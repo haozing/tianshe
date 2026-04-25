@@ -1,0 +1,192 @@
+productName: tiansheai
+appId: com.tiansheai.www
+# ✅ 使用正确的应用名称作为可执行文件名
+executableName: tiansheai
+electronDist: node_modules/electron/dist
+asar: true
+
+asarUnpack:
+  # Worker 脚本解包（worker_threads 入口脚本从 asar 加载可能失败）
+  # 需要把 import-worker 及其同目录依赖一起解包
+  - dist/main/duckdb/**/*
+  - dist/core/system-automation/cv/opencvjs-worker.js
+
+  # Worker 依赖（让 worker 在 app.asar.unpacked 内部即可解析到 node_modules）
+  - node_modules/fs-extra/**/*
+  - node_modules/graceful-fs/**/*
+  - node_modules/jsonfile/**/*
+  - node_modules/universalify/**/*
+
+  # .xls 转换（xlsx + 依赖）
+  - node_modules/xlsx/**/*
+  - node_modules/adler-32/**/*
+  - node_modules/cfb/**/*
+  - node_modules/codepage/**/*
+  - node_modules/crc-32/**/*
+  - node_modules/ssf/**/*
+  - node_modules/wmf/**/*
+  - node_modules/word/**/*
+  # ===============================================
+  # 🔧 原生模块解包配置
+  # 原生模块(.node/.dll)必须解包，无法从 asar 加载
+  # ===============================================
+
+  # DuckDB 数据库引擎
+  - node_modules/@duckdb/**/*
+
+  # ONNX Runtime 推理引擎（关键！解决其他电脑无法启动的问题）
+  - node_modules/onnxruntime-node/**/*
+  - node_modules/onnxruntime-common/**/*
+
+  # 图像处理 (sharp)
+  - node_modules/@img/**/*
+  - node_modules/sharp/**/*
+
+  # FFI 库
+  - node_modules/koffi/**/*
+
+  # 向量索引
+  - node_modules/hnswlib-node/**/*
+
+  # OCR 识别
+  - node_modules/@gutenye/**/*
+
+  # node-gyp-build（原生模块加载器，必须解包）
+  - node_modules/node-gyp-build/**/*
+
+# ✅ 可选：内置 ML 模型（如果 build/models/ 存在）
+# 模型会被复制到 resources/models/ 目录
+# 如果不需要内置模型，删除 build/models/ 目录即可
+extraResources:
+  - from: build/models/
+    to: models/
+    filter:
+      - '**/*.onnx'
+  - from: chrome/
+    to: chrome/
+  - from: firefox/
+    to: firefox/
+
+files:
+  - dist/**/*
+  - node_modules/**/*
+  - package.json
+  # 通用排除规则
+  - '!node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}'
+  - '!node_modules/*/{test,__tests__,tests,powered-test,example,examples}'
+  - '!node_modules/*.d.ts'
+  - '!node_modules/.bin'
+  - '!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}'
+  - '!.editorconfig'
+  - '!**/._*'
+  - '!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}'
+  - '!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}'
+  - '!**/{appveyor.yml,.travis.yml,circle.yml}'
+  - '!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}'
+
+  # ===============================================
+  # 🚀 打包体积优化
+  # ===============================================
+
+  # ===============================================
+  # 🔑 关键：排除非 Windows 平台的原生模块（节省 ~250MB）
+  # 注意：不能排除 Windows 的 .node/.dll，否则程序无法运行
+  # ===============================================
+
+  # onnxruntime-node: 排除 macOS 和 Linux 平台（节省 123MB）
+  - '!node_modules/onnxruntime-node/bin/napi-v6/darwin/**/*'
+  - '!node_modules/onnxruntime-node/bin/napi-v6/linux/**/*'
+  # 排除 Windows ARM64（只保留 x64）
+  - '!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**/*'
+
+  # koffi: 仅保留 Windows x64（koffi 的目录命名使用下划线：linux_x64/darwin_x64/...）
+  - '!node_modules/koffi/build/koffi/darwin_*/**/*'
+  - '!node_modules/koffi/build/koffi/linux_*/**/*'
+  - '!node_modules/koffi/build/koffi/musl_*/**/*'
+  - '!node_modules/koffi/build/koffi/freebsd_*/**/*'
+  - '!node_modules/koffi/build/koffi/openbsd_*/**/*'
+  # 排除 Windows 非 x64
+  - '!node_modules/koffi/build/koffi/win32_arm64/**/*'
+  - '!node_modules/koffi/build/koffi/win32_ia32/**/*'
+
+  # @duckdb: 只需要 win32-x64
+  - '!node_modules/@duckdb/node-bindings-linux-*/**/*'
+  - '!node_modules/@duckdb/node-bindings-darwin-*/**/*'
+
+  # sharp/@img: 排除非 Windows 平台
+  - '!node_modules/@img/sharp-linux*/**/*'
+  - '!node_modules/@img/sharp-darwin*/**/*'
+  - '!node_modules/@img/sharp-linuxmusl*/**/*'
+
+  # ✅ 移除 Chromium 许可证文件 - 节省 12M
+  - '!**/LICENSES.chromium.html'
+
+  # ✅ 增强的 node_modules 清理规则（方案 4）
+  - '!node_modules/*/{HISTORY.md,CONTRIBUTING.md,AUTHORS,CONTRIBUTORS}'
+  - '!node_modules/*/{docs,doc,website,images}'
+  - '!node_modules/**/*.{ts,map,tsbuildinfo}' # 递归排除 source maps 和 TS 文件
+  - '!node_modules/*/{tsconfig.json,tslint.json,.npmignore,.editorconfig,.eslintrc*,.prettierrc*}'
+  - '!node_modules/*/.{github,vscode,idea,circleci,travis}'
+  - '!node_modules/*/bench'
+  - '!node_modules/*/benchmark'
+  - '!node_modules/*/*.{md.txt,markdown}'
+
+  # ✅ 排除项目测试和开发文件（方案 4）
+  - '!**/__tests__/**/*'
+  - '!**/__mocks__/**/*'
+  - '!**/*.test.{ts,tsx,js,jsx}'
+  - '!**/*.spec.{ts,tsx,js,jsx}'
+  - '!**/test/**/*'
+  - '!**/tests/**/*'
+  - '!e2e/**/*'
+  - '!coverage/**/*'
+  - '!test-data/**/*'
+  - '!test-results/**/*'
+  - '!**/examples/**/*'
+
+directories:
+  output: release-build
+  buildResources: build
+
+compression: maximum
+removePackageScripts: true
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
+  requestedExecutionLevel: asInvoker
+  verifyUpdateCodeSignature: false
+  artifactName: '${productName}-${version}-${arch}.${ext}'
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  perMachine: false
+  menuCategory: true
+  shortcutName: TiansheAI
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  artifactName: '${productName}-${version}-Setup.${ext}'
+  language: '2052'
+  # 自定义安装脚本 - 包含 VC++ Runtime 检测和安装
+  include: build/installer.nsh
+
+portable:
+  artifactName: '${productName}-${version}-Portable.${ext}'
+
+# ✅ 仅打包中英文语言包（方案 2）- 节省 ~41M
+electronLanguages:
+  - zh-CN
+  - en-US

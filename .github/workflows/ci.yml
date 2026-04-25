@@ -1,0 +1,39 @@
+name: Open CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  verify:
+    name: typecheck, lint, test, build
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Open edition tests
+        run: npm run test:open
+
+      - name: Open source boundary
+        run: npm run verify:open-source-boundary
+
+      - name: Open build
+        run: npm run build:open

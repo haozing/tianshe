@@ -1,0 +1,864 @@
+/**
+ * TanStack Table 样式
+ */
+
+.tanstack-table-container {
+  width: 100%; /* 宽度填满父容器 */
+  height: 100%; /* 高度填满父容器 */
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 251, 253, 0.98));
+  overflow: visible; /* 不自己滚动，滚动由父容器DatasetTable处理 */
+  position: relative;
+  display: flex; /* 使用 flex 布局 */
+  flex-direction: column; /* 垂直排列 wrapper 和 footer */
+}
+
+.tanstack-table-wrapper {
+  position: relative;
+  /* min-width 移除，让 wrapper 受父容器约束，产生滚动 */
+  flex: 1; /* 占据剩余空间，确保 footer 始终在底部 */
+  min-height: 0; /* 允许 flex item 缩小，重要！ */
+  overflow-y: auto; /* wrapper 成为纵向滚动容器，防止内容溢出 container */
+  overflow-x: auto; /* wrapper 也处理横向滚动 */
+  /* padding-bottom 已移除，sticky 定位的 footer 不需要预留空间 */
+}
+
+.tanstack-table {
+  min-width: 100%; /* 最小宽度100%，但可以超出以启用水平滚动 */
+  width: max-content; /* 根据内容自动扩展宽度 */
+  border-collapse: separate; /* 改为separate以支持sticky定位 */
+  border-spacing: 0; /* 移除边框间距保持紧凑 */
+  font-size: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  table-layout: auto; /* 让列宽根据内容和设置自动计算 */
+}
+
+/* 表头样式 */
+.tanstack-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(248, 250, 252, 0.98);
+}
+
+.tanstack-table th {
+  background: rgba(248, 250, 252, 0.98);
+  color: #374151;
+  font-weight: 500;
+  font-size: 13px;
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.92);
+  white-space: nowrap;
+  user-select: none;
+}
+
+/* 表尾样式 - 使用 flexbox + sticky 固定在底部 */
+.tanstack-table-footer {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: rgba(248, 250, 252, 0.98);
+  overflow: visible; /* 不创建滚动条，跟随父容器滚动 */
+  pointer-events: auto; /* 确保可以点击footer中的按钮 */
+  flex-shrink: 0; /* 不缩小，保持固定高度 */
+}
+
+.tanstack-table-footer-table {
+  min-width: 100%;
+  width: max-content;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  table-layout: auto;
+}
+
+.tanstack-table-footer-table td {
+  background: rgba(248, 250, 252, 0.98);
+  color: #374151;
+  font-weight: 500;
+  font-size: 13px;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(226, 232, 240, 0.92);
+  white-space: nowrap;
+}
+
+.footer-cell {
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.footer-total {
+  color: #374151;
+  font-weight: 500;
+}
+
+.footer-settings-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  color: #64748b;
+}
+
+.footer-settings-button:hover {
+  color: #334155;
+}
+
+.tanstack-table th:hover {
+  background-color: #f8fafc;
+}
+
+.table-header-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 字段头样式（新） */
+.field-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+
+.field-name {
+  flex: 1;
+  font-weight: 500;
+  color: #374151;
+}
+
+.sort-indicator {
+  color: #9ca3af;
+  opacity: 0;
+  transition: all 0.2s;
+}
+
+.sort-indicator.sorted {
+  opacity: 1;
+  color: #2563eb;
+}
+
+.tanstack-table th:hover .sort-indicator {
+  opacity: 1;
+}
+
+.sort-icon {
+  display: inline-flex;
+  align-items: center;
+  color: #2563eb;
+}
+
+/* 表体样式 */
+.tanstack-table tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+.tanstack-table tbody tr:hover {
+  background-color: #f8fafc;
+}
+
+.tanstack-table td {
+  --table-cell-pad-y: 10px;
+  --table-cell-pad-x: 12px;
+  padding: 10px 12px;
+  color: #1f2937;
+  line-height: 1.5;
+  border-bottom: 1px solid rgba(241, 245, 249, 0.96); /* 在td上添加底部边框 */
+  max-width: 300px; /* 限制最大宽度以触发截断 */
+  white-space: nowrap; /* 不换行 */
+  overflow: hidden; /* 隐藏溢出内容 */
+  text-overflow: ellipsis; /* 显示省略号 */
+  position: relative; /* 为子元素提供定位上下文 */
+}
+
+/* 分组行样式 */
+.tanstack-table tbody tr.grouped-row {
+  background-color: rgba(239, 246, 255, 0.88);
+  font-weight: 500;
+}
+
+.tanstack-table tbody tr.grouped-row:hover {
+  background-color: rgba(219, 234, 254, 0.9);
+}
+
+.tanstack-table tbody tr.grouped-row td {
+  color: #1e40af;
+}
+
+/* 分组单元格 */
+.group-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.group-cell--leaf {
+  width: 100%;
+}
+
+.expand-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: #6b7280;
+  transition: all 0.15s ease;
+}
+
+.expand-button:hover {
+  background-color: #e5e7eb;
+  color: #374151;
+}
+
+.expand-button:active {
+  transform: scale(0.95);
+}
+
+.group-value {
+  font-weight: 500;
+  color: #1e40af;
+  min-width: 0;
+  flex: 0 1 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-value--leaf {
+  color: inherit;
+  display: block;
+  width: 100%;
+}
+
+.group-count {
+  color: #6b7280;
+  font-size: 13px;
+  font-weight: 400;
+  flex-shrink: 0;
+}
+
+.group-stats {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.group-stat + .group-stat {
+  margin-left: 12px;
+}
+
+/* 聚合单元格样式 - 去除鲜艳背景色，使用字体颜色区分 */
+.aggregated-cell {
+  font-weight: 500;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.aggregated-cell.sum {
+  color: #2563eb;
+}
+
+.aggregated-cell.mean {
+  color: #7c3aed;
+}
+
+.aggregated-cell.count {
+  color: #059669;
+}
+
+.aggregated-cell.min {
+  color: #dc2626;
+}
+
+.aggregated-cell.max {
+  color: #ea580c;
+}
+
+/* 占位符单元格 */
+.placeholder-cell {
+  color: #9ca3af;
+  font-style: italic;
+}
+
+/* 缩进样式 */
+.indent-0 { padding-left: 16px; }
+.indent-1 { padding-left: 40px; }
+.indent-2 { padding-left: 64px; }
+.indent-3 { padding-left: 88px; }
+.indent-4 { padding-left: 112px; }
+
+/* 空状态 */
+.table-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #94a3b8;
+  gap: 12px;
+}
+
+.table-empty-state svg {
+  width: 52px;
+  height: 52px;
+  opacity: 0.4;
+}
+
+.table-empty-state p {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+/* 加载状态 */
+.table-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #6b7280;
+}
+
+.table-loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #e5e7eb;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.table-column-manager-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-start;
+  background: rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(2px);
+}
+
+.table-column-manager-drawer {
+  width: 320px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 0 18px 18px 0;
+}
+
+.table-column-manager-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  flex-shrink: 0;
+}
+
+.table-column-manager-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.table-column-manager-title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.table-column-manager-close {
+  padding: 6px;
+  color: #94a3b8;
+}
+
+.table-column-manager-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px 10px 12px;
+}
+
+.table-column-manager-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  transition:
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.table-column-manager-row + .table-column-manager-row {
+  margin-top: 2px;
+}
+
+.table-column-manager-row:hover {
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.table-column-manager-row:focus-within {
+  background: rgba(239, 246, 255, 0.92);
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.12);
+}
+
+.table-column-manager-drag {
+  flex-shrink: 0;
+  color: #cbd5e1;
+  cursor: grab;
+}
+
+.table-column-manager-spacer {
+  width: 16px;
+  flex-shrink: 0;
+}
+
+.table-column-manager-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.table-column-manager-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: #334155;
+}
+
+.table-column-manager-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.table-column-manager-order {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.table-column-manager-order-button,
+.table-column-manager-icon-button {
+  padding: 4px;
+  color: #64748b;
+}
+
+.table-column-manager-order-button:disabled,
+.table-column-manager-icon-button:disabled {
+  color: #cbd5e1;
+  cursor: not-allowed;
+}
+
+.table-column-manager-footer {
+  padding: 12px;
+  flex-shrink: 0;
+}
+
+.table-column-manager-add-button {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  color: #475569;
+}
+
+.table-column-manager-add-button:disabled {
+  cursor: not-allowed;
+  color: #94a3b8;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 选中行样式 */
+.tanstack-table tbody tr.selected {
+  background-color: rgba(239, 246, 255, 0.82) !important;
+}
+
+/* 已删除行样式 - 浅红色背景 */
+.tanstack-table tbody tr.deleted-row {
+  background-color: #fef2f2; /* red-50 */
+}
+
+.tanstack-table tbody tr.deleted-row:hover {
+  background-color: #fee2e2; /* red-100 */
+}
+
+.tanstack-table tbody tr.deleted-row td {
+  color: #991b1b; /* red-800 */
+  opacity: 0.8;
+}
+
+/* 已删除行被选中时 */
+.tanstack-table tbody tr.deleted-row.selected {
+  background-color: #fecaca !important; /* red-200 */
+}
+
+/* 右对齐数字列 */
+.tanstack-table .cell-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 行高变体 */
+.tanstack-table.row-height-compact td {
+  --table-cell-pad-y: 0px;
+  --table-cell-pad-x: 6px;
+  padding: 0px 6px;
+}
+
+.tanstack-table.row-height-normal td {
+  --table-cell-pad-y: 10px;
+  --table-cell-pad-x: 16px;
+  padding: 10px 16px;
+}
+
+.tanstack-table.row-height-comfortable td {
+  --table-cell-pad-y: 14px;
+  --table-cell-pad-x: 16px;
+  padding: 14px 16px;
+}
+
+/* Checkbox 样式 */
+.row-checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #2563eb;
+}
+
+.header-checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #2563eb;
+}
+
+/* 选择列表头居中 */
+.select-header-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+/* 选择单元格容器 */
+.select-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* 行号样式 - 默认显示 */
+.select-cell .row-id {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 400;
+}
+
+/* 行复选框 - 默认隐藏 */
+.select-cell .row-checkbox {
+  display: none;
+}
+
+/* 行悬停时：隐藏行号，显示复选框 */
+.tanstack-table tbody tr:hover .select-cell .row-id {
+  display: none;
+}
+
+.tanstack-table tbody tr:hover .select-cell .row-checkbox {
+  display: inline-flex;
+}
+
+/* 行选中时：隐藏行号，显示复选框 */
+.tanstack-table tbody tr.selected .select-cell .row-id {
+  display: none;
+}
+
+.tanstack-table tbody tr.selected .select-cell .row-checkbox {
+  display: inline-flex;
+}
+
+/* 全选时：所有行隐藏行号，显示复选框 */
+.tanstack-table.all-selected tbody tr .select-cell .row-id {
+  display: none;
+}
+
+.tanstack-table.all-selected tbody tr .select-cell .row-checkbox {
+  display: inline-flex;
+}
+
+/* 可编辑单元格样式 */
+.editable-cell {
+  cursor: text;
+  min-height: 20px;
+  border-radius: 10px;
+  transition:
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.editable-cell:hover {
+  background-color: rgba(248, 250, 252, 0.72);
+}
+
+.editable-cell input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  outline: none;
+}
+
+.editable-cell.editing {
+  background-color: white;
+  box-shadow: 0 14px 28px rgba(20, 27, 45, 0.08);
+  margin: 0 !important;
+  display: block;
+  line-height: 0;
+}
+
+.editable-cell--text:hover {
+  background-color: rgba(248, 250, 252, 0.94);
+  box-shadow: 0 1px 2px rgba(148, 163, 184, 0.08);
+}
+
+.editable-cell--boolean:hover {
+  background-color: rgba(248, 250, 252, 0.82);
+}
+
+.editable-cell-textarea {
+  border: 1px solid rgba(147, 197, 253, 0.9);
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 3px rgba(96, 165, 250, 0.12),
+    0 12px 24px rgba(20, 27, 45, 0.08);
+}
+
+.editable-cell-textarea--error {
+  border-color: rgba(248, 113, 113, 0.92);
+  box-shadow:
+    0 0 0 3px rgba(248, 113, 113, 0.12),
+    0 12px 24px rgba(20, 27, 45, 0.08);
+}
+
+.editable-cell-message {
+  border-radius: 10px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 10px 20px rgba(20, 27, 45, 0.08);
+}
+
+.editable-cell-message--error {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+/* 🆕 编辑状态下的单元格允许内容溢出并移除padding */
+.tanstack-table tbody tr td:has(.editable-cell.editing) {
+  overflow: visible !important;
+  z-index: 150;
+  padding: 0 !important;
+  line-height: 0 !important;
+  vertical-align: top !important;
+}
+
+/* 单选字段单元格 - 允许下拉列表溢出 */
+.editable-cell.single-select-cell {
+  position: static; /* 改为 static，让下拉列表相对于 td 定位 */
+  overflow: visible !important;
+  cursor: pointer;
+}
+
+.editable-cell.single-select-cell:hover {
+  background-color: transparent;
+  outline: none;
+}
+
+/* 确保包含 single-select-cell 的 td 允许溢出并提升层级 */
+.tanstack-table tbody tr td {
+  /* 为所有单元格设置基础样式，但会被下面的规则覆盖 */
+}
+
+/* 当 td 内有 single-select-cell 时的特殊处理 */
+.tanstack-table tbody tr:hover td {
+  /* 悬停时，检查是否需要特殊处理 */
+}
+
+/* 使用属性选择器来定位包含单选字段的单元格 */
+.tanstack-table tbody tr td:has(.single-select-cell) {
+  overflow: visible !important;
+}
+
+/* 当单选字段的行悬停或单元格被激活时，进一步提升层级 */
+.tanstack-table tbody tr:hover td:has(.single-select-cell) {
+  z-index: 50;
+  overflow: visible !important;
+}
+
+/* 日期字段单元格 - 允许日历下拉列表溢出 */
+.editable-cell.date-cell {
+  position: static;
+  overflow: visible !important;
+  cursor: pointer;
+}
+
+.editable-cell.date-cell:hover {
+  background-color: transparent;
+  outline: none;
+}
+
+/* 使用属性选择器来定位包含日期字段的单元格 */
+.tanstack-table tbody tr td:has(.date-cell) {
+  overflow: visible !important;
+  z-index: 10;
+}
+
+/* 当日期字段的行悬停或单元格被激活时，进一步提升层级 */
+.tanstack-table tbody tr:hover td:has(.date-cell) {
+  z-index: 50;
+  overflow: visible !important;
+}
+
+/* 附件字段单元格 - 允许上传面板溢出 */
+.editable-cell.attachment-cell {
+  position: static;
+  overflow: visible !important;
+  cursor: pointer;
+}
+
+.editable-cell.attachment-cell:hover {
+  background-color: transparent;
+  outline: none;
+}
+
+/* 使用属性选择器来定位包含附件字段的单元格 */
+.tanstack-table tbody tr td:has(.attachment-cell) {
+  overflow: visible !important;
+  z-index: 10;
+}
+
+/* 当附件字段的行悬停或单元格被激活时，进一步提升层级 */
+.tanstack-table tbody tr:hover td:has(.attachment-cell) {
+  z-index: 50;
+  overflow: visible !important;
+}
+
+/* 列宽调整手柄 */
+.column-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.column-resizer:hover,
+.column-resizer.isResizing {
+  opacity: 1;
+  background-color: #2563eb;
+}
+
+.tanstack-table th {
+  position: relative;
+}
+
+.tanstack-table th:hover .column-resizer {
+  opacity: 0.5;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .tanstack-table th,
+  .tanstack-table td {
+    padding: 8px 12px;
+  }
+
+  .tanstack-table {
+    font-size: 13px;
+  }
+
+  /* 移动端禁用列宽调整 */
+  .column-resizer {
+    display: none;
+  }
+}
+
+/* ============================================
+   自定义纵向滚动条样式
+   ============================================ */
+
+/* Webkit 浏览器（Chrome, Safari, Edge）滚动条 */
+.tanstack-table-wrapper::-webkit-scrollbar {
+  width: 12px;  /* 纵向滚动条宽度 */
+  height: 12px; /* 横向滚动条高度 */
+}
+
+/* 滚动条轨道（背景） */
+.tanstack-table-wrapper::-webkit-scrollbar-track {
+  background: #f1f5f9; /* 浅灰色背景 */
+  border-radius: 6px;
+  margin: 2px;
+}
+
+/* 滚动条滑块（前景） */
+.tanstack-table-wrapper::-webkit-scrollbar-thumb {
+  background: #cbd5e1; /* 中灰色滑块 */
+  border-radius: 6px;
+  border: 2px solid #f1f5f9; /* 与轨道颜色一致的边框 */
+  transition: background 0.2s ease;
+}
+
+/* 滚动条滑块悬停状态 */
+.tanstack-table-wrapper::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8; /* 深灰色 */
+}
+
+/* 滚动条滑块激活状态（拖拽时） */
+.tanstack-table-wrapper::-webkit-scrollbar-thumb:active {
+  background: #64748b; /* 更深灰色 */
+}
+
+/* Firefox 浏览器纵向滚动条 */
+.tanstack-table-wrapper {
+  scrollbar-width: thin; /* 细滚动条 */
+  scrollbar-color: #cbd5e1 #f1f5f9; /* 滑块颜色 轨道颜色 */
+}

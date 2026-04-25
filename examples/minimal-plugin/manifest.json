@@ -1,0 +1,8 @@
+{
+  "id": "minimal-plugin",
+  "name": "Minimal Plugin",
+  "version": "1.0.0",
+  "description": "A minimal local plugin example for Tianshe Client Open.",
+  "main": "index.js",
+  "permissions": ["database", "ui"]
+}

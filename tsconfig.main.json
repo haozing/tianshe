@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "outDir": "dist",
+    "rootDir": "src",
+    "noEmitOnError": true
+  },
+  "include": [
+    "src/main/**/*",
+    "src/core/**/*",
+    "src/types/**/*",
+    "src/preload/**/*"
+  ]
+}

@@ -1,0 +1,811 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Airpa Orchestration HTTP API",
+    "version": "2026-02-23",
+    "description": "Stable orchestration entrypoint for external orchestrators (OpenClaw etc.). Auth is conditionally required when HTTP API enableAuth=true."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000"
+    }
+  ],
+  "tags": [
+    {
+      "name": "orchestration"
+    }
+  ],
+  "paths": {
+    "/api/v1/orchestration/capabilities": {
+      "get": {
+        "tags": [
+          "orchestration"
+        ],
+        "summary": "List orchestration capabilities",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {}
+        ]
+      }
+    },
+    "/api/v1/orchestration/metrics": {
+      "get": {
+        "tags": [
+          "orchestration"
+        ],
+        "summary": "Runtime metrics",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {}
+        ]
+      }
+    },
+    "/api/v1/orchestration/sessions": {
+      "post": {
+        "tags": [
+          "orchestration"
+        ],
+        "summary": "Create orchestration session",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {}
+        ]
+      }
+    },
+    "/api/v1/orchestration/sessions/{sessionId}": {
+      "get": {
+        "tags": [
+          "orchestration"
+        ],
+        "summary": "Get session status",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {}
+        ]
+      },
+      "delete": {
+        "tags": [
+          "orchestration"
+        ],
+        "summary": "Delete session",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {}
+        ]
+      }
+    },
+    "/api/v1/orchestration/sessions/{sessionId}/heartbeat": {
+      "post": {
+        "tags": [
+          "orchestration"
+        ],
+        "summary": "Refresh session activity",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {}
+        ]
+      }
+    },
+    "/api/v1/orchestration/invoke": {
+      "post": {
+        "tags": [
+          "orchestration"
+        ],
+        "summary": "Invoke capability",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XAirpaIdempotencyNamespaceHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XAirpaScopesHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvokeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "408": {
+            "description": "Invoke timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          },
+          "429": {
+            "description": "Queue overflow or rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "x-airpa-api-version": {
+                "$ref": "#/components/headers/XAirpaApiVersion"
+              },
+              "x-airpa-trace-id": {
+                "$ref": "#/components/headers/XAirpaTraceId"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {}
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateSessionRequest": {
+        "type": "object",
+        "properties": {
+          "profileId": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string",
+            "enum": [
+              "electron",
+              "extension"
+            ]
+          },
+          "visible": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "InvokeRequest": {
+        "type": "object",
+        "required": [
+          "sessionId",
+          "name"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object",
+            "additionalProperties": true,
+            "default": {}
+          }
+        }
+      },
+      "SuccessResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "_meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {},
+          "_meta": {
+            "type": "object",
+            "required": [
+              "traceId",
+              "durationMs"
+            ],
+            "properties": {
+              "traceId": {
+                "type": "string"
+              },
+              "durationMs": {
+                "type": "number"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "capability": {
+                "type": "string"
+              },
+              "idempotencyKey": {
+                "type": "string"
+              },
+              "idempotencyStatus": {
+                "type": "string",
+                "enum": [
+                  "stored",
+                  "replayed"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "error",
+          "code",
+          "_meta"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "details": {
+            "type": "string"
+          },
+          "suggestion": {
+            "type": "string"
+          },
+          "context": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "_meta": {
+            "type": "object",
+            "required": [
+              "traceId",
+              "durationMs"
+            ],
+            "properties": {
+              "traceId": {
+                "type": "string"
+              },
+              "durationMs": {
+                "type": "number"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "capability": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API Token",
+        "description": "Required when HTTP API token authentication is enabled."
+      }
+    },
+    "headers": {
+      "XAirpaApiVersion": {
+        "description": "Server API contract version.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "XAirpaTraceId": {
+        "description": "Per-request trace id for diagnostics and support.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "parameters": {
+      "IdempotencyKeyHeader": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "description": "Replay key for idempotent capabilities. Same key with different payload returns 409. Backed by memory by default; optional DuckDB persistence can be enabled.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "XAirpaIdempotencyNamespaceHeader": {
+        "name": "x-airpa-idempotency-namespace",
+        "in": "header",
+        "required": false,
+        "description": "Optional idempotency namespace. Defaults to sessionId when omitted.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "XAirpaScopesHeader": {
+        "name": "x-airpa-scopes",
+        "in": "header",
+        "required": false,
+        "description": "Comma-separated scope list. Enforced only when enforceOrchestrationScopes=true.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    },
+    {}
+  ]
+}

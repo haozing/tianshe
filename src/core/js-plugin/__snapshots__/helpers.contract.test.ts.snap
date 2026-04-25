@@ -1,0 +1,1408 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`PluginHelpers contract snapshot > helpers public surface is stable 1`] = `
+{
+  "helperNamespaces": [
+    "account",
+    "advanced",
+    "button",
+    "cloud",
+    "customField",
+    "cv",
+    "database",
+    "ffi",
+    "image",
+    "imageSearch",
+    "network",
+    "ocr",
+    "onnx",
+    "openai",
+    "plugin",
+    "profile",
+    "raw",
+    "savedSite",
+    "scheduler",
+    "storage",
+    "taskQueue",
+    "ui",
+    "utils",
+    "vectorIndex",
+    "webhook",
+    "window",
+  ],
+  "namespaceContracts": {
+    "account": [
+      {
+        "name": "create",
+        "requiredParams": 1,
+        "returnType": "Promise<Account>",
+      },
+      {
+        "name": "delete",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "deleteByProfile",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "get",
+        "requiredParams": 1,
+        "returnType": "Promise<Account | null>",
+      },
+      {
+        "name": "list",
+        "requiredParams": 0,
+        "returnType": "Promise<Account[]>",
+      },
+      {
+        "name": "listByPlatform",
+        "requiredParams": 1,
+        "returnType": "Promise<Account[]>",
+      },
+      {
+        "name": "listByProfile",
+        "requiredParams": 1,
+        "returnType": "Promise<Account[]>",
+      },
+      {
+        "name": "update",
+        "requiredParams": 2,
+        "returnType": "Promise<Account>",
+      },
+      {
+        "name": "updateLastLogin",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+    ],
+    "advanced": [],
+    "button": [
+      {
+        "name": "addMultiple",
+        "requiredParams": 2,
+        "returnType": "Promise<{ success: boolean; columns: string[]; errors: string[] }>",
+      },
+      {
+        "name": "addToTable",
+        "requiredParams": 2,
+        "returnType": "Promise<AddButtonResult>",
+      },
+      {
+        "name": "getButtons",
+        "requiredParams": 1,
+        "returnType": "Promise<EnhancedColumnSchema[]>",
+      },
+      {
+        "name": "removeButton",
+        "requiredParams": 2,
+        "returnType": "Promise<{ success: boolean; error?: string }>",
+      },
+      {
+        "name": "updateButton",
+        "requiredParams": 3,
+        "returnType": "Promise<{ success: boolean; error?: string }>",
+      },
+    ],
+    "cloud": [
+      {
+        "name": "clearAuth",
+        "requiredParams": 0,
+        "returnType": "void",
+      },
+      {
+        "name": "delete",
+        "requiredParams": 1,
+        "returnType": "Promise<T>",
+      },
+      {
+        "name": "get",
+        "requiredParams": 1,
+        "returnType": "Promise<T>",
+      },
+      {
+        "name": "getSession",
+        "requiredParams": 0,
+        "returnType": "CloudSessionInfo",
+      },
+      {
+        "name": "isLoggedIn",
+        "requiredParams": 0,
+        "returnType": "boolean",
+      },
+      {
+        "name": "post",
+        "requiredParams": 1,
+        "returnType": "Promise<T>",
+      },
+      {
+        "name": "put",
+        "requiredParams": 1,
+        "returnType": "Promise<T>",
+      },
+      {
+        "name": "request",
+        "requiredParams": 2,
+        "returnType": "Promise<T>",
+      },
+      {
+        "name": "setAuth",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+    ],
+    "customField": [
+      {
+        "name": "clearAuth",
+        "requiredParams": 0,
+        "returnType": "void",
+      },
+      {
+        "name": "deleteRelationLink",
+        "requiredParams": 2,
+        "returnType": "Promise<Record<string, unknown>>",
+      },
+      {
+        "name": "deleteRow",
+        "requiredParams": 2,
+        "returnType": "Promise<Record<string, unknown>>",
+      },
+      {
+        "name": "deleteRows",
+        "requiredParams": 2,
+        "returnType": "Promise<Record<string, unknown>>",
+      },
+      {
+        "name": "ensureEntitySchema",
+        "requiredParams": 1,
+        "returnType": "Promise<CustomFieldEnsureEntitySchemaResult>",
+      },
+      {
+        "name": "getCapabilities",
+        "requiredParams": 0,
+        "returnType": "Promise<Record<string, unknown>>",
+      },
+      {
+        "name": "getRow",
+        "requiredParams": 2,
+        "returnType": "Promise<CustomFieldRecord>",
+      },
+      {
+        "name": "getSession",
+        "requiredParams": 0,
+        "returnType": "CustomFieldCloudSession",
+      },
+      {
+        "name": "isLoggedIn",
+        "requiredParams": 0,
+        "returnType": "boolean",
+      },
+      {
+        "name": "listEntities",
+        "requiredParams": 0,
+        "returnType": "Promise<CustomFieldPage<Record<string, unknown>>>",
+      },
+      {
+        "name": "listFields",
+        "requiredParams": 1,
+        "returnType": "Promise<CustomFieldPage<Record<string, unknown>>>",
+      },
+      {
+        "name": "listIndexRules",
+        "requiredParams": 1,
+        "returnType": "Promise<Record<string, unknown>[]>",
+      },
+      {
+        "name": "listRelations",
+        "requiredParams": 0,
+        "returnType": "Promise<CustomFieldPage<Record<string, unknown>>>",
+      },
+      {
+        "name": "queryRelationLinks",
+        "requiredParams": 1,
+        "returnType": "Promise<CustomFieldPage<CustomFieldRelationLink>>",
+      },
+      {
+        "name": "queryRows",
+        "requiredParams": 1,
+        "returnType": "Promise<CustomFieldRecordQueryResult>",
+      },
+      {
+        "name": "queryRowsAll",
+        "requiredParams": 1,
+        "returnType": "Promise<CustomFieldRecordQueryResult>",
+      },
+      {
+        "name": "rebuildIndexes",
+        "requiredParams": 1,
+        "returnType": "Promise<{ entityCode: string; operator?: number; mode?: string }>",
+      },
+      {
+        "name": "replaceIndexRules",
+        "requiredParams": 2,
+        "returnType": "Promise<{ entityCode: string; ruleCount: number }>",
+      },
+      {
+        "name": "setAuth",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+      {
+        "name": "upsertEntity",
+        "requiredParams": 1,
+        "returnType": "Promise<Record<string, unknown>>",
+      },
+      {
+        "name": "upsertField",
+        "requiredParams": 2,
+        "returnType": "Promise<Record<string, unknown>>",
+      },
+      {
+        "name": "upsertRelation",
+        "requiredParams": 1,
+        "returnType": "Promise<Record<string, unknown>>",
+      },
+      {
+        "name": "upsertRelationLink",
+        "requiredParams": 2,
+        "returnType": "Promise<CustomFieldRelationLink>",
+      },
+      {
+        "name": "upsertRow",
+        "requiredParams": 2,
+        "returnType": "Promise<CustomFieldRecord>",
+      },
+      {
+        "name": "upsertRowsBatch",
+        "requiredParams": 2,
+        "returnType": "Promise<CustomFieldUpsertRowsBatchResult>",
+      },
+    ],
+    "cv": [
+      {
+        "name": "dispose",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "extractCrops",
+        "requiredParams": 1,
+        "returnType": "Promise<ExtractCropsResult>",
+      },
+      {
+        "name": "extractCropsBatch",
+        "requiredParams": 1,
+        "returnType": "Promise< Array< | { index: number; ok: true; data: ExtractCropsResult } | { index: number; ok: false; error: string } > >",
+      },
+      {
+        "name": "initialize",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "ping",
+        "requiredParams": 0,
+        "returnType": "Promise<{ pong: boolean; pid: number }>",
+      },
+    ],
+    "database": [
+      {
+        "name": "batchInsert",
+        "requiredParams": 2,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "delete",
+        "requiredParams": 2,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "deleteById",
+        "requiredParams": 2,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "executeSQL",
+        "requiredParams": 1,
+        "returnType": "Promise<any[]>",
+      },
+      {
+        "name": "exportDataset",
+        "requiredParams": 1,
+        "returnType": "Promise<DataTableExportResult>",
+      },
+      {
+        "name": "getDatasetInfo",
+        "requiredParams": 1,
+        "returnType": "Promise<any>",
+      },
+      {
+        "name": "getSchema",
+        "requiredParams": 1,
+        "returnType": "Promise<EnhancedColumnSchema[]>",
+      },
+      {
+        "name": "importRecordsFromBase64",
+        "requiredParams": 1,
+        "returnType": "Promise<DataTableImportResult>",
+      },
+      {
+        "name": "importRecordsFromFile",
+        "requiredParams": 2,
+        "returnType": "Promise<DataTableImportResult>",
+      },
+      {
+        "name": "insert",
+        "requiredParams": 2,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "listDatasets",
+        "requiredParams": 0,
+        "returnType": "Promise<any[]>",
+      },
+      {
+        "name": "query",
+        "requiredParams": 1,
+        "returnType": "Promise<any[]>",
+      },
+      {
+        "name": "update",
+        "requiredParams": 3,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "updateById",
+        "requiredParams": 3,
+        "returnType": "Promise<void>",
+      },
+    ],
+    "ffi": [
+      {
+        "name": "createCallback",
+        "requiredParams": 2,
+        "returnType": "FFICallback",
+      },
+      {
+        "name": "defineStruct",
+        "requiredParams": 1,
+        "returnType": "any",
+      },
+      {
+        "name": "dispose",
+        "requiredParams": 0,
+        "returnType": "void",
+      },
+      {
+        "name": "listLibraries",
+        "requiredParams": 0,
+        "returnType": "Promise<LibraryInfo[]>",
+      },
+      {
+        "name": "loadLibrary",
+        "requiredParams": 1,
+        "returnType": "Promise<Library>",
+      },
+    ],
+    "image": [
+      {
+        "name": "compare",
+        "requiredParams": 2,
+        "returnType": "Promise<ImageSimilarityCompareResult>",
+      },
+      {
+        "name": "comparePHash",
+        "requiredParams": 2,
+        "returnType": "Promise<PerceptualHashCompareResult>",
+      },
+      {
+        "name": "hammingDistance",
+        "requiredParams": 2,
+        "returnType": "number",
+      },
+      {
+        "name": "pHash",
+        "requiredParams": 1,
+        "returnType": "Promise<PerceptualHashResult>",
+      },
+      {
+        "name": "similarity",
+        "requiredParams": 2,
+        "returnType": "Promise<number>",
+      },
+      {
+        "name": "ssim",
+        "requiredParams": 2,
+        "returnType": "Promise<SSIMCompareResult>",
+      },
+    ],
+    "imageSearch": [
+      {
+        "name": "addTemplate",
+        "requiredParams": 2,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "addTemplates",
+        "requiredParams": 1,
+        "returnType": "Promise<BatchAddResult>",
+      },
+      {
+        "name": "clear",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "compare",
+        "requiredParams": 2,
+        "returnType": "Promise<number>",
+      },
+      {
+        "name": "dispose",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "getStats",
+        "requiredParams": 0,
+        "returnType": "IndexStats",
+      },
+      {
+        "name": "getTemplate",
+        "requiredParams": 1,
+        "returnType": "TemplateInfo | null",
+      },
+      {
+        "name": "getTemplateIds",
+        "requiredParams": 0,
+        "returnType": "string[]",
+      },
+      {
+        "name": "hasTemplate",
+        "requiredParams": 1,
+        "returnType": "boolean",
+      },
+      {
+        "name": "initialize",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "isInitialized",
+        "requiredParams": 0,
+        "returnType": "boolean",
+      },
+      {
+        "name": "isModelReady",
+        "requiredParams": 0,
+        "returnType": "boolean",
+      },
+      {
+        "name": "loadIndex",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "removeTemplate",
+        "requiredParams": 1,
+        "returnType": "Promise<boolean>",
+      },
+      {
+        "name": "saveIndex",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "search",
+        "requiredParams": 1,
+        "returnType": "Promise<SearchResult[]>",
+      },
+    ],
+    "network": [
+      {
+        "name": "delete",
+        "requiredParams": 1,
+        "returnType": "Promise<any>",
+      },
+      {
+        "name": "get",
+        "requiredParams": 1,
+        "returnType": "Promise<any>",
+      },
+      {
+        "name": "post",
+        "requiredParams": 2,
+        "returnType": "Promise<any>",
+      },
+      {
+        "name": "put",
+        "requiredParams": 2,
+        "returnType": "Promise<any>",
+      },
+      {
+        "name": "webhook",
+        "requiredParams": 2,
+        "returnType": "Promise<any>",
+      },
+    ],
+    "ocr": [
+      {
+        "name": "configurePool",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "dispose",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "extractText",
+        "requiredParams": 1,
+        "returnType": "Promise<string>",
+      },
+      {
+        "name": "findAllText",
+        "requiredParams": 2,
+        "returnType": "Promise<Array<{ bounds: Bounds; text: string; confidence: number }>>",
+      },
+      {
+        "name": "findText",
+        "requiredParams": 2,
+        "returnType": "Promise<Bounds | null>",
+      },
+      {
+        "name": "getPoolOptions",
+        "requiredParams": 0,
+        "returnType": "OCRPoolOptions",
+      },
+      {
+        "name": "hasText",
+        "requiredParams": 2,
+        "returnType": "Promise<boolean>",
+      },
+      {
+        "name": "preprocessImage",
+        "requiredParams": 1,
+        "returnType": "Promise<{ pipelineName: string; buffer: Buffer }>",
+      },
+      {
+        "name": "recognize",
+        "requiredParams": 1,
+        "returnType": "Promise<OCRResult[]>",
+      },
+      {
+        "name": "recognizeBatch",
+        "requiredParams": 1,
+        "returnType": "Promise<OCRBatchResult[]>",
+      },
+      {
+        "name": "recognizeDetailed",
+        "requiredParams": 1,
+        "returnType": "Promise<DetailedOCRResult[]>",
+      },
+      {
+        "name": "recognizeMultiPass",
+        "requiredParams": 1,
+        "returnType": "Promise<MultiPassOCRResult>",
+      },
+      {
+        "name": "reset",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "waitForText",
+        "requiredParams": 2,
+        "returnType": "Promise<Bounds | null>",
+      },
+    ],
+    "onnx": [
+      {
+        "name": "classifyImage",
+        "requiredParams": 2,
+        "returnType": "Promise<ClassificationResult[]>",
+      },
+      {
+        "name": "cosineSimilarity",
+        "requiredParams": 2,
+        "returnType": "number",
+      },
+      {
+        "name": "createTensor",
+        "requiredParams": 2,
+        "returnType": "SimpleTensorInput",
+      },
+      {
+        "name": "dispose",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "extractFeatures",
+        "requiredParams": 2,
+        "returnType": "Promise<number[]>",
+      },
+      {
+        "name": "getModelInfo",
+        "requiredParams": 1,
+        "returnType": "ModelInfo | null",
+      },
+      {
+        "name": "getTensorSize",
+        "requiredParams": 1,
+        "returnType": "number",
+      },
+      {
+        "name": "l2Normalize",
+        "requiredParams": 1,
+        "returnType": "number[]",
+      },
+      {
+        "name": "listModels",
+        "requiredParams": 0,
+        "returnType": "Array<{ modelId: string; loadedAt: number; lastUsed: number }>",
+      },
+      {
+        "name": "loadModel",
+        "requiredParams": 1,
+        "returnType": "Promise<string>",
+      },
+      {
+        "name": "preprocessImage",
+        "requiredParams": 2,
+        "returnType": "Promise<SimpleTensorInput>",
+      },
+      {
+        "name": "run",
+        "requiredParams": 2,
+        "returnType": "Promise<Record<string, SimpleTensorOutput>>",
+      },
+      {
+        "name": "softmax",
+        "requiredParams": 1,
+        "returnType": "number[]",
+      },
+      {
+        "name": "topK",
+        "requiredParams": 2,
+        "returnType": "Array<{ index: number; score: number }>",
+      },
+      {
+        "name": "unloadModel",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+    ],
+    "openai": [
+      {
+        "name": "cancelBatch",
+        "requiredParams": 1,
+        "returnType": "Promise<OpenAIBatch>",
+      },
+      {
+        "name": "chat",
+        "requiredParams": 1,
+        "returnType": "Promise<OpenAIChatResponse>",
+      },
+      {
+        "name": "chatStream",
+        "requiredParams": 1,
+        "returnType": "AsyncGenerator<OpenAIChatChunk>",
+      },
+      {
+        "name": "chatWithCallbacks",
+        "requiredParams": 2,
+        "returnType": "Promise<OpenAIChatResponse>",
+      },
+      {
+        "name": "configure",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+      {
+        "name": "createBatch",
+        "requiredParams": 1,
+        "returnType": "Promise<OpenAIBatch>",
+      },
+      {
+        "name": "deleteFile",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "editImage",
+        "requiredParams": 2,
+        "returnType": "Promise<OpenAIImageResponse>",
+      },
+      {
+        "name": "embed",
+        "requiredParams": 1,
+        "returnType": "Promise<number[][]>",
+      },
+      {
+        "name": "generateImage",
+        "requiredParams": 1,
+        "returnType": "Promise<OpenAIImageResponse>",
+      },
+      {
+        "name": "getBatch",
+        "requiredParams": 1,
+        "returnType": "Promise<OpenAIBatch>",
+      },
+      {
+        "name": "getBatchResults",
+        "requiredParams": 1,
+        "returnType": "Promise<OpenAIBatchResponseItem[]>",
+      },
+      {
+        "name": "getFileContent",
+        "requiredParams": 1,
+        "returnType": "Promise<string>",
+      },
+      {
+        "name": "getModel",
+        "requiredParams": 1,
+        "returnType": "Promise<OpenAIModel>",
+      },
+      {
+        "name": "listBatches",
+        "requiredParams": 0,
+        "returnType": "Promise<OpenAIBatch[]>",
+      },
+      {
+        "name": "listFiles",
+        "requiredParams": 0,
+        "returnType": "Promise<OpenAIFile[]>",
+      },
+      {
+        "name": "listModels",
+        "requiredParams": 0,
+        "returnType": "Promise<OpenAIModel[]>",
+      },
+      {
+        "name": "moderate",
+        "requiredParams": 1,
+        "returnType": "Promise<OpenAIModerationResult>",
+      },
+      {
+        "name": "setApiKey",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+      {
+        "name": "setAzureConfig",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+      {
+        "name": "setBaseUrl",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+      {
+        "name": "setDefaultModel",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+      {
+        "name": "setMaxRetries",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+      {
+        "name": "setOrganization",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+      {
+        "name": "setProvider",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+      {
+        "name": "setTimeout",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+      {
+        "name": "speak",
+        "requiredParams": 1,
+        "returnType": "Promise<Buffer>",
+      },
+      {
+        "name": "transcribe",
+        "requiredParams": 1,
+        "returnType": "Promise<OpenAITranscription>",
+      },
+      {
+        "name": "uploadFile",
+        "requiredParams": 3,
+        "returnType": "Promise<OpenAIFile>",
+      },
+    ],
+    "plugin": [
+      {
+        "name": "getConfig",
+        "requiredParams": 1,
+        "returnType": "Promise<any>",
+      },
+      {
+        "name": "getDataTable",
+        "requiredParams": 1,
+        "returnType": "DataTableInfo | null",
+      },
+      {
+        "name": "getDataTableId",
+        "requiredParams": 1,
+        "returnType": "string | null",
+      },
+      {
+        "name": "getDataTables",
+        "requiredParams": 0,
+        "returnType": "DataTableInfo[]",
+      },
+      {
+        "name": "getId",
+        "requiredParams": 0,
+        "returnType": "string",
+      },
+      {
+        "name": "getInfo",
+        "requiredParams": 0,
+        "returnType": "PluginInfo",
+      },
+      {
+        "name": "getManifest",
+        "requiredParams": 0,
+        "returnType": "any",
+      },
+      {
+        "name": "getName",
+        "requiredParams": 0,
+        "returnType": "string",
+      },
+      {
+        "name": "getStoragePath",
+        "requiredParams": 0,
+        "returnType": "string",
+      },
+      {
+        "name": "getTempPath",
+        "requiredParams": 0,
+        "returnType": "string",
+      },
+      {
+        "name": "getVersion",
+        "requiredParams": 0,
+        "returnType": "string",
+      },
+      {
+        "name": "setConfig",
+        "requiredParams": 2,
+        "returnType": "Promise<void>",
+      },
+    ],
+    "profile": [
+      {
+        "name": "applyPreset",
+        "requiredParams": 2,
+        "returnType": "Promise<BrowserProfile>",
+      },
+      {
+        "name": "create",
+        "requiredParams": 1,
+        "returnType": "Promise<BrowserProfile>",
+      },
+      {
+        "name": "delete",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "describeEngineRuntime",
+        "requiredParams": 0,
+        "returnType": "BrowserRuntimeDescriptor",
+      },
+      {
+        "name": "generateFingerprint",
+        "requiredParams": 0,
+        "returnType": "Promise<Partial<FingerprintConfig>>",
+      },
+      {
+        "name": "get",
+        "requiredParams": 1,
+        "returnType": "Promise<BrowserProfile | null>",
+      },
+      {
+        "name": "getDefaultFingerprint",
+        "requiredParams": 0,
+        "returnType": "Promise<FingerprintConfig>",
+      },
+      {
+        "name": "getPresetConfig",
+        "requiredParams": 1,
+        "returnType": "Promise<FingerprintConfig | null>",
+      },
+      {
+        "name": "getPresets",
+        "requiredParams": 0,
+        "returnType": "Promise<PresetInfo[]>",
+      },
+      {
+        "name": "getStats",
+        "requiredParams": 0,
+        "returnType": "Promise<{ total: number; idle: number; active: number; error: number; }>",
+      },
+      {
+        "name": "getUsage",
+        "requiredParams": 1,
+        "returnType": "Promise<{ quota: number; browserCount: number; idleCount: number; lockedCount: number; waitingCount: number; } | null>",
+      },
+      {
+        "name": "isAvailable",
+        "requiredParams": 1,
+        "returnType": "Promise<boolean>",
+      },
+      {
+        "name": "launch",
+        "requiredParams": 1,
+        "returnType": "Promise<BrowserHandle>",
+      },
+      {
+        "name": "launchPopup",
+        "requiredParams": 1,
+        "returnType": "Promise<PopupBrowserHandle>",
+      },
+      {
+        "name": "list",
+        "requiredParams": 0,
+        "returnType": "Promise<BrowserProfile[]>",
+      },
+      {
+        "name": "listEngineRuntimes",
+        "requiredParams": 0,
+        "returnType": "Record<AutomationEngine, BrowserRuntimeDescriptor>",
+      },
+      {
+        "name": "listGroups",
+        "requiredParams": 0,
+        "returnType": "Promise<any[]>",
+      },
+      {
+        "name": "randomizeFingerprint",
+        "requiredParams": 1,
+        "returnType": "Promise<BrowserProfile>",
+      },
+      {
+        "name": "regenerateFingerprint",
+        "requiredParams": 1,
+        "returnType": "Promise<BrowserProfile>",
+      },
+      {
+        "name": "update",
+        "requiredParams": 2,
+        "returnType": "Promise<BrowserProfile>",
+      },
+      {
+        "name": "validateFingerprint",
+        "requiredParams": 1,
+        "returnType": "Promise<FingerprintValidationResult>",
+      },
+      {
+        "name": "withLease",
+        "requiredParams": 3,
+        "returnType": "Promise<T>",
+      },
+    ],
+    "raw": [],
+    "savedSite": [
+      {
+        "name": "create",
+        "requiredParams": 1,
+        "returnType": "Promise<SavedSite>",
+      },
+      {
+        "name": "delete",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "ensureDoudianSavedSite",
+        "requiredParams": 0,
+        "returnType": "Promise<SavedSite>",
+      },
+      {
+        "name": "get",
+        "requiredParams": 1,
+        "returnType": "Promise<SavedSite | null>",
+      },
+      {
+        "name": "getByName",
+        "requiredParams": 1,
+        "returnType": "Promise<SavedSite | null>",
+      },
+      {
+        "name": "list",
+        "requiredParams": 0,
+        "returnType": "Promise<SavedSite[]>",
+      },
+      {
+        "name": "update",
+        "requiredParams": 2,
+        "returnType": "Promise<SavedSite>",
+      },
+    ],
+    "scheduler": [
+      {
+        "name": "cancel",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "create",
+        "requiredParams": 1,
+        "returnType": "Promise<ScheduledTaskInfo>",
+      },
+      {
+        "name": "dispose",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "get",
+        "requiredParams": 1,
+        "returnType": "Promise<ScheduledTaskInfo | null>",
+      },
+      {
+        "name": "getHistory",
+        "requiredParams": 1,
+        "returnType": "Promise<ExecutionInfo[]>",
+      },
+      {
+        "name": "isAvailable",
+        "requiredParams": 0,
+        "returnType": "boolean",
+      },
+      {
+        "name": "list",
+        "requiredParams": 0,
+        "returnType": "Promise<ScheduledTaskInfo[]>",
+      },
+      {
+        "name": "pause",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "resume",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "trigger",
+        "requiredParams": 1,
+        "returnType": "Promise<ExecutionInfo>",
+      },
+    ],
+    "storage": [
+      {
+        "name": "clearAllData",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "deleteData",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "getAllConfig",
+        "requiredParams": 0,
+        "returnType": "Promise<Record<string, any>>",
+      },
+      {
+        "name": "getAllData",
+        "requiredParams": 0,
+        "returnType": "Promise<Record<string, any>>",
+      },
+      {
+        "name": "getConfig",
+        "requiredParams": 1,
+        "returnType": "Promise<any>",
+      },
+      {
+        "name": "getData",
+        "requiredParams": 1,
+        "returnType": "Promise<any>",
+      },
+      {
+        "name": "setConfig",
+        "requiredParams": 2,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "setData",
+        "requiredParams": 2,
+        "returnType": "Promise<void>",
+      },
+    ],
+    "taskQueue": [
+      {
+        "name": "cancelAll",
+        "requiredParams": 0,
+        "returnType": "Promise<number>",
+      },
+      {
+        "name": "create",
+        "requiredParams": 0,
+        "returnType": "Promise<TaskQueue>",
+      },
+      {
+        "name": "getActiveQueues",
+        "requiredParams": 0,
+        "returnType": "TaskQueue[]",
+      },
+      {
+        "name": "release",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "stopAll",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+    ],
+    "ui": [
+      {
+        "name": "error",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "getCurrentDataset",
+        "requiredParams": 0,
+        "returnType": "string | null",
+      },
+      {
+        "name": "info",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "notify",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "setCurrentDataset",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+      {
+        "name": "success",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "warning",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+    ],
+    "utils": [
+      {
+        "name": "arrayToMap",
+        "requiredParams": 2,
+        "returnType": "Map<any, T>",
+      },
+      {
+        "name": "chunk",
+        "requiredParams": 2,
+        "returnType": "T[][]",
+      },
+      {
+        "name": "clone",
+        "requiredParams": 1,
+        "returnType": "T",
+      },
+      {
+        "name": "createInterval",
+        "requiredParams": 2,
+        "returnType": "TaskController",
+      },
+      {
+        "name": "formatDate",
+        "requiredParams": 1,
+        "returnType": "string",
+      },
+      {
+        "name": "generateId",
+        "requiredParams": 0,
+        "returnType": "string",
+      },
+      {
+        "name": "groupBy",
+        "requiredParams": 2,
+        "returnType": "Map<any, T[]>",
+      },
+      {
+        "name": "randomString",
+        "requiredParams": 1,
+        "returnType": "string",
+      },
+      {
+        "name": "sleep",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "validate",
+        "requiredParams": 2,
+        "returnType": "{ valid: boolean; errors?: any[] }",
+      },
+      {
+        "name": "validateOrThrow",
+        "requiredParams": 2,
+        "returnType": "void",
+      },
+    ],
+    "vectorIndex": [
+      {
+        "name": "add",
+        "requiredParams": 3,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "addBatch",
+        "requiredParams": 2,
+        "returnType": "Promise<BatchAddResult>",
+      },
+      {
+        "name": "clear",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "create",
+        "requiredParams": 1,
+        "returnType": "Promise<string>",
+      },
+      {
+        "name": "delete",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "dispose",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "getDeletionRatio",
+        "requiredParams": 1,
+        "returnType": "number",
+      },
+      {
+        "name": "getEntry",
+        "requiredParams": 2,
+        "returnType": "VectorEntry | null",
+      },
+      {
+        "name": "getIds",
+        "requiredParams": 1,
+        "returnType": "string[]",
+      },
+      {
+        "name": "getStats",
+        "requiredParams": 1,
+        "returnType": "IndexStats",
+      },
+      {
+        "name": "has",
+        "requiredParams": 2,
+        "returnType": "boolean",
+      },
+      {
+        "name": "listIndexes",
+        "requiredParams": 0,
+        "returnType": "Array<{ indexId: string; stats: IndexStats }>",
+      },
+      {
+        "name": "load",
+        "requiredParams": 1,
+        "returnType": "Promise<string>",
+      },
+      {
+        "name": "rebuild",
+        "requiredParams": 1,
+        "returnType": "Promise<{ success: number; failed: number }>",
+      },
+      {
+        "name": "remove",
+        "requiredParams": 2,
+        "returnType": "Promise<boolean>",
+      },
+      {
+        "name": "save",
+        "requiredParams": 2,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "search",
+        "requiredParams": 2,
+        "returnType": "Promise<VectorSearchResult[]>",
+      },
+    ],
+    "webhook": [
+      {
+        "name": "dispose",
+        "requiredParams": 0,
+        "returnType": "void",
+      },
+      {
+        "name": "emit",
+        "requiredParams": 2,
+        "returnType": "void",
+      },
+      {
+        "name": "register",
+        "requiredParams": 1,
+        "returnType": "void",
+      },
+    ],
+    "window": [
+      {
+        "name": "openModal",
+        "requiredParams": 1,
+        "returnType": "Promise<ModalWindowResult>",
+      },
+    ],
+  },
+  "publicHelpersMethods": [
+    {
+      "name": "dispose",
+      "requiredParams": 0,
+      "returnType": "Promise<void>",
+    },
+    {
+      "name": "registerDisposer",
+      "requiredParams": 1,
+      "returnType": "void",
+    },
+    {
+      "name": "setContext",
+      "requiredParams": 1,
+      "returnType": "void",
+    },
+    {
+      "name": "setCurrentDataset",
+      "requiredParams": 1,
+      "returnType": "void",
+    },
+  ],
+}
+`;
