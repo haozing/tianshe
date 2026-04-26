@@ -7,6 +7,7 @@
  */
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import type { TiansheEditionName, TiansheEditionPublicInfo } from '../edition/types';
 import type { LogEntry } from '../main/log-storage-service';
 import type { DownloadInfo } from '../main/download';
 import type {
@@ -47,14 +48,24 @@ import type {
 } from '../core/observability/types';
 import type { PluginNotificationPayload } from '../core/js-plugin/events';
 
-const tiansheEdition = {
-  name: 'open' as const,
-  capabilities: {
-    cloudAuth: false,
-    cloudSnapshot: false,
-    cloudCatalog: false,
-  },
+const resolveTiansheEditionPublicInfo = (): TiansheEditionPublicInfo => {
+  const value = String(process.env.TIANSHE_EDITION || process.env.AIRPA_EDITION || '')
+    .trim()
+    .toLowerCase();
+  const name: TiansheEditionName = value === 'cloud' ? 'cloud' : 'open';
+  const cloudEnabled = name === 'cloud';
+
+  return {
+    name,
+    capabilities: {
+      cloudAuth: cloudEnabled,
+      cloudSnapshot: cloudEnabled,
+      cloudCatalog: cloudEnabled,
+    },
+  };
 };
+
+const tiansheEdition = resolveTiansheEditionPublicInfo();
 
 /**
  * 暴露给渲染进程的 API
