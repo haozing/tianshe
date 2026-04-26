@@ -137,6 +137,12 @@ export class JSPluginManager {
       logger.error('[INIT] Failed to load installed plugins, continuing without plugins:', error);
     }
 
+    try {
+      await this.importExternalPluginSources();
+    } catch (error: any) {
+      logger.error('[INIT] Failed to import external plugins, continuing:', error);
+    }
+
     // 运行数据完整性检查
     try {
       logger.info('[IntegrityCheck] Running data integrity check...');
@@ -1745,6 +1751,50 @@ export class JSPluginManager {
       logger.info(
         `[SKIP] Skipped ${disabledPlugins.length} disabled plugin(s): ${disabledPlugins.map((p) => p.id).join(', ')}`
       );
+    }
+  }
+
+  private async importExternalPluginSources(): Promise<void> {
+    const sources = await this.loader.discoverExternalPluginSources();
+    if (sources.length === 0) {
+      return;
+    }
+
+    logger.info(`[ExternalPlugins] Found ${sources.length} external plugin source(s)`);
+
+    for (const sourcePath of sources) {
+      let prepared: PreparedPluginSource | null = null;
+      try {
+        prepared = await this.preparePluginSource(sourcePath, '_temp_external_plugin_probe');
+        const existing = await this.getPluginInfo(prepared.manifest.id);
+        if (existing) {
+          logger.info(
+            `[ExternalPlugins] Plugin already installed, skipping auto import: ${prepared.manifest.id}`
+          );
+          continue;
+        }
+
+        const result = await this.import(sourcePath, {
+          devMode: prepared.kind === 'directory',
+          sourceType: 'local_private',
+          installChannel: 'manual_import',
+        });
+
+        if (!result.success) {
+          logger.warn(
+            `[ExternalPlugins] Failed to auto import ${sourcePath}: ${result.error || 'unknown error'}`
+          );
+        }
+      } catch (error: any) {
+        logger.error(
+          `[ExternalPlugins] Failed to inspect external plugin source: ${sourcePath}`,
+          error?.message || String(error)
+        );
+      } finally {
+        if (prepared) {
+          await this.cleanupPreparedPluginSource(prepared);
+        }
+      }
     }
   }
 

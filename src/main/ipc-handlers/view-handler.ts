@@ -4,7 +4,11 @@
  */
 
 import { ipcMain, IpcMainInvokeEvent } from 'electron';
-import { CLOUD_AUTH_COOKIE_NAME, CLOUD_WORKBENCH_URL } from '../../constants/cloud';
+import {
+  CLOUD_AUTH_COOKIE_NAME,
+  CLOUD_WORKBENCH_URL,
+  CLOUD_WORKBENCH_VIEW_ID,
+} from '../../constants/cloud';
 import {
   getPersistedCloudAuthSession,
   invalidateCloudAuthSession,
@@ -17,6 +21,14 @@ import {
 } from '../webcontentsview-manager';
 import { WindowManager } from '../window-manager';
 import { handleIPCError } from '../ipc-utils';
+
+function getConfiguredWorkbenchUrl(): string {
+  return String(CLOUD_WORKBENCH_URL || '').trim();
+}
+
+function shouldUseConfiguredWorkbenchUrl(viewId: string): boolean {
+  return viewId === CLOUD_WORKBENCH_VIEW_ID && Boolean(getConfiguredWorkbenchUrl());
+}
 
 export class ViewIPCHandler {
   constructor(
@@ -75,7 +87,9 @@ export class ViewIPCHandler {
           this.viewManager.registerView({
             id: options.viewId,
             partition: options.partition,
-            url: options.url,
+            url: shouldUseConfiguredWorkbenchUrl(options.viewId)
+              ? getConfiguredWorkbenchUrl()
+              : options.url,
             metadata: options.metadata,
           });
 
@@ -148,7 +162,10 @@ export class ViewIPCHandler {
       'view:navigate',
       async (_event: IpcMainInvokeEvent, options: { viewId: string; url: string }) => {
         try {
-          await this.viewManager.navigateView(options.viewId, options.url);
+          const targetUrl = shouldUseConfiguredWorkbenchUrl(options.viewId)
+            ? getConfiguredWorkbenchUrl()
+            : options.url;
+          await this.viewManager.navigateView(options.viewId, targetUrl);
           return { success: true };
         } catch (error: unknown) {
           return handleIPCError(error);
@@ -170,7 +187,17 @@ export class ViewIPCHandler {
             throw new Error(`View not found: ${options.viewId}`);
           }
 
-          const targetUrl = new URL(options.url);
+          const configuredWorkbenchUrl = getConfiguredWorkbenchUrl();
+          if (!configuredWorkbenchUrl) {
+            return {
+              success: false,
+              reason: 'workbench-url-not-configured',
+            };
+          }
+
+          const expectedUrl = new URL(configuredWorkbenchUrl);
+          const targetUrl =
+            options.viewId === CLOUD_WORKBENCH_VIEW_ID ? expectedUrl : new URL(options.url);
           const cookieUrl = `${targetUrl.origin}/`;
           const cookieName =
             String(options.cookieName || CLOUD_AUTH_COOKIE_NAME).trim() || CLOUD_AUTH_COOKIE_NAME;
@@ -184,7 +211,7 @@ export class ViewIPCHandler {
 
           const persisted = getPersistedCloudAuthSession();
           const token = String(persisted?.token || '').trim();
-          const expectedOrigin = new URL(CLOUD_WORKBENCH_URL).origin;
+          const expectedOrigin = expectedUrl.origin;
 
           if (targetUrl.origin !== expectedOrigin) {
             await clearCookie();

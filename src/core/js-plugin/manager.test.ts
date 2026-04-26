@@ -70,6 +70,7 @@ const mockPluginLoader = {
   import: vi.fn(),
   loadModule: vi.fn(),
   unloadModule: vi.fn(),
+  discoverExternalPluginSources: vi.fn().mockResolvedValue([]),
   safeRemovePluginPath: vi.fn().mockResolvedValue(undefined),
   createSymbolicLink: vi.fn().mockResolvedValue(true),
 };
@@ -187,6 +188,7 @@ describe('JSPluginManager', () => {
 
     // 重置所有 mock
     vi.clearAllMocks();
+    mockPluginLoader.discoverExternalPluginSources.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -290,6 +292,46 @@ describe('JSPluginManager', () => {
 
       // 不应该抛出错误，而是记录日志
       await expect(manager.init()).resolves.not.toThrow();
+    });
+
+    it('应该自动导入根目录插件目录中的新插件', async () => {
+      const loaderModule = await import('./loader');
+      vi.spyOn(manager, 'listPlugins').mockResolvedValue([]);
+      vi.spyOn(manager, 'getPluginInfo').mockResolvedValue(null);
+      const importSpy = vi.spyOn(manager, 'import').mockResolvedValue({
+        success: true,
+        pluginId: 'external_plugin',
+      });
+
+      mockPluginLoader.discoverExternalPluginSources.mockResolvedValue([
+        '/app/plugins/external-plugin',
+      ]);
+      vi.mocked(fs.stat).mockResolvedValue({
+        isDirectory: () => true,
+        isFile: () => false,
+      } as any);
+      vi.mocked(loaderModule.readManifest).mockResolvedValue({
+        id: 'external_plugin',
+        name: 'External Plugin',
+        version: '1.0.0',
+        author: 'External Author',
+        main: 'index.js',
+      });
+
+      vi.doMock('./data-integrity-checker', () => ({
+        DataIntegrityChecker: vi.fn().mockImplementation(() => mockDataIntegrityChecker),
+      }));
+      vi.doMock('../../main/duckdb/utils', () => ({
+        getImportsDir: vi.fn().mockReturnValue('/mock/imports'),
+      }));
+
+      await manager.init();
+
+      expect(importSpy).toHaveBeenCalledWith('/app/plugins/external-plugin', {
+        devMode: true,
+        sourceType: 'local_private',
+        installChannel: 'manual_import',
+      });
     });
   });
 

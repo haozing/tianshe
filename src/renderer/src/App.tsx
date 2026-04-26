@@ -12,6 +12,12 @@ import { Toaster } from './components/ui/sonner';
 import { AppTitleBar } from './components/layout/AppTitleBar';
 import { isCloudWorkbenchAvailable } from './lib/edition';
 import { toast } from './lib/toast';
+import {
+  DEFAULT_APP_SHELL_CONFIG,
+  normalizeAppShellConfig,
+  resolveAppShellActiveView,
+  type AppShellConfig,
+} from '../../shared/app-shell-config';
 
 const DatasetsPage = lazy(() =>
   import('./components/DatasetsPage').then((module) => ({ default: module.DatasetsPage }))
@@ -57,6 +63,7 @@ type AppInfoResult = {
   info?: {
     platform?: string;
     isPackaged?: boolean;
+    appShell?: AppShellConfig;
   };
 };
 
@@ -66,9 +73,11 @@ function App() {
   const isActivityBarCollapsed = useUIStore((state) => state.isActivityBarCollapsed);
   const [showUpdateNotification, setShowUpdateNotification] = useState(false);
   const [appPlatform, setAppPlatform] = useState<string>('');
+  const [appShellConfig, setAppShellConfig] = useState<AppShellConfig>(DEFAULT_APP_SHELL_CONFIG);
   const cloudWorkbenchAvailable = isCloudWorkbenchAvailable();
-  const effectiveActiveView =
-    activeView === 'workbench' && !cloudWorkbenchAvailable ? 'accountCenter' : activeView;
+  const effectiveActiveView = resolveAppShellActiveView(activeView, appShellConfig, {
+    workbenchAvailable: cloudWorkbenchAvailable,
+  });
 
   useEffect(() => {
     let mounted = true;
@@ -80,11 +89,17 @@ function App() {
         const isPackaged = result?.success === true && result?.info?.isPackaged === true;
         setShowUpdateNotification(isPackaged);
         setAppPlatform(result?.info?.platform || '');
+        setAppShellConfig(
+          result?.info?.appShell
+            ? normalizeAppShellConfig(result.info.appShell)
+            : DEFAULT_APP_SHELL_CONFIG
+        );
       })
       .catch(() => {
         if (!mounted) return;
         setShowUpdateNotification(false);
         setAppPlatform('');
+        setAppShellConfig(DEFAULT_APP_SHELL_CONFIG);
       });
 
     return () => {
@@ -140,10 +155,10 @@ function App() {
   }, [isActivityBarCollapsed]);
 
   useEffect(() => {
-    if (activeView === 'workbench' && !cloudWorkbenchAvailable) {
-      setActiveView('accountCenter');
+    if (effectiveActiveView !== activeView) {
+      setActiveView(effectiveActiveView);
     }
-  }, [activeView, cloudWorkbenchAvailable, setActiveView]);
+  }, [activeView, effectiveActiveView, setActiveView]);
 
   // ✅ 统一管理视图切换时的清理逻辑
   useEffect(() => {
@@ -234,11 +249,11 @@ function App() {
         }`}
       >
         {/* 左侧 Activity Bar */}
-        <ActivityBar />
+        <ActivityBar appShellConfig={appShellConfig} />
 
         {/* 主内容区域 */}
         <main className="shell-content-surface flex flex-1 flex-col overflow-hidden">
-          {effectiveActiveView === 'datasets' ? (
+          {effectiveActiveView === 'datasets' && appShellConfig.pages.datasets ? (
             <ErrorBoundary fallback={<TabErrorFallback tabName="数据表" />}>
               <Suspense fallback={<ViewLoadingFallback />}>
                 <DatasetsPage />
@@ -250,13 +265,13 @@ function App() {
                 <WorkbenchPanel />
               </Suspense>
             </ErrorBoundary>
-          ) : effectiveActiveView === 'accountCenter' ? (
+          ) : effectiveActiveView === 'accountCenter' && appShellConfig.pages.accountCenter ? (
             <ErrorBoundary fallback={<TabErrorFallback tabName="账号中心" />}>
               <Suspense fallback={<ViewLoadingFallback />}>
                 <AccountCenterPage />
               </Suspense>
             </ErrorBoundary>
-          ) : effectiveActiveView === 'marketplace' ? (
+          ) : effectiveActiveView === 'marketplace' && appShellConfig.pages.marketplace ? (
             <ErrorBoundary fallback={<TabErrorFallback tabName="插件市场" />}>
               <Suspense fallback={<ViewLoadingFallback />}>
                 <PluginMarketPage />
@@ -267,7 +282,7 @@ function App() {
               {/* 插件视图容器 - 完全空白，WebContentsView 会通过 attachView 显示 */}
               <div className="h-full w-full bg-background" />
             </ErrorBoundary>
-          ) : effectiveActiveView === 'settings' ? (
+          ) : effectiveActiveView === 'settings' && appShellConfig.pages.settings ? (
             <ErrorBoundary fallback={<TabErrorFallback tabName="设置" />}>
               <Suspense fallback={<ViewLoadingFallback />}>
                 <SettingsPage />

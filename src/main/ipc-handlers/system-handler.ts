@@ -15,6 +15,7 @@ import {
   getInternalBrowserDevToolsConfig,
   setInternalBrowserDevToolsConfig,
 } from '../internal-browser-devtools';
+import { getAppShellConfig } from '../app-shell-config';
 
 // 全局 store 实例（用于读取配置）
 const store = new Store();
@@ -205,6 +206,7 @@ export class SystemIPCHandler {
           isFromAsar,
           shouldShowDevOptions,
           enableDevModeFromConfig, // 🆕 配置中的开发模式状态
+          appShell: getAppShellConfig(),
         };
         console.log('[DEBUG][Main] app.isPackaged:', app.isPackaged);
         console.log('[DEBUG][Main] isDevelopment:', isDevelopment);

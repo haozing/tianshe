@@ -55,6 +55,23 @@ The open edition uses independent runtime identity and user data. Development la
 
 For development launches through `scripts/launch-electron.js`, set `TIANSHEAI_USER_DATA_DIR` to override the user data directory.
 
+## Shell Configuration
+
+Place `tianshe-shell.config.json` beside the packaged `.exe` to hide built-in shell pages without rebuilding. Development also reads the same file from the repository root.
+
+```json
+{
+  "pages": {
+    "datasets": false,
+    "marketplace": false,
+    "accountCenter": false,
+    "settings": false
+  }
+}
+```
+
+When all four controlled pages are hidden, the app opens the first enabled plugin that contributes an Activity Bar view. External plugins can be placed in `plugins/` or `js-plugins/` beside the packaged `.exe`; each child directory should contain a `manifest.json`, or the folder can contain `.tsai`/`.zip` plugin packages.
+
 ## Repository Boundary
 
 The open edition may contain a small allowlist of cloud stub files so shared UI and type contracts can compile. Those stubs must not contain real cloud endpoints, private server paths, auth flows, snapshot/catalog implementations, or deployment hostnames. Run this check before publishing:

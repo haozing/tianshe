@@ -23,6 +23,7 @@ import { PluginLoader, type PluginImportCallbacks } from './plugin-loader';
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => '/user/data'),
+    getAppPath: vi.fn(() => '/mock/app'),
   },
 }));
 
@@ -196,6 +197,49 @@ describe('PluginLoader', () => {
       vi.mocked(fs.ensureDir).mockResolvedValueOnce(undefined);
 
       await expect(loader.ensurePluginsDir()).resolves.toBeUndefined();
+    });
+  });
+
+  describe('discoverExternalPluginSources', () => {
+    it('应该发现应用根目录 plugins 下的插件目录和插件包', async () => {
+      const externalRoot = path.resolve('/mock/app', 'plugins');
+      const pluginDir = path.join(externalRoot, 'plugin-a');
+      const pluginArchive = path.join(externalRoot, 'plugin-b.tsai');
+
+      vi.mocked(fs.pathExists).mockImplementation(async (targetPath: string) => {
+        const normalized = path.normalize(targetPath);
+        return [
+          path.normalize(externalRoot),
+          path.normalize(path.join(pluginDir, 'manifest.json')),
+          path.normalize(pluginArchive),
+        ].includes(normalized);
+      });
+      vi.mocked(fs.stat).mockImplementation(async (targetPath: string) => {
+        const normalized = path.normalize(targetPath);
+        return {
+          isDirectory: () => normalized === path.normalize(externalRoot),
+          isFile: () => normalized === path.normalize(pluginArchive),
+        } as any;
+      });
+      vi.mocked(fs.readdir).mockResolvedValue([
+        {
+          name: 'plugin-a',
+          isDirectory: () => true,
+          isFile: () => false,
+        },
+        {
+          name: 'plugin-b.tsai',
+          isDirectory: () => false,
+          isFile: () => true,
+        },
+      ] as any);
+
+      const sources = await loader.discoverExternalPluginSources();
+
+      expect(sources).toEqual([
+        path.resolve(pluginDir),
+        path.resolve(pluginArchive),
+      ]);
     });
   });
 

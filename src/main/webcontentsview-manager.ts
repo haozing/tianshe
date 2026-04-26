@@ -330,6 +330,7 @@ export interface DetachScopedViewsOptions {
 export class WebContentsViewManager {
   private registry: Map<string, ViewRegistration> = new Map(); // View 注册表（无限制）
   private pool: Map<string, WebContentsViewInfo> = new Map(); // 实际的 View 池（有限制）
+  private viewActivationTasks: Map<string, Promise<WebContentsViewInfo>> = new Map();
   private maxSize: number;
   private pluginPageViewLoads = new Map<string, Promise<void>>();
   private pluginPageViewContributions = new Map<string, ActivityBarViewContribution>();
@@ -1015,15 +1016,31 @@ export class WebContentsViewManager {
       throw new Error(`View not registered: ${viewId}`);
     }
 
-    console.log(`🆕 [Performance] Activating new view: ${viewId}...`);
-    const result = await this.createViewFromRegistration(registration);
-    const duration = Date.now() - perfStart;
-    console.log(`⏱️  [Performance] View activation completed: ${viewId} in ${duration}ms`);
+    const pendingActivation = this.viewActivationTasks.get(viewId);
+    if (pendingActivation) {
+      console.log(`⏳ [Performance] View activation already in progress: ${viewId}`);
+      const viewInfo = await pendingActivation;
+      viewInfo.lastAccessedAt = Date.now();
+      return viewInfo;
+    }
 
-    this.ensurePluginPageViewLoaded(viewId, result).catch((error) => {
-      console.error(`❌ Failed to ensure plugin page view loaded: ${viewId}`, error);
-    });
-    return result;
+    console.log(`🆕 [Performance] Activating new view: ${viewId}...`);
+    const activationTask = this.createViewFromRegistration(registration);
+    this.viewActivationTasks.set(viewId, activationTask);
+
+    try {
+      const result = await activationTask;
+      const duration = Date.now() - perfStart;
+      console.log(`⏱️  [Performance] View activation completed: ${viewId} in ${duration}ms`);
+      this.ensurePluginPageViewLoaded(viewId, result).catch((error) => {
+        console.error(`❌ Failed to ensure plugin page view loaded: ${viewId}`, error);
+      });
+      return result;
+    } finally {
+      if (this.viewActivationTasks.get(viewId) === activationTask) {
+        this.viewActivationTasks.delete(viewId);
+      }
+    }
   }
 
   private parsePluginPageViewId(

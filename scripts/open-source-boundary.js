@@ -403,8 +403,7 @@ function applyOpenSourceOverlay(outputDir) {
     predev: 'node scripts/clean-main-dist.js && npm run build:main',
     dev: 'npm run dev:open',
     'dev:open': 'node scripts/run-with-edition.js open npm run dev:base',
-    'dev:base':
-      'concurrently -k --names renderer,main,electron "npm:dev:renderer" "npm:dev:main" "npm:dev:electron"',
+    'dev:base': 'node scripts/run-dev-base.js',
     'dev:renderer': 'vite',
     'dev:main': 'tsc -p tsconfig.main.json --watch --preserveWatchOutput',
     'dev:electron':

@@ -47,6 +47,7 @@ import type {
   TraceTimeline,
 } from '../core/observability/types';
 import type { PluginNotificationPayload } from '../core/js-plugin/events';
+import type { AppShellConfig } from '../shared/app-shell-config';
 
 const resolveTiansheEditionPublicInfo = (): TiansheEditionPublicInfo => {
   const value = String(process.env.TIANSHE_EDITION || process.env.AIRPA_EDITION || '')
@@ -227,6 +228,7 @@ const electronAPI = {
       isDevelopment?: boolean;
       isFromAsar?: boolean;
       shouldShowDevOptions?: boolean;
+      appShell?: AppShellConfig;
     };
     error?: string;
   }> => {

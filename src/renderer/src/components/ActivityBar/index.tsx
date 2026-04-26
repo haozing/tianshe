@@ -3,7 +3,7 @@
  * 用于切换主要功能模块（数据表、插件市场等）
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronLeft,
@@ -24,6 +24,11 @@ import { buildPluginMenuTree } from './plugin-menu-tree';
 import { CloudAuthDialog } from './CloudAuthDialog';
 import { useCloudAuthStore } from '../../stores/cloudAuthStore';
 import { isCloudAuthAvailable, isCloudWorkbenchAvailable } from '../../lib/edition';
+import {
+  DEFAULT_APP_SHELL_CONFIG,
+  areControlledAppShellPagesHidden,
+  type AppShellConfig,
+} from '../../../../shared/app-shell-config';
 
 interface ActivityBarButtonProps {
   icon: React.ReactNode;
@@ -104,7 +109,11 @@ function renderActivityPluginIcon(
   });
 }
 
-export function ActivityBar() {
+interface ActivityBarProps {
+  appShellConfig?: AppShellConfig;
+}
+
+export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: ActivityBarProps) {
   const {
     activeView,
     setActiveView,
@@ -230,7 +239,7 @@ export function ActivityBar() {
   }, []);
 
   // 处理插件按钮点击
-  const handlePluginClick = async (pluginId: string) => {
+  const handlePluginClick = useCallback(async (pluginId: string) => {
     try {
       // 1. 先隐藏之前的插件视图（如果有）
       if (activePluginView && activePluginView !== pluginId) {
@@ -269,7 +278,7 @@ export function ActivityBar() {
     } catch (error) {
       console.error(`[ActivityBar] Failed to show plugin view ${pluginId}:`, error);
     }
-  };
+  }, [activePluginView, setActivePluginView]);
 
   const activities: Array<{
     value: ActiveView;
@@ -278,6 +287,7 @@ export function ActivityBar() {
   }> = useMemo(
     () => [
       ...(cloudWorkbenchAvailable
+        && !areControlledAppShellPagesHidden(appShellConfig)
         ? [
             {
               value: 'workbench' as const,
@@ -286,24 +296,64 @@ export function ActivityBar() {
             },
           ]
         : []),
-      {
-        value: 'datasets',
-        icon: <Database className="w-6 h-6" />,
-        label: '数据表',
-      },
-      {
-        value: 'marketplace',
-        icon: <Store className="w-6 h-6" />,
-        label: '插件市场',
-      },
-      {
-        value: 'accountCenter',
-        icon: <Monitor className="w-6 h-6" />,
-        label: '账号中心',
-      },
+      ...(appShellConfig.pages.datasets
+        ? [
+            {
+              value: 'datasets' as const,
+              icon: <Database className="w-6 h-6" />,
+              label: '数据表',
+            },
+          ]
+        : []),
+      ...(appShellConfig.pages.marketplace
+        ? [
+            {
+              value: 'marketplace' as const,
+              icon: <Store className="w-6 h-6" />,
+              label: '插件市场',
+            },
+          ]
+        : []),
+      ...(appShellConfig.pages.accountCenter
+        ? [
+            {
+              value: 'accountCenter' as const,
+              icon: <Monitor className="w-6 h-6" />,
+              label: '账号中心',
+            },
+          ]
+        : []),
     ],
-    [cloudWorkbenchAvailable]
+    [appShellConfig, cloudWorkbenchAvailable]
   );
+
+  const shouldAutoOpenFirstPlugin =
+    areControlledAppShellPagesHidden(appShellConfig) && plugins.length > 0;
+
+  useEffect(() => {
+    if (!shouldAutoOpenFirstPlugin) {
+      return;
+    }
+
+    const selectedPlugin =
+      plugins.find((plugin) => plugin.id === activePluginView) ??
+      plugins[0];
+    if (!selectedPlugin) {
+      return;
+    }
+
+    if (activeView === 'plugin' && activePluginView === selectedPlugin.id) {
+      return;
+    }
+
+    void handlePluginClick(selectedPlugin.id);
+  }, [
+    activePluginView,
+    activeView,
+    handlePluginClick,
+    plugins,
+    shouldAutoOpenFirstPlugin,
+  ]);
 
   const pluginTree = useMemo(() => buildPluginMenuTree(plugins), [plugins]);
   const cloudLabel = useMemo(() => {
@@ -653,14 +703,16 @@ export function ActivityBar() {
 
         {/* 底部功能按钮 */}
         <div className="flex flex-col">
-          <ActivityBarButton
-            icon={<Settings className="w-6 h-6" />}
-            label="设置"
-            value="settings"
-            isActive={activeView === 'settings'}
-            onClick={() => setActiveView('settings')}
-            collapsed={isActivityBarCollapsed}
-          />
+          {appShellConfig.pages.settings ? (
+            <ActivityBarButton
+              icon={<Settings className="w-6 h-6" />}
+              label="设置"
+              value="settings"
+              isActive={activeView === 'settings'}
+              onClick={() => setActiveView('settings')}
+              collapsed={isActivityBarCollapsed}
+            />
+          ) : null}
         </div>
       </aside>
 

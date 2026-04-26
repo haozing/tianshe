@@ -54,6 +54,7 @@ vi.mock('../cloud-auth/service', () => ({
 
 vi.mock('../../constants/cloud', () => ({
   CLOUD_WORKBENCH_URL: 'http://localhost:8080',
+  CLOUD_WORKBENCH_VIEW_ID: 'pool:workbench:tianshe-cloud',
   CLOUD_AUTH_COOKIE_NAME: 'Admin-Token',
 }));
 
@@ -228,6 +229,31 @@ describe('ViewIPCHandler', () => {
         id: options.viewId,
         partition: options.partition,
         url: undefined,
+      });
+      expect(response).toEqual({
+        success: true,
+        viewId: options.viewId,
+      });
+    });
+
+    it('应该使用主进程工作台地址注册云工作台视图', async () => {
+      const options = {
+        viewId: 'pool:workbench:tianshe-cloud',
+        partition: 'persist:workbench:tianshe-cloud',
+        url: 'http://example.com',
+      };
+
+      mockViewManager.registerView.mockReturnValue(undefined);
+
+      handler.register();
+      const createHandler = getIpcHandler('view:create');
+
+      const response = await createHandler(null, options);
+
+      expect(mockViewManager.registerView).toHaveBeenCalledWith({
+        id: options.viewId,
+        partition: options.partition,
+        url: 'http://localhost:8080',
       });
       expect(response).toEqual({
         success: true,
@@ -490,6 +516,26 @@ describe('ViewIPCHandler', () => {
       expect(response).toEqual({ success: true });
     });
 
+    it('应该使用主进程工作台地址导航云工作台视图', async () => {
+      const options = {
+        viewId: 'pool:workbench:tianshe-cloud',
+        url: 'http://example.com',
+      };
+
+      mockViewManager.navigateView.mockResolvedValue(undefined);
+
+      handler.register();
+      const navigateHandler = getIpcHandler('view:navigate');
+
+      const response = await navigateHandler(null, options);
+
+      expect(mockViewManager.navigateView).toHaveBeenCalledWith(
+        options.viewId,
+        'http://localhost:8080'
+      );
+      expect(response).toEqual({ success: true });
+    });
+
     it('应该处理导航失败', async () => {
       const options = {
         viewId: 'view-123',
@@ -581,6 +627,56 @@ describe('ViewIPCHandler', () => {
         cookieName: 'Admin-Token',
         targetOrigin: 'http://example.com',
         expectedOrigin: 'http://localhost:8080',
+      });
+    });
+
+    it('应该为云工作台视图使用主进程工作台地址同步 Cookie', async () => {
+      const expire = '2030-01-01T00:00:00.000Z';
+      const setCookie = vi.fn().mockResolvedValue(undefined);
+      mockViewManager.getView.mockReturnValue({
+        view: {
+          webContents: {
+            session: {
+              cookies: {
+                set: setCookie,
+              },
+            },
+          },
+        },
+      });
+      mockGetPersistedCloudAuthSession.mockReturnValue({
+        authSessionId: 'session-1',
+        authRevision: 1,
+        token: 'token-123',
+        expire,
+        user: {
+          userId: 1,
+          userName: 'tester',
+        },
+      });
+
+      handler.register();
+      const syncCloudAuthHandler = getIpcHandler('view:sync-cloud-auth');
+
+      const response = await syncCloudAuthHandler(null, {
+        viewId: 'pool:workbench:tianshe-cloud',
+        url: 'http://example.com',
+      });
+
+      expect(setCookie).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: 'http://localhost:8080/',
+          name: 'Admin-Token',
+          value: 'token-123',
+          path: '/',
+          secure: false,
+          expirationDate: Math.floor(Date.parse(expire) / 1000),
+        })
+      );
+      expect(response).toEqual({
+        success: true,
+        cookieName: 'Admin-Token',
+        targetOrigin: 'http://localhost:8080',
       });
     });
 

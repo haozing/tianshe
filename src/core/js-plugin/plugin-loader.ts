@@ -86,6 +86,76 @@ export class PluginLoader {
   }
 
   /**
+   * Discover plugin packages placed beside the app executable.
+   *
+   * Supported layouts:
+   * - <exe-dir>/plugins/<plugin>/manifest.json
+   * - <exe-dir>/plugins/<plugin>.tsai
+   * - <exe-dir>/js-plugins/<plugin>/manifest.json
+   *
+   * In development the project root is also checked, so the same layout works
+   * before packaging.
+   */
+  async discoverExternalPluginSources(): Promise<string[]> {
+    const rootDirs = this.getExternalPluginRootDirs();
+    const discovered: string[] = [];
+    const seen = new Set<string>();
+
+    const addSource = (sourcePath: string) => {
+      const resolved = path.resolve(sourcePath);
+      const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      discovered.push(resolved);
+    };
+
+    for (const rootDir of rootDirs) {
+      if (path.resolve(rootDir) === path.resolve(this.pluginsDir)) {
+        continue;
+      }
+      if (!(await fs.pathExists(rootDir))) {
+        continue;
+      }
+
+      const stats = await fs.stat(rootDir).catch(() => null);
+      if (!stats?.isDirectory()) {
+        continue;
+      }
+
+      if (await fs.pathExists(path.join(rootDir, 'manifest.json'))) {
+        addSource(rootDir);
+        continue;
+      }
+
+      const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (entry.name.startsWith('_temp_')) {
+          continue;
+        }
+
+        const entryPath = path.join(rootDir, entry.name);
+        if (entry.isDirectory()) {
+          if (await fs.pathExists(path.join(entryPath, 'manifest.json'))) {
+            addSource(entryPath);
+          }
+          continue;
+        }
+
+        if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase();
+          if (ext === '.tsai' || ext === '.zip') {
+            addSource(entryPath);
+          }
+        }
+      }
+    }
+
+    return discovered.sort((left, right) => left.localeCompare(right));
+  }
+
+  /**
    * 导入插件
    *
    * @param sourcePath - .tsai 文件或目录路径
@@ -589,5 +659,39 @@ export class PluginLoader {
         );
       }
     }
+  }
+
+  private getExternalPluginRootDirs(): string[] {
+    const baseDirs: string[] = [];
+
+    const addBaseDir = (baseDir: string | undefined) => {
+      const normalized = String(baseDir || '').trim();
+      if (normalized) {
+        baseDirs.push(normalized);
+      }
+    };
+
+    addBaseDir(path.dirname(process.execPath));
+    addBaseDir(app.getAppPath());
+    addBaseDir(process.cwd());
+
+    const resourcesPath = (process as typeof process & { resourcesPath?: string }).resourcesPath;
+    addBaseDir(resourcesPath);
+
+    const roots: string[] = [];
+    const seen = new Set<string>();
+    for (const baseDir of baseDirs) {
+      for (const folderName of ['plugins', 'js-plugins']) {
+        const rootDir = path.resolve(baseDir, folderName);
+        const key = process.platform === 'win32' ? rootDir.toLowerCase() : rootDir;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        roots.push(rootDir);
+      }
+    }
+
+    return roots;
   }
 }

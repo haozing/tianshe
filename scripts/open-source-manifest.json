@@ -36,6 +36,7 @@
     "scripts/open-source-boundary.js",
     "scripts/open-source-manifest.json",
     "scripts/package-electron.js",
+    "scripts/run-dev-base.js",
     "scripts/run-with-edition.js",
     "scripts/test-edition.js",
     "examples/minimal-plugin"
