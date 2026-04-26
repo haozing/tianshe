@@ -30,6 +30,14 @@ npm run test:open
 npm run build:open
 ```
 
+## Standalone Package
+
+```bash
+npm run package:open:portable
+```
+
+The portable Windows build is written to `release-build/`.
+
 ## Repository Boundary
 
 The open edition may contain a small allowlist of cloud stub files so shared UI and type contracts can compile. Those stubs must not contain real cloud endpoints, private server paths, auth flows, snapshot/catalog implementations, or deployment hostnames. Run this check before publishing:

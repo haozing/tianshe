@@ -4,6 +4,8 @@ appId: com.tiansheai.www
 executableName: tiansheai
 electronDist: node_modules/electron/dist
 asar: true
+extraMetadata:
+  main: dist/main/index.js
 
 asarUnpack:
   # Worker 脚本解包（worker_threads 入口脚本从 asar 加载可能失败）
