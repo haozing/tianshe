@@ -4,6 +4,7 @@ import { handleBrowserWaitFor } from './observation';
 describe('browser_wait_for canonical wait conditions', () => {
   it('supports allOf with text, textGone, and urlIncludes', async () => {
     const browser = {
+      hasCapability: vi.fn((name: string) => name === 'text.dom'),
       getViewport: vi.fn().mockResolvedValue({
         width: 100,
         height: 100,

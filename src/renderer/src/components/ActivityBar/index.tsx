@@ -23,7 +23,7 @@ import type { JSPluginInfo } from '../../../../types/js-plugin';
 import { buildPluginMenuTree } from './plugin-menu-tree';
 import { CloudAuthDialog } from './CloudAuthDialog';
 import { useCloudAuthStore } from '../../stores/cloudAuthStore';
-import { isCloudAuthAvailable } from '../../lib/edition';
+import { isCloudAuthAvailable, isCloudWorkbenchAvailable } from '../../lib/edition';
 
 interface ActivityBarButtonProps {
   icon: React.ReactNode;
@@ -126,6 +126,7 @@ export function ActivityBar() {
   const cloudSession = useCloudAuthStore((state) => state.session);
   const loadCloudSession = useCloudAuthStore((state) => state.loadSession);
   const cloudAuthAvailable = isCloudAuthAvailable();
+  const cloudWorkbenchAvailable = isCloudWorkbenchAvailable();
   const hiddenPluginViewForCloudAuthRef = useRef<string | null>(null);
 
   const asideRef = useRef<HTMLElement | null>(null);
@@ -274,28 +275,35 @@ export function ActivityBar() {
     value: ActiveView;
     icon: React.ReactNode;
     label: string;
-  }> = [
-    {
-      value: 'workbench',
-      icon: <LayoutDashboard className="w-6 h-6" />,
-      label: '工作台',
-    },
-    {
-      value: 'datasets',
-      icon: <Database className="w-6 h-6" />,
-      label: '数据表',
-    },
-    {
-      value: 'marketplace',
-      icon: <Store className="w-6 h-6" />,
-      label: '插件市场',
-    },
-    {
-      value: 'accountCenter',
-      icon: <Monitor className="w-6 h-6" />,
-      label: '账号中心',
-    },
-  ];
+  }> = useMemo(
+    () => [
+      ...(cloudWorkbenchAvailable
+        ? [
+            {
+              value: 'workbench' as const,
+              icon: <LayoutDashboard className="w-6 h-6" />,
+              label: '工作台',
+            },
+          ]
+        : []),
+      {
+        value: 'datasets',
+        icon: <Database className="w-6 h-6" />,
+        label: '数据表',
+      },
+      {
+        value: 'marketplace',
+        icon: <Store className="w-6 h-6" />,
+        label: '插件市场',
+      },
+      {
+        value: 'accountCenter',
+        icon: <Monitor className="w-6 h-6" />,
+        label: '账号中心',
+      },
+    ],
+    [cloudWorkbenchAvailable]
+  );
 
   const pluginTree = useMemo(() => buildPluginMenuTree(plugins), [plugins]);
   const cloudLabel = useMemo(() => {

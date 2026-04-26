@@ -3,6 +3,7 @@ import { handleBrowserFindText } from './browser-handlers';
 
 function createIntegratedBrowserStub() {
   return {
+    hasCapability: vi.fn((name: string) => name === 'text.dom'),
     getViewport: vi.fn().mockResolvedValue({
       width: 100,
       height: 100,

@@ -2,19 +2,38 @@
  * 主应用组件
  */
 
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import ErrorBoundary from './components/ErrorBoundary';
-import { DatasetsPage } from './components/DatasetsPage';
-import { WorkbenchPanel } from './components/DatasetsPage/WorkbenchPanel';
-import { AccountCenterPage } from './components/AccountCenter';
-import { PluginMarketPage } from './components/PluginMarket';
-import { SettingsPage } from './components/SettingsPage';
 import { ActivityBar } from './components/ActivityBar';
 import { useUIStore } from './stores/uiStore';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
 import { UpdateNotification } from './components/UpdateNotification';
 import { Toaster } from './components/ui/sonner';
 import { AppTitleBar } from './components/layout/AppTitleBar';
+import { isCloudWorkbenchAvailable } from './lib/edition';
+import { toast } from './lib/toast';
+
+const DatasetsPage = lazy(() =>
+  import('./components/DatasetsPage').then((module) => ({ default: module.DatasetsPage }))
+);
+const WorkbenchPanel = lazy(() =>
+  import('./components/DatasetsPage/WorkbenchPanel').then((module) => ({
+    default: module.WorkbenchPanel,
+  }))
+);
+const AccountCenterPage = lazy(() =>
+  import('./components/AccountCenter').then((module) => ({
+    default: module.AccountCenterPage,
+  }))
+);
+const PluginMarketPage = lazy(() =>
+  import('./components/PluginMarket').then((module) => ({
+    default: module.PluginMarketPage,
+  }))
+);
+const SettingsPage = lazy(() =>
+  import('./components/SettingsPage').then((module) => ({ default: module.SettingsPage }))
+);
 
 // 简化的错误降级 UI（用于单个 tab）
 const TabErrorFallback = ({ tabName }: { tabName: string }) => (
@@ -31,6 +50,8 @@ const TabErrorFallback = ({ tabName }: { tabName: string }) => (
   </Card>
 );
 
+const ViewLoadingFallback = () => <div className="h-full w-full bg-background" />;
+
 type AppInfoResult = {
   success?: boolean;
   info?: {
@@ -41,9 +62,13 @@ type AppInfoResult = {
 
 function App() {
   const activeView = useUIStore((state) => state.activeView);
+  const setActiveView = useUIStore((state) => state.setActiveView);
   const isActivityBarCollapsed = useUIStore((state) => state.isActivityBarCollapsed);
   const [showUpdateNotification, setShowUpdateNotification] = useState(false);
   const [appPlatform, setAppPlatform] = useState<string>('');
+  const cloudWorkbenchAvailable = isCloudWorkbenchAvailable();
+  const effectiveActiveView =
+    activeView === 'workbench' && !cloudWorkbenchAvailable ? 'accountCenter' : activeView;
 
   useEffect(() => {
     let mounted = true;
@@ -67,6 +92,36 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const subscribe = window.electronAPI?.jsPlugin?.onPluginNotification;
+    if (typeof subscribe !== 'function') {
+      return;
+    }
+
+    return subscribe((event) => {
+      const message = String(event?.message || '').trim();
+      if (!message) {
+        return;
+      }
+
+      const description = event.pluginId ? `来自插件 ${event.pluginId}` : undefined;
+      switch (event.type) {
+        case 'success':
+          toast.success(message, description);
+          break;
+        case 'warning':
+          toast.warning(message, description);
+          break;
+        case 'error':
+          toast.error(message, description);
+          break;
+        default:
+          toast.info(message, description);
+          break;
+      }
+    });
+  }, []);
+
   // ✅ 兼容：旧版本仅支持同步折叠状态；新版本由 ActivityBar 通过 ResizeObserver 上报真实宽度
   useEffect(() => {
     const setWidth = window.electronAPI?.view?.setActivityBarWidth;
@@ -83,6 +138,12 @@ function App() {
       console.error('[App] Failed to sync activity bar collapsed state:', error);
     });
   }, [isActivityBarCollapsed]);
+
+  useEffect(() => {
+    if (activeView === 'workbench' && !cloudWorkbenchAvailable) {
+      setActiveView('accountCenter');
+    }
+  }, [activeView, cloudWorkbenchAvailable, setActiveView]);
 
   // ✅ 统一管理视图切换时的清理逻辑
   useEffect(() => {
@@ -125,7 +186,7 @@ function App() {
         }
       };
 
-      switch (activeView) {
+      switch (effectiveActiveView) {
         case 'datasets':
         case 'workbench':
           // 切换到数据表：隐藏插件视图，detach 插件市场相关视图
@@ -156,12 +217,12 @@ function App() {
           break;
 
         default:
-          console.warn(`[App] Unknown activeView: ${activeView}`);
+          console.warn(`[App] Unknown activeView: ${effectiveActiveView}`);
       }
     };
 
     handleViewSwitch();
-  }, [activeView]);
+  }, [effectiveActiveView]);
 
   return (
     <>
@@ -177,30 +238,40 @@ function App() {
 
         {/* 主内容区域 */}
         <main className="shell-content-surface flex flex-1 flex-col overflow-hidden">
-          {activeView === 'datasets' ? (
+          {effectiveActiveView === 'datasets' ? (
             <ErrorBoundary fallback={<TabErrorFallback tabName="数据表" />}>
-              <DatasetsPage />
+              <Suspense fallback={<ViewLoadingFallback />}>
+                <DatasetsPage />
+              </Suspense>
             </ErrorBoundary>
-          ) : activeView === 'workbench' ? (
+          ) : effectiveActiveView === 'workbench' && cloudWorkbenchAvailable ? (
             <ErrorBoundary fallback={<TabErrorFallback tabName="工作台" />}>
-              <WorkbenchPanel />
+              <Suspense fallback={<ViewLoadingFallback />}>
+                <WorkbenchPanel />
+              </Suspense>
             </ErrorBoundary>
-          ) : activeView === 'accountCenter' ? (
+          ) : effectiveActiveView === 'accountCenter' ? (
             <ErrorBoundary fallback={<TabErrorFallback tabName="账号中心" />}>
-              <AccountCenterPage />
+              <Suspense fallback={<ViewLoadingFallback />}>
+                <AccountCenterPage />
+              </Suspense>
             </ErrorBoundary>
-          ) : activeView === 'marketplace' ? (
+          ) : effectiveActiveView === 'marketplace' ? (
             <ErrorBoundary fallback={<TabErrorFallback tabName="插件市场" />}>
-              <PluginMarketPage />
+              <Suspense fallback={<ViewLoadingFallback />}>
+                <PluginMarketPage />
+              </Suspense>
             </ErrorBoundary>
-          ) : activeView === 'plugin' ? (
+          ) : effectiveActiveView === 'plugin' ? (
             <ErrorBoundary fallback={<TabErrorFallback tabName="插件视图" />}>
               {/* 插件视图容器 - 完全空白，WebContentsView 会通过 attachView 显示 */}
               <div className="h-full w-full bg-background" />
             </ErrorBoundary>
-          ) : activeView === 'settings' ? (
+          ) : effectiveActiveView === 'settings' ? (
             <ErrorBoundary fallback={<TabErrorFallback tabName="设置" />}>
-              <SettingsPage />
+              <Suspense fallback={<ViewLoadingFallback />}>
+                <SettingsPage />
+              </Suspense>
             </ErrorBoundary>
           ) : null}
         </main>

@@ -360,9 +360,9 @@ describe('FingerprintManager', () => {
         fingerprint: preset.id,
       };
       const fingerprint = manager.getFingerprint('preset-id', config);
-      expect(fingerprint.userAgent).toBe(preset.config.userAgent);
-      expect(fingerprint.platform).toBe(preset.config.platform);
-      expect(fingerprint.timezone).toBe(preset.config.timezone);
+      expect(fingerprint.userAgent).toBe(preset.config.identity.hardware.userAgent);
+      expect(fingerprint.platform).toBe(preset.config.identity.hardware.platform);
+      expect(fingerprint.timezone).toBe(preset.config.identity.region.timezone);
     });
   });
 

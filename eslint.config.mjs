@@ -25,8 +25,17 @@ export default [
       '**/release-build/**',
       '**/*.min.js',
       '**/.git/**',
+      '**/.codex-tmp/**',
+      '**/.tmp/**',
+      '**/.tmp-test-userdata-run/**',
+      '**/.vscode/**',
+      '**/artifacts/**',
       '**/coverage/**',
+      '**/data/**',
       '**/.vite/**',
+      '**/chrome/**',
+      '**/firefox/**',
+      '**/qa-results/**',
       '**/*.config.*.timestamp-*', // Vite 生成的临时文件
       // 示例/演示脚本不参与 lint（可能包含大量临时代码与空块）
       '**/examples/**',

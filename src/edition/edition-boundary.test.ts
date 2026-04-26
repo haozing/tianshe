@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { getTiansheEditionPublicInfo, normalizeTiansheEditionName } from './selection';
 
 const IMPORT_PATTERN = /^\s*import(?:[\s\S]*?\sfrom\s+)?['"]([^'"]+)['"]/gm;
+const RUNTIME_IMPORT_PATTERN = /^\s*import\s+(?!type\b)(?:[\s\S]*?\sfrom\s+)?['"]([^'"]+)['"]/gm;
 
 function collectTsFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
@@ -27,6 +28,13 @@ function collectTsFiles(dir: string): string[] {
 function extractImports(filePath: string): string[] {
   const source = readFileSync(filePath, 'utf8');
   return Array.from(source.matchAll(IMPORT_PATTERN)).map((match) => match[1].replace(/\\/g, '/'));
+}
+
+function extractRuntimeImports(filePath: string): string[] {
+  const source = readFileSync(filePath, 'utf8');
+  return Array.from(source.matchAll(RUNTIME_IMPORT_PATTERN)).map((match) =>
+    match[1].replace(/\\/g, '/'),
+  );
 }
 
 function source(filePath: string): string {
@@ -107,5 +115,9 @@ describe('open/cloud edition boundary', () => {
     expect(preload).toContain('delete exposed.cloudPlugin');
     expect(preload).toContain('delete exposed.cloudBrowserExtension');
     expect(preload).toContain('delete extensionPackages.downloadCloudCatalogPackages');
+  });
+
+  it('preload runtime imports stay sandbox-compatible', () => {
+    expect(extractRuntimeImports('src/preload/index.ts')).toEqual(['electron']);
   });
 });

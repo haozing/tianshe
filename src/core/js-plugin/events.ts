@@ -17,12 +17,23 @@ export interface PluginReloadedPayload {
   error?: string;
 }
 
+export type PluginNotificationType = 'info' | 'success' | 'warning' | 'error';
+
+export interface PluginNotificationPayload {
+  pluginId: string;
+  type: PluginNotificationType;
+  message: string;
+  createdAt: number;
+}
+
 /**
  * 插件事件映射
  */
 export interface PluginBusEvents {
   /** 插件热重载完成 */
   'plugin:reloaded': PluginReloadedPayload;
+  /** 插件请求向用户展示通知 */
+  'plugin:notification': PluginNotificationPayload;
 }
 
 // ============================================
@@ -35,6 +46,8 @@ export interface PluginBusEvents {
 export const PluginEvents = {
   /** 插件热重载完成 */
   RELOADED: 'plugin:reloaded',
+  /** 插件通知 */
+  NOTIFICATION: 'plugin:notification',
 } as const satisfies Record<string, keyof PluginBusEvents>;
 
 // ============================================

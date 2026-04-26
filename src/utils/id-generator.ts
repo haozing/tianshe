@@ -1,8 +1,6 @@
 /**
  * ID 生成工具
- * 提供统一的 ID 生成接口
- *
- * 使用 crypto.randomBytes 确保生成的 ID 具有加密学安全性
+ * 提供统一的 ID 生成接口，并使用 crypto.randomBytes 生成随机部分。
  */
 
 import * as crypto from 'crypto';
@@ -10,15 +8,17 @@ import * as crypto from 'crypto';
 /**
  * 生成唯一 ID
  * @param prefix ID 前缀 (默认 'id')
+ * @param randomByteLength 随机字节长度 (默认 4，输出为 8 位 hex)
  * @returns 唯一 ID 字符串
  *
  * 格式: prefix_timestamp_randomhex
  * 示例: id_1704067200000_a1b2c3d4
  */
-export function generateId(prefix = 'id'): string {
+export function generateId(prefix = 'id', randomByteLength = 4): string {
   const timestamp = Date.now();
-  const randomHex = crypto.randomBytes(4).toString('hex');
-  return `${prefix}_${timestamp}_${randomHex}`;
+  const byteLength = Math.max(1, Math.min(32, Math.floor(randomByteLength)));
+  const randomHex = crypto.randomBytes(byteLength).toString('hex');
+  return prefix ? `${prefix}_${timestamp}_${randomHex}` : `${timestamp}_${randomHex}`;
 }
 
 /**
@@ -27,6 +27,14 @@ export function generateId(prefix = 'id'): string {
  */
 export function generateTaskId(): string {
   return generateId('task');
+}
+
+/**
+ * 生成操作 ID
+ * @returns 操作 ID 字符串
+ */
+export function generateActionId(): string {
+  return generateId('action', 5);
 }
 
 /**

@@ -7,7 +7,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
 const HELPERS_FILE = path.resolve(PROJECT_ROOT, 'src/core/js-plugin/helpers.ts');
 const HELPERS_REFERENCE_DOC = path.resolve(
   PROJECT_ROOT,
-  'skills/airpa-plugin-create-codex/references/helpers-reference.md'
+  'docs/plugin-helpers-reference.md'
 );
 
 const findPluginHelpersClass = (sourceFile: ts.SourceFile): ts.ClassDeclaration => {

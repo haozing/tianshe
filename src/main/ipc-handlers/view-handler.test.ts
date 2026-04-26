@@ -52,6 +52,11 @@ vi.mock('../cloud-auth/service', () => ({
   isCloudAuthSessionExpired: mockIsCloudAuthSessionExpired,
 }));
 
+vi.mock('../../constants/cloud', () => ({
+  CLOUD_WORKBENCH_URL: 'http://localhost:8080',
+  CLOUD_AUTH_COOKIE_NAME: 'Admin-Token',
+}));
+
 // Mock ipc-utils 模块
 vi.mock('../ipc-utils', () => ({
   handleIPCError: vi.fn((error: unknown) => {

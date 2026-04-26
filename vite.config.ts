@@ -9,6 +9,26 @@ export default defineConfig({
   build: {
     outDir: '../../dist/renderer',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          const normalized = id.replace(/\\/g, '/');
+
+          if (normalized.includes('/node_modules/')) {
+            if (
+              normalized.includes('/react/') ||
+              normalized.includes('/react-dom/') ||
+              normalized.includes('/scheduler/')
+            ) {
+              return 'vendor-react';
+            }
+            if (normalized.includes('/@tanstack/')) {
+              return 'vendor-tanstack';
+            }
+          }
+        },
+      },
+    },
   },
   resolve: {
     alias: {

@@ -148,6 +148,7 @@ describe('browser workflow handlers', () => {
 
   it('browser_act wraps text-target click actions with the delegated tool name', async () => {
     const browser = {
+      hasCapability: vi.fn((name: string) => name === 'text.dom'),
       getViewport: vi.fn().mockResolvedValue({
         width: 100,
         height: 100,

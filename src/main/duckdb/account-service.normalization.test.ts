@@ -13,13 +13,21 @@ describe('AccountService input normalization', () => {
   it('normalizes trimmed account fields and de-duplicates tags on create', async () => {
     let bindings: unknown[] = [];
     const conn = {
-      prepare: vi.fn(async () => ({
-        bind: vi.fn((values: unknown[]) => {
-          bindings = values;
-        }),
-        run: vi.fn().mockResolvedValue(undefined),
-        destroySync: vi.fn(),
-      })),
+      prepare: vi.fn(async (sql: string) => {
+        const hasExistingBinding =
+          sql.includes('FROM browser_profiles') || sql.includes('FROM saved_sites');
+        return {
+          bind: vi.fn((values: unknown[]) => {
+            bindings = values;
+          }),
+          run: vi.fn().mockResolvedValue(undefined),
+          runAndReadAll: vi.fn().mockResolvedValue({
+            columnNames: () => ['id'],
+            getRows: () => (hasExistingBinding ? [['bound-record']] : []),
+          }),
+          destroySync: vi.fn(),
+        };
+      }),
     };
     const service = new AccountService(conn as never);
     vi.spyOn(service, 'get').mockResolvedValue({

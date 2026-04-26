@@ -69,6 +69,10 @@ vi.mock('fs', async () => {
   return {
     ...actual,
     existsSync: vi.fn().mockReturnValue(true),
+    statSync: vi.fn().mockReturnValue({
+      isFile: () => true,
+      size: 2048,
+    }),
     readFileSync: vi.fn().mockReturnValue(Buffer.from('fake-image')),
     mkdirSync: vi.fn(),
     createWriteStream: vi.fn().mockReturnValue({

@@ -8,7 +8,9 @@ This repository is the upstream client core. Cloud login, cloud snapshot, cloud 
 
 - Node.js 22 or newer
 - npm
-- Windows, macOS, or Linux with Electron runtime support
+- Windows x64 for packaged desktop builds
+
+macOS and Linux source development may work where Electron and native dependencies are available, but packaging and native runtime bundles are currently validated for Windows x64.
 
 ## Install
 
@@ -22,11 +24,18 @@ npm ci
 npm run dev:open
 ```
 
+To launch Electron directly from the repository root, build the app first:
+
+```bash
+npm run build:open
+npx electron .
+```
+
 ## Verification
 
 ```bash
 npm run typecheck
-npm run test:open
+npm run test:open:full
 npm run build:open
 ```
 
@@ -36,7 +45,15 @@ npm run build:open
 npm run package:open:portable
 ```
 
-The portable Windows build is written to `release-build/`.
+The portable Windows x64 build is written to `release-build/`.
+For a faster unpacked packaging smoke test, run `npm run package:open:dir`.
+Open packages use the `tiansheai-open` executable and `com.tiansheai.client.open` app id so they can coexist with private/cloud packages.
+
+## Runtime Data
+
+The open edition uses independent runtime identity and user data. Development launches through `scripts/launch-electron.js` default to an open package user data directory, such as `%APPDATA%\@tianshe\client-open` on Windows; packaged builds use the open app identity from `electron-builder.yml`.
+
+For development launches through `scripts/launch-electron.js`, set `TIANSHEAI_USER_DATA_DIR` to override the user data directory.
 
 ## Repository Boundary
 
@@ -55,7 +72,7 @@ Pull requests and main branch pushes run the generated Open CI workflow:
 ```bash
 npm run typecheck
 npm run lint
-npm run test:open
+npm run test:open:full
 npm run verify:open-source-boundary
 npm run build:open
 ```

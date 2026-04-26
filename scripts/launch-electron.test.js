@@ -1,4 +1,5 @@
 const { EventEmitter } = require('node:events');
+const path = require('node:path');
 const {
   USER_DATA_FLAG,
   HTTP_PORT_FLAG,
@@ -10,6 +11,9 @@ const {
   runLaunchElectron,
 } = require('./launch-electron.js');
 
+const WINDOWS_APPDATA = 'C:\\Users\\tester\\AppData\\Roaming';
+const OPEN_USER_DATA_DIR = path.join(WINDOWS_APPDATA, '@tianshe/client-open');
+
 describe('launch-electron', () => {
   it('sanitizes the parent env and appends default launch flags', () => {
     const { args, env } = buildLaunchConfig({
@@ -17,7 +21,7 @@ describe('launch-electron', () => {
       env: {
         ELECTRON_RUN_AS_NODE: '1',
         AIRPA_HTTP_PORT: '39090',
-        APPDATA: 'C:\\Users\\tester\\AppData\\Roaming',
+        APPDATA: WINDOWS_APPDATA,
       },
       platform: 'win32',
     });
@@ -27,7 +31,7 @@ describe('launch-electron', () => {
       expect.arrayContaining([
         '.',
         '--trace-warnings',
-        `${USER_DATA_FLAG}=C:\\Users\\tester\\AppData\\Roaming\\tiansheai`,
+        `${USER_DATA_FLAG}=${OPEN_USER_DATA_DIR}`,
         `${HTTP_PORT_FLAG}=39090`,
       ])
     );
@@ -37,7 +41,7 @@ describe('launch-electron', () => {
     const { args } = buildLaunchConfig({
       args: ['.', '--airpa-enable-http', '--airpa-enable-mcp', '--airpa-http-port=39091'],
       env: {
-        APPDATA: 'C:\\Users\\tester\\AppData\\Roaming',
+        APPDATA: WINDOWS_APPDATA,
       },
       platform: 'win32',
     });
@@ -48,7 +52,7 @@ describe('launch-electron', () => {
         '--airpa-enable-http',
         '--airpa-enable-mcp',
         '--airpa-http-port=39091',
-        `${USER_DATA_FLAG}=C:\\Users\\tester\\AppData\\Roaming\\tiansheai`,
+        `${USER_DATA_FLAG}=${OPEN_USER_DATA_DIR}`,
       ])
     );
   });
@@ -63,7 +67,7 @@ describe('launch-electron', () => {
         ISOLATE_USER_DATA_FLAG,
       ],
       env: {
-        APPDATA: 'C:\\Users\\tester\\AppData\\Roaming',
+        APPDATA: WINDOWS_APPDATA,
       },
       platform: 'win32',
     });
@@ -77,7 +81,7 @@ describe('launch-electron', () => {
         ISOLATE_USER_DATA_FLAG,
         `${USER_DATA_FLAG}=${resolveIsolatedUserDataDir(
           ['--airpa-enable-http', '--airpa-enable-mcp', '--airpa-http-port=39091'],
-          { APPDATA: 'C:\\Users\\tester\\AppData\\Roaming' }
+          { APPDATA: WINDOWS_APPDATA }
         )}`,
       ])
     );
@@ -99,7 +103,7 @@ describe('launch-electron', () => {
     const { args } = buildLaunchConfig({
       args: ['--airpa-enable-http', '--airpa-enable-mcp', '--airpa-http-port=39091'],
       env: {
-        APPDATA: 'C:\\Users\\tester\\AppData\\Roaming',
+        APPDATA: WINDOWS_APPDATA,
       },
       platform: 'win32',
     });

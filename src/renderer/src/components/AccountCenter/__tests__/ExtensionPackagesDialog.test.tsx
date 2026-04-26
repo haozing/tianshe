@@ -42,6 +42,10 @@ vi.mock('../../../stores/cloudAuthStore', () => ({
     (typeof selector === 'function' ? selector(cloudAuthState) : cloudAuthState),
 }));
 
+vi.mock('../../../lib/edition', () => ({
+  isCloudBrowserExtensionCatalogAvailable: () => true,
+}));
+
 describe('ExtensionPackagesPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();

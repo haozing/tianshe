@@ -5,6 +5,8 @@
  * 包括通知、对话框、当前数据集上下文等
  */
 
+import { pluginEventBus, PluginEvents, type PluginNotificationType } from '../events';
+
 /**
  * UI 命名空间
  *
@@ -36,11 +38,19 @@ export class UINamespace {
    */
   async notify(
     message: string,
-    type: 'info' | 'success' | 'warning' | 'error' = 'info'
+    type: PluginNotificationType = 'info'
   ): Promise<void> {
-    // TODO: 实现通知功能
-    // 需要通过 IPC 发送消息到渲染进程显示 Toast
-    console.log(`[NOTIFY ${type.toUpperCase()}] ${message}`);
+    const normalizedMessage = String(message || '').trim();
+    if (!normalizedMessage) {
+      return;
+    }
+
+    await pluginEventBus.emit(PluginEvents.NOTIFICATION, {
+      pluginId: this.pluginId,
+      type,
+      message: normalizedMessage,
+      createdAt: Date.now(),
+    });
   }
 
   /**

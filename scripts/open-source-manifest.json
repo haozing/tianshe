@@ -7,6 +7,7 @@
     ".prettierrc",
     "LICENSE",
     "README.md",
+    "index.js",
     "package-lock.json",
     "package.json",
     "electron-builder.yml",
@@ -23,6 +24,7 @@
     "docs/README.md",
     "docs/legacy-airpa-compatibility.md",
     "docs/open-sync-contract.md",
+    "docs/plugin-helpers-reference.md",
     "scripts/build-edition.js",
     "scripts/build-main-with-stamp.js",
     "scripts/check-native-module.js",
@@ -33,6 +35,7 @@
     "scripts/main-build-stamp.js",
     "scripts/open-source-boundary.js",
     "scripts/open-source-manifest.json",
+    "scripts/package-electron.js",
     "scripts/run-with-edition.js",
     "scripts/test-edition.js",
     "examples/minimal-plugin"
@@ -153,6 +156,7 @@
   "requiredFiles": [
     "package.json",
     "package-lock.json",
+    "index.js",
     "src/edition/index.ts",
     "src/edition/open/index.ts",
     "src/preload/index.ts",
@@ -162,7 +166,9 @@
   "requiredPackageScripts": [
     "dev:open",
     "build:open",
+    "package:open:portable",
     "test:open",
+    "test:open:full",
     "verify:open-source-boundary",
     "verify:ci"
   ]

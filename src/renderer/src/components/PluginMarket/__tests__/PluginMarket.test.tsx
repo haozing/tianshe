@@ -150,7 +150,7 @@ describe('PluginMarket', () => {
     });
 
     expect(screen.getByRole('button', { name: '首页' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '云端目录' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '云端目录' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '已安装' })).toBeInTheDocument();
     expect(screen.queryByTestId('plugin-catalog-panel')).not.toBeInTheDocument();
     expect(screen.getByText('插件运行总览')).toBeInTheDocument();
@@ -162,7 +162,7 @@ describe('PluginMarket', () => {
     expect(screen.getAllByText('本地调试插件').length).toBeGreaterThan(0);
     expect(screen.getAllByText('本地调试插件 · 正在执行批量任务').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: '刷新状态' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '浏览云端目录' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '浏览云端目录' })).not.toBeInTheDocument();
   });
 
   it('switches to the installed workspace with grouped plugin sections', async () => {
@@ -197,12 +197,16 @@ describe('PluginMarket', () => {
     expect(screen.getByText('D:/workspace/local-plugin')).toBeInTheDocument();
   });
 
-  it('switches to the cloud catalog tab', async () => {
+  it('hides the cloud catalog tab in the open edition', async () => {
     render(<PluginMarket />);
 
-    fireEvent.click(screen.getByRole('button', { name: '云端目录' }));
+    await waitFor(() => {
+      expect(pluginStoreState.loadPlugins).toHaveBeenCalledTimes(1);
+      expect(pluginRuntimeStoreState.loadStatuses).toHaveBeenCalledTimes(1);
+    });
 
-    expect(await screen.findByTestId('plugin-catalog-panel')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '云端目录' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('plugin-catalog-panel')).not.toBeInTheDocument();
   });
 
   it('allows stopping tasks for a busy plugin', async () => {

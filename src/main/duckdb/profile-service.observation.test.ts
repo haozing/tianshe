@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { ProfileService } from './profile-service';
 import { setObservationSink } from '../../core/observability/observation-service';
 import type { ObservationSink, RuntimeArtifact, RuntimeEvent } from '../../core/observability/types';
+import { getDefaultFingerprint } from '../../constants/fingerprint-defaults';
 
 vi.mock('electron', () => ({
   app: {
@@ -120,6 +121,7 @@ describe('ProfileService observation hooks', () => {
   it('records profile.lifecycle.update events when updating a profile', async () => {
     const sink = new MemoryObservationSink();
     setObservationSink(sink);
+    const fingerprint = getDefaultFingerprint('electron');
 
     vi.spyOn(service, 'get')
       .mockResolvedValueOnce({
@@ -129,7 +131,7 @@ describe('ProfileService observation hooks', () => {
         groupId: null,
         partition: 'persist:profile-1',
         proxy: null,
-        fingerprint: {} as never,
+        fingerprint,
         notes: null,
         tags: [],
         color: null,
@@ -149,7 +151,7 @@ describe('ProfileService observation hooks', () => {
         groupId: null,
         partition: 'persist:profile-1',
         proxy: null,
-        fingerprint: {} as never,
+        fingerprint,
         notes: null,
         tags: [],
         color: null,

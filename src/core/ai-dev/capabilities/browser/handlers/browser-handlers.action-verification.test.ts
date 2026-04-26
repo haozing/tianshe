@@ -337,6 +337,7 @@ describe('browser handler action verification', () => {
 
   it('text click helper rejects unverified no-op clicks', async () => {
     const browser = {
+      hasCapability: vi.fn((name: string) => name === 'text.dom'),
       getViewport: vi.fn().mockResolvedValue({
         width: 100,
         height: 100,
@@ -372,6 +373,7 @@ describe('browser handler action verification', () => {
 
   it('text click helper reports the actual match source and click method', async () => {
     const browser = {
+      hasCapability: vi.fn((name: string) => name === 'text.dom'),
       getViewport: vi.fn().mockResolvedValue({
         width: 100,
         height: 100,
@@ -428,6 +430,7 @@ describe('browser handler action verification', () => {
 
   it('text click helper preserves structured errors from the integrated browser', async () => {
     const browser = {
+      hasCapability: vi.fn((name: string) => name === 'text.dom'),
       getViewport: vi.fn().mockResolvedValue({
         width: 100,
         height: 100,

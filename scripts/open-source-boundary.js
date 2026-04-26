@@ -123,13 +123,19 @@ function collectGitTrackedAndUnignoredFiles() {
 function shouldSkipActualWalk(relativePath) {
   const normalized = normalizePath(relativePath);
   const ignored = [
+    '.codex-tmp',
     '.git',
     '.tmp',
     '.tmp-test-userdata-run',
+    '.vscode',
+    'artifacts',
+    'chrome',
     'coverage',
     'data',
     'dist',
+    'firefox',
     'node_modules',
+    'qa-results',
     'release',
     'release-build',
   ];
@@ -335,7 +341,7 @@ function copyFiles(files, target) {
       '# Tianshe Client Open Export',
       '',
       'This directory was generated from `scripts/open-source-manifest.json`.',
-      'Run `npm ci`, `npm run typecheck`, `npm run test:open`, and `npm run build:open` before publishing.',
+      'Run `npm ci`, `npm run typecheck`, `npm run test:open:full`, and `npm run build:open` before publishing.',
       '',
     ].join('\n'),
     'utf8'
@@ -362,7 +368,10 @@ function applyOpenSourceOverlay(outputDir) {
   packageJson.name = '@tianshe/client-open';
   packageJson.description = 'Open-source Tianshe client edition';
   packageJson.private = false;
-  delete packageJson.main;
+  packageJson.engines = {
+    node: '>=22',
+  };
+  packageJson.main = 'index.js';
   packageJson.repository = {
     type: 'git',
     url: 'https://github.com/tianshe-ai/tianshe-client-open.git',
@@ -376,6 +385,7 @@ function applyOpenSourceOverlay(outputDir) {
     'build',
     'docs',
     'examples',
+    'index.js',
     'scripts',
     'src',
     'electron-builder.yml',
@@ -403,16 +413,45 @@ function applyOpenSourceOverlay(outputDir) {
     'build:open': 'node scripts/build-edition.js open',
     'build:renderer': 'vite build',
     'build:main': 'node scripts/build-main-with-stamp.js',
+    'package:open': 'npm run package:open:portable',
+    'package:open:dir': 'npm run build:open && node scripts/package-electron.js --dir --publish never',
+    'package:open:portable':
+      'npm run build:open && node scripts/package-electron.js --win portable --x64 --publish never',
+    'package:open:win':
+      'npm run build:open && node scripts/package-electron.js --win --x64 --publish never',
     test: 'npm run test:open',
     'test:open': 'node scripts/test-edition.js open',
+    'test:open:full': 'node scripts/test-edition.js open --full',
     typecheck: 'tsc --noEmit',
     lint: 'eslint .',
     'format:check': 'prettier --check "src/**/*.{ts,tsx,json}"',
     'verify:open-source-boundary': 'node scripts/open-source-boundary.js',
     'verify:ci':
-      'npm run typecheck && npm run lint && npm run test:open && npm run verify:open-source-boundary && npm run build:open',
+      'npm run typecheck && npm run lint && npm run test:open:full && npm run verify:open-source-boundary && npm run build:open',
   };
   writeJson(outputDir, 'package.json', packageJson);
+
+  writeText(
+    outputDir,
+    'index.js',
+    `
+const fs = require('node:fs');
+const path = require('node:path');
+
+const mainEntry = path.join(__dirname, 'dist', 'main', 'index.js');
+
+if (!fs.existsSync(mainEntry)) {
+  throw new Error(
+    [
+      'Missing Electron main build at dist/main/index.js.',
+      'Run \`npm run build:main\` or \`npm run build:open\` before launching Electron from the repository root.',
+    ].join(' ')
+  );
+}
+
+require(mainEntry);
+`
+  );
 
   const packageLockPath = path.join(outputDir, 'package-lock.json');
   if (fs.existsSync(packageLockPath)) {
@@ -428,12 +467,18 @@ function applyOpenSourceOverlay(outputDir) {
   const manifestPath = path.join(outputDir, 'scripts/open-source-manifest.json');
   const exportManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   exportManifest.include = Array.from(
-    new Set([...(exportManifest.include || []), 'examples/minimal-plugin'])
+    new Set([
+      ...(exportManifest.include || []),
+      'docs/plugin-helpers-reference.md',
+      'examples/minimal-plugin',
+    ])
   );
   exportManifest.requiredPackageScripts = [
     'dev:open',
     'build:open',
+    'package:open:portable',
     'test:open',
+    'test:open:full',
     'verify:open-source-boundary',
     'verify:ci',
   ];
@@ -487,8 +532,8 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Open edition tests
-        run: npm run test:open
+      - name: Full open edition tests
+        run: npm run test:open:full
 
       - name: Open source boundary
         run: npm run verify:open-source-boundary
@@ -524,6 +569,8 @@ yarn-error.log*
 data/
 .browser-profiles/
 .tmp-test-userdata-run/
+artifacts/
+qa-results/
 
 # DuckDB database files
 *.duckdb
@@ -537,6 +584,8 @@ coverage/
 # Temporary files
 *.tmp
 *.temp
+.codex-tmp/
+.tmp/
 .cache/
 tmp/
 
@@ -584,7 +633,9 @@ This repository is the upstream client core. Cloud login, cloud snapshot, cloud 
 
 - Node.js 22 or newer
 - npm
-- Windows, macOS, or Linux with Electron runtime support
+- Windows x64 for packaged desktop builds
+
+macOS and Linux source development may work where Electron and native dependencies are available, but packaging and native runtime bundles are currently validated for Windows x64.
 
 ## Install
 
@@ -598,13 +649,36 @@ npm ci
 npm run dev:open
 \`\`\`
 
+To launch Electron directly from the repository root, build the app first:
+
+\`\`\`bash
+npm run build:open
+npx electron .
+\`\`\`
+
 ## Verification
 
 \`\`\`bash
 npm run typecheck
-npm run test:open
+npm run test:open:full
 npm run build:open
 \`\`\`
+
+## Standalone Package
+
+\`\`\`bash
+npm run package:open:portable
+\`\`\`
+
+The portable Windows x64 build is written to \`release-build/\`.
+For a faster unpacked packaging smoke test, run \`npm run package:open:dir\`.
+Open packages use the \`tiansheai-open\` executable and \`com.tiansheai.client.open\` app id so they can coexist with private/cloud packages.
+
+## Runtime Data
+
+The open edition uses independent runtime identity and user data. Development launches through \`scripts/launch-electron.js\` default to an open package user data directory, such as \`%APPDATA%\\@tianshe\\client-open\` on Windows; packaged builds use the open app identity from \`electron-builder.yml\`.
+
+For development launches through \`scripts/launch-electron.js\`, set \`TIANSHEAI_USER_DATA_DIR\` to override the user data directory.
 
 ## Repository Boundary
 
@@ -623,7 +697,7 @@ Pull requests and main branch pushes run the generated Open CI workflow:
 \`\`\`bash
 npm run typecheck
 npm run lint
-npm run test:open
+npm run test:open:full
 npm run verify:open-source-boundary
 npm run build:open
 \`\`\`
@@ -654,11 +728,141 @@ Useful starting points:
 
 - \`README.md\` for install, development, and verification commands
 - \`docs/open-sync-contract.md\` for the open sync gateway boundary
+- \`docs/plugin-helpers-reference.md\` for the open plugin helper namespace surface
 - \`examples/minimal-plugin\` for a small local plugin example
 - \`src/core/js-plugin\` for runtime helper implementations
 - \`src/types/js-plugin.d.ts\` for plugin-facing types
 
 Cloud and private server integrations are not part of this edition.
+
+Packaged desktop builds are currently validated for Windows x64. Open packages use the \`tiansheai-open\` executable and \`com.tiansheai.client.open\` app id so runtime data, shortcuts, and installer identity stay separate from private/cloud packages.
+`
+  );
+
+  writeText(
+    outputDir,
+    'docs/plugin-helpers-reference.md',
+    `
+# Plugin Helpers Reference
+
+This document is the open-edition reference index for \`PluginHelpers\`.
+
+Each heading below maps to one public \`helpers.*\` namespace exposed by
+\`src/core/js-plugin/helpers.ts\`. Cloud-related namespaces are present only as
+open compatibility stubs unless explicitly documented otherwise.
+
+## helpers.account
+
+Local account records bound to browser profiles.
+
+## helpers.advanced
+
+Privileged Electron helpers. This namespace is lazily initialized and requires
+explicit plugin permissions for real use.
+
+## helpers.button
+
+Dataset button field registration and management helpers.
+
+## helpers.cloud
+
+Open-edition compatibility stub. It reports a logged-out session and rejects
+cloud auth setup.
+
+## helpers.customField
+
+Open-edition compatibility stub for cloud custom fields. Cloud-backed custom
+field operations are unavailable in this edition.
+
+## helpers.cv
+
+OpenCV-backed image processing helpers.
+
+## helpers.database
+
+Local dataset query, import, export, schema, and record mutation helpers.
+
+## helpers.ffi
+
+Native FFI library loading, callback, and struct helpers.
+
+## helpers.image
+
+Perceptual hash and SSIM image comparison helpers.
+
+## helpers.imageSearch
+
+Local image feature extraction, template indexing, and similarity search.
+
+## helpers.network
+
+HTTP request and webhook helpers for plugins.
+
+## helpers.ocr
+
+OCR recognition, text search, preprocessing, and OCR worker pool helpers.
+
+## helpers.onnx
+
+ONNX model loading, inference, tensor, embedding, and image preprocessing
+helpers.
+
+## helpers.openai
+
+OpenAI-compatible chat, streaming, embedding, file, batch, speech, image, and
+moderation helpers.
+
+## helpers.plugin
+
+Plugin metadata, manifest, storage path, config, and data table introspection.
+
+## helpers.profile
+
+Browser profile management, fingerprint helpers, runtime descriptors, and
+browser lease/launch helpers.
+
+## helpers.raw
+
+Raw Electron/WebContents access surface.
+
+## helpers.savedSite
+
+Saved site CRUD and platform initialization helpers.
+
+## helpers.scheduler
+
+Scheduled task creation, pause/resume, trigger, history, and disposal helpers.
+
+## helpers.storage
+
+Plugin configuration and plugin-scoped persistent data helpers.
+
+## helpers.taskQueue
+
+Plugin task queue creation, active queue listing, cancellation, and cleanup.
+
+## helpers.ui
+
+Renderer-facing UI helpers, including notification toast forwarding and current
+dataset context.
+
+## helpers.utils
+
+Common utility helpers such as IDs, sleeps, chunking, validation, cloning, and
+date formatting.
+
+## helpers.vectorIndex
+
+Local HNSW vector index creation, mutation, search, persistence, and rebuild
+helpers.
+
+## helpers.webhook
+
+Plugin webhook registration, event emission, and cleanup helpers.
+
+## helpers.window
+
+Plugin modal window helpers.
 `
   );
 
@@ -697,7 +901,7 @@ Open npm packages are source packages. Build output under \`dist/\` must not be 
 ## Release Flow
 
 1. Merge core client changes into the open repository.
-2. Run Open CI: typecheck, lint, \`test:open\`, boundary verification, and \`build:open\`.
+2. Run Open CI: typecheck, lint, \`test:open:full\`, boundary verification, and \`build:open\`.
 3. Publish or tag the open version.
 4. Update the private repository to the exact open version.
 5. Run private cloud CI before publishing the cloud edition.
@@ -804,7 +1008,7 @@ export function normalizeTiansheEditionName(_raw: unknown): TiansheEditionName {
 }
 
 export function resolveTiansheEditionName(): TiansheEditionName {
-  return normalizeTiansheEditionName(process.env.TIANSHE_EDITION || process.env.AIRPA_EDITION);
+  return DEFAULT_EDITION;
 }
 
 export function getTiansheEditionPublicInfo(

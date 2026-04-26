@@ -33,6 +33,14 @@ describe('button metadata interop', () => {
     mockGetPlugin.mockReset();
     mockExecuteActionColumn.mockReset();
     vi.clearAllMocks();
+    (window as any).electronAPI = {
+      ...(window as any).electronAPI,
+      jsPlugin: {
+        ...(window as any).electronAPI?.jsPlugin,
+        list: mockListPlugins,
+        executeActionColumn: mockExecuteActionColumn,
+      },
+    };
     mockListPlugins.mockResolvedValue({
       success: true,
       plugins: [{ id: 'plugin-1' }],

@@ -594,7 +594,10 @@ describe('JSPluginManager', () => {
       // 验证先停用
       expect(mockLifecycleManager.deactivate).toHaveBeenCalledWith(
         'test-plugin',
-        expect.any(Object)
+        expect.objectContaining({
+          unregisterUIContributions: expect.any(Function),
+        }),
+        { force: true }
       );
 
       // 验证卸载模块
@@ -687,7 +690,10 @@ describe('JSPluginManager', () => {
       // 验证停用插件
       expect(mockLifecycleManager.deactivate).toHaveBeenCalledWith(
         'test-plugin',
-        expect.any(Object)
+        expect.objectContaining({
+          unregisterUIContributions: expect.any(Function),
+        }),
+        { force: true }
       );
 
       // 验证卸载模块
@@ -1188,7 +1194,10 @@ describe('JSPluginManager', () => {
 
       expect(mockLifecycleManager.deactivate).toHaveBeenCalledWith(
         'test-plugin',
-        expect.any(Object)
+        expect.objectContaining({
+          unregisterUIContributions: expect.any(Function),
+        }),
+        { force: true }
       );
       expect(mockLifecycleManager.disable).toHaveBeenCalledWith('test-plugin');
     });

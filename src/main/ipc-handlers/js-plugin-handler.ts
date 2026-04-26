@@ -17,6 +17,7 @@ import { DEFAULT_VIEW_BOUNDS } from '../../constants/layout';
 import {
   pluginEventBus,
   PluginEvents,
+  type PluginNotificationPayload,
   type PluginReloadedPayload,
 } from '../../core/js-plugin/events';
 import type { JSPluginRuntimeStatusChangeEvent } from '../../types/js-plugin';
@@ -1351,6 +1352,13 @@ export class JSPluginIPCHandler {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('js-plugin:reloaded', payload);
         console.log(`[IPC] Plugin reloaded event forwarded: ${payload.pluginId}`);
+      }
+    });
+
+    pluginEventBus.on(PluginEvents.NOTIFICATION, (payload: PluginNotificationPayload) => {
+      const mainWindow = windowManager.getMainWindowV3();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('js-plugin:notification', payload);
       }
     });
   }

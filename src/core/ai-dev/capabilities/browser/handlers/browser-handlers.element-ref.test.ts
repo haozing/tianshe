@@ -78,7 +78,10 @@ describe('browser handlers elementRef support', () => {
 
     const result = await handleBrowserWaitFor(
       {
-        ref,
+        condition: {
+          kind: 'element',
+          ref,
+        },
         timeoutMs: 500,
         pollIntervalMs: 100,
       },
@@ -101,7 +104,15 @@ describe('browser handlers elementRef support', () => {
       getCurrentUrl: vi.fn().mockResolvedValue('https://example.test/'),
     };
 
-    const result = await handleBrowserClick({ ref }, { browser } as never);
+    const result = await handleBrowserClick(
+      {
+        target: {
+          kind: 'element',
+          ref,
+        },
+      },
+      { browser } as never
+    );
 
     expect(browser.click).toHaveBeenCalledWith('#search');
     expect(result.structuredContent?.data?.target?.ref).toBe(ref);
@@ -117,7 +128,15 @@ describe('browser handlers elementRef support', () => {
       getCurrentUrl: vi.fn().mockResolvedValue('https://example.test/'),
     };
 
-    const result = await handleBrowserClick({ ref }, { browser } as never);
+    const result = await handleBrowserClick(
+      {
+        target: {
+          kind: 'element',
+          ref,
+        },
+      },
+      { browser } as never
+    );
 
     expect(result.structuredContent?.error?.context).toMatchObject({
       selector: '#search',

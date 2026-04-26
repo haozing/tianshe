@@ -113,171 +113,31 @@ exports[`PluginHelpers contract snapshot > helpers public surface is stable 1`] 
         "returnType": "void",
       },
       {
-        "name": "delete",
-        "requiredParams": 1,
-        "returnType": "Promise<T>",
-      },
-      {
-        "name": "get",
-        "requiredParams": 1,
-        "returnType": "Promise<T>",
-      },
-      {
         "name": "getSession",
         "requiredParams": 0,
         "returnType": "CloudSessionInfo",
       },
       {
-        "name": "isLoggedIn",
-        "requiredParams": 0,
-        "returnType": "boolean",
-      },
-      {
-        "name": "post",
-        "requiredParams": 1,
-        "returnType": "Promise<T>",
-      },
-      {
-        "name": "put",
-        "requiredParams": 1,
-        "returnType": "Promise<T>",
-      },
-      {
-        "name": "request",
-        "requiredParams": 2,
-        "returnType": "Promise<T>",
-      },
-      {
         "name": "setAuth",
         "requiredParams": 1,
-        "returnType": "void",
+        "returnType": "never",
       },
     ],
     "customField": [
       {
-        "name": "clearAuth",
-        "requiredParams": 0,
-        "returnType": "void",
-      },
-      {
-        "name": "deleteRelationLink",
-        "requiredParams": 2,
-        "returnType": "Promise<Record<string, unknown>>",
-      },
-      {
-        "name": "deleteRow",
-        "requiredParams": 2,
-        "returnType": "Promise<Record<string, unknown>>",
-      },
-      {
         "name": "deleteRows",
-        "requiredParams": 2,
-        "returnType": "Promise<Record<string, unknown>>",
-      },
-      {
-        "name": "ensureEntitySchema",
-        "requiredParams": 1,
-        "returnType": "Promise<CustomFieldEnsureEntitySchemaResult>",
-      },
-      {
-        "name": "getCapabilities",
         "requiredParams": 0,
-        "returnType": "Promise<Record<string, unknown>>",
-      },
-      {
-        "name": "getRow",
-        "requiredParams": 2,
-        "returnType": "Promise<CustomFieldRecord>",
-      },
-      {
-        "name": "getSession",
-        "requiredParams": 0,
-        "returnType": "CustomFieldCloudSession",
-      },
-      {
-        "name": "isLoggedIn",
-        "requiredParams": 0,
-        "returnType": "boolean",
-      },
-      {
-        "name": "listEntities",
-        "requiredParams": 0,
-        "returnType": "Promise<CustomFieldPage<Record<string, unknown>>>",
-      },
-      {
-        "name": "listFields",
-        "requiredParams": 1,
-        "returnType": "Promise<CustomFieldPage<Record<string, unknown>>>",
-      },
-      {
-        "name": "listIndexRules",
-        "requiredParams": 1,
-        "returnType": "Promise<Record<string, unknown>[]>",
-      },
-      {
-        "name": "listRelations",
-        "requiredParams": 0,
-        "returnType": "Promise<CustomFieldPage<Record<string, unknown>>>",
-      },
-      {
-        "name": "queryRelationLinks",
-        "requiredParams": 1,
-        "returnType": "Promise<CustomFieldPage<CustomFieldRelationLink>>",
+        "returnType": "Promise<never>",
       },
       {
         "name": "queryRows",
-        "requiredParams": 1,
-        "returnType": "Promise<CustomFieldRecordQueryResult>",
-      },
-      {
-        "name": "queryRowsAll",
-        "requiredParams": 1,
-        "returnType": "Promise<CustomFieldRecordQueryResult>",
-      },
-      {
-        "name": "rebuildIndexes",
-        "requiredParams": 1,
-        "returnType": "Promise<{ entityCode: string; operator?: number; mode?: string }>",
-      },
-      {
-        "name": "replaceIndexRules",
-        "requiredParams": 2,
-        "returnType": "Promise<{ entityCode: string; ruleCount: number }>",
-      },
-      {
-        "name": "setAuth",
-        "requiredParams": 1,
-        "returnType": "void",
-      },
-      {
-        "name": "upsertEntity",
-        "requiredParams": 1,
-        "returnType": "Promise<Record<string, unknown>>",
-      },
-      {
-        "name": "upsertField",
-        "requiredParams": 2,
-        "returnType": "Promise<Record<string, unknown>>",
-      },
-      {
-        "name": "upsertRelation",
-        "requiredParams": 1,
-        "returnType": "Promise<Record<string, unknown>>",
-      },
-      {
-        "name": "upsertRelationLink",
-        "requiredParams": 2,
-        "returnType": "Promise<CustomFieldRelationLink>",
+        "requiredParams": 0,
+        "returnType": "Promise<never>",
       },
       {
         "name": "upsertRow",
-        "requiredParams": 2,
-        "returnType": "Promise<CustomFieldRecord>",
-      },
-      {
-        "name": "upsertRowsBatch",
-        "requiredParams": 2,
-        "returnType": "Promise<CustomFieldUpsertRowsBatchResult>",
+        "requiredParams": 0,
+        "returnType": "Promise<never>",
       },
     ],
     "cv": [

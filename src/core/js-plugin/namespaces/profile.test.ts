@@ -432,8 +432,8 @@ describe('ProfileNamespace.launch visibility behavior', () => {
     const fingerprint = await ns.generateFingerprint({
       os: 'windows',
       browser: 'firefox',
-      browserMinVersion: 120,
-      browserMaxVersion: 130,
+      browserMinVersion: 140,
+      browserMaxVersion: 160,
       locales: ['ja-JP', 'ja'],
       screenWidth: { min: 1366, max: 1920 },
       screenHeight: { min: 768, max: 1080 },

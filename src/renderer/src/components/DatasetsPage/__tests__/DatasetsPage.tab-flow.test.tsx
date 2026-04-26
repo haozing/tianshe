@@ -82,7 +82,13 @@ vi.mock('../DatasetTabs', () => ({
 }));
 
 vi.mock('../DatasetToolbar', () => ({
-  DatasetToolbar: () => <div data-testid="mock-toolbar" />,
+  DatasetToolbar: ({ onCreateTabCopy }: any) => (
+    <div data-testid="mock-toolbar">
+      {onCreateTabCopy ? (
+        <button onClick={onCreateTabCopy}>复制为新标签页</button>
+      ) : null}
+    </div>
+  ),
 }));
 
 vi.mock('../DatasetTable', () => ({

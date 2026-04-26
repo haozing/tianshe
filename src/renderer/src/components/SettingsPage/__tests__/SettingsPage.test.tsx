@@ -23,15 +23,12 @@ vi.mock('../InternalBrowserPanel', () => ({
 }));
 
 describe('SettingsPage', () => {
-  it('renders the cloud snapshot tab without the old sync console', () => {
+  it('hides cloud snapshot settings in the open edition', () => {
     render(<SettingsPage />);
 
     expect(screen.getByTestId('scheduler-panel')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: '云端快照' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('cloud-snapshot-panel')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('tab', { name: '云端快照' }));
-
-    expect(screen.getByTestId('cloud-snapshot-panel')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('tab', { name: '内置浏览器' }));
 

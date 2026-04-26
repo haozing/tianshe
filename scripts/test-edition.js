@@ -7,7 +7,9 @@ const EDITIONS = new Set(['open', 'cloud']);
 
 const OPEN_TEST_FILES = [
   'src/edition/edition-boundary.test.ts',
+  'src/core/js-plugin/namespaces/ui.test.ts',
   'src/preload/electron-api.contract.ts',
+  'src/renderer/src/lib/edition.test.tsx',
   'src/renderer/src/components/SettingsPage/__tests__/SettingsPage.test.tsx',
   'src/renderer/src/components/AccountCenter/__tests__/AccountCenterPage.tab-smoke.test.tsx',
   'src/renderer/src/components/PluginMarket/__tests__/PluginMarket.test.tsx',
@@ -31,8 +33,9 @@ function run(command, args, env) {
 
 function main() {
   const edition = process.argv[2];
+  const full = process.argv.includes('--full');
   if (!EDITIONS.has(edition)) {
-    process.stderr.write('Usage: node scripts/test-edition.js <open|cloud>\n');
+    process.stderr.write('Usage: node scripts/test-edition.js <open|cloud> [--full]\n');
     process.exit(2);
   }
 
@@ -44,6 +47,10 @@ function main() {
 
   if (edition === 'open') {
     run(process.execPath, ['scripts/open-source-boundary.js'], env);
+    if (full) {
+      run(process.execPath, [VITEST_BIN, 'run'], env);
+      return;
+    }
     run(process.execPath, [VITEST_BIN, 'run', ...OPEN_TEST_FILES], env);
     return;
   }

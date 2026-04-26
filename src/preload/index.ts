@@ -45,9 +45,16 @@ import type {
   TraceSummary,
   TraceTimeline,
 } from '../core/observability/types';
-import { getTiansheEditionPublicInfo, resolveTiansheEditionName } from '../edition/selection';
+import type { PluginNotificationPayload } from '../core/js-plugin/events';
 
-const tiansheEdition = getTiansheEditionPublicInfo(resolveTiansheEditionName());
+const tiansheEdition = {
+  name: 'open' as const,
+  capabilities: {
+    cloudAuth: false,
+    cloudSnapshot: false,
+    cloudCatalog: false,
+  },
+};
 
 /**
  * 暴露给渲染进程的 API
@@ -1844,6 +1851,18 @@ const electronAPI = {
       ipcRenderer.on('js-plugin:runtime-status-changed', subscription);
       return () => {
         ipcRenderer.removeListener('js-plugin:runtime-status-changed', subscription);
+      };
+    },
+
+    /**
+     * 监听插件通知事件
+     */
+    onPluginNotification: (callback: (data: PluginNotificationPayload) => void) => {
+      const subscription = (_event: IpcRendererEvent, data: PluginNotificationPayload) =>
+        callback(data);
+      ipcRenderer.on('js-plugin:notification', subscription);
+      return () => {
+        ipcRenderer.removeListener('js-plugin:notification', subscription);
       };
     },
   },

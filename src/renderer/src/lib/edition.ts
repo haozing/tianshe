@@ -12,18 +12,18 @@ function getEditionCapabilities(): Record<CloudCapabilityName, boolean> | null {
 
 export function isCloudAuthAvailable(): boolean {
   const capabilities = getEditionCapabilities();
-  return capabilities ? capabilities.cloudAuth && !!window.electronAPI.cloudAuth : true;
+  return capabilities ? capabilities.cloudAuth && !!window.electronAPI.cloudAuth : false;
 }
 
 export function isCloudSnapshotAvailable(): boolean {
   const capabilities = getEditionCapabilities();
-  return capabilities ? capabilities.cloudSnapshot && !!window.electronAPI.cloudSnapshot : true;
+  return capabilities ? capabilities.cloudSnapshot && !!window.electronAPI.cloudSnapshot : false;
 }
 
 export function isCloudCatalogAvailable(): boolean {
   const capabilities = getEditionCapabilities();
   return (
-    capabilities ? capabilities.cloudCatalog && !!window.electronAPI.cloudPlugin : true
+    capabilities ? capabilities.cloudCatalog && !!window.electronAPI.cloudPlugin : false
   );
 }
 
@@ -32,6 +32,10 @@ export function isCloudBrowserExtensionCatalogAvailable(): boolean {
   return (
     capabilities
       ? capabilities.cloudCatalog && !!window.electronAPI.cloudBrowserExtension
-      : true
+      : false
   );
+}
+
+export function isCloudWorkbenchAvailable(): boolean {
+  return isCloudAuthAvailable();
 }

@@ -18,7 +18,7 @@ export function normalizeTiansheEditionName(_raw: unknown): TiansheEditionName {
 }
 
 export function resolveTiansheEditionName(): TiansheEditionName {
-  return normalizeTiansheEditionName(process.env.TIANSHE_EDITION || process.env.AIRPA_EDITION);
+  return DEFAULT_EDITION;
 }
 
 export function getTiansheEditionPublicInfo(

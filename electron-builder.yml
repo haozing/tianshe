@@ -1,11 +1,9 @@
-productName: tiansheai
-appId: com.tiansheai.www
-# ✅ 使用正确的应用名称作为可执行文件名
-executableName: tiansheai
+productName: tiansheai-open
+appId: com.tiansheai.client.open
+# ✅ 使用 open 版专属可执行文件名，避免和 private/cloud 发行包冲突
+executableName: tiansheai-open
 electronDist: node_modules/electron/dist
 asar: true
-extraMetadata:
-  main: dist/main/index.js
 
 asarUnpack:
   # Worker 脚本解包（worker_threads 入口脚本从 asar 加载可能失败）
@@ -70,6 +68,7 @@ extraResources:
     to: firefox/
 
 files:
+  - index.js
   - dist/**/*
   - node_modules/**/*
   - package.json
@@ -151,7 +150,9 @@ directories:
   buildResources: build
 
 compression: maximum
-removePackageScripts: true
+# Keep source package.json stable; package scripts use scripts/package-electron.js as an
+# additional guard because electron-builder may rewrite app metadata while staging.
+removePackageScripts: false
 
 win:
   target:
@@ -177,7 +178,7 @@ nsis:
   createStartMenuShortcut: true
   perMachine: false
   menuCategory: true
-  shortcutName: TiansheAI
+  shortcutName: TiansheAI Open
   deleteAppDataOnUninstall: false
   runAfterFinish: true
   artifactName: '${productName}-${version}-Setup.${ext}'

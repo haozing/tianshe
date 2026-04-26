@@ -86,6 +86,10 @@ vi.mock('../../../stores/cloudAuthStore', () => {
   };
 });
 
+vi.mock('../../../lib/edition', () => ({
+  isCloudSnapshotAvailable: () => true,
+}));
+
 describe('useAccountCenterCoordinator', () => {
   beforeEach(() => {
     vi.clearAllMocks();

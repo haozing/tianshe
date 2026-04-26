@@ -4,6 +4,10 @@
   "description": "Open-source Tianshe client edition",
   "author": "tiansheai",
   "license": "MIT",
+  "main": "index.js",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "predev": "node scripts/clean-main-dist.js && npm run build:main",
     "dev": "npm run dev:open",
@@ -17,15 +21,17 @@
     "build:renderer": "vite build",
     "build:main": "node scripts/build-main-with-stamp.js",
     "package:open": "npm run package:open:portable",
-    "package:open:portable": "npm run build:open && electron-builder --win portable --x64 --publish never",
-    "package:open:win": "npm run build:open && electron-builder --win --x64 --publish never",
+    "package:open:dir": "npm run build:open && node scripts/package-electron.js --dir --publish never",
+    "package:open:portable": "npm run build:open && node scripts/package-electron.js --win portable --x64 --publish never",
+    "package:open:win": "npm run build:open && node scripts/package-electron.js --win --x64 --publish never",
     "test": "npm run test:open",
     "test:open": "node scripts/test-edition.js open",
+    "test:open:full": "node scripts/test-edition.js open --full",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json}\"",
     "verify:open-source-boundary": "node scripts/open-source-boundary.js",
-    "verify:ci": "npm run typecheck && npm run lint && npm run test:open && npm run verify:open-source-boundary && npm run build:open"
+    "verify:ci": "npm run typecheck && npm run lint && npm run test:open:full && npm run verify:open-source-boundary && npm run build:open"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -39,8 +45,6 @@
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.13.12",
     "adm-zip": "^0.5.16",
-    "ag-grid-community": "^32.3.9",
-    "ag-grid-react": "^32.3.9",
     "aho-corasick": "^0.1.3",
     "ajv": "^8.17.1",
     "async-mutex": "^0.5.0",
@@ -55,7 +59,6 @@
     "fingerprint-generator": "^2.1.78",
     "fs-extra": "^11.2.0",
     "handlebars": "^4.7.8",
-    "heap-js": "^2.7.1",
     "hnswlib-node": "^3.0.0",
     "iconv-lite": "^0.7.2",
     "imghash": "^1.1.2",
@@ -131,6 +134,7 @@
     "build",
     "docs",
     "examples",
+    "index.js",
     "scripts",
     "src",
     "electron-builder.yml",

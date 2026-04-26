@@ -68,6 +68,7 @@ describe('browser handler engine feature contracts', () => {
 
   it('browser console handlers use explicit console capabilities', async () => {
     const browser = {
+      hasCapability: vi.fn((name: string) => name === 'console.capture'),
       startConsoleCapture: vi.fn(),
       stopConsoleCapture: vi.fn(),
       getConsoleMessages: vi.fn().mockReturnValue([

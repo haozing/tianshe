@@ -20,6 +20,8 @@ yarn-error.log*
 data/
 .browser-profiles/
 .tmp-test-userdata-run/
+artifacts/
+qa-results/
 
 # DuckDB database files
 *.duckdb
@@ -33,6 +35,8 @@ coverage/
 # Temporary files
 *.tmp
 *.temp
+.codex-tmp/
+.tmp/
 .cache/
 tmp/
 

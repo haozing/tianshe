@@ -67,9 +67,16 @@ describe('prepareRuyiFirefoxLaunch', () => {
 
     previousArgv = [...process.argv];
     firefoxExecutablePath = path.join(tempRoot, 'firefox.exe');
+    const baseArgv = previousArgv.filter(
+      (arg) => arg !== '--airpa-user-data-dir' && !arg.startsWith('--airpa-user-data-dir=')
+    );
     Object.defineProperty(process, 'argv', {
       configurable: true,
-      value: [...previousArgv, `--airpa-firefox-path=${firefoxExecutablePath}`],
+      value: [
+        ...baseArgv,
+        `--airpa-user-data-dir=${tempRoot}`,
+        `--airpa-firefox-path=${firefoxExecutablePath}`,
+      ],
     });
     await fsp.writeFile(firefoxExecutablePath, '', 'utf8');
   });

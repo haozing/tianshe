@@ -1150,7 +1150,9 @@ export function PluginMarket() {
                   description:
                     '按异常、运行中、空闲、未启动、已禁用排序，方便快速扫一眼所有插件状态。',
                   rows: runtimeRows,
-                  emptyMessage: '当前还没有已安装插件，可前往“云端目录”或“已安装”页导入插件。',
+                  emptyMessage: cloudCatalogAvailable
+                    ? '当前还没有已安装插件，可前往“云端目录”或“已安装”页导入插件。'
+                    : '当前还没有已安装插件，可前往“已安装”页导入本地插件。',
                   icon: <House className="h-4 w-4 text-slate-700" />,
                 })}
               </>
