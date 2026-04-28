@@ -7,6 +7,7 @@ import { app } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
 import { resolveUserDataDir } from '../../constants/runtime-config';
 import { normalizeExtensionPackageId } from '../../core/extension-packages/policy';
+import { assertSafeZipEntryPath, assertSafeZipMetadata } from '../../utils/zip-safety';
 import type {
   ExtensionPackage,
   ExtensionPackagesMeta,
@@ -152,9 +153,7 @@ export class ExtensionPackagesManager {
     return { succeeded, failed };
   }
 
-  async downloadCloudPackages(
-    inputs: DownloadCloudExtensionInput[]
-  ): Promise<ExtensionPackage[]> {
+  async downloadCloudPackages(inputs: DownloadCloudExtensionInput[]): Promise<ExtensionPackage[]> {
     const normalizedInputs = Array.isArray(inputs) ? inputs : [];
     if (normalizedInputs.length === 0) return [];
 
@@ -237,7 +236,9 @@ export class ExtensionPackagesManager {
   }): Promise<ExtensionPackage> {
     await this.ensureRepositoryDirs();
 
-    const normalizedExtensionId = normalizeExtensionPackageId(String(input.extensionId || '').trim());
+    const normalizedExtensionId = normalizeExtensionPackageId(
+      String(input.extensionId || '').trim()
+    );
     const bytes = this.decodeBase64Archive(input.archiveBase64, normalizedExtensionId);
 
     return this.installCloudArchiveBuffer({
@@ -283,9 +284,7 @@ export class ExtensionPackagesManager {
       .trim()
       .toLowerCase();
     if (expectedHash && expectedHash !== archiveSha256) {
-      throw new Error(
-        `Archive hash mismatch: expected ${expectedHash}, got ${archiveSha256}`
-      );
+      throw new Error(`Archive hash mismatch: expected ${expectedHash}, got ${archiveSha256}`);
     }
 
     const installed = await this.importFromArchivePath({
@@ -322,7 +321,9 @@ export class ExtensionPackagesManager {
     const packages = Array.isArray(input.packages) ? input.packages : [];
     const profileInput = Array.isArray(input.profileIds) ? input.profileIds : [];
     const profileIds = Array.from(
-      new Set(profileInput.map((item) => String(item || '').trim()).filter((item) => item.length > 0))
+      new Set(
+        profileInput.map((item) => String(item || '').trim()).filter((item) => item.length > 0)
+      )
     );
     if (profileIds.length === 0 || packages.length === 0) return;
 
@@ -349,7 +350,9 @@ export class ExtensionPackagesManager {
     const profileInput = Array.isArray(input.profileIds) ? input.profileIds : [];
     const extensionInput = Array.isArray(input.extensionIds) ? input.extensionIds : [];
     const profileIds = Array.from(
-      new Set(profileInput.map((item) => String(item || '').trim()).filter((item) => item.length > 0))
+      new Set(
+        profileInput.map((item) => String(item || '').trim()).filter((item) => item.length > 0)
+      )
     );
     const extensionIds = Array.from(
       new Set(
@@ -403,7 +406,9 @@ export class ExtensionPackagesManager {
       const refCount = await this.extensionService.countBindingsByExtensionId(extensionId);
       if (refCount > 0) continue;
 
-      const deletedPackages = await this.extensionService.removePackagesByExtensionIds([extensionId]);
+      const deletedPackages = await this.extensionService.removePackagesByExtensionIds([
+        extensionId,
+      ]);
       await fs.remove(path.join(this.getPackagesDir(), extensionId));
       removed.push(...deletedPackages);
     }
@@ -717,7 +722,10 @@ export class ExtensionPackagesManager {
     extensionIdHint?: string;
     sourceType: ImportSourceType;
   }): Promise<UpsertExtensionPackageParams> {
-    const payload = await this.readExtensionPayloadFromDirectory(params.sourceDir, params.extensionIdHint);
+    const payload = await this.readExtensionPayloadFromDirectory(
+      params.sourceDir,
+      params.extensionIdHint
+    );
     const targetDir = this.getVersionedPackageDir(payload.extensionId, payload.version);
     await fs.remove(targetDir);
     await fs.ensureDir(path.dirname(targetDir));
@@ -856,22 +864,11 @@ export class ExtensionPackagesManager {
 
   private async safeExtractZip(zip: AdmZip, targetDir: string): Promise<void> {
     const entries = zip.getEntries();
-    const resolvedTargetDir = path.resolve(targetDir);
+    assertSafeZipMetadata(entries, 'extension package');
 
     for (const entry of entries) {
       const entryPath = entry.entryName;
-      if (entryPath.includes('..') || path.isAbsolute(entryPath)) {
-        throw new Error(`Unsafe zip entry path detected: ${entryPath}`);
-      }
-
-      const targetPath = path.join(targetDir, entryPath);
-      const resolvedPath = path.resolve(targetPath);
-      if (
-        !resolvedPath.startsWith(resolvedTargetDir + path.sep) &&
-        resolvedPath !== resolvedTargetDir
-      ) {
-        throw new Error(`Unsafe zip extraction path detected: ${entryPath}`);
-      }
+      const targetPath = assertSafeZipEntryPath(entryPath, targetDir);
 
       if (entry.isDirectory) {
         await fs.ensureDir(targetPath);
@@ -892,7 +889,9 @@ export class ExtensionPackagesManager {
   }): Promise<ExtensionPackage> {
     await this.ensureRepositoryDirs();
 
-    const normalizedExtensionId = normalizeExtensionPackageId(String(input.extensionId || '').trim());
+    const normalizedExtensionId = normalizeExtensionPackageId(
+      String(input.extensionId || '').trim()
+    );
     const bytes = Buffer.from(input.bytes);
     if (bytes.length === 0) {
       throw new Error(`Archive is empty for extension: ${normalizedExtensionId}`);
@@ -1010,4 +1009,3 @@ export class ExtensionPackagesManager {
     }
   }
 }
-

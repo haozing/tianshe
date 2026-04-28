@@ -102,6 +102,12 @@ Open releases use SemVer and must be consumed by private cloud editions through 
 
 Plugin examples live in `examples/`. Runtime helper APIs live under `src/core/js-plugin/`.
 
+## Plugin Trust Model
+
+Tianshe Client Open is designed to run only fully trusted first-party plugins ("完全可信的一方插件"). A JavaScript plugin is treated as part of the local desktop application: plugin modules run in the host Node/Electron context, and plugin pages are UI extension surfaces, not a security sandbox.
+
+Plugin import paths must explicitly mark packages as trusted first-party before the runtime accepts them, and production plugin manifests must declare `"trustModel": "first_party"`. Do not install or distribute third-party, semi-trusted, or unreviewed plugin packages with this edition. Supporting an external plugin ecosystem would require a separate isolation and capability model before those plugins are allowed to run.
+
 ## License
 
 MIT

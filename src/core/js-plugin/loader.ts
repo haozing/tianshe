@@ -9,6 +9,7 @@ import * as path from 'path';
 import * as Module from 'module';
 import AdmZip from 'adm-zip';
 import type { JSPluginManifest, JSPluginModule } from '../../types/js-plugin';
+import { assertSafeZipEntryPath, assertSafeZipMetadata } from '../../utils/zip-safety';
 
 function isLikelyBrowserExtensionManifest(manifest: any): boolean {
   if (!manifest || typeof manifest !== 'object') return false;
@@ -324,35 +325,11 @@ export async function packPlugin(pluginDir: string, outputPath?: string): Promis
  */
 async function safeExtractAll(zip: AdmZip, targetDir: string): Promise<void> {
   const entries = zip.getEntries();
-  const resolvedTargetDir = path.resolve(targetDir);
+  assertSafeZipMetadata(entries, 'plugin package');
 
   for (const entry of entries) {
     const entryPath = entry.entryName;
-
-    // ZipSlip 防护：检查路径是否试图逃逸目标目录
-    if (entryPath.includes('..') || path.isAbsolute(entryPath)) {
-      throw new Error(
-        `Security error: ZipSlip attack detected!\n` +
-          `Entry "${entryPath}" contains path traversal or absolute path.\n` +
-          `This plugin package may be malicious.`
-      );
-    }
-
-    const targetPath = path.join(targetDir, entryPath);
-    const resolvedPath = path.resolve(targetPath);
-
-    // 二次验证：确保解析后的路径在目标目录内
-    if (
-      !resolvedPath.startsWith(resolvedTargetDir + path.sep) &&
-      resolvedPath !== resolvedTargetDir
-    ) {
-      throw new Error(
-        `Security error: ZipSlip attack detected!\n` +
-          `Entry "${entryPath}" resolves outside target directory.\n` +
-          `Target: ${resolvedTargetDir}\n` +
-          `Resolved: ${resolvedPath}`
-      );
-    }
+    const targetPath = assertSafeZipEntryPath(entryPath, targetDir);
 
     if (entry.isDirectory) {
       await fs.ensureDir(targetPath);

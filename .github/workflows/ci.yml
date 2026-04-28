@@ -8,7 +8,7 @@ on:
 
 jobs:
   verify:
-    name: typecheck, lint, test, build
+    name: typecheck, lint, test, audit, build
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -30,10 +30,25 @@ jobs:
         run: npm run lint
 
       - name: Open edition tests
-        run: npm run test:open
+        run: npm run test:open:full
+
+      - name: Security audit
+        run: npm audit --registry=https://registry.npmjs.org --audit-level=high --omit=dev
 
       - name: Open source boundary
         run: npm run verify:open-source-boundary
+
+      - name: Coverage smoke
+        run: >
+          npx vitest run --coverage
+          --coverage.include=src/main/ipc-authorization.ts
+          --coverage.include=src/utils/redaction.ts
+          --coverage.include=src/utils/zip-safety.ts
+          --coverage.include=src/core/js-plugin/trust-policy.ts
+          src/main/ipc-authorization.test.ts
+          src/utils/redaction.test.ts
+          src/utils/zip-safety.test.ts
+          src/core/js-plugin/trust-policy.test.ts
 
       - name: Open build
         run: npm run build:open

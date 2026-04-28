@@ -12,6 +12,10 @@ import type { DuckDBService } from '../../main/duckdb/service';
 import type { JSPluginManifest, JSPluginInfo, JSPluginImportResult } from '../../types/js-plugin';
 import { readManifest, loadPluginModule, extractPlugin } from './loader';
 import { createLogger } from '../logger';
+import {
+  assertTrustedFirstPartyPluginImport,
+  type TrustedFirstPartyImportOptions,
+} from './trust-policy';
 
 /**
  * 插件导入时的回调函数接口
@@ -37,7 +41,7 @@ export interface PluginImportCallbacks {
 /**
  * 插件导入选项
  */
-export interface PluginImportOptions {
+export interface PluginImportOptions extends TrustedFirstPartyImportOptions {
   /** 是否为开发模式（使用符号链接） */
   devMode?: boolean;
   /** 插件来源类型（本地私有 / 云端托管） */
@@ -209,6 +213,7 @@ export class PluginLoader {
       let manifest;
       try {
         manifest = await readManifest(manifestSourceDir);
+        assertTrustedFirstPartyPluginImport(manifest, options);
         logger.info('Manifest read successfully');
       } catch (manifestError: any) {
         if (tempExtractDir) {

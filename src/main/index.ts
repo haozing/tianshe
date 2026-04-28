@@ -343,15 +343,11 @@ async function initializeServices(): Promise<void> {
   // 9.575. Register extension packages manager handlers
   logStartup('Registering Extension Packages Manager Handlers...');
   extensionPackages = new ExtensionPackagesManager(duckdbService.getExtensionPackagesService());
-  registerExtensionPackagesManagerHandlers(
-    extensionPackages,
-    duckdbService.getProfileService(),
-    {
-      syncOutboxService: duckdbService.getSyncOutboxService(),
-      fetchBrowserExtensionInstallPackage:
-        tiansheEdition.cloudCatalog.fetchBrowserExtensionInstallPackage,
-    }
-  );
+  registerExtensionPackagesManagerHandlers(extensionPackages, duckdbService.getProfileService(), {
+    syncOutboxService: duckdbService.getSyncOutboxService(),
+    fetchBrowserExtensionInstallPackage:
+      tiansheEdition.cloudCatalog.fetchBrowserExtensionInstallPackage,
+  });
   console.log('[OK] Extension packages manager handlers registered');
   logStartup('Extension Packages Manager Handlers registered');
 
@@ -876,6 +872,7 @@ async function startHttpServer(): Promise<void> {
                   devMode: false,
                   sourceType: 'cloud_managed',
                   installChannel: 'cloud_download',
+                  trustedFirstParty: true,
                   cloudPluginCode: pkg.pluginCode,
                   cloudReleaseVersion: pkg.releaseVersion,
                   managedByPolicy: true,
@@ -907,6 +904,7 @@ async function startHttpServer(): Promise<void> {
             }
             const result = await jsPluginManager.import(sourcePath, {
               devMode: request.devMode === true,
+              trustedFirstParty: true,
             });
             if (!result.success || !result.pluginId) {
               throw new Error(result.error || 'Failed to install local plugin');

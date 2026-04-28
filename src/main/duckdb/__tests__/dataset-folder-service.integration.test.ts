@@ -90,49 +90,102 @@ describe('DatasetFolderService integration', () => {
     expect(grandchild?.parentId).toBe(childFolderId);
   });
 
-  it(
-    'deletes nested folders and datasets when deleteContents=true',
-    async () => {
-      const rootFolderId = await folderService.createFolder('Unsafe Folder');
-      const childFolderId = await folderService.createFolder('Child Folder', rootFolderId);
+  it('reorders tables and folders with bound parameters', async () => {
+    const folderA = await folderService.createFolder('A');
+    const folderB = await folderService.createFolder('B');
 
-      await metadataService.saveMetadata({
-        id: 'unsafe_dataset_root',
-        name: 'Unsafe Dataset Root',
-        filePath: 'unsafe_dataset_root.db',
-        rowCount: 1,
-        columnCount: 1,
-        sizeBytes: 0,
-        createdAt: Date.now(),
-        folderId: rootFolderId,
-        schema: [{ name: 'name', duckdbType: 'VARCHAR', fieldType: 'text', nullable: true }],
-      });
+    await metadataService.saveMetadata({
+      id: 'dataset_a',
+      name: 'Dataset A',
+      filePath: 'dataset_a.db',
+      rowCount: 1,
+      columnCount: 1,
+      sizeBytes: 0,
+      createdAt: Date.now(),
+      folderId: folderA,
+      tableOrder: 0,
+      schema: [{ name: 'name', duckdbType: 'VARCHAR', fieldType: 'text', nullable: true }],
+    });
 
-      await metadataService.saveMetadata({
-        id: 'unsafe_dataset_child',
-        name: 'Unsafe Dataset Child',
-        filePath: 'unsafe_dataset_child.db',
-        rowCount: 1,
-        columnCount: 1,
-        sizeBytes: 0,
-        createdAt: Date.now(),
-        folderId: childFolderId,
-        schema: [{ name: 'name', duckdbType: 'VARCHAR', fieldType: 'text', nullable: true }],
-      });
+    await metadataService.saveMetadata({
+      id: 'dataset_b',
+      name: 'Dataset B',
+      filePath: 'dataset_b.db',
+      rowCount: 1,
+      columnCount: 1,
+      sizeBytes: 0,
+      createdAt: Date.now(),
+      folderId: folderA,
+      tableOrder: 1,
+      schema: [{ name: 'name', duckdbType: 'VARCHAR', fieldType: 'text', nullable: true }],
+    });
 
-      await folderService.deleteFolder(rootFolderId, true);
+    await folderService.reorderTables(folderA, ['dataset_b', 'dataset_a']);
+    await folderService.reorderFolders([folderB, folderA]);
 
-      expect(await folderService.getFolder(rootFolderId)).toBeNull();
-      expect(await folderService.getFolder(childFolderId)).toBeNull();
+    const datasetRows = parseRows(
+      await conn.runAndReadAll(
+        `SELECT id, table_order FROM datasets WHERE folder_id = ? ORDER BY table_order ASC`,
+        [folderA]
+      )
+    );
+    expect(datasetRows.map((row) => row.id)).toEqual(['dataset_b', 'dataset_a']);
 
-      const datasetRows = parseRows(
-        await conn.runAndReadAll(
-          `SELECT id FROM datasets WHERE id IN (?, ?) ORDER BY id ASC`,
-          ['unsafe_dataset_child', 'unsafe_dataset_root']
-        )
-      );
-      expect(datasetRows).toEqual([]);
-    },
-    15000
-  );
+    const folderRows = parseRows(
+      await conn.runAndReadAll(
+        `SELECT id, folder_order FROM dataset_folders WHERE id IN (?, ?) ORDER BY folder_order ASC`,
+        [folderA, folderB]
+      )
+    );
+    expect(folderRows.map((row) => row.id)).toEqual([folderB, folderA]);
+  });
+
+  it('does not interpolate quoted reorder ids into SQL', async () => {
+    await expect(
+      folderService.reorderTables("folder-x'--", ["dataset-x'--"])
+    ).resolves.toBeUndefined();
+    await expect(folderService.reorderFolders(["folder-x'--"])).resolves.toBeUndefined();
+  });
+
+  it('deletes nested folders and datasets when deleteContents=true', async () => {
+    const rootFolderId = await folderService.createFolder('Unsafe Folder');
+    const childFolderId = await folderService.createFolder('Child Folder', rootFolderId);
+
+    await metadataService.saveMetadata({
+      id: 'unsafe_dataset_root',
+      name: 'Unsafe Dataset Root',
+      filePath: 'unsafe_dataset_root.db',
+      rowCount: 1,
+      columnCount: 1,
+      sizeBytes: 0,
+      createdAt: Date.now(),
+      folderId: rootFolderId,
+      schema: [{ name: 'name', duckdbType: 'VARCHAR', fieldType: 'text', nullable: true }],
+    });
+
+    await metadataService.saveMetadata({
+      id: 'unsafe_dataset_child',
+      name: 'Unsafe Dataset Child',
+      filePath: 'unsafe_dataset_child.db',
+      rowCount: 1,
+      columnCount: 1,
+      sizeBytes: 0,
+      createdAt: Date.now(),
+      folderId: childFolderId,
+      schema: [{ name: 'name', duckdbType: 'VARCHAR', fieldType: 'text', nullable: true }],
+    });
+
+    await folderService.deleteFolder(rootFolderId, true);
+
+    expect(await folderService.getFolder(rootFolderId)).toBeNull();
+    expect(await folderService.getFolder(childFolderId)).toBeNull();
+
+    const datasetRows = parseRows(
+      await conn.runAndReadAll(`SELECT id FROM datasets WHERE id IN (?, ?) ORDER BY id ASC`, [
+        'unsafe_dataset_child',
+        'unsafe_dataset_root',
+      ])
+    );
+    expect(datasetRows).toEqual([]);
+  }, 15000);
 });

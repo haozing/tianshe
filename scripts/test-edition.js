@@ -34,6 +34,7 @@ function run(command, args, env) {
 function main() {
   const edition = process.argv[2];
   const full = process.argv.includes('--full');
+  const vitestArgs = process.argv.slice(3).filter((arg) => arg !== '--full');
   if (!EDITIONS.has(edition)) {
     process.stderr.write('Usage: node scripts/test-edition.js <open|cloud> [--full]\n');
     process.exit(2);
@@ -48,14 +49,14 @@ function main() {
   if (edition === 'open') {
     run(process.execPath, ['scripts/open-source-boundary.js'], env);
     if (full) {
-      run(process.execPath, [VITEST_BIN, 'run'], env);
+      run(process.execPath, [VITEST_BIN, 'run', '--no-file-parallelism', ...vitestArgs], env);
       return;
     }
-    run(process.execPath, [VITEST_BIN, 'run', ...OPEN_TEST_FILES], env);
+    run(process.execPath, [VITEST_BIN, 'run', ...OPEN_TEST_FILES, ...vitestArgs], env);
     return;
   }
 
-  run(process.execPath, [VITEST_BIN, 'run'], env);
+  run(process.execPath, [VITEST_BIN, 'run', ...vitestArgs], env);
 }
 
 main();

@@ -2,7 +2,9 @@
   "id": "minimal-plugin",
   "name": "Minimal Plugin",
   "version": "1.0.0",
+  "author": "tiansheai",
   "description": "A minimal local plugin example for Tianshe Client Open.",
   "main": "index.js",
+  "trustModel": "first_party",
   "permissions": ["database", "ui"]
 }

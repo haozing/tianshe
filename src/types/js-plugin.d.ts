@@ -69,6 +69,8 @@ export interface JSPluginManifest {
   configuration?: PluginConfiguration;
   /** 插件权限声明（可选但推荐） */
   permissions?: PluginPermissions;
+  /** 插件信任模型；open 版本只允许运行 first_party 插件 */
+  trustModel?: 'first_party';
   /** 🆕 跨插件调用配置（用于插件互调和 MCP/HTTP 调用） */
   crossPlugin?: CrossPluginConfig;
   /** 云端插件编码（配置后主进程可在执行命令前执行 cloud authorize） */
@@ -107,13 +109,7 @@ export interface JSPluginModule {
    * 插件停用前守卫（可选）。
    * 返回 false 或 { allow: false } 时，普通停用会被跳过。
    */
-  canDeactivate?(
-    input?: {
-      force?: boolean;
-      pluginId?: string;
-      helpers?: PluginHelpers;
-    }
-  ):
+  canDeactivate?(input?: { force?: boolean; pluginId?: string; helpers?: PluginHelpers }):
     | boolean
     | {
         allow?: boolean;

@@ -54,16 +54,64 @@ import type { LogStorageService } from '../log-storage-service';
 import type { DownloadManager } from '../download';
 import type { BrowserWindow } from 'electron';
 
+function createFetchResponse(options: {
+  status?: number;
+  statusText?: string;
+  headers?: Record<string, string>;
+  chunks?: Uint8Array[];
+  url?: string;
+}): Response {
+  const headers = new Map(
+    Object.entries(options.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value])
+  );
+  const chunks = options.chunks ?? [];
+
+  return {
+    ok: (options.status ?? 200) >= 200 && (options.status ?? 200) < 300,
+    status: options.status ?? 200,
+    statusText: options.statusText ?? 'OK',
+    url: options.url ?? '',
+    headers: {
+      get: vi.fn((key: string) => headers.get(key.toLowerCase()) ?? null),
+    },
+    body: {
+      getReader: () => {
+        let index = 0;
+        return {
+          read: vi.fn(async () => {
+            if (index >= chunks.length) {
+              return { done: true, value: undefined };
+            }
+            return { done: false, value: chunks[index++] };
+          }),
+          releaseLock: vi.fn(),
+        };
+      },
+    },
+    arrayBuffer: vi.fn(async () => Buffer.concat(chunks).buffer),
+  } as unknown as Response;
+}
+
 describe('SystemIPCHandler', () => {
   let handler: SystemIPCHandler;
   let mockLogger: LogStorageService;
   let mockDownloadManager: DownloadManager;
   let mockMainWindow: BrowserWindow;
+  let mockWebContents: { id: number; isDestroyed: ReturnType<typeof vi.fn> };
   let handlers: Map<string, Function>;
+  let mockFetch: ReturnType<typeof vi.fn>;
+  let trustedEvent: { sender: typeof mockWebContents };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
     handlers = new Map();
+    mockWebContents = {
+      id: 1,
+      isDestroyed: vi.fn(() => false),
+    };
+    trustedEvent = { sender: mockWebContents };
 
     // 捕获注册的处理器
     mockIpcMainHandle.mockImplementation((channel: string, h: Function) => {
@@ -90,6 +138,7 @@ describe('SystemIPCHandler', () => {
     // 创建 mock BrowserWindow
     mockMainWindow = {
       getBounds: mockGetBounds,
+      webContents: mockWebContents,
     } as unknown as BrowserWindow;
 
     // 创建处理器实例并注册
@@ -99,6 +148,7 @@ describe('SystemIPCHandler', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
   describe('处理器注册', () => {
@@ -274,7 +324,7 @@ describe('SystemIPCHandler', () => {
     it('应该保存内置浏览器 DevTools 配置', async () => {
       const h = handlers.get('internal-browser:set-devtools-config')!;
 
-      const result = await h({} as any, { autoOpenDevTools: true });
+      const result = await h(trustedEvent as any, { autoOpenDevTools: true });
 
       expect(result.success).toBe(true);
       expect(result.config).toEqual({ autoOpenDevTools: true });
@@ -283,7 +333,7 @@ describe('SystemIPCHandler', () => {
     it('应该拒绝无效的内置浏览器 DevTools 配置', async () => {
       const h = handlers.get('internal-browser:set-devtools-config')!;
 
-      const result = await h({} as any, { autoOpenDevTools: 'bad-value' });
+      const result = await h(trustedEvent as any, { autoOpenDevTools: 'bad-value' });
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('autoOpenDevTools must be boolean');
@@ -352,29 +402,104 @@ describe('SystemIPCHandler', () => {
     it('应该验证空 URL', async () => {
       const h = handlers.get('download-image')!;
 
-      const result = await h({} as any, '');
+      const result = await h(trustedEvent as any, '');
 
       expect(result.success).toBe(false);
       expect(result.errorType).toBe('INVALID_URL');
       expect(result.retryable).toBe(false);
     });
 
+    it('应该拒绝非主窗口发送方', async () => {
+      const h = handlers.get('download-image')!;
+
+      const result = await h({ sender: { id: 2 } } as any, 'http://93.184.216.34/image.png');
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Unauthorized IPC sender');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     it('应该验证无效协议', async () => {
       const h = handlers.get('download-image')!;
 
-      const result = await h({} as any, 'ftp://example.com/image.png');
+      const result = await h(trustedEvent as any, 'ftp://example.com/image.png');
 
       expect(result.success).toBe(false);
       expect(result.errorType).toBe('INVALID_PROTOCOL');
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('应该处理 null URL', async () => {
       const h = handlers.get('download-image')!;
 
-      const result = await h({} as any, null);
+      const result = await h(trustedEvent as any, null);
 
       expect(result.success).toBe(false);
       expect(result.errorType).toBe('INVALID_URL');
+    });
+
+    it('应该拒绝回环地址且不发起请求', async () => {
+      const h = handlers.get('download-image')!;
+
+      const result = await h(trustedEvent as any, 'http://127.0.0.1:39090/health');
+
+      expect(result.success).toBe(false);
+      expect(result.errorType).toBe('PRIVATE_NETWORK_URL');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('应该拒绝重定向到内网地址', async () => {
+      const h = handlers.get('download-image')!;
+      mockFetch.mockResolvedValueOnce(
+        createFetchResponse({
+          status: 302,
+          statusText: 'Found',
+          headers: { location: 'http://127.0.0.1/private.png' },
+        })
+      );
+
+      const result = await h(trustedEvent as any, 'http://93.184.216.34/image.png');
+
+      expect(result.success).toBe(false);
+      expect(result.errorType).toBe('PRIVATE_NETWORK_URL');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('应该流式读取有效图片并返回 Base64', async () => {
+      const h = handlers.get('download-image')!;
+      mockFetch.mockResolvedValueOnce(
+        createFetchResponse({
+          headers: {
+            'content-type': 'image/png',
+            'content-length': '8',
+          },
+          chunks: [Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+          url: 'http://93.184.216.34/image.png',
+        })
+      );
+
+      const result = await h(trustedEvent as any, 'http://93.184.216.34/image.png');
+
+      expect(result.success).toBe(true);
+      expect(result.mimeType).toBe('image/png');
+      expect(result.data).toMatch(/^data:image\/png;base64,/);
+    });
+
+    it('应该在 Content-Length 超限时拒绝下载', async () => {
+      const h = handlers.get('download-image')!;
+      mockFetch.mockResolvedValueOnce(
+        createFetchResponse({
+          headers: {
+            'content-type': 'image/png',
+            'content-length': String(10 * 1024 * 1024 + 1),
+          },
+        })
+      );
+
+      const result = await h(trustedEvent as any, 'http://93.184.216.34/large.png');
+
+      expect(result.success).toBe(false);
+      expect(result.errorType).toBe('FILE_TOO_LARGE');
     });
   });
 
@@ -386,7 +511,7 @@ describe('SystemIPCHandler', () => {
       const { shell } = await import('electron');
       (shell.openPath as any).mockResolvedValue('');
 
-      const result = await h({} as any, '/some/path');
+      const result = await h(trustedEvent as any, '/some/path');
 
       expect(result).toBe('');
       expect(shell.openPath).toHaveBeenCalledWith('/some/path');
@@ -397,7 +522,7 @@ describe('SystemIPCHandler', () => {
       const { shell } = await import('electron');
       (shell.openPath as any).mockResolvedValue('Path not found');
 
-      const result = await h({} as any, '/invalid/path');
+      const result = await h(trustedEvent as any, '/invalid/path');
 
       expect(result).toBe('Path not found');
     });
@@ -407,9 +532,19 @@ describe('SystemIPCHandler', () => {
       const { shell } = await import('electron');
       (shell.openPath as any).mockRejectedValue(new Error('Shell error'));
 
-      const result = await h({} as any, '/some/path');
+      const result = await h(trustedEvent as any, '/some/path');
 
       expect(result).toBe('Shell error');
+    });
+
+    it('应该拒绝 URL 形式路径', async () => {
+      const h = handlers.get('shell:openPath')!;
+      const { shell } = await import('electron');
+
+      const result = await h(trustedEvent as any, 'https://example.com/file');
+
+      expect(result).toBe('Invalid path');
+      expect(shell.openPath).not.toHaveBeenCalled();
     });
   });
 });

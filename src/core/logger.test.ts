@@ -236,7 +236,15 @@ describe('Logger', () => {
     it('应该正确处理 Error 对象', () => {
       const error = new Error('Test error');
       logger.debug('Debug with error', error);
-      expect(childLogger.debug).toHaveBeenCalledWith({ err: error }, 'Debug with error');
+      expect(childLogger.debug).toHaveBeenCalledWith(
+        {
+          err: expect.objectContaining({
+            name: 'Error',
+            message: 'Test error',
+          }),
+        },
+        'Debug with error'
+      );
     });
 
     it('应该支持数字类型数据', () => {
@@ -289,7 +297,15 @@ describe('Logger', () => {
     it('应该正确处理 Error 对象', () => {
       const error = new Error('Info error');
       logger.info('Info with error', error);
-      expect(childLogger.info).toHaveBeenCalledWith({ err: error }, 'Info with error');
+      expect(childLogger.info).toHaveBeenCalledWith(
+        {
+          err: expect.objectContaining({
+            name: 'Error',
+            message: 'Info error',
+          }),
+        },
+        'Info with error'
+      );
     });
 
     it('应该处理复杂嵌套对象', () => {
@@ -331,7 +347,15 @@ describe('Logger', () => {
     it('应该正确处理 Error 对象', () => {
       const error = new Error('Warning error');
       logger.warn('Warn with error', error);
-      expect(childLogger.warn).toHaveBeenCalledWith({ err: error }, 'Warn with error');
+      expect(childLogger.warn).toHaveBeenCalledWith(
+        {
+          err: expect.objectContaining({
+            name: 'Error',
+            message: 'Warning error',
+          }),
+        },
+        'Warn with error'
+      );
     });
 
     it('应该处理空对象数据', () => {
@@ -359,7 +383,16 @@ describe('Logger', () => {
       const error = new Error('Something went wrong');
       error.stack = 'Error: Something went wrong\n    at test.ts:1:1';
       logger.error('Operation failed', error);
-      expect(childLogger.error).toHaveBeenCalledWith({ err: error }, 'Operation failed');
+      expect(childLogger.error).toHaveBeenCalledWith(
+        {
+          err: {
+            name: 'Error',
+            message: 'Something went wrong',
+            stack: 'Error: Something went wrong\n    at test.ts:1:1',
+          },
+        },
+        'Operation failed'
+      );
     });
 
     it('应该记录非 Error 类型的错误数据', () => {
@@ -380,7 +413,15 @@ describe('Logger', () => {
 
       const customError = new CustomError('Custom error', 'CUSTOM_001');
       logger.error('Custom error occurred', customError);
-      expect(childLogger.error).toHaveBeenCalledWith({ err: customError }, 'Custom error occurred');
+      expect(childLogger.error).toHaveBeenCalledWith(
+        {
+          err: expect.objectContaining({
+            name: 'CustomError',
+            message: 'Custom error',
+          }),
+        },
+        'Custom error occurred'
+      );
     });
 
     it('应该处理 Error 对象没有 stack 的情况', () => {
@@ -389,7 +430,12 @@ describe('Logger', () => {
 
       logger.error('Error without stack', errorWithoutStack);
       expect(childLogger.error).toHaveBeenCalledWith(
-        { err: errorWithoutStack },
+        {
+          err: {
+            name: 'Error',
+            message: 'No stack',
+          },
+        },
         'Error without stack'
       );
     });
@@ -400,7 +446,15 @@ describe('Logger', () => {
       (outerError as any).cause = innerError;
 
       logger.error('Nested error', outerError);
-      expect(childLogger.error).toHaveBeenCalledWith({ err: outerError }, 'Nested error');
+      expect(childLogger.error).toHaveBeenCalledWith(
+        {
+          err: expect.objectContaining({
+            name: 'Error',
+            message: 'Outer error',
+          }),
+        },
+        'Nested error'
+      );
     });
   });
 

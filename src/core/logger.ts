@@ -5,6 +5,11 @@
 
 import pino from 'pino';
 import { isDevelopmentMode } from '../constants/runtime-config';
+import {
+  redactSensitiveError,
+  redactSensitiveText,
+  redactSensitiveValue,
+} from '../utils/redaction';
 
 /**
  * 日志级别枚举
@@ -209,14 +214,15 @@ export class Logger {
    * @param data - 附加数据
    */
   debug(message: string, data?: unknown): void {
+    const safeMessage = redactSensitiveText(message);
     if (data !== undefined) {
       if (data instanceof Error) {
-        this.pinoLogger.debug({ err: data }, message);
+        this.pinoLogger.debug({ err: redactSensitiveError(data) }, safeMessage);
       } else {
-        this.pinoLogger.debug({ data }, message);
+        this.pinoLogger.debug({ data: redactSensitiveValue(data) }, safeMessage);
       }
     } else {
-      this.pinoLogger.debug(message);
+      this.pinoLogger.debug(safeMessage);
     }
   }
 
@@ -226,14 +232,15 @@ export class Logger {
    * @param data - 附加数据
    */
   info(message: string, data?: unknown): void {
+    const safeMessage = redactSensitiveText(message);
     if (data !== undefined) {
       if (data instanceof Error) {
-        this.pinoLogger.info({ err: data }, message);
+        this.pinoLogger.info({ err: redactSensitiveError(data) }, safeMessage);
       } else {
-        this.pinoLogger.info({ data }, message);
+        this.pinoLogger.info({ data: redactSensitiveValue(data) }, safeMessage);
       }
     } else {
-      this.pinoLogger.info(message);
+      this.pinoLogger.info(safeMessage);
     }
   }
 
@@ -243,14 +250,15 @@ export class Logger {
    * @param data - 附加数据
    */
   warn(message: string, data?: unknown): void {
+    const safeMessage = redactSensitiveText(message);
     if (data !== undefined) {
       if (data instanceof Error) {
-        this.pinoLogger.warn({ err: data }, message);
+        this.pinoLogger.warn({ err: redactSensitiveError(data) }, safeMessage);
       } else {
-        this.pinoLogger.warn({ data }, message);
+        this.pinoLogger.warn({ data: redactSensitiveValue(data) }, safeMessage);
       }
     } else {
-      this.pinoLogger.warn(message);
+      this.pinoLogger.warn(safeMessage);
     }
   }
 
@@ -260,14 +268,15 @@ export class Logger {
    * @param error - 错误对象或附加数据
    */
   error(message: string, error?: unknown): void {
+    const safeMessage = redactSensitiveText(message);
     if (error !== undefined) {
       if (error instanceof Error) {
-        this.pinoLogger.error({ err: error }, message);
+        this.pinoLogger.error({ err: redactSensitiveError(error) }, safeMessage);
       } else {
-        this.pinoLogger.error({ data: error }, message);
+        this.pinoLogger.error({ data: redactSensitiveValue(error) }, safeMessage);
       }
     } else {
-      this.pinoLogger.error(message);
+      this.pinoLogger.error(safeMessage);
     }
   }
 

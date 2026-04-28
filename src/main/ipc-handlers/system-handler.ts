@@ -4,6 +4,8 @@
  */
 
 import { ipcMain, IpcMainInvokeEvent, BrowserWindow, app, shell } from 'electron';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import Store from 'electron-store';
 import { LogStorageService } from '../log-storage-service';
 import { DownloadManager } from '../download';
@@ -11,6 +13,12 @@ import { handleIPCError } from '../ipc-utils';
 import { DEFAULT_HTTP_API_CONFIG, type HttpApiConfig } from '../../constants/http-api';
 import { isDevelopmentMode } from '../../constants/runtime-config';
 import { getDeviceFingerprint } from '../system/device-fingerprint';
+import { assertMainWindowIpcSender } from '../ipc-authorization';
+import {
+  redactSensitiveText,
+  redactSensitiveUrl,
+  redactSensitiveValue,
+} from '../../utils/redaction';
 import {
   getInternalBrowserDevToolsConfig,
   setInternalBrowserDevToolsConfig,
@@ -19,6 +27,20 @@ import { getAppShellConfig } from '../app-shell-config';
 
 // 全局 store 实例（用于读取配置）
 const store = new Store();
+const MAX_DOWNLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_DOWNLOAD_IMAGE_REDIRECTS = 5;
+
+class DownloadImageError extends Error {
+  constructor(
+    message: string,
+    public readonly errorType: string,
+    public readonly retryable: boolean = false,
+    public readonly statusCode?: number
+  ) {
+    super(message);
+    this.name = 'DownloadImageError';
+  }
+}
 
 export class SystemIPCHandler {
   constructor(
@@ -266,8 +288,9 @@ export class SystemIPCHandler {
 
     ipcMain.handle(
       'internal-browser:set-devtools-config',
-      async (_event: IpcMainInvokeEvent, config: { autoOpenDevTools?: boolean }) => {
+      async (event: IpcMainInvokeEvent, config: { autoOpenDevTools?: boolean }) => {
         try {
+          assertMainWindowIpcSender(event, this.mainWindow, 'internal-browser:set-devtools-config');
           if (typeof config?.autoOpenDevTools !== 'boolean') {
             throw new Error('autoOpenDevTools must be boolean');
           }
@@ -292,12 +315,14 @@ export class SystemIPCHandler {
    * 使用 Node.js 环境，绕过浏览器的 CORS 限制
    */
   private registerDownloadImage(): void {
-    ipcMain.handle('download-image', async (_event: IpcMainInvokeEvent, url: string) => {
+    ipcMain.handle('download-image', async (event: IpcMainInvokeEvent, url: string) => {
       const startTime = Date.now();
+      let normalizedUrl = typeof url === 'string' ? url : '';
 
       try {
+        assertMainWindowIpcSender(event, this.mainWindow, 'download-image');
         console.log('[DownloadImage] ========================================');
-        console.log('[DownloadImage] 开始下载图片:', url);
+        console.log('[DownloadImage] 开始下载图片:', redactSensitiveUrl(String(url || '')));
 
         // 验证 URL 格式
         if (!url || typeof url !== 'string' || url.trim() === '') {
@@ -312,38 +337,16 @@ export class SystemIPCHandler {
           };
         }
 
-        url = url.trim();
-
-        // 验证 URL 协议
-        if (!url.startsWith('http://') && !url.startsWith('https://')) {
-          const error = 'URL 必须以 http:// 或 https:// 开头';
-          console.error('[DownloadImage] ❌ 协议验证失败:', error);
-          return {
-            success: false,
-            error: error,
-            errorType: 'INVALID_PROTOCOL',
-            retryable: false,
-            url: url,
-          };
-        }
+        normalizedUrl = url.trim();
+        const imageUrl = this.parseDownloadImageUrl(normalizedUrl);
+        const redactedUrl = redactSensitiveUrl(normalizedUrl);
 
         console.log('[DownloadImage] ✓ URL 验证通过');
+        console.log('[DownloadImage] 请求 URL:', redactedUrl);
         console.log('[DownloadImage] 请求头: User-Agent: Mozilla/5.0...');
 
-        // 使用 fetch 下载图片（Node.js 18+ 原生支持 fetch）
         const fetchStartTime = Date.now();
-        const response = await fetch(url, {
-          method: 'GET',
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            Accept: 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-          },
-          // 设置超时
-          signal: AbortSignal.timeout(30000), // 30秒超时
-        });
+        const response = await this.fetchDownloadImage(imageUrl);
 
         const fetchDuration = Date.now() - fetchStartTime;
         console.log(`[DownloadImage] Fetch 完成，耗时: ${fetchDuration}ms`);
@@ -362,7 +365,7 @@ export class SystemIPCHandler {
             error: error,
             errorType: response.status >= 500 ? 'SERVER_ERROR' : 'HTTP_ERROR',
             retryable: retryable,
-            url: url,
+            url: redactSensitiveUrl(response.url || normalizedUrl),
             statusCode: response.status,
           };
         }
@@ -379,8 +382,7 @@ export class SystemIPCHandler {
             `[DownloadImage] Content-Length: ${contentLength} bytes (${sizeMB.toFixed(2)} MB)`
           );
 
-          // 检查文件大小（限制 10MB）
-          if (parseInt(contentLength) > 10 * 1024 * 1024) {
+          if (parseInt(contentLength) > MAX_DOWNLOAD_IMAGE_BYTES) {
             const error = `文件过大: ${sizeMB.toFixed(2)} MB（限制 10MB）`;
             console.error('[DownloadImage] ❌', error);
             return {
@@ -388,7 +390,7 @@ export class SystemIPCHandler {
               error: error,
               errorType: 'FILE_TOO_LARGE',
               retryable: false,
-              url: url,
+              url: redactSensitiveUrl(url),
             };
           }
         }
@@ -396,8 +398,7 @@ export class SystemIPCHandler {
         // 下载图片数据
         console.log('[DownloadImage] 开始下载图片数据...');
         const downloadStartTime = Date.now();
-        const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
+        const buffer = await this.readResponseBufferWithLimit(response);
         const downloadDuration = Date.now() - downloadStartTime;
 
         console.log(`[DownloadImage] ✅ 图片下载成功`);
@@ -407,7 +408,7 @@ export class SystemIPCHandler {
         console.log(`[DownloadImage]    下载耗时: ${downloadDuration}ms`);
 
         // 验证文件大小
-        if (buffer.length > 10 * 1024 * 1024) {
+        if (buffer.length > MAX_DOWNLOAD_IMAGE_BYTES) {
           const error = `文件过大: ${(buffer.length / (1024 * 1024)).toFixed(2)} MB（限制 10MB）`;
           console.error('[DownloadImage] ❌', error);
           return {
@@ -415,7 +416,7 @@ export class SystemIPCHandler {
             error: error,
             errorType: 'FILE_TOO_LARGE',
             retryable: false,
-            url: url,
+            url: redactSensitiveUrl(url),
           };
         }
 
@@ -432,13 +433,14 @@ export class SystemIPCHandler {
         let mimeType = contentType || 'image/png';
         if (!mimeType.startsWith('image/')) {
           // 如果 Content-Type 不是图片类型，尝试从 URL 推断
-          if (url.endsWith('.jpg') || url.endsWith('.jpeg')) {
+          const finalUrl = response.url || normalizedUrl;
+          if (finalUrl.endsWith('.jpg') || finalUrl.endsWith('.jpeg')) {
             mimeType = 'image/jpeg';
-          } else if (url.endsWith('.png')) {
+          } else if (finalUrl.endsWith('.png')) {
             mimeType = 'image/png';
-          } else if (url.endsWith('.gif')) {
+          } else if (finalUrl.endsWith('.gif')) {
             mimeType = 'image/gif';
-          } else if (url.endsWith('.webp')) {
+          } else if (finalUrl.endsWith('.webp')) {
             mimeType = 'image/webp';
           } else {
             mimeType = 'image/png'; // 默认
@@ -469,14 +471,22 @@ export class SystemIPCHandler {
         };
       } catch (error: unknown) {
         const totalDuration = Date.now() - startTime;
-        console.error('[DownloadImage] ❌ 下载图片失败 (耗时: ' + totalDuration + 'ms):', error);
+        console.error(
+          '[DownloadImage] ❌ 下载图片失败 (耗时: ' + totalDuration + 'ms):',
+          redactSensitiveValue(error)
+        );
 
         // 解析错误类型
         let errorType = 'UNKNOWN_ERROR';
         let retryable = false;
         let errorMessage = error instanceof Error ? error.message : String(error);
+        let statusCode: number | undefined;
 
-        if (errorMessage.includes('aborted') || errorMessage.includes('timeout')) {
+        if (error instanceof DownloadImageError) {
+          errorType = error.errorType;
+          retryable = error.retryable;
+          statusCode = error.statusCode;
+        } else if (errorMessage.includes('aborted') || errorMessage.includes('timeout')) {
           errorType = 'TIMEOUT';
           retryable = true;
         } else if (errorMessage.includes('ENOTFOUND') || errorMessage.includes('ECONNREFUSED')) {
@@ -496,10 +506,207 @@ export class SystemIPCHandler {
           error: errorMessage,
           errorType: errorType,
           retryable: retryable,
-          url: url,
+          url: redactSensitiveUrl(normalizedUrl),
+          ...(statusCode !== undefined ? { statusCode } : {}),
         };
       }
     });
+  }
+
+  private parseDownloadImageUrl(url: string): URL {
+    let parsed: URL;
+
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new DownloadImageError('URL 格式无效', 'INVALID_URL', false);
+    }
+
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new DownloadImageError(
+        'URL 必须以 http:// 或 https:// 开头',
+        'INVALID_PROTOCOL',
+        false
+      );
+    }
+
+    if (!parsed.hostname) {
+      throw new DownloadImageError('URL 缺少主机名', 'INVALID_URL', false);
+    }
+
+    return parsed;
+  }
+
+  private async fetchDownloadImage(initialUrl: URL): Promise<Response> {
+    let currentUrl = initialUrl;
+
+    for (let redirectCount = 0; redirectCount <= MAX_DOWNLOAD_IMAGE_REDIRECTS; redirectCount++) {
+      await this.assertPublicHttpTarget(currentUrl);
+
+      const response = await fetch(currentUrl.toString(), {
+        method: 'GET',
+        redirect: 'manual',
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          Accept: 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        },
+        signal: AbortSignal.timeout(30000),
+      });
+
+      if (![301, 302, 303, 307, 308].includes(response.status)) {
+        return response;
+      }
+
+      const location = response.headers.get('location');
+      if (!location) {
+        return response;
+      }
+
+      if (redirectCount === MAX_DOWNLOAD_IMAGE_REDIRECTS) {
+        throw new DownloadImageError('重定向次数过多', 'TOO_MANY_REDIRECTS', false);
+      }
+
+      currentUrl = this.parseDownloadImageUrl(new URL(location, currentUrl).toString());
+    }
+
+    throw new DownloadImageError('重定向次数过多', 'TOO_MANY_REDIRECTS', false);
+  }
+
+  private async assertPublicHttpTarget(url: URL): Promise<void> {
+    const hostname = this.normalizeHostname(url.hostname);
+
+    if (!hostname || hostname === 'localhost') {
+      throw new DownloadImageError('不允许访问本机或内网地址', 'PRIVATE_NETWORK_URL', false);
+    }
+
+    if (isIP(hostname)) {
+      if (this.isDisallowedNetworkAddress(hostname)) {
+        throw new DownloadImageError('不允许访问本机或内网地址', 'PRIVATE_NETWORK_URL', false);
+      }
+      return;
+    }
+
+    const addresses = await lookup(hostname, { all: true, verbatim: true });
+    if (addresses.length === 0) {
+      throw new DownloadImageError('无法解析 URL 主机名', 'NETWORK_ERROR', true);
+    }
+
+    if (addresses.some((entry) => this.isDisallowedNetworkAddress(entry.address))) {
+      throw new DownloadImageError('不允许访问本机或内网地址', 'PRIVATE_NETWORK_URL', false);
+    }
+  }
+
+  private normalizeHostname(hostname: string): string {
+    return hostname
+      .trim()
+      .toLowerCase()
+      .replace(/^\[(.*)\]$/, '$1')
+      .replace(/\.$/, '');
+  }
+
+  private isDisallowedNetworkAddress(address: string): boolean {
+    const normalized = this.normalizeHostname(address);
+    const ipVersion = isIP(normalized);
+
+    if (ipVersion === 4) {
+      return this.isDisallowedIPv4Address(normalized);
+    }
+
+    if (ipVersion === 6) {
+      return this.isDisallowedIPv6Address(normalized);
+    }
+
+    return true;
+  }
+
+  private isDisallowedIPv4Address(address: string): boolean {
+    const parts = address.split('.').map((part) => Number(part));
+    if (
+      parts.length !== 4 ||
+      parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+    ) {
+      return true;
+    }
+
+    const [a, b] = parts;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 192 && b === 0) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    );
+  }
+
+  private isDisallowedIPv6Address(address: string): boolean {
+    const normalized = address.toLowerCase();
+    const mappedIPv4 = normalized.match(/^(?:0*:)*ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mappedIPv4) {
+      return this.isDisallowedIPv4Address(mappedIPv4[1]);
+    }
+
+    return (
+      normalized === '::' ||
+      normalized === '::1' ||
+      normalized === '0:0:0:0:0:0:0:1' ||
+      normalized.startsWith('fc') ||
+      normalized.startsWith('fd') ||
+      /^fe[89ab]/.test(normalized) ||
+      normalized.startsWith('ff')
+    );
+  }
+
+  private async readResponseBufferWithLimit(response: Response): Promise<Buffer> {
+    const body = response.body;
+
+    if (!body || typeof body.getReader !== 'function') {
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      if (buffer.length > MAX_DOWNLOAD_IMAGE_BYTES) {
+        throw new DownloadImageError(
+          `文件过大: ${(buffer.length / (1024 * 1024)).toFixed(2)} MB（限制 10MB）`,
+          'FILE_TOO_LARGE',
+          false
+        );
+      }
+      return buffer;
+    }
+
+    const reader = body.getReader();
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = Buffer.from(value);
+        totalBytes += chunk.length;
+
+        if (totalBytes > MAX_DOWNLOAD_IMAGE_BYTES) {
+          throw new DownloadImageError(
+            `文件过大: ${(totalBytes / (1024 * 1024)).toFixed(2)} MB（限制 10MB）`,
+            'FILE_TOO_LARGE',
+            false
+          );
+        }
+
+        chunks.push(chunk);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    return Buffer.concat(chunks, totalBytes);
   }
 
   /**
@@ -554,9 +761,18 @@ export class SystemIPCHandler {
    * 在文件管理器中打开指定路径
    */
   private registerShellOpenPath(): void {
-    ipcMain.handle('shell:openPath', async (_event: IpcMainInvokeEvent, filePath: string) => {
+    ipcMain.handle('shell:openPath', async (event: IpcMainInvokeEvent, filePath: string) => {
       try {
-        console.log(`[Shell] Opening path: ${filePath}`);
+        assertMainWindowIpcSender(event, this.mainWindow, 'shell:openPath');
+        if (typeof filePath !== 'string' || filePath.trim() === '') {
+          return 'Invalid path';
+        }
+
+        if (/^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(filePath) || filePath.includes('\0')) {
+          return 'Invalid path';
+        }
+
+        console.log(`[Shell] Opening path: ${redactSensitiveText(filePath)}`);
 
         // shell.openPath 返回空字符串表示成功，否则返回错误信息
         const result = await shell.openPath(filePath);
@@ -569,7 +785,7 @@ export class SystemIPCHandler {
 
         return result;
       } catch (error: unknown) {
-        console.error(`[Shell] Error opening path:`, error);
+        console.error(`[Shell] Error opening path:`, redactSensitiveValue(error));
         const errorMessage = error instanceof Error ? error.message : String(error);
         return errorMessage;
       }

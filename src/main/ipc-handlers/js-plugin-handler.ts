@@ -21,10 +21,7 @@ import {
   type PluginReloadedPayload,
 } from '../../core/js-plugin/events';
 import type { JSPluginRuntimeStatusChangeEvent } from '../../types/js-plugin';
-import type {
-  CloudRuntimeAuthorizeResult,
-  CloudRuntimePluginProvider,
-} from '../../edition/types';
+import type { CloudRuntimeAuthorizeResult, CloudRuntimePluginProvider } from '../../edition/types';
 import { DEFAULT_HTTP_API_CONFIG, type HttpApiConfig } from '../../constants/http-api';
 import { isDevelopmentMode } from '../../constants/runtime-config';
 
@@ -182,7 +179,10 @@ export class JSPluginIPCHandler {
             console.log(`[IPC] Development mode requested`);
           }
 
-          const importResult = await this.pluginManager.import(pluginPath, options);
+          const importResult = await this.pluginManager.import(pluginPath, {
+            ...options,
+            trustedFirstParty: true,
+          });
 
           // 🆕 如果安装成功，发送插件状态变化事件
           if (importResult.success && importResult.pluginId) {

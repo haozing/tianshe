@@ -4,6 +4,7 @@
  */
 
 import { BroadcastHandler, HookBus } from '../../core/hookbus';
+import { redactSensitiveText, redactSensitiveUrl } from '../../utils/redaction';
 
 /**
  * 内置埋点列表（写死，无需配置）
@@ -33,7 +34,9 @@ export class WebhookSender {
    */
   setCallbackUrl(url?: string): void {
     this.callbackUrl = url;
-    console.log(`[WebhookSender] Callback URL updated: ${url || '(disabled)'}`);
+    console.log(
+      `[WebhookSender] Callback URL updated: ${url ? redactSensitiveUrl(url) : '(disabled)'}`
+    );
   }
 
   /**
@@ -103,7 +106,7 @@ export class WebhookSender {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[WebhookSender] Error sending ${eventId}:`, errorMessage);
+      console.error(`[WebhookSender] Error sending ${eventId}:`, redactSensitiveText(errorMessage));
       // 失败就失败，不重试（按用户要求）
     }
   }

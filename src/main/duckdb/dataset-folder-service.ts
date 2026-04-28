@@ -389,7 +389,9 @@ export class DatasetFolderService {
   }
 
   private async deleteFolderRecursive(folderId: string): Promise<void> {
-    const folderStmt = await this.conn.prepare(`SELECT plugin_id FROM dataset_folders WHERE id = ?`);
+    const folderStmt = await this.conn.prepare(
+      `SELECT plugin_id FROM dataset_folders WHERE id = ?`
+    );
     folderStmt.bind([folderId]);
     const folderRows = parseRows(await folderStmt.runAndReadAll());
     folderStmt.destroySync();
@@ -441,15 +443,23 @@ export class DatasetFolderService {
   async reorderTables(folderId: string, tableIds: string[]): Promise<void> {
     if (tableIds.length === 0) return;
 
-    // ✅ 使用 DuckDB 的 VALUES 子句批量更新
-    const values = tableIds.map((id, idx) => `('${id}', ${idx})`).join(',');
+    const placeholders = tableIds.map(() => `(?, ?)`).join(',');
+    const values: Array<string | number> = tableIds.flatMap((id, idx) => [id, idx]);
+    values.push(folderId);
 
-    await this.conn.run(`
+    const stmt = await this.conn.prepare(`
       UPDATE datasets
       SET table_order = v.ord
-      FROM (VALUES ${values}) AS v(id, ord)
-      WHERE datasets.id = v.id AND datasets.folder_id = '${folderId}'
+      FROM (VALUES ${placeholders}) AS v(id, ord)
+      WHERE datasets.id = v.id AND datasets.folder_id = ?
     `);
+
+    try {
+      stmt.bind(values);
+      await stmt.run();
+    } finally {
+      stmt.destroySync();
+    }
 
     console.log(`[DatasetFolderService] Reordered ${tableIds.length} tables in folder ${folderId}`);
   }
@@ -460,14 +470,22 @@ export class DatasetFolderService {
   async reorderFolders(folderIds: string[]): Promise<void> {
     if (folderIds.length === 0) return;
 
-    const values = folderIds.map((id, idx) => `('${id}', ${idx})`).join(',');
+    const placeholders = folderIds.map(() => `(?, ?)`).join(',');
+    const values: Array<string | number> = folderIds.flatMap((id, idx) => [id, idx]);
 
-    await this.conn.run(`
+    const stmt = await this.conn.prepare(`
       UPDATE dataset_folders
       SET folder_order = v.ord
-      FROM (VALUES ${values}) AS v(id, ord)
+      FROM (VALUES ${placeholders}) AS v(id, ord)
       WHERE dataset_folders.id = v.id
     `);
+
+    try {
+      stmt.bind(values);
+      await stmt.run();
+    } finally {
+      stmt.destroySync();
+    }
 
     console.log(`[DatasetFolderService] Reordered ${folderIds.length} folders`);
   }

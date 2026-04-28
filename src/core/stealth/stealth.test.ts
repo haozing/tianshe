@@ -427,12 +427,33 @@ describe('CDP Commands', () => {
 describe('Integration', () => {
   it('should work end-to-end: manager -> script -> CDP', () => {
     const manager = createFingerprintManager();
+    const config: StealthConfig = {
+      userAgent: mockFingerprint.userAgent,
+      platform: mockFingerprint.platform,
+      languages: mockFingerprint.languages,
+      timezone: mockFingerprint.timezone,
+      hardwareConcurrency: mockFingerprint.hardwareConcurrency,
+      deviceMemory: mockFingerprint.deviceMemory,
+      screen: {
+        width: mockFingerprint.screenResolution.width,
+        height: mockFingerprint.screenResolution.height,
+        availWidth: mockFingerprint.screenResolution.width,
+        availHeight: mockFingerprint.screenResolution.height - 40,
+        colorDepth: mockFingerprint.colorDepth,
+        pixelRatio: 1,
+      },
+      webgl: mockFingerprint.webgl,
+      touchSupport: false,
+      maxTouchPoints: 0,
+      canvasNoise: false,
+    };
 
     // 1. Generate fingerprint
-    const fingerprint = manager.getFingerprint('integration-test');
+    const fingerprint = manager.getFingerprint('integration-test', config);
 
     // 2. Validate fingerprint
     const validation = manager.validateFingerprint(fingerprint);
+    expect(validation.errors).toEqual([]);
     expect(validation.valid).toBe(true);
 
     // 3. Generate JS script

@@ -24,11 +24,9 @@ import {
   getCurrentTraceContext,
   withTraceContext,
 } from '../observability/observation-context';
-import {
-  observationService,
-  summarizeForObservation,
-} from '../observability/observation-service';
+import { observationService, summarizeForObservation } from '../observability/observation-service';
 import { attachErrorContextArtifact } from '../observability/error-context-artifact';
+import { assertTrustedFirstPartyPluginImport } from './trust-policy';
 
 const logger = createLogger('JSPluginManager');
 
@@ -46,9 +44,7 @@ export interface CommandExecutionGuardContext {
   params: any;
 }
 
-export type CommandExecutionGuard = (
-  context: CommandExecutionGuardContext
-) => Promise<void> | void;
+export type CommandExecutionGuard = (context: CommandExecutionGuardContext) => Promise<void> | void;
 
 type PreparedPluginSource = {
   manifest: JSPluginManifest;
@@ -172,12 +168,17 @@ export class JSPluginManager {
    * 导入插件
    */
   async import(sourcePath: string, options?: PluginImportOptions): Promise<JSPluginImportResult> {
+    const importOptions: PluginImportOptions = {
+      ...options,
+      trustedFirstParty: options?.trustedFirstParty !== false,
+    };
     const currentTraceContext = getCurrentTraceContext();
     const traceContext = createChildTraceContext({
       source: currentTraceContext?.source ?? 'plugin-manager',
       attributes: {
         sourcePath,
-        sourceType: options?.sourceType === 'cloud_managed' ? 'cloud_managed' : 'local_private',
+        sourceType:
+          importOptions.sourceType === 'cloud_managed' ? 'cloud_managed' : 'local_private',
       },
     });
 
@@ -188,20 +189,22 @@ export class JSPluginManager {
         event: 'plugin.lifecycle.install',
         attrs: {
           sourcePath: summarizeForObservation(sourcePath, 1),
-          sourceType: options?.sourceType === 'cloud_managed' ? 'cloud_managed' : 'local_private',
-          devMode: options?.devMode === true,
+          sourceType:
+            importOptions.sourceType === 'cloud_managed' ? 'cloud_managed' : 'local_private',
+          devMode: importOptions.devMode === true,
         },
       });
 
       const prepared = await this.preparePluginSource(sourcePath, '_temp_local_import');
       try {
+        assertTrustedFirstPartyPluginImport(prepared.manifest, importOptions);
         const existing = await this.getPluginInfo(prepared.manifest.id);
         const sourceType =
-          options?.sourceType === 'cloud_managed' ? 'cloud_managed' : 'local_private';
+          importOptions.sourceType === 'cloud_managed' ? 'cloud_managed' : 'local_private';
 
         let result: JSPluginImportResult;
         if (!existing) {
-          result = await this.loader.import(sourcePath, options, {
+          result = await this.loader.import(sourcePath, importOptions, {
             getPluginInfo: (id) => this.getPluginInfo(id),
             createFolderAndTables: async (manifest) => {
               // 创建插件专属文件夹
@@ -233,7 +236,12 @@ export class JSPluginManager {
               `Please update it from the plugin market or uninstall it first.`,
           };
         } else {
-          result = await this.replaceInstalledLocalPlugin(existing, prepared, sourcePath, options);
+          result = await this.replaceInstalledLocalPlugin(
+            existing,
+            prepared,
+            sourcePath,
+            importOptions
+          );
         }
 
         if (result.success && !result.operation) {
@@ -260,16 +268,18 @@ export class JSPluginManager {
           label: 'plugin install failure context',
           data: {
             sourcePath: summarizeForObservation(sourcePath, 1),
-            sourceType: options?.sourceType === 'cloud_managed' ? 'cloud_managed' : 'local_private',
-            devMode: options?.devMode === true,
+            sourceType:
+              importOptions.sourceType === 'cloud_managed' ? 'cloud_managed' : 'local_private',
+            devMode: importOptions.devMode === true,
           },
         });
         await span.fail(error, {
           artifactRefs: [artifact.artifactId],
           attrs: {
             sourcePath: summarizeForObservation(sourcePath, 1),
-            sourceType: options?.sourceType === 'cloud_managed' ? 'cloud_managed' : 'local_private',
-            devMode: options?.devMode === true,
+            sourceType:
+              importOptions.sourceType === 'cloud_managed' ? 'cloud_managed' : 'local_private',
+            devMode: importOptions.devMode === true,
           },
         });
         if (error instanceof Error && error.message === 'Plugin install failed') {
@@ -301,6 +311,10 @@ export class JSPluginManager {
     sourcePath: string,
     options?: PluginImportOptions
   ): Promise<JSPluginImportResult> {
+    const importOptions: PluginImportOptions = {
+      ...options,
+      trustedFirstParty: true,
+    };
     const cloudPluginCode = String(options?.cloudPluginCode || '').trim();
     if (!cloudPluginCode) {
       return {
@@ -313,10 +327,11 @@ export class JSPluginManager {
     try {
       const extractedPath = await extractPlugin(sourcePath, tempRoot);
       const manifest = await readManifest(extractedPath);
+      assertTrustedFirstPartyPluginImport(manifest, importOptions);
       const existing = await this.findPluginForCloudUpdate(cloudPluginCode, manifest.id);
 
       if (!existing) {
-        const result = await this.import(sourcePath, options);
+        const result = await this.import(sourcePath, importOptions);
         if (result.success) {
           result.operation = 'installed';
         }
@@ -354,11 +369,15 @@ export class JSPluginManager {
           }
 
           const nextVersion = String(options?.cloudReleaseVersion || manifest.version || '').trim();
-          const currentVersion = String(existing.cloudReleaseVersion || existing.version || '').trim();
+          const currentVersion = String(
+            existing.cloudReleaseVersion || existing.version || ''
+          ).trim();
           if (currentVersion && nextVersion) {
             const compareResult = compareVersionStrings(currentVersion, nextVersion);
             if (compareResult === 0) {
-              throw new Error(`[ALREADY_LATEST] Installed release ${currentVersion} is already latest`);
+              throw new Error(
+                `[ALREADY_LATEST] Installed release ${currentVersion} is already latest`
+              );
             }
             if (compareResult > 0) {
               throw new Error(
@@ -367,7 +386,12 @@ export class JSPluginManager {
             }
           }
 
-          const result = await this.replaceInstalledCloudPlugin(existing, manifest, extractedPath, options);
+          const result = await this.replaceInstalledCloudPlugin(
+            existing,
+            manifest,
+            extractedPath,
+            importOptions
+          );
           if (!result.success) {
             throw new Error(result.error || 'Cloud plugin install failed');
           }
@@ -454,7 +478,9 @@ export class JSPluginManager {
     const installPath = existing.path;
     const backupPath = `${installPath}.__backup__.${Date.now()}`;
     const hadInstallPath = await fs.pathExists(installPath);
-    const previousManifest = hadInstallPath ? await readManifest(installPath).catch(() => null) : null;
+    const previousManifest = hadInstallPath
+      ? await readManifest(installPath).catch(() => null)
+      : null;
     const shouldReload = existing.enabled !== false;
     let metadataUpdated = false;
 
@@ -651,10 +677,7 @@ export class JSPluginManager {
     }
   }
 
-  private async ensurePluginFolder(
-    pluginId: string,
-    manifest: JSPluginManifest
-  ): Promise<string> {
+  private async ensurePluginFolder(pluginId: string, manifest: JSPluginManifest): Promise<string> {
     const folderService = this.duckdb.getFolderService();
     const rows = await this.duckdb.executeSQLWithParams(
       `SELECT id FROM dataset_folders
@@ -693,7 +716,9 @@ export class JSPluginManager {
     const sourceType = options?.sourceType === 'cloud_managed' ? 'cloud_managed' : 'local_private';
     const installChannel =
       options?.installChannel === 'cloud_download' ? 'cloud_download' : 'manual_import';
-    const cloudPluginCode = String(options?.cloudPluginCode || existing.cloudPluginCode || '').trim();
+    const cloudPluginCode = String(
+      options?.cloudPluginCode || existing.cloudPluginCode || ''
+    ).trim();
     const cloudReleaseVersion = String(
       options?.cloudReleaseVersion || existing.cloudReleaseVersion || manifest.version || ''
     ).trim();
@@ -703,7 +728,8 @@ export class JSPluginManager {
     const lastPolicySyncAt =
       typeof options?.lastPolicySyncAt === 'number' && Number.isFinite(options.lastPolicySyncAt)
         ? Math.trunc(options.lastPolicySyncAt)
-        : typeof existing.lastPolicySyncAt === 'number' && Number.isFinite(existing.lastPolicySyncAt)
+        : typeof existing.lastPolicySyncAt === 'number' &&
+            Number.isFinite(existing.lastPolicySyncAt)
           ? Math.trunc(existing.lastPolicySyncAt)
           : null;
 
@@ -1022,9 +1048,10 @@ export class JSPluginManager {
         await this.loader.safeRemovePluginPath(info.path, info.isSymlink ?? false);
 
         // 6. 删除数据库记录
-        await this.duckdb.executeWithParams(`DELETE FROM js_plugin_custom_pages WHERE plugin_id = ?`, [
-          pluginId,
-        ]);
+        await this.duckdb.executeWithParams(
+          `DELETE FROM js_plugin_custom_pages WHERE plugin_id = ?`,
+          [pluginId]
+        );
         logger.info(`  ✓ Deleted custom pages for plugin: ${pluginId}`);
 
         await this.duckdb.executeWithParams(`DELETE FROM js_plugins WHERE id = ?`, [pluginId]);
@@ -1264,9 +1291,7 @@ export class JSPluginManager {
     await this.lifecycle.disable(pluginId);
   }
 
-  async listRuntimeStatuses(): Promise<
-    import('../../types/js-plugin').JSPluginRuntimeStatus[]
-  > {
+  async listRuntimeStatuses(): Promise<import('../../types/js-plugin').JSPluginRuntimeStatus[]> {
     const plugins = await this.listPlugins();
     const runtimeMap = new Map(
       this.runtimeRegistry.listStatuses().map((status) => [status.pluginId, status])
@@ -1322,9 +1347,7 @@ export class JSPluginManager {
   }
 
   onRuntimeStatusChanged(
-    listener: (
-      event: import('../../types/js-plugin').JSPluginRuntimeStatusChangeEvent
-    ) => void
+    listener: (event: import('../../types/js-plugin').JSPluginRuntimeStatusChangeEvent) => void
   ): () => void {
     this.runtimeRegistry.on('status-changed', listener);
     return () => {
@@ -1355,9 +1378,13 @@ export class JSPluginManager {
       force?: boolean;
     } = {}
   ): Promise<boolean> {
-    return await this.lifecycle.deactivate(pluginId, {
-      unregisterUIContributions: (id) => this.uiExtManager.unregisterUIContributions(id),
-    }, options);
+    return await this.lifecycle.deactivate(
+      pluginId,
+      {
+        unregisterUIContributions: (id) => this.uiExtManager.unregisterUIContributions(id),
+      },
+      options
+    );
   }
 
   /**
@@ -1388,82 +1415,82 @@ export class JSPluginManager {
         },
       });
 
-    for (const guard of this.commandExecutionGuards) {
-      await guard({ pluginId, commandId, params });
-    }
-
-    const info = await this.getPluginInfo(pluginId);
-    if (!info) {
-      throw new Error(`Plugin not found: ${pluginId}`);
-    }
-    if (info.enabled === false) {
-      throw new Error(`Plugin ${pluginId} is disabled`);
-    }
-
-    const context = this.lifecycle.getContext(pluginId);
-    if (!context) {
-      throw new Error(`Plugin ${pluginId} is not activated`);
-    }
-
-    const handler = context.getCommand(commandId);
-    if (!handler) {
-      throw new Error(`Command ${commandId} not found in plugin ${pluginId}`);
-    }
-
-    const pluginLogger = this.lifecycle.getLogger(pluginId);
-    const endTimer = pluginLogger?.timer(`Command: ${commandId}`);
-
-    pluginLogger?.command(commandId, 'start', { params });
-
-    try {
-      const helpers = this.lifecycle.getHelpers(pluginId);
-      if (!helpers) {
-        throw new Error(`Helpers not found for plugin ${pluginId}`);
+      for (const guard of this.commandExecutionGuards) {
+        await guard({ pluginId, commandId, params });
       }
 
-      const result = await handler(params, helpers);
+      const info = await this.getPluginInfo(pluginId);
+      if (!info) {
+        throw new Error(`Plugin not found: ${pluginId}`);
+      }
+      if (info.enabled === false) {
+        throw new Error(`Plugin ${pluginId} is disabled`);
+      }
 
-      endTimer?.();
-      pluginLogger?.command(commandId, 'success', { result });
-      await span.succeed({
-        attrs: {
-          pluginId,
-          apiName: commandId,
-          invocationType: 'command',
-          source: 'command',
-          callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
-          result: summarizeForObservation(result, 2),
-        },
-      });
+      const context = this.lifecycle.getContext(pluginId);
+      if (!context) {
+        throw new Error(`Plugin ${pluginId} is not activated`);
+      }
 
-      return result;
-    } catch (error: any) {
-      endTimer?.();
-      pluginLogger?.command(commandId, 'error', error);
-      const runtimeStatus = await this.getRuntimeStatus(pluginId).catch(() => null);
-      const artifact = await attachErrorContextArtifact({
-        span,
-        component: 'plugin-manager',
-        label: 'plugin command failure context',
-        data: {
-          pluginId,
-          apiName: commandId,
-          invocationType: 'command',
-          runtimeStatus: summarizeForObservation(runtimeStatus, 2),
-        },
-      });
-      await span.fail(error, {
-        artifactRefs: [artifact.artifactId],
-        attrs: {
-          pluginId,
-          apiName: commandId,
-          invocationType: 'command',
-          source: 'command',
-          callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
-        },
-      });
-      throw error;
-    }
+      const handler = context.getCommand(commandId);
+      if (!handler) {
+        throw new Error(`Command ${commandId} not found in plugin ${pluginId}`);
+      }
+
+      const pluginLogger = this.lifecycle.getLogger(pluginId);
+      const endTimer = pluginLogger?.timer(`Command: ${commandId}`);
+
+      pluginLogger?.command(commandId, 'start', { params });
+
+      try {
+        const helpers = this.lifecycle.getHelpers(pluginId);
+        if (!helpers) {
+          throw new Error(`Helpers not found for plugin ${pluginId}`);
+        }
+
+        const result = await handler(params, helpers);
+
+        endTimer?.();
+        pluginLogger?.command(commandId, 'success', { result });
+        await span.succeed({
+          attrs: {
+            pluginId,
+            apiName: commandId,
+            invocationType: 'command',
+            source: 'command',
+            callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
+            result: summarizeForObservation(result, 2),
+          },
+        });
+
+        return result;
+      } catch (error: any) {
+        endTimer?.();
+        pluginLogger?.command(commandId, 'error', error);
+        const runtimeStatus = await this.getRuntimeStatus(pluginId).catch(() => null);
+        const artifact = await attachErrorContextArtifact({
+          span,
+          component: 'plugin-manager',
+          label: 'plugin command failure context',
+          data: {
+            pluginId,
+            apiName: commandId,
+            invocationType: 'command',
+            runtimeStatus: summarizeForObservation(runtimeStatus, 2),
+          },
+        });
+        await span.fail(error, {
+          artifactRefs: [artifact.artifactId],
+          attrs: {
+            pluginId,
+            apiName: commandId,
+            invocationType: 'command',
+            source: 'command',
+            callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
+          },
+        });
+        throw error;
+      }
     });
   }
 
@@ -1778,6 +1805,7 @@ export class JSPluginManager {
           devMode: prepared.kind === 'directory',
           sourceType: 'local_private',
           installChannel: 'manual_import',
+          trustedFirstParty: true,
         });
 
         if (!result.success) {

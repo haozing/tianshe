@@ -331,6 +331,7 @@ describe('JSPluginManager', () => {
         devMode: true,
         sourceType: 'local_private',
         installChannel: 'manual_import',
+        trustedFirstParty: true,
       });
     });
   });
@@ -375,7 +376,7 @@ describe('JSPluginManager', () => {
       });
       expect(mockPluginLoader.import).toHaveBeenCalledWith(
         '/path/to/plugin',
-        undefined,
+        { trustedFirstParty: true },
         expect.objectContaining({
           getPluginInfo: expect.any(Function),
           createFolderAndTables: expect.any(Function),
@@ -408,7 +409,7 @@ describe('JSPluginManager', () => {
       });
       expect(mockPluginLoader.import).toHaveBeenCalledWith(
         '/path/to/dev-plugin',
-        { devMode: true },
+        { devMode: true, trustedFirstParty: true },
         expect.any(Object)
       );
     });
@@ -781,7 +782,8 @@ describe('JSPluginManager', () => {
       expect(
         sink.events.every(
           (event) =>
-            !event.event.startsWith('plugin.lifecycle.uninstall') || event.pluginId === 'test-plugin'
+            !event.event.startsWith('plugin.lifecycle.uninstall') ||
+            event.pluginId === 'test-plugin'
         )
       ).toBe(true);
     });
@@ -1195,7 +1197,9 @@ describe('JSPluginManager', () => {
       await manager.executeCommand('test-plugin', 'test-command', { ok: true });
 
       expect(
-        sink.events.filter((event) => event.event.startsWith('plugin.invoke')).map((event) => event.event)
+        sink.events
+          .filter((event) => event.event.startsWith('plugin.invoke'))
+          .map((event) => event.event)
       ).toEqual(['plugin.invoke.started', 'plugin.invoke.succeeded']);
       expect(sink.events.every((event) => event.pluginId === 'test-plugin')).toBe(true);
     });
@@ -1546,7 +1550,9 @@ describe('JSPluginManager', () => {
       await manager.callPluginAPI('test-plugin', 'testAPI', ['arg1']);
 
       expect(
-        sink.events.filter((event) => event.event.startsWith('plugin.invoke')).map((event) => event.event)
+        sink.events
+          .filter((event) => event.event.startsWith('plugin.invoke'))
+          .map((event) => event.event)
       ).toEqual(['plugin.invoke.started', 'plugin.invoke.succeeded']);
       expect(sink.events.every((event) => event.pluginId === 'test-plugin')).toBe(true);
     });
