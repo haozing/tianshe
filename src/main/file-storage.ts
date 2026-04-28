@@ -26,11 +26,48 @@ export class FileStorage {
     }
   }
 
+  private sanitizeDatasetId(datasetId: string): string {
+    const value = String(datasetId || '').trim();
+    if (!/^[a-zA-Z0-9_-]+$/.test(value)) {
+      throw new Error(
+        `Invalid dataset ID format: ${datasetId}. Only alphanumeric characters, underscores, and hyphens are allowed.`
+      );
+    }
+    return value;
+  }
+
+  private resolveSafePath(relativePath: string): string {
+    const raw = String(relativePath || '').trim();
+    if (!raw) {
+      throw new Error('文件路径不能为空');
+    }
+    if (raw.includes('\0')) {
+      throw new Error('文件路径包含非法字符');
+    }
+    if (path.isAbsolute(raw) || /^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith('\\\\')) {
+      throw new Error(`非法文件路径: ${relativePath}`);
+    }
+
+    const resolvedBase = path.resolve(this.basePath);
+    const resolvedTarget = path.resolve(resolvedBase, raw);
+    const relativeToBase = path.relative(resolvedBase, resolvedTarget);
+
+    if (
+      relativeToBase === '' ||
+      relativeToBase.startsWith('..') ||
+      path.isAbsolute(relativeToBase)
+    ) {
+      throw new Error(`非法文件路径: ${relativePath}`);
+    }
+
+    return resolvedTarget;
+  }
+
   /**
    * 获取数据集专属目录
    */
   private getDatasetDir(datasetId: string): string {
-    return path.join(this.basePath, datasetId);
+    return path.join(this.basePath, this.sanitizeDatasetId(datasetId));
   }
 
   /**
@@ -90,23 +127,25 @@ export class FileStorage {
     originalFilename: string
   ): Promise<AttachmentMetadata> {
     try {
+      const safeDatasetId = this.sanitizeDatasetId(datasetId);
+
       // 确保目录存在
-      this.ensureDatasetDir(datasetId);
+      this.ensureDatasetDir(safeDatasetId);
 
       // 生成唯一文件名
       const uniqueFilename = this.generateUniqueFilename(originalFilename);
-      const datasetDir = this.getDatasetDir(datasetId);
+      const datasetDir = this.getDatasetDir(safeDatasetId);
       const fullPath = path.join(datasetDir, uniqueFilename);
 
       // 保存文件
       await fs.writeFile(fullPath, fileBuffer);
 
       // 构建相对路径（相对于basePath）
-      const relativePath = path.join(datasetId, uniqueFilename);
+      const relativePath = path.join(safeDatasetId, uniqueFilename);
 
       // 生成元数据
       const metadata: AttachmentMetadata = {
-        id: `${datasetId}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+        id: `${safeDatasetId}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
         filename: originalFilename,
         size: fileBuffer.length,
         uploadTime: Date.now(),
@@ -127,7 +166,7 @@ export class FileStorage {
    */
   async deleteFile(relativePath: string): Promise<void> {
     try {
-      const fullPath = path.join(this.basePath, relativePath);
+      const fullPath = this.resolveSafePath(relativePath);
 
       if (fs.existsSync(fullPath)) {
         await fs.unlink(fullPath);
@@ -147,7 +186,7 @@ export class FileStorage {
    * @returns 绝对路径
    */
   getFilePath(relativePath: string): string {
-    return path.join(this.basePath, relativePath);
+    return this.resolveSafePath(relativePath);
   }
 
   /**

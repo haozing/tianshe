@@ -79,6 +79,12 @@ export class ViewIPCHandler {
             label?: string;
             displayMode?: ViewDisplayMode;
             source?: ViewSource;
+            security?: {
+              webSecurity?: boolean;
+              allowRunningInsecureContent?: boolean;
+              disableCSP?: boolean;
+              allowedPermissions?: string[];
+            };
           };
         }
       ) => {

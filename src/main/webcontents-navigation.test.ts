@@ -68,4 +68,13 @@ describe('loadWebContentsURL', () => {
     );
     expect(webContents.loadURL).not.toHaveBeenCalled();
   });
+
+  it('rejects javascript URLs before calling loadURL', async () => {
+    const webContents = new MockWebContents();
+
+    await expect(loadWebContentsURL(webContents as never, 'javascript:alert(1)')).rejects.toThrow(
+      'unsupported protocol: javascript:'
+    );
+    expect(webContents.loadURL).not.toHaveBeenCalled();
+  });
 });

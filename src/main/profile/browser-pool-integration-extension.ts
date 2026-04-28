@@ -44,13 +44,14 @@ const REQUIRED_NATIVE_FINGERPRINT_ARGS = [
   '--enable-webgl',
   '--ignore-gpu-blocklist',
   '--enable-unsafe-webgl',
-  '--no-sandbox',
 ] as const;
 
 export function buildExtensionLaunchArgs(options: ExtensionLaunchArgsOptions): string[] {
   const { session, userDataDir, managedExtensionArgs, ruyiArg } = options;
+  const noSandboxArgs = AIRPA_RUNTIME_CONFIG.extension.allowNoSandbox ? ['--no-sandbox'] : [];
   return buildChromeLaunchArgs(parseExtraChromeLaunchArgs(), managedExtensionArgs, [
     ...REQUIRED_NATIVE_FINGERPRINT_ARGS,
+    ...noSandboxArgs,
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-component-update',

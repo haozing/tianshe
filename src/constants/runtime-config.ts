@@ -83,6 +83,10 @@ const getFirefoxExecutablePathOverride = (): string =>
 const getHttpPortOverride = (): number | null => readProcessArgInteger('--airpa-http-port');
 const getHttpEnabledOverride = (): boolean | null => readProcessArgBoolean('--airpa-enable-http');
 const getMcpEnabledOverride = (): boolean | null => readProcessArgBoolean('--airpa-enable-mcp');
+const getAllowNoSandbox = (): boolean =>
+  readProcessArgBoolean('--tianshe-allow-no-sandbox') ??
+  readProcessArgBoolean('--airpa-allow-no-sandbox') ??
+  false;
 
 export interface AirpaRuntimeConfig {
   app: {
@@ -128,6 +132,7 @@ export interface AirpaRuntimeConfig {
   extension: {
     fingerprintStrict: boolean;
     extraLaunchArgs: string[];
+    allowNoSandbox: boolean;
     expectedChromeVersion: string;
     expectedChromeVersionPrefix: string;
     expectedChromeSha256: string;
@@ -228,6 +233,7 @@ export const AIRPA_RUNTIME_CONFIG: AirpaRuntimeConfig = {
   extension: {
     fingerprintStrict: false,
     extraLaunchArgs: [],
+    allowNoSandbox: getAllowNoSandbox(),
     expectedChromeVersion: '',
     expectedChromeVersionPrefix: '',
     expectedChromeSha256: '',

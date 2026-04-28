@@ -283,6 +283,7 @@ export interface ViewMetadata {
     webSecurity?: boolean;
     allowRunningInsecureContent?: boolean;
     disableCSP?: boolean;
+    allowedPermissions?: string[];
   };
   /**
    * 🆕 反检测配置
@@ -558,6 +559,24 @@ export class WebContentsViewManager {
       disableCSP:
         typeof overrides.disableCSP === 'boolean' ? overrides.disableCSP : defaults.disableCSP,
     };
+  }
+
+  private resolveViewPreloadPath(metadata?: ViewMetadata): string | undefined {
+    if (metadata?.source !== 'plugin') {
+      return undefined;
+    }
+    return path.join(app.getAppPath(), 'dist', 'preload', 'webcontents-view.js');
+  }
+
+  private resolveAllowedPermissions(metadata?: ViewMetadata): Set<string> {
+    const values = Array.isArray(metadata?.security?.allowedPermissions)
+      ? metadata.security.allowedPermissions
+      : [];
+    return new Set(
+      values
+        .map((permission) => String(permission || '').trim())
+        .filter((permission) => permission.length > 0)
+    );
   }
 
   private async applyStealthToWebContentsInternal(
@@ -1326,12 +1345,11 @@ export class WebContentsViewManager {
     // 3. 创建 WebContentsView
     const viewCreateStart = Date.now();
 
-    // ✅ 构建 preload 脚本路径（统一注入，符合业界最佳实践）
-    // 开发环境: app.getAppPath() -> 项目根目录 -> dist/preload/index.js
-    // 生产环境: app.getAppPath() -> app.asar -> dist/preload/index.js
-    const preloadPath = path.join(app.getAppPath(), 'dist', 'preload', 'index.js');
+    // 自动化目标页不注入主应用 preload，避免远程页面获得完整 electronAPI。
+    // 插件页使用窄桥接 preload，只暴露插件 API 调用能力。
+    const preloadPath = this.resolveViewPreloadPath(registration.metadata);
     const securityPolicy = this.resolveSecurityPolicy(registration.metadata);
-    console.log(`📦 Preload script path: ${preloadPath}`);
+    console.log(`📦 View preload script path: ${preloadPath || '(none)'}`);
 
     const view = new WebContentsView({
       webPreferences: {
@@ -1341,7 +1359,7 @@ export class WebContentsViewManager {
         sandbox: true,
         webSecurity: securityPolicy.webSecurity,
         allowRunningInsecureContent: securityPolicy.allowRunningInsecureContent,
-        preload: preloadPath, // ✅ 注入 preload 脚本，暴露 window.electronAPI
+        ...(preloadPath ? { preload: preloadPath } : {}),
       },
     });
     console.log(`  ⏱️  WebContentsView object created in ${Date.now() - viewCreateStart}ms`);
@@ -1414,19 +1432,20 @@ export class WebContentsViewManager {
       }
     });
 
-    // 🔍 调试：监听页面加载完成后检查 window.electronAPI
     view.webContents.on('did-finish-load', () => {
-      view.webContents
-        .executeJavaScript('typeof window.electronAPI')
-        .then((result) => {
-          console.log(`  🔍 window.electronAPI type: ${result} (view: ${viewId})`);
-          if (result === 'undefined') {
-            console.error(`  ❌ window.electronAPI is undefined! Preload may have failed.`);
-          }
-        })
-        .catch((err) => {
-          console.error(`  ❌ Failed to check window.electronAPI:`, err);
-        });
+      if (preloadPath) {
+        view.webContents
+          .executeJavaScript('typeof window.electronAPI')
+          .then((result) => {
+            console.log(`  🔍 window.electronAPI type: ${result} (view: ${viewId})`);
+            if (result === 'undefined') {
+              console.error(`  ❌ window.electronAPI is undefined! Preload may have failed.`);
+            }
+          })
+          .catch((err) => {
+            console.error(`  ❌ Failed to check window.electronAPI:`, err);
+          });
+      }
 
       if (AIRPA_RUNTIME_CONFIG.webview.debugStealthHeaders) {
         view.webContents
@@ -1462,13 +1481,25 @@ export class WebContentsViewManager {
     this.ensureSecurityHooks(view.webContents.session, registration.partition);
 
     // 3.5.1 禁用地理位置权限请求（避免 googleapis.com 403 错误）
-    view.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
-      if (permission === 'geolocation') {
-        console.log(`🚫 Blocked geolocation request for view: ${viewId}`);
-        callback(false); // 拒绝地理位置权限
-      } else {
-        callback(true); // 允许其他权限
+    const allowedPermissions = this.resolveAllowedPermissions(registration.metadata);
+    const isPermissionAllowed = (permission: string) => allowedPermissions.has(permission);
+    const logBlockedPermission = (permission: string) => {
+      console.log(`🚫 Blocked permission request for view: ${viewId} (${permission})`);
+    };
+
+    view.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+      const allowed = isPermissionAllowed(permission);
+      if (!allowed) {
+        logBlockedPermission(permission);
       }
+      callback(allowed);
+    });
+    view.webContents.session.setPermissionCheckHandler((_webContents, permission) => {
+      const allowed = isPermissionAllowed(permission);
+      if (!allowed) {
+        logBlockedPermission(permission);
+      }
+      return allowed;
     });
 
     // 3.6 根据全局/视图级配置自动打开 DevTools（便于调试脚本执行）

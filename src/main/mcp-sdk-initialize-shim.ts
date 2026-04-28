@@ -34,7 +34,7 @@ interface CreateSdkInitializeShimOptions {
 }
 
 export const MCP_SDK_PRIVATE_INITIALIZE_SLOT = '_oninitialize';
-export const MCP_SDK_PRIVATE_INITIALIZE_TESTED_VERSIONS = ['1.25.1'] as const;
+export const MCP_SDK_PRIVATE_INITIALIZE_TESTED_VERSIONS = ['1.25.1', '1.29.0'] as const;
 
 const nodeRequire = createRequire(__filename);
 let cachedSdkVersion: string | null | undefined;

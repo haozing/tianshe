@@ -39,6 +39,9 @@ describe('navigation-guard', () => {
     expect(createBlockedNavigationError('bytedance://open')?.message).toContain(
       'unsupported protocol: bytedance:'
     );
+    expect(createBlockedNavigationError('javascript:alert(1)')?.message).toContain(
+      'unsupported protocol: javascript:'
+    );
   });
 
   it('prevents will-navigate, will-redirect, and will-frame-navigate for blocked protocols', () => {

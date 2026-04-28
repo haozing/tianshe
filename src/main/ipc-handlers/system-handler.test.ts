@@ -19,6 +19,7 @@ vi.mock('electron', () => ({
     getVersion: vi.fn(() => '1.0.0'),
     getName: vi.fn(() => 'TestApp'),
     getAppPath: vi.fn(() => '/app/path'),
+    getPath: vi.fn(() => '/user/data'),
     isPackaged: false,
   },
   BrowserWindow: {
@@ -46,11 +47,6 @@ vi.mock('../ipc-utils', () => ({
     success: false,
     error: error instanceof Error ? error.message : String(error),
   })),
-}));
-
-// Mock path
-vi.mock('path', () => ({
-  join: vi.fn((...args) => args.join('/')),
 }));
 
 import { SystemIPCHandler } from './system-handler';

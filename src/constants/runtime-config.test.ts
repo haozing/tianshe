@@ -54,6 +54,23 @@ describe('runtime-config', () => {
     expect(runtimeConfig.AIRPA_RUNTIME_CONFIG.http.port).toBe(49123);
   });
 
+  it('reads the explicit no-sandbox override from process argv', async () => {
+    Object.defineProperty(globalThis, 'process', {
+      configurable: true,
+      value: {
+        ...originalProcess,
+        argv: ['node', 'runtime-config.test.ts', '--tianshe-allow-no-sandbox'],
+        versions: {
+          node: '20.0.0',
+        },
+      },
+    });
+
+    const runtimeConfig = await import('./runtime-config');
+
+    expect(runtimeConfig.AIRPA_RUNTIME_CONFIG.extension.allowNoSandbox).toBe(true);
+  });
+
   it('reads path overrides from process argv', async () => {
     Object.defineProperty(globalThis, 'process', {
       configurable: true,

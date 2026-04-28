@@ -55,6 +55,19 @@ describe('SimpleBrowser navigation guard', () => {
     expect((browser.getWebContents() as unknown as MockWebContents).loadURL).not.toHaveBeenCalled();
   });
 
+  it('rejects goto for javascript URLs before loadURL', async () => {
+    const browser = new SimpleBrowser(
+      'test-view',
+      new MockWebContents() as never,
+      { closeView: vi.fn(async () => undefined) }
+    );
+
+    await expect(browser.goto('javascript:alert(1)')).rejects.toThrow(
+      'unsupported protocol: javascript:'
+    );
+    expect((browser.getWebContents() as unknown as MockWebContents).loadURL).not.toHaveBeenCalled();
+  });
+
   it('denies same-window window.open attempts for blocked custom protocols', () => {
     const webContents = new MockWebContents();
     const browser = new SimpleBrowser(

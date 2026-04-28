@@ -5,6 +5,7 @@ import {
   createSdkInitializeShim,
   getMcpSdkInitializeShimStatus,
   getSdkPrivateInitializeHandler,
+  readMcpSdkVersion,
 } from './mcp-sdk-initialize-shim';
 
 const createInitializeRequest = (): InitializeRequest => ({
@@ -20,6 +21,8 @@ const createInitializeRequest = (): InitializeRequest => ({
 });
 
 describe('mcp sdk initialize shim', () => {
+  const expectedSdkVersion = readMcpSdkVersion();
+
   it('delegates to the SDK private initialize handler', async () => {
     const server = new Server(
       {
@@ -81,7 +84,7 @@ describe('mcp sdk initialize shim', () => {
       mode: 'fallback_missing_private_slot',
       degraded: true,
       fingerprintInjected: false,
-      sdkVersion: '1.25.1',
+      sdkVersion: expectedSdkVersion,
       reason: expect.stringContaining('_oninitialize'),
     });
 
@@ -101,7 +104,7 @@ describe('mcp sdk initialize shim', () => {
   it('reports the current shim mode for runtime diagnostics', () => {
     const status = getMcpSdkInitializeShimStatus();
     expect(status).toMatchObject({
-      sdkVersion: '1.25.1',
+      sdkVersion: expectedSdkVersion,
       privateSlot: '_oninitialize',
       mode: 'private_slot',
       degraded: false,

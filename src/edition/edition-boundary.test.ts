@@ -110,8 +110,8 @@ describe('open/cloud edition boundary', () => {
 
     expect(preload).toContain("import type { TiansheEditionName, TiansheEditionPublicInfo } from '../edition/types';");
     expect(preload).toContain('const resolveTiansheEditionPublicInfo = (): TiansheEditionPublicInfo => {');
-    expect(preload).toContain("process.env.TIANSHE_EDITION || process.env.AIRPA_EDITION || ''");
-    expect(preload).not.toContain("name: 'open' as const");
+    expect(preload).toContain("const name: TiansheEditionName = 'open';");
+    expect(preload).not.toContain('process.env');
     expect(preload).toContain('edition: tiansheEdition');
     expect(preload).toContain("if (tiansheEdition.name === 'open')");
     expect(preload).toContain('delete exposed.cloudAuth');

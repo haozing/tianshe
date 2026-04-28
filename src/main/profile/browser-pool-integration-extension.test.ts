@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AIRPA_RUNTIME_CONFIG } from '../../constants/runtime-config';
 import { getDefaultFingerprint } from '../../constants/fingerprint-defaults';
 import type { SessionConfig } from '../../core/browser-pool/types';
 import {
@@ -31,7 +32,14 @@ function createSession(overrides?: Partial<SessionConfig>): SessionConfig {
 }
 
 describe('buildExtensionLaunchArgs', () => {
-  it('includes ruyi and avoids remote-debugging-port or enable-automation', () => {
+  const originalAllowNoSandbox = AIRPA_RUNTIME_CONFIG.extension.allowNoSandbox;
+
+  afterEach(() => {
+    AIRPA_RUNTIME_CONFIG.extension.allowNoSandbox = originalAllowNoSandbox;
+  });
+
+  it('includes ruyi and avoids remote-debugging-port, enable-automation, or no-sandbox by default', () => {
+    AIRPA_RUNTIME_CONFIG.extension.allowNoSandbox = false;
     const launchArgs = buildExtensionLaunchArgs({
       session: createSession(),
       userDataDir: 'C:\\airpa\\profiles\\extension-test',
@@ -43,13 +51,26 @@ describe('buildExtensionLaunchArgs', () => {
     expect(launchArgs).toContain('--enable-webgl');
     expect(launchArgs).toContain('--ignore-gpu-blocklist');
     expect(launchArgs).toContain('--enable-unsafe-webgl');
-    expect(launchArgs).toContain('--no-sandbox');
+    expect(launchArgs).not.toContain('--no-sandbox');
     expect(
       launchArgs.some((argument) => argument.startsWith('--remote-debugging-port='))
     ).toBe(false);
     expect(launchArgs).toContain('--load-extension=C:\\airpa\\extensions');
     expect(launchArgs).toContain('--ruyi={"ruyiFile":"C:\\\\airpa\\\\fingerprint.ruyi.txt"}');
     expect(launchArgs).not.toContain('--enable-automation');
+  });
+
+  it('allows no-sandbox only when explicitly requested', () => {
+    AIRPA_RUNTIME_CONFIG.extension.allowNoSandbox = true;
+
+    const launchArgs = buildExtensionLaunchArgs({
+      session: createSession(),
+      userDataDir: 'C:\\airpa\\profiles\\extension-test',
+      managedExtensionArgs: [],
+      ruyiArg: '--ruyi={"ruyiFile":"C:\\\\airpa\\\\fingerprint.ruyi.txt"}',
+    });
+
+    expect(launchArgs).toContain('--no-sandbox');
   });
 });
 

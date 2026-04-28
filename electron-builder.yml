@@ -164,7 +164,7 @@ win:
         - x64
   icon: build/icon.ico
   requestedExecutionLevel: asInvoker
-  verifyUpdateCodeSignature: false
+  verifyUpdateCodeSignature: true
   artifactName: '${productName}-${version}-${arch}.${ext}'
 
 nsis:

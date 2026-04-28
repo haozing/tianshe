@@ -10,7 +10,6 @@ const ALLOWED_WEB_CONTENTS_PROTOCOLS = new Set([
   'file:',
   'http:',
   'https:',
-  'javascript:',
 ]);
 
 type GuardEventName = 'will-navigate' | 'will-redirect' | 'will-frame-navigate';

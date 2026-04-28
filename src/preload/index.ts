@@ -50,11 +50,8 @@ import type { PluginNotificationPayload } from '../core/js-plugin/events';
 import type { AppShellConfig } from '../shared/app-shell-config';
 
 const resolveTiansheEditionPublicInfo = (): TiansheEditionPublicInfo => {
-  const value = String(process.env.TIANSHE_EDITION || process.env.AIRPA_EDITION || '')
-    .trim()
-    .toLowerCase();
-  const name: TiansheEditionName = value === 'cloud' ? 'cloud' : 'open';
-  const cloudEnabled = name === 'cloud';
+  const name: TiansheEditionName = 'open';
+  const cloudEnabled = false;
 
   return {
     name,
@@ -1216,6 +1213,12 @@ const electronAPI = {
         label?: string;
         displayMode?: 'fullscreen' | 'offscreen' | 'popup' | 'docked-right';
         source?: 'plugin' | 'mcp' | 'pool' | 'account';
+        security?: {
+          webSecurity?: boolean;
+          allowRunningInsecureContent?: boolean;
+          disableCSP?: boolean;
+          allowedPermissions?: string[];
+        };
       };
     }): Promise<{ success: boolean; viewId?: string; error?: string }> => {
       return ipcRenderer.invoke('view:create', options);
