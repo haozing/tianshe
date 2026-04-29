@@ -145,6 +145,14 @@ describe('DatabaseNamespace', () => {
       );
     });
 
+    it('应该拒绝通过 query 执行变更 SQL', async () => {
+      await expect(
+        database.query('dataset-123', 'UPDATE data SET status = "unsafe" WHERE id = 1')
+      ).rejects.toThrow(/read-only|UPDATE/i);
+
+      expect(mockDuckDB.queryDataset).not.toHaveBeenCalled();
+    });
+
     it('数据集不存在时应该抛出 DatasetNotFoundError', async () => {
       mockDuckDB.queryDataset.mockRejectedValue(new Error('Dataset not found'));
 
@@ -206,22 +214,13 @@ describe('DatabaseNamespace', () => {
 
   // ========== update ==========
   describe('update', () => {
-    it('应该更新记录', async () => {
-      mockDuckDB.executeSQLWithParams.mockResolvedValueOnce([{ _row_id: 3 }, { _row_id: 5 }]);
+    it('应该拒绝遗留 where 字符串接口', async () => {
+      await expect(
+        database.update('dataset-123', { status: 'active' }, "name = 'Test'")
+      ).rejects.toThrow(/raw SQL WHERE strings are unsafe/);
 
-      await database.update('dataset-123', { status: 'active' }, "name = 'Test'");
-
-      expect(mockDuckDB.executeSQLWithParams).toHaveBeenCalledWith(
-        expect.stringContaining('SELECT _row_id'),
-        []
-      );
-      expect(mockDuckDB.batchUpdateRecords).toHaveBeenCalledWith(
-        'dataset-123',
-        [
-          { rowId: 3, updates: { status: 'active' } },
-          { rowId: 5, updates: { status: 'active' } },
-        ]
-      );
+      expect(mockDuckDB.executeSQLWithParams).not.toHaveBeenCalled();
+      expect(mockDuckDB.batchUpdateRecords).not.toHaveBeenCalled();
     });
   });
 
@@ -238,12 +237,13 @@ describe('DatabaseNamespace', () => {
 
   // ========== delete ==========
   describe('delete', () => {
-    it('应该删除匹配的记录', async () => {
-      mockDuckDB.executeSQLWithParams.mockResolvedValueOnce([{ _row_id: 7 }, { _row_id: 9 }]);
+    it('应该拒绝遗留 where 字符串接口', async () => {
+      await expect(database.delete('dataset-123', "status = 'deleted'")).rejects.toThrow(
+        /raw SQL WHERE strings are unsafe/
+      );
 
-      await database.delete('dataset-123', "status = 'deleted'");
-
-      expect(mockDuckDB.hardDeleteRows).toHaveBeenCalledWith('dataset-123', [7, 9]);
+      expect(mockDuckDB.executeSQLWithParams).not.toHaveBeenCalled();
+      expect(mockDuckDB.hardDeleteRows).not.toHaveBeenCalled();
     });
   });
 
@@ -375,7 +375,19 @@ describe('DatabaseNamespace', () => {
 
       await expect(
         database.executeSQL('DELETE FROM data WHERE id = 1', { datasetId: 'dataset-123' })
-      ).rejects.toThrow('read-only SQL');
+      ).rejects.toThrow(/read-only|DELETE/i);
+
+      expect(mockDuckDB.executeSQLWithParams).not.toHaveBeenCalled();
+    });
+
+    it('在 datasetId 模式下应拒绝多语句 SQL', async () => {
+      mockDuckDB.getDatasetInfo.mockResolvedValue({ id: 'dataset-123' });
+
+      await expect(
+        database.executeSQL('SELECT * FROM data; DELETE FROM data WHERE id = 1', {
+          datasetId: 'dataset-123',
+        })
+      ).rejects.toThrow(/single/);
 
       expect(mockDuckDB.executeSQLWithParams).not.toHaveBeenCalled();
     });

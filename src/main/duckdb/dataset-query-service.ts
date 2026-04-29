@@ -16,11 +16,13 @@ import { DatasetSchemaService } from './dataset-schema-service';
 import { DatasetStorageService, sanitizeDatasetId } from './dataset-storage-service';
 import { parseRows, quoteIdentifier, quoteQualifiedName } from './utils';
 import type { QueryResult } from './types';
+import { assertReadOnlySQL, isSelectLikeSQL } from '../../utils/sql-readonly';
 import AhoCorasick from 'aho-corasick';
 
 // ✅ 查询超时配置（毫秒）
 const QUERY_TIMEOUT_MS = 60000; // 60秒默认超时
 const AC_ROW_ID_INSERT_BATCH_SIZE = 1000;
+const MAX_QUERY_LIMIT = 10000;
 
 /**
  * 带超时的 Promise 包装器
@@ -36,6 +38,28 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorMessage: st
   return Promise.race([promise, timeoutPromise]).finally(() => {
     clearTimeout(timeoutId);
   });
+}
+
+function normalizePaginationValue(
+  value: number | undefined | null,
+  name: 'offset' | 'limit',
+  fallback: number,
+  min: number,
+  max: number
+): number {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+
+  if (!Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new Error(`${name} must be an integer`);
+  }
+
+  if (value < min || value > max) {
+    throw new Error(`${name} must be between ${min} and ${max}`);
+  }
+
+  return value;
 }
 
 export class DatasetQueryService {
@@ -77,10 +101,20 @@ export class DatasetQueryService {
     limit: number = 50
   ): Promise<QueryResult> {
     const safeDatasetId = sanitizeDatasetId(datasetId);
+    const safeOffset = normalizePaginationValue(
+      offset,
+      'offset',
+      0,
+      0,
+      Number.MAX_SAFE_INTEGER
+    );
+    const safeLimit = normalizePaginationValue(limit, 'limit', 50, 1, MAX_QUERY_LIMIT);
 
     // 🔄 使用队列机制执行查询，避免并发 ATTACH 导致文件锁定
     return this.storageService.executeInQueue(safeDatasetId, async () => {
-      console.log(`🔍 Querying dataset: ${safeDatasetId} (offset: ${offset}, limit: ${limit})`);
+      console.log(
+        `🔍 Querying dataset: ${safeDatasetId} (offset: ${safeOffset}, limit: ${safeLimit})`
+      );
 
       const dataset = await this.metadataService.getDatasetInfo(safeDatasetId);
       if (!dataset) throw new Error(`Dataset not found: ${safeDatasetId}`);
@@ -90,15 +124,14 @@ export class DatasetQueryService {
       const hasComputedColumns = computedColumns.length > 0;
 
       // 如果没有提供自定义SQL，使用默认分页查询
-      const defaultSql = `SELECT * FROM data ORDER BY _row_id ASC LIMIT ${limit} OFFSET ${offset}`;
+      const defaultSql = `SELECT * FROM data ORDER BY _row_id ASC LIMIT ${safeLimit} OFFSET ${safeOffset}`;
       let querySql = sql || defaultSql;
 
       // ✅ 仅对“查询类”SQL 自动追加分页（避免 DELETE/UPDATE/INSERT 被错误追加 LIMIT/OFFSET 导致语法错误）
       if (sql) {
-        const trimmed = sql.trimStart().toUpperCase();
-        const isQueryLike = trimmed.startsWith('SELECT') || trimmed.startsWith('WITH');
-        if (isQueryLike && !/\bLIMIT\b/i.test(sql)) {
-          querySql = `${sql} LIMIT ${limit} OFFSET ${offset}`;
+        assertReadOnlySQL(sql);
+        if (isSelectLikeSQL(sql) && !/\bLIMIT\b/i.test(sql)) {
+          querySql = `${sql} LIMIT ${safeLimit} OFFSET ${safeOffset}`;
         }
       }
 

@@ -122,6 +122,10 @@ function getWritableRecordForDataset(dataset: Dataset, record: DataRecord): Data
   return accepted as DataRecord;
 }
 
+function hasDatasetColumn(dataset: Dataset, columnName: string): boolean {
+  return Array.isArray(dataset.schema) && dataset.schema.some((column) => column.name === columnName);
+}
+
 export class DatasetService {
   // 子服务实例
   private storageService: DatasetStorageService;
@@ -656,7 +660,11 @@ export class DatasetService {
       const tableName = this.getTableName(safeDatasetId);
 
       // 直接使用 _row_id 更新，不需要查询
-      const setClause = columns.map((col) => `${safeQuoteColumn(col)} = ?`).join(', ');
+      const setExpressions = columns.map((col) => `${safeQuoteColumn(col)} = ?`);
+      if (hasDatasetColumn(dataset, 'updated_at')) {
+        setExpressions.push(`${safeQuoteColumn('updated_at')} = now()`);
+      }
+      const setClause = setExpressions.join(', ');
       const sql = `UPDATE ${tableName} SET ${setClause} WHERE _row_id = ?`;
 
       console.log(`🔍 Updating record with _row_id: ${rowId}`);
@@ -713,7 +721,11 @@ export class DatasetService {
           if (columns.length === 0) continue;
 
           // 直接使用 _row_id，不需要查询
-          const setClause = columns.map((col) => `${safeQuoteColumn(col)} = ?`).join(', ');
+          const setExpressions = columns.map((col) => `${safeQuoteColumn(col)} = ?`);
+          if (hasDatasetColumn(dataset, 'updated_at')) {
+            setExpressions.push(`${safeQuoteColumn('updated_at')} = now()`);
+          }
+          const setClause = setExpressions.join(', ');
           const sql = `UPDATE ${tableName} SET ${setClause} WHERE _row_id = ?`;
           const stmt = await this.conn.prepare(sql);
           stmt.bind([...values, rowId]);

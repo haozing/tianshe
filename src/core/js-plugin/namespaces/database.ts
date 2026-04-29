@@ -9,13 +9,13 @@ import type { DuckDBService } from '../../../main/duckdb/service';
 import type { EnhancedColumnSchema } from '../../../main/duckdb/types';
 import type {
   DataTableExportOptions,
-  DataTableExportOutput,
   DataTableExportResult,
   ExportOptions,
 } from '../../../types/dataset-export';
 import { DatabaseError, DatasetNotFoundError } from '../errors';
 import { ParamValidator } from '../validators';
 import { SQLUtils } from '../../query-engine/utils/sql-utils';
+import { assertReadOnlySQL } from '../../../utils/sql-readonly';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
@@ -94,6 +94,7 @@ export class DatabaseNamespace {
     try {
       let result;
       if (sql) {
+        assertReadOnlySQL(sql);
         // 自定义 SQL 查询
         result = await this.duckdb.queryDataset(datasetId, sql);
       } else {
@@ -102,6 +103,14 @@ export class DatabaseNamespace {
       }
       return result.rows;
     } catch (error: any) {
+      if (
+        error.message?.includes('read-only SQL') ||
+        error.message?.includes('Only a single') ||
+        error.message?.includes('must not contain')
+      ) {
+        throw error;
+      }
+
       // 区分错误类型
       if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
         throw new DatasetNotFoundError(datasetId);
@@ -247,32 +256,7 @@ export class DatabaseNamespace {
     ParamValidator.validateObject(updates, 'updates');
     ParamValidator.validateString(where, 'where');
 
-    try {
-      const rowIds = await this.queryMatchingRowIds(datasetId, where);
-      if (rowIds.length === 0) {
-        return;
-      }
-
-      await this.duckdb.batchUpdateRecords(
-        datasetId,
-        rowIds.map((rowId) => ({ rowId, updates }))
-      );
-    } catch (error: any) {
-      if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
-        throw new DatasetNotFoundError(datasetId);
-      }
-
-      throw new DatabaseError(
-        `Failed to update records in dataset "${datasetId}"`,
-        {
-          datasetId,
-          updates,
-          where,
-          operation: 'update',
-        },
-        error
-      );
-    }
+    this.rejectRawWhereOperation('update', 'updateById');
   }
 
   /**
@@ -352,28 +336,7 @@ export class DatabaseNamespace {
     ParamValidator.validateDatasetId(datasetId);
     ParamValidator.validateString(where, 'where');
 
-    try {
-      const rowIds = await this.queryMatchingRowIds(datasetId, where);
-      if (rowIds.length === 0) {
-        return;
-      }
-
-      await this.duckdb.hardDeleteRows(datasetId, rowIds);
-    } catch (error: any) {
-      if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
-        throw new DatasetNotFoundError(datasetId);
-      }
-
-      throw new DatabaseError(
-        `Failed to delete records from dataset "${datasetId}"`,
-        {
-          datasetId,
-          where,
-          operation: 'delete',
-        },
-        error
-      );
-    }
+    this.rejectRawWhereOperation('delete', 'deleteById');
   }
 
   /**
@@ -790,11 +753,7 @@ export class DatabaseNamespace {
 
       // 如果提供了 datasetId，则限定为只读查询，并通过 attach 保证表可访问
       if (datasetId) {
-        if (this.isMutatingSQL(sql)) {
-          throw new Error(
-            'helpers.database.executeSQL only supports read-only SQL when datasetId is provided. Use insert/update/delete helpers for mutations.'
-          );
-        }
+        assertReadOnlySQL(sql);
 
         finalSql = await this.replaceTableName(sql, datasetId);
         return await this.duckdb.withDatasetAttached(datasetId, async () => {
@@ -804,7 +763,11 @@ export class DatabaseNamespace {
 
       return await this.duckdb.executeSQLWithParams(finalSql, params || []);
     } catch (error: any) {
-      if (error.message?.includes('read-only SQL')) {
+      if (
+        error.message?.includes('read-only SQL') ||
+        error.message?.includes('Only a single') ||
+        error.message?.includes('must not contain')
+      ) {
         throw error;
       }
 
@@ -829,21 +792,11 @@ export class DatabaseNamespace {
     return normalized;
   }
 
-  private async queryMatchingRowIds(datasetId: string, where: string): Promise<number[]> {
-    return await this.duckdb.withDatasetAttached(datasetId, async () => {
-      const tableName = await this.getTableName(datasetId);
-      const sql = `SELECT _row_id FROM ${tableName} WHERE ${where}`;
-      const rows = await this.duckdb.executeSQLWithParams(sql, []);
-      return rows.map((row: any) => this.normalizeRowId(row?._row_id));
-    });
-  }
-
-  private isMutatingSQL(sql: string): boolean {
-    const normalized = sql
-      .replace(/^(?:\s|--.*(?:\r?\n|$)|\/\*[\s\S]*?\*\/)+/g, '')
-      .toUpperCase();
-
-    return !/^(SELECT|WITH|EXPLAIN|DESCRIBE|SHOW)\b/.test(normalized);
+  private rejectRawWhereOperation(operation: 'update' | 'delete', byIdMethod: string): never {
+    throw new Error(
+      `helpers.database.${operation}(where) is disabled because raw SQL WHERE strings are unsafe. ` +
+        `Use helpers.database.query() to read _row_id values, then call helpers.database.${byIdMethod}().`
+    );
   }
 
   /**

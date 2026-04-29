@@ -43,17 +43,40 @@ describe('DatasetQueryService', () => {
     return { service, storageService };
   };
 
-  it('does not append LIMIT/OFFSET to DELETE statements', async () => {
+  it('rejects mutating SQL passed through the query endpoint', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.queryDataset('plugin__doudian_combo__products', 'DELETE FROM data WHERE "task_id" = 1')
+    ).rejects.toThrow(/read-only|DELETE/i);
+
+    expect(lastExecutedSql).toBeNull();
+  });
+
+  it('rejects multi-statement SQL passed through the query endpoint', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.queryDataset(
+        'plugin__doudian_combo__products',
+        "SELECT * FROM data WHERE name = 'safe'; UPDATE data SET name = 'unsafe'"
+      )
+    ).rejects.toThrow(/single/i);
+
+    expect(lastExecutedSql).toBeNull();
+  });
+
+  it('allows read-only SQL that mentions mutating keywords inside string literals', async () => {
     const { service } = createService();
     await service.queryDataset(
       'plugin__doudian_combo__products',
-      'DELETE FROM data WHERE "浠诲姟ID" = 1'
+      "SELECT * FROM data WHERE note = 'please do not update this row'"
     );
 
     expect(lastExecutedSql).toBeTruthy();
-    expect(lastExecutedSql).toContain('DELETE FROM "ds_plugin__doudian_combo__products"."data"');
-    expect(lastExecutedSql).not.toMatch(/\bLIMIT\b/i);
-    expect(lastExecutedSql).not.toMatch(/\bOFFSET\b/i);
+    expect(lastExecutedSql).toContain('SELECT * FROM "ds_plugin__doudian_combo__products"."data"');
+    expect(lastExecutedSql).toMatch(/\bLIMIT\b/i);
+    expect(lastExecutedSql).toMatch(/\bOFFSET\b/i);
   });
 
   it('appends LIMIT/OFFSET to SELECT statements that lack LIMIT', async () => {
@@ -75,6 +98,16 @@ describe('DatasetQueryService', () => {
     expect(lastExecutedSql).toMatch(/\bORDER BY\s+_row_id\s+ASC\b/i);
     expect(lastExecutedSql).toMatch(/\bLIMIT\b/i);
     expect(lastExecutedSql).toMatch(/\bOFFSET\b/i);
+  });
+
+  it('rejects invalid pagination values before SQL execution', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.queryDataset('plugin__doudian_combo__products', undefined, 0, 10001)
+    ).rejects.toThrow(/limit/i);
+
+    expect(lastExecutedSql).toBeNull();
   });
 
   it.each([
