@@ -98,6 +98,8 @@ import { SchedulerIPCHandler } from './ipc-handlers/scheduler-handler';
 import { registerObservationHandlers } from './ipc-handlers/observation-handler';
 import { setSchedulerService } from '../core/js-plugin/namespaces/scheduler';
 import { HttpApiIPCHandler } from './ipc-handlers/http-api-handler';
+import type { IpcSenderGuard } from './ipc-handlers/utils';
+import { assertMainWindowIpcSender } from './ipc-authorization';
 import { OCRPoolIPCHandler } from './ipc-handlers/ocr-pool-handler';
 import { createDuckDbOrchestrationIdempotencyPersistence } from './orchestration-idempotency-duckdb-store';
 import { probeLocalHttpRuntime } from './http-runtime-diagnostics';
@@ -141,6 +143,7 @@ import { ErrorCode, createStructuredError } from '../types/error-codes';
 import { setOcrPoolConfig } from '../core/system-automation/ocr';
 import type { CreateProfileParams, UpdateProfileParams } from '../types/profile';
 import { resolveTiansheEdition } from '../edition';
+import { redactSensitiveUrl } from '../utils/redaction';
 
 // 全局变量
 let mainWindow: BrowserWindowType | null = null;
@@ -162,6 +165,13 @@ const tiansheEdition = resolveTiansheEdition();
 // 🆕 Webhook 回调系统
 let hookBus: HookBus;
 let webhookSender: WebhookSender;
+
+const assertPrimaryRendererSender: IpcSenderGuard = (event, channel) => {
+  if (!mainWindow) {
+    throw new Error('Main window not created');
+  }
+  assertMainWindowIpcSender(event, mainWindow, channel);
+};
 
 registerRuntimeErrorHandlers({
   startupLogPath,
@@ -322,6 +332,7 @@ async function initializeServices(): Promise<void> {
     viewManager,
     windowManager,
     {
+      senderGuard: assertPrimaryRendererSender,
       onOwnedBundleChanged: () => {
         tiansheEdition.cloudSnapshot.markAccountBundleDirty(true);
       },
@@ -513,7 +524,8 @@ function initializeHttpApiIPC(): void {
     store,
     webhookSender,
     startHttpServer,
-    stopHttpServer
+    stopHttpServer,
+    assertPrimaryRendererSender
   );
   httpApiIPCHandler.register();
 
@@ -661,8 +673,16 @@ async function startHttpServer(): Promise<void> {
 
       // 配置 WebhookSender 回调 URL
       if (httpApiConfig.callbackUrl) {
-        webhookSender.setCallbackUrl(httpApiConfig.callbackUrl);
-        console.log(`   [CONFIG] Webhook callback URL: ${httpApiConfig.callbackUrl}`);
+        try {
+          webhookSender.setCallbackUrl(httpApiConfig.callbackUrl);
+          console.log(
+            `   [CONFIG] Webhook callback URL: ${redactSensitiveUrl(httpApiConfig.callbackUrl)}`
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          webhookSender.setCallbackUrl(undefined);
+          console.warn(`   [CONFIG] Ignoring invalid webhook callback URL: ${message}`);
+        }
       }
 
       // 准备依赖项和配置

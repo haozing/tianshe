@@ -27,6 +27,7 @@ import {
   attachProfileLiveSessionLease,
 } from '../../core/browser-pool/profile-live-session-lease';
 import { createIpcHandler, createIpcVoidHandler } from './utils';
+import type { IpcSenderGuard } from './utils';
 import type { WebContentsViewManager } from '../webcontentsview-manager';
 import type { WindowManager } from '../window-manager';
 
@@ -46,6 +47,7 @@ export interface LoginOptions {
 
 interface RegisterAccountHandlersOptions {
   onOwnedBundleChanged?: () => Promise<void> | void;
+  senderGuard?: IpcSenderGuard;
 }
 
 /**
@@ -70,6 +72,10 @@ export function registerAccountHandlers(
       console.warn('[AccountIPC] Failed to mark owned account bundle dirty:', error);
     }
   };
+  const guarded = (errorMessage: string) => ({
+    errorMessage,
+    senderGuard: handlerOptions.senderGuard,
+  });
 
   // =====================================================
   // Account CRUD (使用工厂函数减少重复代码)
@@ -82,7 +88,7 @@ export function registerAccountHandlers(
       await notifyOwnedBundleChanged();
       return created;
     },
-    '创建账号失败'
+    guarded('创建账号失败')
   );
 
   createIpcHandler(
@@ -92,29 +98,29 @@ export function registerAccountHandlers(
       await notifyOwnedBundleChanged();
       return created;
     },
-    '自动创建环境并创建账号失败'
+    guarded('自动创建环境并创建账号失败')
   );
 
-  createIpcHandler('account:get', (id: string) => accountService.get(id), '获取账号失败');
+  createIpcHandler('account:get', (id: string) => accountService.get(id), guarded('获取账号失败'));
 
   createIpcHandler(
     'account:list-by-profile',
     (profileId: string) => accountService.listByProfile(profileId),
-    '获取账号列表失败'
+    guarded('获取账号列表失败')
   );
 
   createIpcHandler(
     'account:list-by-platform',
     (platformId: string) => accountService.listByPlatform(platformId),
-    '获取平台账号列表失败'
+    guarded('获取平台账号列表失败')
   );
 
-  createIpcHandler('account:list-all', () => accountService.listAll(), '获取所有账号失败');
+  createIpcHandler('account:list-all', () => accountService.listAll(), guarded('获取所有账号失败'));
 
   createIpcHandler(
     'account:reveal-secret',
     (id: string) => accountService.revealSecret(id),
-    '查看账号密码失败'
+    guarded('查看账号密码失败')
   );
 
   createIpcHandler(
@@ -124,7 +130,7 @@ export function registerAccountHandlers(
       await notifyOwnedBundleChanged();
       return updated;
     },
-    '更新账号失败'
+    guarded('更新账号失败')
   );
 
   createIpcVoidHandler(
@@ -133,7 +139,7 @@ export function registerAccountHandlers(
       await accountService.delete(id);
       await notifyOwnedBundleChanged();
     },
-    '删除账号失败'
+    guarded('删除账号失败')
   );
 
   // =====================================================
@@ -149,8 +155,8 @@ export function registerAccountHandlers(
    * - 使用账号关联的 Profile 配置
    * - 自动导航到登录 URL
    * - 支持弹窗显示（默认开启）
-  */
-  ipcMain.handle('account:login', async (_, accountId: string, options?: LoginOptions) => {
+   */
+  ipcMain.handle('account:login', async (event, accountId: string, options?: LoginOptions) => {
     let acquiredHandle: BrowserHandle | null = null;
     let popupOwnsHandle = false;
 
@@ -164,6 +170,7 @@ export function registerAccountHandlers(
     };
 
     try {
+      handlerOptions.senderGuard?.(event, 'account:login');
       // 解析选项（默认显示弹窗）
       const showPopup = options?.showPopup !== false;
 
@@ -349,18 +356,26 @@ export function registerAccountHandlers(
       await notifyOwnedBundleChanged();
       return created;
     },
-    '创建常用网站失败'
+    guarded('创建常用网站失败')
   );
 
-  createIpcHandler('saved-site:get', (id: string) => savedSiteService.get(id), '获取常用网站失败');
+  createIpcHandler(
+    'saved-site:get',
+    (id: string) => savedSiteService.get(id),
+    guarded('获取常用网站失败')
+  );
 
   createIpcHandler(
     'saved-site:get-by-name',
     (name: string) => savedSiteService.getByName(name),
-    '获取常用网站失败'
+    guarded('获取常用网站失败')
   );
 
-  createIpcHandler('saved-site:list', () => savedSiteService.listAll(), '获取常用网站列表失败');
+  createIpcHandler(
+    'saved-site:list',
+    () => savedSiteService.listAll(),
+    guarded('获取常用网站列表失败')
+  );
 
   createIpcHandler(
     'saved-site:update',
@@ -369,7 +384,7 @@ export function registerAccountHandlers(
       await notifyOwnedBundleChanged();
       return updated;
     },
-    '更新常用网站失败'
+    guarded('更新常用网站失败')
   );
 
   createIpcVoidHandler(
@@ -378,13 +393,13 @@ export function registerAccountHandlers(
       await savedSiteService.delete(id);
       await notifyOwnedBundleChanged();
     },
-    '删除常用网站失败'
+    guarded('删除常用网站失败')
   );
 
   createIpcVoidHandler(
     'saved-site:increment-usage',
     (id: string) => savedSiteService.incrementUsage(id),
-    '更新使用次数失败'
+    guarded('更新使用次数失败')
   );
 
   // =====================================================
@@ -394,8 +409,9 @@ export function registerAccountHandlers(
   /**
    * 关闭弹窗窗口
    */
-  ipcMain.handle('popup:close', async (_, popupId: string) => {
+  ipcMain.handle('popup:close', async (event, popupId: string) => {
     try {
+      handlerOptions.senderGuard?.(event, 'popup:close');
       // v3 API: 使用统一的 closeWindowById
       windowManager.closeWindowById(`popup-${popupId}`);
       return { success: true };

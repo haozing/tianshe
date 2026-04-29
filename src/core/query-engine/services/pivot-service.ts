@@ -3,7 +3,7 @@
  * 支持行转列、列转行操作
  */
 
-import type { DuckDBService } from '../../../main/duckdb/service';
+import type { IQueryDuckDBService } from '../interfaces/IQueryDuckDBService';
 import { SQLUtils } from '../utils/sql-utils';
 import { validateColumnsExist } from '../validators/common-validators';
 
@@ -106,7 +106,7 @@ export interface UnpivotResult {
  * ```
  */
 export class PivotService {
-  constructor(private duckdbService: DuckDBService) {}
+  constructor(private duckdbService: IQueryDuckDBService) {}
 
   /**
    * 执行 Pivot 操作（行转列）

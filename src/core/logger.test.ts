@@ -38,7 +38,14 @@ vi.mock('pino', () => {
   };
 });
 
-import { Logger, LogLevel, createLogger, getPinoLogger, type LoggerConfig } from './logger';
+import {
+  Logger,
+  LogLevel,
+  createLogFields,
+  createLogger,
+  getPinoLogger,
+  type LoggerConfig,
+} from './logger';
 import pino from 'pino';
 
 // 获取 mock 实例
@@ -917,6 +924,25 @@ describe('Logger', () => {
       expect(typeof Logger.getLevel).toBe('function');
       expect(typeof Logger.configure).toBe('function');
       expect(typeof Logger.getConfig).toBe('function');
+    });
+    it('createLogFields should redact sensitive structured fields', () => {
+      expect(
+        createLogFields({
+          traceId: 'trace-1',
+          operation: 'http-api:set-config',
+          token: 'secret-token',
+          nested: {
+            password: 'secret-password',
+          },
+        })
+      ).toEqual({
+        traceId: 'trace-1',
+        operation: 'http-api:set-config',
+        token: '[REDACTED]',
+        nested: {
+          password: '[REDACTED]',
+        },
+      });
     });
   });
 });

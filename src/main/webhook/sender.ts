@@ -5,6 +5,7 @@
 
 import { BroadcastHandler, HookBus } from '../../core/hookbus';
 import { redactSensitiveText, redactSensitiveUrl } from '../../utils/redaction';
+import { assertPublicHttpTarget, parsePublicHttpUrl } from '../network-target-policy';
 
 /**
  * 内置埋点列表（写死，无需配置）
@@ -33,9 +34,12 @@ export class WebhookSender {
    * 设置回调地址
    */
   setCallbackUrl(url?: string): void {
-    this.callbackUrl = url;
+    const normalizedUrl = String(url || '').trim();
+    this.callbackUrl = normalizedUrl ? parsePublicHttpUrl(normalizedUrl).toString() : undefined;
     console.log(
-      `[WebhookSender] Callback URL updated: ${url ? redactSensitiveUrl(url) : '(disabled)'}`
+      `[WebhookSender] Callback URL updated: ${
+        this.callbackUrl ? redactSensitiveUrl(this.callbackUrl) : '(disabled)'
+      }`
     );
   }
 
@@ -78,7 +82,8 @@ export class WebhookSender {
    * 发送回调
    */
   private async sendCallback(eventId: string, data: unknown): Promise<void> {
-    if (!this.callbackUrl) {
+    const callbackUrl = this.callbackUrl;
+    if (!callbackUrl) {
       return;
     }
 
@@ -89,7 +94,8 @@ export class WebhookSender {
     };
 
     try {
-      const response = await fetch(this.callbackUrl, {
+      const targetUrl = await assertPublicHttpTarget(callbackUrl);
+      const response = await fetch(targetUrl.toString(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

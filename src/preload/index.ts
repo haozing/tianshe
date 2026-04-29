@@ -65,6 +65,41 @@ const resolveTiansheEditionPublicInfo = (): TiansheEditionPublicInfo => {
 
 const tiansheEdition = resolveTiansheEditionPublicInfo();
 
+const allowedPreloadEventChannels = [
+  'cloud-auth:session-changed',
+  'dataset:schema-updated',
+  'download:started',
+  'download:progress',
+  'download:completed',
+  'download:cancelled',
+  'download:interrupted',
+  'duckdb:export-progress',
+  'duckdb:import-progress',
+  'duckdb:import-records-progress',
+  'js-plugin:notification',
+  'js-plugin:reloaded',
+  'js-plugin:runtime-status-changed',
+  'js-plugin:state-changed',
+  'plugin:view-created',
+  'plugin:view-closed',
+  'updater:available',
+  'updater:checking',
+  'updater:download-progress',
+  'updater:downloaded',
+  'updater:error',
+  'updater:not-available',
+] as const;
+
+type PreloadEventChannel = (typeof allowedPreloadEventChannels)[number];
+
+const allowedPreloadEventChannelSet = new Set<string>(allowedPreloadEventChannels);
+
+function assertAllowedPreloadEventChannel(channel: string): asserts channel is PreloadEventChannel {
+  if (!allowedPreloadEventChannelSet.has(channel)) {
+    throw new Error(`Unsupported preload event channel: ${channel}`);
+  }
+}
+
 /**
  * 暴露给渲染进程的 API
  */
@@ -2000,7 +2035,8 @@ const electronAPI = {
   /**
    * 通用事件监听
    */
-  on: (channel: string, callback: (...args: any[]) => void) => {
+  on: (channel: PreloadEventChannel, callback: (...args: any[]) => void) => {
+    assertAllowedPreloadEventChannel(channel);
     const subscription = (_event: IpcRendererEvent, ...args: any[]) => callback(...args);
     ipcRenderer.on(channel, subscription);
 
@@ -2013,17 +2049,14 @@ const electronAPI = {
   /**
    * 移除事件监听
    */
-  removeListener: (channel: string, callback: (...args: any[]) => void) => {
+  removeListener: (channel: PreloadEventChannel, callback: (...args: any[]) => void) => {
+    assertAllowedPreloadEventChannel(channel);
     ipcRenderer.removeListener(channel, callback);
   },
 
   /**
    * 移除所有监听器
    */
-  removeAllListeners: (channel: string) => {
-    ipcRenderer.removeAllListeners(channel);
-  },
-
   // ========== 系统 Shell API ==========
 
   /**

@@ -47,7 +47,7 @@ export class IPCHandler {
     this.viewHandler = new ViewIPCHandler(viewManager, windowManager);
     this.queryTemplateHandler = new QueryTemplateIPCHandler(duckdbService);
     this.systemHandler = new SystemIPCHandler(logger, downloadManager, mainWindow);
-    this.fileHandler = new FileIPCHandler();
+    this.fileHandler = new FileIPCHandler(mainWindow);
 
     // 注册所有处理器
     this.registerAllHandlers();

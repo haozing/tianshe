@@ -3,7 +3,7 @@
  * 支持将查询结果写回数据库，包括新建表、插入、更新等操作
  */
 
-import type { DuckDBService } from '../../../main/duckdb/service';
+import type { IQueryDuckDBService } from '../interfaces/IQueryDuckDBService';
 import { SQLUtils } from '../utils/sql-utils';
 import { createValidator } from '../validators/common-validators';
 
@@ -137,7 +137,7 @@ export interface WritebackResult {
  * ```
  */
 export class DataWritebackService {
-  constructor(private duckdbService: DuckDBService) {}
+  constructor(private duckdbService: IQueryDuckDBService) {}
 
   /**
    * 执行数据写回操作

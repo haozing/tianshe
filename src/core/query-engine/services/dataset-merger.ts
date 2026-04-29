@@ -3,7 +3,7 @@
  * 支持合并多个数据集，自动对齐列结构
  */
 
-import type { DuckDBService } from '../../../main/duckdb/service';
+import type { IQueryDuckDBService } from '../interfaces/IQueryDuckDBService';
 import { SQLUtils } from '../utils/sql-utils';
 
 /**
@@ -89,7 +89,7 @@ export interface UnionResult {
  * ```
  */
 export class DatasetMerger {
-  constructor(private duckdbService: DuckDBService) {}
+  constructor(private duckdbService: IQueryDuckDBService) {}
 
   /**
    * 合并多个数据集

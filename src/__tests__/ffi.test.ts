@@ -34,6 +34,7 @@ vi.mock('electron', () => ({
 // Mock fs-extra to bypass existence checks during tests
 vi.mock('fs-extra', () => ({
   existsSync: vi.fn(() => true),
+  realpathSync: vi.fn((targetPath: string) => targetPath),
 }));
 
 const SYS_BASE = 'C:\\Windows\\System32';
@@ -353,6 +354,18 @@ describe('FFI Namespace', () => {
   describe('安全性测试', () => {
     it('应该阻止加载绝对路径的库（非系统库）', async () => {
       await expect(ffiNamespace.loadLibrary('D:\\hacker\\malware.dll')).rejects.toThrow(
+        'Library path not allowed'
+      );
+    });
+
+    it('应该阻止前缀相似目录绕过允许目录边界', async () => {
+      await expect(
+        ffiNamespace.loadLibrary(`${SYS_BASE}_evil\\malware.dll`)
+      ).rejects.toThrow('Library path not allowed');
+    });
+
+    it('应该阻止通过完整路径加载白名单同名库到非允许目录', async () => {
+      await expect(ffiNamespace.loadLibrary('D:\\hacker\\user32.dll')).rejects.toThrow(
         'Library path not allowed'
       );
     });

@@ -3,8 +3,8 @@
  * 核心类，协调所有Builder生成优化的SQL查询
  */
 
-import type { DuckDBService } from '../../main/duckdb/service';
 import type { IDatasetResolver } from './interfaces/IDatasetResolver';
+import type { IQueryDuckDBService } from './interfaces/IQueryDuckDBService';
 import type {
   ComputeConfig,
   QueryConfig,
@@ -69,7 +69,7 @@ export class QueryEngine {
   private groupBuilder: GroupBuilder; //
 
   constructor(
-    private duckdbService: DuckDBService,
+    private duckdbService: IQueryDuckDBService,
     datasetResolver?: IDatasetResolver
   ) {
     // 初始化日志记录器

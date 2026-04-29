@@ -47,6 +47,19 @@ export interface LoggerConfig {
   prettyPrint?: boolean;
 }
 
+export interface LogFields {
+  traceId?: string;
+  requestId?: string;
+  pluginId?: string;
+  datasetId?: string;
+  viewId?: string;
+  channel?: string;
+  operation?: string;
+  outcome?: 'success' | 'failure' | 'blocked' | 'noop';
+  durationMs?: number;
+  [key: string]: unknown;
+}
+
 /**
  * 全局配置
  */
@@ -304,6 +317,10 @@ export class Logger {
  */
 export function createLogger(context: string): Logger {
   return new Logger(context);
+}
+
+export function createLogFields(fields: LogFields): LogFields {
+  return redactSensitiveValue(fields) as LogFields;
 }
 
 /**

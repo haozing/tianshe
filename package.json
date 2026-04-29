@@ -30,8 +30,10 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json}\"",
+    "verify:supply-chain": "node scripts/verify-supply-chain.js",
+    "sbom": "node scripts/generate-sbom.js",
     "verify:open-source-boundary": "node scripts/open-source-boundary.js",
-    "verify:ci": "npm run typecheck && npm run lint && npm run test:open:full && npm run verify:open-source-boundary && npm run build:open"
+    "verify:ci": "npm run typecheck && npm run lint && npm run test:open:full && npm run verify:supply-chain && npm run verify:open-source-boundary && npm run sbom && npm run build:open"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

@@ -17,6 +17,7 @@ import type { StructuredError } from '../types/error-codes';
 import { firstString, parseRequestedEngine, parseScopesHeader } from './http-request-utils';
 import { HTTP_SERVER_DEFAULTS } from '../constants/http-api';
 import { buildHealthPayload } from './http-system-routes';
+import { getHttpApiAuthToken } from './http-api-config-guard';
 
 interface LoggerLike {
   info(message: string, ...args: unknown[]): void;
@@ -68,7 +69,8 @@ export const createHttpServerComposition = (
                 mcpEndpointEnabled,
                 getSessionCounts: () => ({
                   activeSessions:
-                    options.runtimeState.transports.size + options.runtimeState.orchestrationSessions.size,
+                    options.runtimeState.transports.size +
+                    options.runtimeState.orchestrationSessions.size,
                   mcpSessions: options.runtimeState.transports.size,
                   orchestrationSessions: options.runtimeState.orchestrationSessions.size,
                 }),
@@ -81,10 +83,11 @@ export const createHttpServerComposition = (
   };
   registerTraceContextMiddleware(app);
 
-  if (options.restApiConfig?.enableAuth && options.restApiConfig.token) {
+  const authToken = options.restApiConfig ? getHttpApiAuthToken(options.restApiConfig) : undefined;
+  if (authToken) {
     registerTokenAuthMiddleware({
       app,
-      expectedToken: options.restApiConfig.token,
+      expectedToken: authToken,
       restApiConfig: options.restApiConfig,
       logger: options.logger,
     });
@@ -114,7 +117,8 @@ export const createHttpServerComposition = (
     getBrowserPoolManager: options.getBrowserPoolManager,
     enqueueInvokeTask: (sessionLabel, session, task, invokeOptions) =>
       options.sessionBridge.enqueueInvokeTask(sessionLabel, session, task, invokeOptions),
-    cleanupSession: (sessionId, session) => options.sessionBridge.cleanupMcpSession(sessionId, session),
+    cleanupSession: (sessionId, session) =>
+      options.sessionBridge.cleanupMcpSession(sessionId, session),
     enqueueOrchestrationInvoke: (sessionId, session, task) =>
       options.sessionBridge.enqueueOrchestrationInvoke(sessionId, session, task),
     cleanupOrchestrationSession: (sessionId, session) =>
@@ -122,7 +126,7 @@ export const createHttpServerComposition = (
     buildRuntimeMetricsPayload: () => options.sessionBridge.buildRuntimeMetricsPayload(),
     getSessionCounts: () => ({
       activeSessions:
-      options.runtimeState.transports.size + options.runtimeState.orchestrationSessions.size,
+        options.runtimeState.transports.size + options.runtimeState.orchestrationSessions.size,
       mcpSessions: options.runtimeState.transports.size,
       orchestrationSessions: options.runtimeState.orchestrationSessions.size,
     }),

@@ -94,6 +94,8 @@ describe('WebContentsViewManager security boundaries', () => {
     expect(options.webPreferences.contextIsolation).toBe(true);
     expect(options.webPreferences.nodeIntegration).toBe(false);
     expect(options.webPreferences.sandbox).toBe(true);
+    expect(options.webPreferences.webSecurity).toBe(true);
+    expect(options.webPreferences.allowRunningInsecureContent).toBe(false);
   });
 
   it('injects only the narrow plugin preload into plugin views', async () => {
@@ -112,6 +114,28 @@ describe('WebContentsViewManager security boundaries', () => {
     );
     expect(options.webPreferences.webSecurity).toBe(true);
     expect(options.webPreferences.allowRunningInsecureContent).toBe(false);
+  });
+
+  it('requires explicit metadata to relax automation target web security', async () => {
+    const manager = createManager();
+    manager.registerView({
+      id: 'compat-view',
+      partition: 'persist:compat-view',
+      metadata: {
+        source: 'pool',
+        stealth: { enabled: false },
+        security: {
+          webSecurity: false,
+          allowRunningInsecureContent: true,
+        },
+      },
+    });
+
+    await manager.activateView('compat-view');
+
+    const options = webContentsViewCtor.mock.calls[0][0];
+    expect(options.webPreferences.webSecurity).toBe(false);
+    expect(options.webPreferences.allowRunningInsecureContent).toBe(true);
   });
 
   it('denies permissions by default and allows only declared permissions', async () => {

@@ -21,6 +21,8 @@ import type {
   LibraryInfo,
 } from './types';
 
+const SYSTEM_LIBS_ALLOWLIST = new Set(SYSTEM_LIBS_WHITELIST.map((lib) => lib.toLowerCase()));
+
 /**
  * FFI 服务
  *
@@ -283,12 +285,15 @@ export class FFIService {
    * 验证库路径安全性
    */
   private validateLibraryPath(libPath: string): string {
-    const normalizedPath = path.normalize(libPath);
+    const requestedPath = path.resolve(libPath);
+    const normalizedPath = path.normalize(requestedPath);
 
-    // 检查系统库白名单
-    const libName = path.basename(normalizedPath).toLowerCase();
-    if (SYSTEM_LIBS_WHITELIST.includes(libName)) {
-      return normalizedPath;
+    // Bare system library names are allowed. Full paths still go through the
+    // directory boundary check below.
+    const libName = path.basename(libPath).toLowerCase();
+    const isBareLibraryName = libName === libPath.toLowerCase();
+    if (isBareLibraryName && SYSTEM_LIBS_ALLOWLIST.has(libName)) {
+      return libPath;
     }
 
     // 构建允许的路径列表
@@ -309,23 +314,49 @@ export class FFIService {
       allowedPaths.push('C:\\Windows\\SysWOW64');
     }
 
-    // 检查路径是否在白名单内
-    const isAllowed = allowedPaths.some((allowed) => normalizedPath.startsWith(allowed));
-
-    if (!isAllowed) {
-      throw new FFIError(
-        `Library path not allowed: ${normalizedPath}\n` +
-          `Allowed paths:\n${allowedPaths.map((p) => `  - ${p}`).join('\n')}`,
-        'PATH_NOT_ALLOWED'
-      );
-    }
-
-    // 检查文件是否存在
     if (!fs.existsSync(normalizedPath)) {
       throw new FFIError(`Library file not found: ${normalizedPath}`, 'NOT_FOUND');
     }
 
-    return normalizedPath;
+    const realLibraryPath = this.resolveRealPath(normalizedPath, 'library');
+    const allowedRealPaths = allowedPaths
+      .filter((allowed) => fs.existsSync(allowed))
+      .map((allowed) => this.resolveRealPath(allowed, 'allowed path'));
+
+    // 检查路径是否在白名单内
+    const isAllowed = allowedRealPaths.some((allowed) =>
+      this.isPathWithinDirectory(realLibraryPath, allowed)
+    );
+
+    if (!isAllowed) {
+      throw new FFIError(
+        `Library path not allowed: ${realLibraryPath}\n` +
+          `Allowed paths:\n${allowedRealPaths.map((p) => `  - ${p}`).join('\n')}`,
+        'PATH_NOT_ALLOWED'
+      );
+    }
+
+    return realLibraryPath;
+  }
+
+  private resolveRealPath(targetPath: string, label: string): string {
+    try {
+      return path.normalize(fs.realpathSync(path.resolve(targetPath)));
+    } catch (error) {
+      const cause = error instanceof Error ? error : undefined;
+      throw new FFIError(`Failed to resolve ${label}: ${targetPath}`, 'PATH_NOT_ALLOWED', cause);
+    }
+  }
+
+  private normalizePathForComparison(targetPath: string): string {
+    const normalized = path.normalize(path.resolve(targetPath));
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  }
+
+  private isPathWithinDirectory(targetPath: string, directory: string): boolean {
+    const target = this.normalizePathForComparison(targetPath);
+    const base = this.normalizePathForComparison(directory);
+    return target === base || target.startsWith(base + path.sep);
   }
 
   /**

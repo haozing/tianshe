@@ -87,6 +87,26 @@ describe('FileIPCHandler', () => {
       // 验证日志输出
       expect(console.log).toHaveBeenCalledWith('✅ File IPC handlers registered');
     });
+
+    it('rejects file operations from unauthorized senders when a main window is configured', async () => {
+      handler = new FileIPCHandler({
+        webContents: {
+          id: 1,
+          isDestroyed: () => false,
+        },
+      } as any);
+      handler.register();
+      const uploadHandler = (ipcMain.handle as any).mock.calls[0][1];
+
+      const response = await uploadHandler({ sender: { id: 2 } }, 'dataset-123', {
+        buffer: Buffer.from('test'),
+        filename: 'test.txt',
+      });
+
+      expect(response.success).toBe(false);
+      expect(response.error).toMatch(/Unauthorized IPC sender/);
+      expect(fileStorage.saveFile).not.toHaveBeenCalled();
+    });
   });
 
   describe('file:upload', () => {

@@ -38,7 +38,10 @@
     "scripts/package-electron.js",
     "scripts/run-dev-base.js",
     "scripts/run-with-edition.js",
+    "scripts/generate-sbom.js",
+    "scripts/supply-chain-policy.json",
     "scripts/test-edition.js",
+    "scripts/verify-supply-chain.js",
     "examples/minimal-plugin"
   ],
   "exclude": [
@@ -170,6 +173,8 @@
     "package:open:portable",
     "test:open",
     "test:open:full",
+    "verify:supply-chain",
+    "sbom",
     "verify:open-source-boundary",
     "verify:ci"
   ]

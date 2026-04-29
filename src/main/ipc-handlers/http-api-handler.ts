@@ -7,6 +7,7 @@ import { ipcMain, IpcMainInvokeEvent } from 'electron';
 import { handleIPCError } from '../ipc-utils';
 import type Store from 'electron-store';
 import type { WebhookSender } from '../webhook/sender';
+import type { IpcSenderGuard } from './utils';
 import {
   DEFAULT_HTTP_API_CONFIG,
   HTTP_SERVER_DEFAULTS,
@@ -16,6 +17,8 @@ import {
   type HttpApiConfig,
 } from '../../constants/http-api';
 import { probeLocalHttpRuntime } from '../http-runtime-diagnostics';
+import { assertValidHttpApiConfig } from '../http-api-config-guard';
+import { assertPublicHttpTarget } from '../network-target-policy';
 
 const sameStringArray = (left: string[], right: string[]): boolean =>
   left.length === right.length && left.every((value, index) => value === right[index]);
@@ -25,8 +28,13 @@ export class HttpApiIPCHandler {
     private store: Store,
     private webhookSender: WebhookSender,
     private startHttpServer: () => Promise<void>,
-    private stopHttpServer: () => Promise<void>
+    private stopHttpServer: () => Promise<void>,
+    private senderGuard?: IpcSenderGuard
   ) {}
+
+  private assertSender(event: IpcMainInvokeEvent, channel: string): void {
+    this.senderGuard?.(event, channel);
+  }
 
   /**
    * 注册所有 HTTP API 相关的 IPC 处理器
@@ -73,8 +81,9 @@ export class HttpApiIPCHandler {
    * 获取 HTTP API 配置
    */
   private registerGetConfig(): void {
-    ipcMain.handle('http-api:get-config', async (_event: IpcMainInvokeEvent) => {
+    ipcMain.handle('http-api:get-config', async (event: IpcMainInvokeEvent) => {
       try {
+        this.assertSender(event, 'http-api:get-config');
         const storedConfig = this.getStoredConfig();
         const effectiveConfig = resolveEffectiveHttpApiConfig(storedConfig);
         this.store.set('httpApiConfig', storedConfig);
@@ -97,14 +106,19 @@ export class HttpApiIPCHandler {
   private registerSetConfig(): void {
     ipcMain.handle(
       'http-api:set-config',
-      async (_event: IpcMainInvokeEvent, config: Partial<HttpApiConfig>) => {
+      async (event: IpcMainInvokeEvent, config: Partial<HttpApiConfig>) => {
         try {
+          this.assertSender(event, 'http-api:set-config');
           const oldStoredConfig = this.getStoredConfig();
           const oldEffectiveConfig = resolveEffectiveHttpApiConfig(oldStoredConfig);
           const nextStoredConfig = normalizeHttpApiConfig({
             ...oldStoredConfig,
             ...config,
           });
+          assertValidHttpApiConfig(nextStoredConfig);
+          if (nextStoredConfig.callbackUrl) {
+            await assertPublicHttpTarget(nextStoredConfig.callbackUrl);
+          }
           const nextEffectiveConfig = resolveEffectiveHttpApiConfig(nextStoredConfig);
 
           this.store.set('httpApiConfig', nextStoredConfig);
@@ -153,8 +167,9 @@ export class HttpApiIPCHandler {
    * 获取 HTTP API 运行时状态（健康信息 + 编排指标）
    */
   private registerGetRuntimeStatus(): void {
-    ipcMain.handle('http-api:get-runtime-status', async (_event: IpcMainInvokeEvent) => {
+    ipcMain.handle('http-api:get-runtime-status', async (event: IpcMainInvokeEvent) => {
       try {
+        this.assertSender(event, 'http-api:get-runtime-status');
         const config = this.getEffectiveConfig();
         const port = HTTP_SERVER_DEFAULTS.PORT;
         const runtime = await this.probeRuntime(config);
@@ -180,8 +195,9 @@ export class HttpApiIPCHandler {
    * 尝试修复 HTTP API 运行态问题。
    */
   private registerRepairRuntime(): void {
-    ipcMain.handle('http-api:repair-runtime', async (_event: IpcMainInvokeEvent) => {
+    ipcMain.handle('http-api:repair-runtime', async (event: IpcMainInvokeEvent) => {
       try {
+        this.assertSender(event, 'http-api:repair-runtime');
         const config = this.getEffectiveConfig();
         if (!config.enabled) {
           return {
@@ -236,7 +252,8 @@ export class HttpApiIPCHandler {
               break;
           }
         } catch (repairError: unknown) {
-          const errorMessage = repairError instanceof Error ? repairError.message : String(repairError);
+          const errorMessage =
+            repairError instanceof Error ? repairError.message : String(repairError);
           action = 'failed';
           repaired = false;
           message = `修复失败: ${errorMessage}`;

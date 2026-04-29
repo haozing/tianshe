@@ -127,9 +127,11 @@ describe('registerAccountHandlers - account:login', () => {
     vi.clearAllMocks();
     registeredHandlers.clear();
 
-    (ipcMain.handle as Mock).mockImplementation((channel: string, fn: (...args: unknown[]) => unknown) => {
-      registeredHandlers.set(channel, fn as (...args: unknown[]) => Promise<unknown>);
-    });
+    (ipcMain.handle as Mock).mockImplementation(
+      (channel: string, fn: (...args: unknown[]) => unknown) => {
+        registeredHandlers.set(channel, fn as (...args: unknown[]) => Promise<unknown>);
+      }
+    );
 
     (getBrowserPoolManager as Mock).mockReturnValue(poolManager);
     (acquireProfileLiveSessionLease as Mock).mockResolvedValue({
@@ -154,6 +156,33 @@ describe('registerAccountHandlers - account:login', () => {
         onOwnedBundleChanged,
       }
     );
+  });
+
+  it('rejects account secret reads from unauthorized senders', async () => {
+    registeredHandlers.clear();
+    const senderGuard = vi.fn(() => {
+      throw new Error('Unauthorized sender');
+    });
+    registerAccountHandlers(
+      accountService as never,
+      savedSiteService as never,
+      profileService as never,
+      viewManager as never,
+      windowManager as never,
+      {
+        onOwnedBundleChanged,
+        senderGuard,
+      }
+    );
+
+    const event = { sender: { id: 2 } };
+    const revealHandler = getHandler('account:reveal-secret');
+    const result = (await revealHandler(event, 'acc-1')) as { success: boolean; error?: string };
+
+    expect(senderGuard).toHaveBeenCalledWith(event, 'account:reveal-secret');
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Unauthorized sender');
+    expect(accountService.revealSecret).not.toHaveBeenCalled();
   });
 
   it('should return invalid-platform error when account has no platformId', async () => {
@@ -237,7 +266,9 @@ describe('registerAccountHandlers - account:login', () => {
     const handle = buildBrowserHandle();
     poolManager.acquire.mockResolvedValue(handle);
 
-    accountService.get.mockResolvedValue(buildAccount({ profileId: 'account-profile', loginUrl: '' }));
+    accountService.get.mockResolvedValue(
+      buildAccount({ profileId: 'account-profile', loginUrl: '' })
+    );
     savedSiteService.get.mockResolvedValue(
       buildPlatform({
         url: 'https://platform.example/fallback-login',
@@ -370,10 +401,12 @@ describe('registerAccountHandlers - account:login', () => {
     profileService.get.mockResolvedValue({ id: 'legacy-profile', name: 'Legacy Env' });
 
     let popupConfig: { onClose?: () => void } | null = null;
-    (showBrowserViewInPopup as Mock).mockImplementation((_viewId, _viewManager, _windowManager, config) => {
-      popupConfig = config as { onClose?: () => void };
-      return 'popup-1';
-    });
+    (showBrowserViewInPopup as Mock).mockImplementation(
+      (_viewId, _viewManager, _windowManager, config) => {
+        popupConfig = config as { onClose?: () => void };
+        return 'popup-1';
+      }
+    );
 
     const loginHandler = getHandler('account:login');
     const result = (await loginHandler(null, 'acc-1')) as {
@@ -485,9 +518,7 @@ describe('registerAccountHandlers - account:login', () => {
   });
 
   it('should propagate saved-site delete constraint failures', async () => {
-    savedSiteService.delete.mockRejectedValue(
-      new Error('平台仍被 2 个账号引用，请先处理相关账号')
-    );
+    savedSiteService.delete.mockRejectedValue(new Error('平台仍被 2 个账号引用，请先处理相关账号'));
 
     const deleteHandler = getHandler('saved-site:delete');
     const result = (await deleteHandler(null, 'platform-1')) as {

@@ -70,6 +70,33 @@ describe('HttpApiIPCHandler', () => {
     expect(handlers.has('http-api:repair-runtime')).toBe(true);
   });
 
+  it('rejects guarded HTTP config calls from unauthorized senders', async () => {
+    handlers.clear();
+    mockIpcMainHandle.mockClear();
+    const senderGuard = vi.fn(() => {
+      throw new Error('Unauthorized sender');
+    });
+    const guardedHandler = new HttpApiIPCHandler(
+      mockStore as any,
+      mockWebhookSender as any,
+      startHttpServer,
+      stopHttpServer,
+      senderGuard
+    );
+    guardedHandler.register();
+
+    const setHandler = handlers.get('http-api:set-config');
+    expect(setHandler).toBeTypeOf('function');
+    const event = { sender: { id: 2 } };
+    const result = await setHandler?.(event as any, { enabled: true });
+
+    expect(senderGuard).toHaveBeenCalledWith(event, 'http-api:set-config');
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Unauthorized sender');
+    expect(mockStore.set).not.toHaveBeenCalled();
+    expect(startHttpServer).not.toHaveBeenCalled();
+  });
+
   it('get-config 会补齐历史配置缺失字段并回写 store', async () => {
     storedConfig = {
       enabled: true,
@@ -188,6 +215,34 @@ describe('HttpApiIPCHandler', () => {
     expect(result.success).toBe(true);
     expect(startHttpServer).toHaveBeenCalledTimes(1);
     expect(stopHttpServer).not.toHaveBeenCalled();
+  });
+
+  it('rejects enableAuth=true with a blank token before saving config', async () => {
+    storedConfig = { ...DEFAULT_HTTP_API_CONFIG, enabled: false };
+
+    const setHandler = handlers.get('http-api:set-config');
+    expect(setHandler).toBeTypeOf('function');
+    const result = await setHandler?.({} as any, { enableAuth: true, token: '   ' });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/token is required/i);
+    expect(mockStore.set).not.toHaveBeenCalled();
+    expect(startHttpServer).not.toHaveBeenCalled();
+    expect(stopHttpServer).not.toHaveBeenCalled();
+    expect(mockWebhookSender.setCallbackUrl).not.toHaveBeenCalled();
+  });
+
+  it('rejects private-network webhook callback URLs before saving config', async () => {
+    storedConfig = { ...DEFAULT_HTTP_API_CONFIG, enabled: false };
+
+    const setHandler = handlers.get('http-api:set-config');
+    expect(setHandler).toBeTypeOf('function');
+    const result = await setHandler?.({} as any, { callbackUrl: 'http://127.0.0.1/hook' });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/private network/i);
+    expect(mockStore.set).not.toHaveBeenCalled();
+    expect(mockWebhookSender.setCallbackUrl).not.toHaveBeenCalled();
   });
 
   it('enabled 从 true 改为 false 时会停止 HTTP 服务', async () => {

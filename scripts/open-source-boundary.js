@@ -109,15 +109,17 @@ function runCapture(command, args, options = {}) {
 }
 
 function collectGitTrackedAndUnignoredFiles() {
-  const result = runCapture('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
+  const result = runCapture('git', [
+    'ls-files',
+    '-z',
+    '--cached',
+    '--others',
+    '--exclude-standard',
+  ]);
   if (!result.ok) {
     return null;
   }
-  return result.stdout
-    .split('\0')
-    .map(normalizePath)
-    .filter(Boolean)
-    .sort();
+  return result.stdout.split('\0').map(normalizePath).filter(Boolean).sort();
 }
 
 function shouldSkipActualWalk(relativePath) {
@@ -169,9 +171,7 @@ function collectActualRepoFiles() {
 function collectNpmPackFiles() {
   const result = runCapture('npm', ['pack', '--dry-run', '--json']);
   if (!result.ok) {
-    throw new Error(
-      `npm pack --dry-run failed:\n${result.stderr.trim() || result.stdout.trim()}`
-    );
+    throw new Error(`npm pack --dry-run failed:\n${result.stderr.trim() || result.stdout.trim()}`);
   }
 
   let parsed;
@@ -219,7 +219,9 @@ function verify(manifest, files) {
       }
     }
     if (String(packageJson.main || '').startsWith('dist/')) {
-      errors.push('package.json main points at dist/ and makes npm pack include build output implicitly');
+      errors.push(
+        'package.json main points at dist/ and makes npm pack include build output implicitly'
+      );
     }
   }
 
@@ -259,10 +261,7 @@ function verifyActualFileSet(manifest, files, label) {
     },
     {
       name: 'Tianshe cloud API implementation path',
-      pattern: new RegExp(
-        escapeRegExp(joinUrlPath('', 'api', 'v1', 'tianshe', 'cloud')),
-        'g'
-      ),
+      pattern: new RegExp(escapeRegExp(joinUrlPath('', 'api', 'v1', 'tianshe', 'cloud')), 'g'),
     },
     {
       name: 'Aidian test host',
@@ -413,7 +412,8 @@ function applyOpenSourceOverlay(outputDir) {
     'build:renderer': 'vite build',
     'build:main': 'node scripts/build-main-with-stamp.js',
     'package:open': 'npm run package:open:portable',
-    'package:open:dir': 'npm run build:open && node scripts/package-electron.js --dir --publish never',
+    'package:open:dir':
+      'npm run build:open && node scripts/package-electron.js --dir --publish never',
     'package:open:portable':
       'npm run build:open && node scripts/package-electron.js --win portable --x64 --publish never',
     'package:open:win':
@@ -424,9 +424,11 @@ function applyOpenSourceOverlay(outputDir) {
     typecheck: 'tsc --noEmit',
     lint: 'eslint .',
     'format:check': 'prettier --check "src/**/*.{ts,tsx,json}"',
+    'verify:supply-chain': 'node scripts/verify-supply-chain.js',
+    sbom: 'node scripts/generate-sbom.js',
     'verify:open-source-boundary': 'node scripts/open-source-boundary.js',
     'verify:ci':
-      'npm run typecheck && npm run lint && npm run test:open:full && npm run verify:open-source-boundary && npm run build:open',
+      'npm run typecheck && npm run lint && npm run test:open:full && npm run verify:supply-chain && npm run verify:open-source-boundary && npm run sbom && npm run build:open',
   };
   writeJson(outputDir, 'package.json', packageJson);
 
@@ -478,6 +480,8 @@ require(mainEntry);
     'package:open:portable',
     'test:open',
     'test:open:full',
+    'verify:supply-chain',
+    'sbom',
     'verify:open-source-boundary',
     'verify:ci',
   ];
@@ -534,8 +538,17 @@ jobs:
       - name: Full open edition tests
         run: npm run test:open:full
 
+      - name: Security audit
+        run: npm audit --registry=https://registry.npmjs.org --audit-level=high --omit=dev
+
+      - name: Supply-chain policy
+        run: npm run verify:supply-chain
+
       - name: Open source boundary
         run: npm run verify:open-source-boundary
+
+      - name: Generate SBOM
+        run: npm run sbom
 
       - name: Open build
         run: npm run build:open

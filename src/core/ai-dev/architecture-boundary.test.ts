@@ -7,6 +7,7 @@ const CAPABILITIES_ROOT = `${AI_DEV_ROOT}/capabilities`;
 const ORCHESTRATION_ROOT = 'src/core/ai-dev/orchestration';
 const MCP_ROOT = `${AI_DEV_ROOT}/mcp`;
 const MAIN_ROOT = 'src/main';
+const QUERY_ENGINE_ROOT = 'src/core/query-engine';
 const HTTP_ENTRY = 'src/main/mcp-server-http.ts';
 
 const IMPORT_PATTERN = /^\s*import(?:[\s\S]*?\sfrom\s+)?['"]([^'"]+)['"]/gm;
@@ -117,6 +118,11 @@ const isLegacyMcpModuleImport = (specifier: string): boolean => {
     normalized.startsWith('../../core/ai-dev/mcp/') ||
     normalized.startsWith('../../../core/ai-dev/mcp/')
   );
+};
+
+const isMainLayerImport = (specifier: string): boolean => {
+  const normalized = normalizeImport(specifier);
+  return normalized.includes('/main/') || normalized.startsWith('../../main/');
 };
 
 describe('AI-Dev layered boundary contracts', () => {
@@ -236,6 +242,21 @@ describe('AI-Dev layered boundary contracts', () => {
       const imports = extractImports(file);
       for (const specifier of imports) {
         if (isLegacyMcpModuleImport(specifier)) {
+          violations.push(`${relative(process.cwd(), file)} -> ${specifier}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it('query-engine runtime code stays independent from the main process layer', () => {
+    const files = collectTsFiles(QUERY_ENGINE_ROOT).filter((file) => !file.endsWith('.test.ts'));
+    const violations: string[] = [];
+
+    for (const file of files) {
+      for (const specifier of extractImports(file)) {
+        if (isMainLayerImport(specifier)) {
           violations.push(`${relative(process.cwd(), file)} -> ${specifier}`);
         }
       }

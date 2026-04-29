@@ -154,7 +154,7 @@ export interface ModelInfo {
   /** 备用下载 URL 列表 */
   urls?: string[];
   /** SHA256 校验和 */
-  sha256?: string;
+  sha256: string;
   /** 特征维度 */
   featureDim: number;
   /** 输入尺寸 */
@@ -167,22 +167,11 @@ export interface ModelInfo {
 export const PRESET_MODELS: Record<string, ModelInfo> = {
   'mobilenetv3-small': {
     name: 'MobileNetV3-Small',
-    version: '1.0',
-    size: 2_500_000, // ~2.5MB
-    url: 'https://huggingface.co/qualcomm/MobileNet-v3-Small/resolve/main/MobileNet-v3-Small.onnx',
-    urls: [
-      // New official distribution channel (zip bundle includes ONNX + external data file).
-      'https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/mobilenet_v3_small/releases/v0.47.0/mobilenet_v3_small-onnx-float.zip',
-    ],
+    version: '0.47.0',
+    size: 9_421_334,
+    url: 'https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/mobilenet_v3_small/releases/v0.47.0/mobilenet_v3_small-onnx-float.zip',
+    sha256: '3e9d154fc4a716dfa901b43a194acad042eec3477cd753a16d1dc15c37d9dd9a',
     featureDim: 576,
-    inputSize: [224, 224],
-  },
-  'mobilenetv3-large': {
-    name: 'MobileNetV3-Large',
-    version: '1.0',
-    size: 5_500_000, // ~5.5MB
-    url: 'https://huggingface.co/qualcomm/MobileNet-v3-Large/resolve/main/MobileNet-v3-Large.onnx',
-    featureDim: 960,
     inputSize: [224, 224],
   },
 };

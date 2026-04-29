@@ -12,11 +12,11 @@ import { createHttpSessionBridge } from './http-session-bridge';
 import { createHttpServerComposition } from './http-server-composition';
 
 const FETCH_FORBIDDEN_PORTS = new Set([
-  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101,
-  102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427,
-  465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990,
-  993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668,
-  6669, 6697, 10080,
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,
+  103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465,
+  512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993,
+  995, 1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669,
+  6697, 10080,
 ]);
 
 function isFetchSafePort(port: number): boolean {
@@ -102,6 +102,39 @@ describe('http-server-composition', () => {
 
     const response = await fetch(`${baseUrl}/api/v1/orchestration/capabilities`);
     expect(response.status).toBe(401);
+  });
+
+  it('rejects enableAuth=true when token is blank', () => {
+    const logger = createLogger();
+    const runtimeState = createHttpRuntimeState();
+    const sessionBridge = createHttpSessionBridge({
+      transports: runtimeState.transports,
+      orchestrationSessions: runtimeState.orchestrationSessions,
+      runtimeMetrics: runtimeState.runtimeMetrics,
+      sessionTimeoutMs: HTTP_SERVER_DEFAULTS.SESSION_TIMEOUT,
+      logger,
+    });
+
+    expect(() =>
+      createHttpServerComposition({
+        serverName: 'test-http',
+        serverVersion: '1.0.0',
+        restApiConfig: {
+          enableAuth: true,
+          token: '   ',
+          mcpRequireAuth: true,
+          enableMcp: true,
+        },
+        runtimeState,
+        runtimeMetrics: runtimeState.runtimeMetrics,
+        sessionBridge,
+        normalizeStructuredError: toStructuredError,
+        mapErrorStatus,
+        mapStructuredErrorStatus,
+        asyncHandler: createAsyncHandler(logger),
+        logger,
+      })
+    ).toThrow(/token is required/i);
   });
 
   it('mcpRequireAuth=false 时 /mcp 不要求 token（应不返回 401）', async () => {

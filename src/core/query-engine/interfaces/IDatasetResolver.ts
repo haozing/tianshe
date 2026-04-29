@@ -10,7 +10,11 @@
  * 注意：这里导入Dataset类型是类型级别的导入，不会产生运行时循环依赖
  */
 
-import type { Dataset } from '../../../main/duckdb/types';
+export interface DatasetLike {
+  id?: string;
+  name?: string;
+  schema?: any[];
+}
 
 /**
  * 数据集解析器接口
@@ -22,7 +26,7 @@ export interface IDatasetResolver {
    * @param datasetId - 数据集ID
    * @returns 数据集信息，不存在时返回null
    */
-  getDatasetInfo(datasetId: string): Promise<Dataset | null>;
+  getDatasetInfo(datasetId: string): Promise<DatasetLike | null>;
 
   /**
    * 获取数据集的表名

@@ -164,6 +164,27 @@ describe('IPC Handler 工具函数', () => {
         error: '操作失败',
       });
     });
+
+    it('rejects calls when the sender guard fails', async () => {
+      const channel = 'test:guarded';
+      const handler = vi.fn().mockResolvedValue('ok');
+      const senderGuard = vi.fn(() => {
+        throw new Error('Unauthorized sender');
+      });
+
+      createIpcHandler(channel, handler, { senderGuard });
+
+      const registeredHandler = (ipcMain.handle as any).mock.calls[0][1];
+      const mockEvent = { sender: { id: 2 } } as unknown as IpcMainInvokeEvent;
+      const response = await registeredHandler(mockEvent, 'arg1');
+
+      expect(senderGuard).toHaveBeenCalledWith(mockEvent, channel);
+      expect(handler).not.toHaveBeenCalled();
+      expect(response).toEqual({
+        success: false,
+        error: 'Unauthorized sender',
+      });
+    });
   });
 
   describe('createIpcVoidHandler', () => {

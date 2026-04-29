@@ -276,8 +276,8 @@ export interface ViewMetadata {
    * ?? WebContents 安全策略（按 view/source 可配置）
    *
    * 默认策略：
-   * - plugin 视图：更严格（webSecurity=true，不移除 CSP）
-   * - 其他自动化视图：保持兼容（沿用历史行为）
+   * - 所有视图默认启用 webSecurity，禁止混合内容，不移除 CSP
+   * - 少数内部兼容场景必须通过 metadata.security 显式放宽
    */
   security?: {
     webSecurity?: boolean;
@@ -542,11 +542,11 @@ export class WebContentsViewManager {
     allowRunningInsecureContent: boolean;
     disableCSP: boolean;
   } {
-    const source = metadata?.source;
-    const defaults =
-      source === 'plugin'
-        ? { webSecurity: true, allowRunningInsecureContent: false, disableCSP: false }
-        : { webSecurity: false, allowRunningInsecureContent: true, disableCSP: true };
+    const defaults = {
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      disableCSP: false,
+    };
 
     const overrides = metadata?.security || {};
     return {

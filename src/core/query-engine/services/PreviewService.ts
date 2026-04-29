@@ -14,7 +14,7 @@
  * - 分组预览
  */
 
-import type { DuckDBService } from '../../../main/duckdb/service';
+import type { IQueryDuckDBService } from '../interfaces/IQueryDuckDBService';
 import type { ILogger } from '../utils/logger';
 import type {
   CleanConfig,
@@ -50,7 +50,7 @@ import { normalizeRuntimeSQL } from '../../../utils/query-runtime';
  * PreviewService构造器参数
  */
 export interface PreviewServiceDependencies {
-  duckdbService: DuckDBService;
+  duckdbService: IQueryDuckDBService;
   logger: ILogger;
   builders: {
     clean: CleanBuilder;
@@ -72,7 +72,7 @@ export interface PreviewServiceDependencies {
  * 提供各种数据预览功能
  */
 export class PreviewService {
-  private duckdbService: DuckDBService;
+  private duckdbService: IQueryDuckDBService;
   private logger: ILogger;
   private builders: PreviewServiceDependencies['builders'];
   private createBaseContext: (datasetId: string) => Promise<SQLContext>;

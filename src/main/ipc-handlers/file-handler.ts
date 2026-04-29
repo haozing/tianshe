@@ -3,17 +3,25 @@
  * 负责处理附件文件的上传、删除、打开等操作
  */
 
-import { ipcMain, shell } from 'electron';
+import { ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import { fileStorage } from '../file-storage';
 import { handleIPCError } from '../ipc-utils';
+import { assertMainWindowIpcSender } from '../ipc-authorization';
 
 export class FileIPCHandler {
+  constructor(private readonly mainWindow?: BrowserWindow) {}
+
+  private assertSender(event: IpcMainInvokeEvent, channel: string): void {
+    if (!this.mainWindow) return;
+    assertMainWindowIpcSender(event, this.mainWindow, channel);
+  }
+
   register(): void {
     // 文件上传
     ipcMain.handle(
       'file:upload',
       async (
-        _event,
+        event,
         datasetId: string,
         fileData: {
           buffer: Buffer;
@@ -21,6 +29,7 @@ export class FileIPCHandler {
         }
       ) => {
         try {
+          this.assertSender(event, 'file:upload');
           console.log(
             `[FileIPCHandler] Uploading file: ${fileData.filename} for dataset: ${datasetId}`
           );
@@ -40,8 +49,9 @@ export class FileIPCHandler {
     );
 
     // 文件删除
-    ipcMain.handle('file:delete', async (_event, relativePath: string) => {
+    ipcMain.handle('file:delete', async (event, relativePath: string) => {
       try {
+        this.assertSender(event, 'file:delete');
         console.log(`[FileIPCHandler] Deleting file: ${relativePath}`);
 
         await fileStorage.deleteFile(relativePath);
@@ -56,8 +66,9 @@ export class FileIPCHandler {
     });
 
     // 打开文件（使用系统默认程序）
-    ipcMain.handle('file:open', async (_event, relativePath: string) => {
+    ipcMain.handle('file:open', async (event, relativePath: string) => {
       try {
+        this.assertSender(event, 'file:open');
         console.log(`[FileIPCHandler] Opening file: ${relativePath}`);
 
         const fullPath = fileStorage.getFilePath(relativePath);
@@ -79,8 +90,9 @@ export class FileIPCHandler {
     });
 
     // 获取文件URL
-    ipcMain.handle('file:getUrl', async (_event, relativePath: string) => {
+    ipcMain.handle('file:getUrl', async (event, relativePath: string) => {
       try {
+        this.assertSender(event, 'file:getUrl');
         const url = fileStorage.getFileUrl(relativePath);
 
         return {
@@ -94,8 +106,9 @@ export class FileIPCHandler {
     });
 
     // 获取图片的 Base64 数据（用于渲染进程显示）
-    ipcMain.handle('file:getImageData', async (_event, relativePath: string) => {
+    ipcMain.handle('file:getImageData', async (event, relativePath: string) => {
       try {
+        this.assertSender(event, 'file:getImageData');
         const imageData = await fileStorage.getFileAsBase64(relativePath);
 
         return {
@@ -109,8 +122,9 @@ export class FileIPCHandler {
     });
 
     // 删除数据集的所有文件
-    ipcMain.handle('file:deleteDatasetFiles', async (_event, datasetId: string) => {
+    ipcMain.handle('file:deleteDatasetFiles', async (event, datasetId: string) => {
       try {
+        this.assertSender(event, 'file:deleteDatasetFiles');
         console.log(`[FileIPCHandler] Deleting all files for dataset: ${datasetId}`);
 
         await fileStorage.deleteDatasetFiles(datasetId);

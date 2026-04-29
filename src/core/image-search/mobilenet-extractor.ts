@@ -13,6 +13,12 @@ import { dynamicImport } from '../utils/dynamic-import';
 import { getONNXService, imageToNCHW, l2Normalize } from '../onnx-runtime';
 import type { ExecutionProvider } from '../onnx-runtime';
 import type { FeatureExtractorConfig, DownloadProgress, ModelInfo } from './types';
+import {
+  assertModelInfoHasSha256,
+  MAX_MODEL_DOWNLOAD_BYTES,
+  safeExtractModelZip,
+  verifyFileSha256,
+} from './model-download-safety';
 
 const logger = createLogger('MobileNetExtractor');
 
@@ -262,6 +268,7 @@ export class MobileNetExtractor {
     destPath: string,
     onProgress?: (progress: DownloadProgress) => void
   ): Promise<void> {
+    const expectedSha256 = assertModelInfoHasSha256(modelInfo);
     const dir = path.dirname(destPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -276,12 +283,21 @@ export class MobileNetExtractor {
 
     const downloadToFile = async (url: string, outputPath: string): Promise<void> => {
       await new Promise<void>((resolve, reject) => {
-        const file = fs.createWriteStream(outputPath);
+        let file: fs.WriteStream | null = null;
         let downloaded = 0;
+        let settled = false;
+
+        const fail = (error: Error) => {
+          if (settled) return;
+          settled = true;
+          file?.destroy();
+          cleanupFile(outputPath);
+          reject(error);
+        };
 
         const request = (requestUrl: string, redirectCount: number = 0) => {
           if (redirectCount > 8) {
-            reject(new Error('Failed to download: too many redirects'));
+            fail(new Error('Failed to download: too many redirects'));
             return;
           }
 
@@ -292,7 +308,7 @@ export class MobileNetExtractor {
                 const redirectUrl = String(response.headers.location || '');
                 response.resume();
                 if (!redirectUrl) {
-                  reject(new Error(`Failed to download: HTTP ${statusCode}`));
+                  fail(new Error(`Failed to download: HTTP ${statusCode}`));
                   return;
                 }
                 const nextUrl = redirectUrl.startsWith('http')
@@ -304,15 +320,35 @@ export class MobileNetExtractor {
 
               if (statusCode !== 200) {
                 response.resume();
-                reject(new Error(`Failed to download: HTTP ${statusCode}`));
+                fail(new Error(`Failed to download: HTTP ${statusCode}`));
                 return;
               }
 
-              const total =
-                parseInt(String(response.headers['content-length'] || '0'), 10) || modelInfo.size;
+              const declaredBytes = parseInt(String(response.headers['content-length'] || '0'), 10);
+              if (Number.isFinite(declaredBytes) && declaredBytes > MAX_MODEL_DOWNLOAD_BYTES) {
+                response.resume();
+                fail(
+                  new Error(
+                    `Failed to download: model is too large (${declaredBytes} bytes > ${MAX_MODEL_DOWNLOAD_BYTES} bytes)`
+                  )
+                );
+                return;
+              }
+
+              const total = declaredBytes > 0 ? declaredBytes : modelInfo.size;
+              file = fs.createWriteStream(outputPath);
 
               response.on('data', (chunk) => {
                 downloaded += chunk.length;
+                if (downloaded > MAX_MODEL_DOWNLOAD_BYTES) {
+                  response.destroy();
+                  fail(
+                    new Error(
+                      `Failed to download: model exceeded ${MAX_MODEL_DOWNLOAD_BYTES} bytes`
+                    )
+                  );
+                  return;
+                }
                 if (onProgress) {
                   onProgress({
                     downloaded,
@@ -322,13 +358,22 @@ export class MobileNetExtractor {
                 }
               });
 
+              response.on('error', (err) =>
+                fail(err instanceof Error ? err : new Error(String(err)))
+              );
               response.pipe(file);
-              file.on('finish', () => file.close(() => resolve()));
+              file.on('error', (err) => fail(err));
+              file.on('finish', () =>
+                file?.close(() => {
+                  if (settled) return;
+                  settled = true;
+                  resolve();
+                })
+              );
             })
-            .on('error', (err) => reject(err));
+            .on('error', (err) => fail(err));
         };
 
-        file.on('error', (err) => reject(err));
         request(url);
       });
     };
@@ -342,7 +387,7 @@ export class MobileNetExtractor {
         const zipModule = await dynamicImport<any>('adm-zip');
         const AdmZipCtor = zipModule?.default || zipModule;
         const zip = new AdmZipCtor(zipPath);
-        zip.extractAllTo(unzipDir, true);
+        safeExtractModelZip(zip, unzipDir);
 
         const onnxPath = findFirstFileByExt(unzipDir, '.onnx');
         if (!onnxPath) {
@@ -366,6 +411,7 @@ export class MobileNetExtractor {
 
       try {
         await downloadToFile(url, tempPath);
+        await verifyFileSha256(tempPath, expectedSha256);
         if (isZip) {
           await extractFromZip(tempPath, destPath);
         } else {
@@ -379,6 +425,7 @@ export class MobileNetExtractor {
         return;
       } catch (error) {
         cleanupFile(tempPath);
+        cleanupFile(destPath);
         lastError = error as Error;
         logger.warn(`Model download source failed: ${url}`, error);
       }
