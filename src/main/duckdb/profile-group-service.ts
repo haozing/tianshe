@@ -8,7 +8,10 @@ import { DuckDBConnection } from '@duckdb/node-api';
 import { parseRows } from './utils';
 import { allPrepared, runPrepared } from './statement-executor';
 import { v4 as uuidv4 } from 'uuid';
+import { createLogger } from '../../core/logger';
 import type { ProfileGroup, CreateGroupParams, UpdateGroupParams } from '../../types/profile';
+
+const logger = createLogger('ProfileGroupService');
 
 /**
  * ProfileGroup 服务
@@ -29,7 +32,7 @@ export class ProfileGroupService {
     // ??????????????? sort_order
     const maxOrder = await this.getMaxSortOrder(params.parentId || null);
 
-    const result = await allPrepared(this.conn, `
+    await allPrepared(this.conn, `
       INSERT INTO profile_groups (
         id, name, parent_id, color, icon, description, sort_order, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -43,7 +46,7 @@ export class ProfileGroupService {
       maxOrder + 1,
     ]);
 
-    console.log(`[ProfileGroupService] Created group: ${params.name} (${id})`);
+    logger.info('Created group', { groupId: id, groupName: params.name });
 
     return this.get(id) as Promise<ProfileGroup>;
   }
@@ -186,7 +189,7 @@ export class ProfileGroupService {
       values
     );
 
-    console.log(`[ProfileGroupService] Updated group: ${id}`);
+    logger.info('Updated group', { groupId: id });
 
     return this.get(id) as Promise<ProfileGroup>;
   }
@@ -222,7 +225,7 @@ export class ProfileGroupService {
     // 删除分组
     await runPrepared(this.conn, `DELETE FROM profile_groups WHERE id = ?`, [id]);
 
-    console.log(`[ProfileGroupService] Deleted group: ${id}`);
+    logger.info('Deleted group', { groupId: id });
   }
 
   /**
@@ -242,7 +245,7 @@ export class ProfileGroupService {
       `, [i, groupIds[i]]);
     }
 
-    console.log(`[ProfileGroupService] Reordered ${groupIds.length} groups`);
+    logger.info('Reordered groups', { groupCount: groupIds.length });
   }
 
   // =====================================================

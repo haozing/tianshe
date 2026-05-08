@@ -10,6 +10,9 @@ import type {
   SavedSite,
   UpdateSavedSiteParams,
 } from '../../../types/profile';
+import { createLogger } from '../../logger';
+
+const logger = createLogger('SavedSiteNamespace');
 
 export interface EnsureDoudianSavedSiteOptions {
   /** 平台名称，默认“抖店” */
@@ -65,7 +68,10 @@ export class SavedSiteNamespace {
    * 创建平台
    */
   async create(params: CreateSavedSiteParams): Promise<SavedSite> {
-    console.log(`[SavedSite] Plugin ${this.pluginId} creating saved site: ${params.name}`);
+    logger.info('Plugin creating saved site', {
+      pluginId: this.pluginId,
+      savedSiteName: params.name,
+    });
     return this.savedSiteService.create(params);
   }
 
@@ -73,7 +79,10 @@ export class SavedSiteNamespace {
    * 更新平台
    */
   async update(id: string, params: UpdateSavedSiteParams): Promise<SavedSite> {
-    console.log(`[SavedSite] Plugin ${this.pluginId} updating saved site: ${id}`);
+    logger.info('Plugin updating saved site', {
+      pluginId: this.pluginId,
+      savedSiteId: id,
+    });
     return this.savedSiteService.update(id, params);
   }
 
@@ -81,7 +90,10 @@ export class SavedSiteNamespace {
    * 删除平台
    */
   async delete(id: string): Promise<void> {
-    console.log(`[SavedSite] Plugin ${this.pluginId} deleting saved site: ${id}`);
+    logger.info('Plugin deleting saved site', {
+      pluginId: this.pluginId,
+      savedSiteId: id,
+    });
     return this.savedSiteService.delete(id);
   }
 

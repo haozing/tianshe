@@ -35,6 +35,9 @@
 
 import type { IAccountService } from '../../../types/service-interfaces';
 import type { Account, CreateAccountParams, UpdateAccountParams } from '../../../types/profile';
+import { createLogger } from '../../logger';
+
+const logger = createLogger('AccountNamespace');
 
 /**
  * 账号命名空间
@@ -117,7 +120,10 @@ export class AccountNamespace {
    * });
    */
   async create(params: CreateAccountParams): Promise<Account> {
-    console.log(`[Account] Plugin ${this.pluginId} creating account: ${params.name}`);
+    logger.info('Plugin creating account', {
+      pluginId: this.pluginId,
+      accountName: params.name,
+    });
     return this.accountService.create(params);
   }
 
@@ -135,7 +141,10 @@ export class AccountNamespace {
    * });
    */
   async update(id: string, params: UpdateAccountParams): Promise<Account> {
-    console.log(`[Account] Plugin ${this.pluginId} updating account: ${id}`);
+    logger.info('Plugin updating account', {
+      pluginId: this.pluginId,
+      accountId: id,
+    });
     return this.accountService.update(id, params);
   }
 
@@ -148,7 +157,10 @@ export class AccountNamespace {
    * await helpers.account.delete('account-id');
    */
   async delete(id: string): Promise<void> {
-    console.log(`[Account] Plugin ${this.pluginId} deleting account: ${id}`);
+    logger.info('Plugin deleting account', {
+      pluginId: this.pluginId,
+      accountId: id,
+    });
     return this.accountService.delete(id);
   }
 
@@ -161,7 +173,10 @@ export class AccountNamespace {
    * await helpers.account.deleteByProfile('profile-id');
    */
   async deleteByProfile(profileId: string): Promise<void> {
-    console.log(`[Account] Plugin ${this.pluginId} deleting accounts for profile: ${profileId}`);
+    logger.info('Plugin deleting accounts for profile', {
+      pluginId: this.pluginId,
+      profileId,
+    });
     return this.accountService.deleteByProfile(profileId);
   }
 

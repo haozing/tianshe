@@ -22,6 +22,9 @@ import {
   TAG_SCHEMA_BACKFILLS,
   TAG_SCHEMA_MIGRATIONS,
 } from './schema-migrations';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('TagService');
 
 /**
  * 标签服务
@@ -93,7 +96,7 @@ export class TagService {
       syncUpdatedAt,
     ]);
 
-    console.log(`[TagService] Created tag: ${params.name} (${id})`);
+    logger.info('Created tag', { tagId: id, tagName: params.name });
 
     return this.get(id) as Promise<Tag>;
   }
@@ -177,7 +180,7 @@ export class TagService {
 
     await runPrepared(this.conn, sql, values);
 
-    console.log(`[TagService] Updated tag: ${id}`);
+    logger.info('Updated tag', { tagId: id });
 
     return this.get(id) as Promise<Tag>;
   }
@@ -188,7 +191,7 @@ export class TagService {
   async delete(id: string): Promise<void> {
     await runPrepared(this.conn, `DELETE FROM tags WHERE id = ?`, [id]);
 
-    console.log(`[TagService] Deleted tag: ${id}`);
+    logger.info('Deleted tag', { tagId: id });
   }
 
   /**

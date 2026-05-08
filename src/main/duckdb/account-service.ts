@@ -23,6 +23,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { safeStorage } from 'electron';
 import { UNBOUND_PROFILE_ID } from '../../types/profile';
+import { createLogger } from '../../core/logger';
 import type {
   Account,
   AccountSyncPermission,
@@ -35,6 +36,7 @@ import type {
 import type { ProfileService } from './profile-service';
 
 const PASSWORD_ENCRYPTION_PREFIX = 'enc:v1:';
+const logger = createLogger('AccountService');
 
 interface AccountMutationOptions {
   allowSharedMutation?: boolean;
@@ -126,7 +128,7 @@ export class AccountService {
       const encrypted = safeStorage.encryptString(normalized);
       return `${PASSWORD_ENCRYPTION_PREFIX}${encrypted.toString('base64')}`;
     } catch (error) {
-      console.warn('[AccountService] Failed to encrypt password:', error);
+      logger.warn('Failed to encrypt password', error);
       throw new Error('账号密码加密失败，请稍后重试');
     }
   }
@@ -148,7 +150,7 @@ export class AccountService {
     try {
       return safeStorage.decryptString(Buffer.from(payload, 'base64'));
     } catch (error) {
-      console.warn('[AccountService] Failed to decrypt password:', error);
+      logger.warn('Failed to decrypt password', error);
       throw new Error('账号密码解密失败，请稍后重试');
     }
   }
@@ -466,7 +468,7 @@ export class AccountService {
       syncUpdatedAt,
     ]);
 
-    console.log(`[AccountService] Created account: ${normalizedName} (${id})`);
+    logger.info('Created account', { accountId: id, accountName: normalizedName });
 
     return this.get(id) as Promise<Account>;
   }
@@ -748,7 +750,7 @@ export class AccountService {
 
     await runPrepared(this.conn, sql, values);
 
-    console.log(`[AccountService] Updated account: ${id}`);
+    logger.info('Updated account', { accountId: id });
 
     return this.get(id) as Promise<Account>;
   }
@@ -760,7 +762,7 @@ export class AccountService {
     await this.assertMutableAccount(id, options);
     await runPrepared(this.conn, `DELETE FROM accounts WHERE id = ?`, [id]);
 
-    console.log(`[AccountService] Deleted account: ${id}`);
+    logger.info('Deleted account', { accountId: id });
   }
 
   /**
@@ -769,7 +771,7 @@ export class AccountService {
   async deleteByProfile(profileId: string): Promise<void> {
     await runPrepared(this.conn, `DELETE FROM accounts WHERE profile_id = ?`, [profileId]);
 
-    console.log(`[AccountService] Deleted all accounts for profile: ${profileId}`);
+    logger.info('Deleted all accounts for profile', { profileId });
   }
 
   /**

@@ -22,6 +22,9 @@ import {
   normalizeSyncBoolean,
   normalizeSyncTimestamp,
 } from './sync-field-normalizer';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('SavedSiteService');
 
 /**
  * 常用网站服务
@@ -191,7 +194,7 @@ export class SavedSiteService {
       syncUpdatedAt,
     ]);
 
-    console.log(`[SavedSiteService] Created saved site: ${normalizedName} (${id})`);
+    logger.info('Created saved site', { siteId: id, siteName: normalizedName });
 
     return this.get(id) as Promise<SavedSite>;
   }
@@ -306,7 +309,7 @@ export class SavedSiteService {
 
     await runPrepared(this.conn, sql, values);
 
-    console.log(`[SavedSiteService] Updated saved site: ${id}`);
+    logger.info('Updated saved site', { siteId: id });
 
     return this.get(id) as Promise<SavedSite>;
   }
@@ -322,7 +325,7 @@ export class SavedSiteService {
 
     await runPrepared(this.conn, `DELETE FROM saved_sites WHERE id = ?`, [id]);
 
-    console.log(`[SavedSiteService] Deleted saved site: ${id}`);
+    logger.info('Deleted saved site', { siteId: id });
   }
 
   /**
