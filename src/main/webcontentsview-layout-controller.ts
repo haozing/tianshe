@@ -2,6 +2,7 @@ import type { Rectangle } from 'electron';
 import { CLOUD_WORKBENCH_VIEW_ID } from '../constants/cloud';
 import { DEFAULT_SPLIT_SIZE } from '../constants/layout';
 import { isDevelopmentMode } from '../constants/runtime-config';
+import { createLogger } from '../core/logger';
 import { LayoutCalculator } from './layout-calculator';
 import {
   buildPluginLayoutInfo,
@@ -11,6 +12,8 @@ import {
 } from './plugin-layout';
 import type { WindowManager } from './window-manager';
 import type { ViewBounds, ViewDisplayMode, WebContentsViewInfo } from './webcontentsview-manager';
+
+const logger = createLogger('WebContentsViewLayoutController');
 
 const OFFSCREEN_BOUNDS: ViewBounds = {
   x: 10000,
@@ -111,10 +114,11 @@ export class WebContentsViewLayoutController {
           try {
             this.deps.updateBounds(currentDock.viewId, OFFSCREEN_BOUNDS);
           } catch (error) {
-            console.warn(
-              `[applyPluginDockLayout] Failed to hide previous dock view ${currentDock.viewId}:`,
-              error
-            );
+            logger.warn('Failed to hide previous dock view while applying plugin layout', {
+              pluginId: normalizedPluginId,
+              viewId: currentDock.viewId,
+              error,
+            });
           }
         }
       }
@@ -157,10 +161,11 @@ export class WebContentsViewLayoutController {
       try {
         this.deps.attachView(desiredDock.viewId, 'main', workspace.fullBounds);
       } catch (error) {
-        console.warn(
-          `[applyPluginDockLayout] Failed to attach dock view ${desiredDock.viewId} to main window:`,
-          error
-        );
+        logger.warn('Failed to attach dock view to main window while applying plugin layout', {
+          pluginId: normalizedPluginId,
+          viewId: desiredDock.viewId,
+          error,
+        });
         return;
       }
     }
@@ -244,7 +249,7 @@ export class WebContentsViewLayoutController {
         rightDockBounds: splitResult.secondary,
       };
     } catch (error) {
-      console.warn('⚠️ Failed to calculate right dock bounds, fallback to full layout:', error);
+      logger.warn('Failed to calculate right dock bounds, falling back to full layout', { error });
       return {
         windowInfo: {
           width: windowInfo.width,
@@ -269,14 +274,14 @@ export class WebContentsViewLayoutController {
     // 这样可以自动受益于防抖和全屏事件支持
     try {
       const unregister = this.deps.windowManager.registerMainWindowResizeCallback((bounds) => {
-        console.log(`📐 [WebContentsViewManager] Received size change notification:`, bounds);
+        logger.info('Received window size change notification', { bounds });
         this.handleWindowResize(bounds);
       });
 
-      console.log('✅ Window size change listener registered via window-manager');
+      logger.info('Window size change listener registered via window-manager');
       return unregister;
     } catch (error) {
-      console.error('❌ Failed to register window size change listener:', error);
+      logger.error('Failed to register window size change listener', { error });
       return null;
     }
   }
@@ -295,7 +300,10 @@ export class WebContentsViewLayoutController {
 
     const { windowInfo, fullBounds, pluginBounds, rightDockBounds } = workspace;
 
-    console.log(`📐 Window content resized to: ${windowInfo.width}x${windowInfo.height}`);
+    logger.info('Window content resized', {
+      width: windowInfo.width,
+      height: windowInfo.height,
+    });
 
     // 遍历所有已附加的视图
     this.deps.pool.forEach((viewInfo, viewId) => {
@@ -314,15 +322,19 @@ export class WebContentsViewLayoutController {
         this.deps.updateBounds(viewId, pluginBounds);
         this.deps.scheduleViewportDebug(viewId, 'window-resize');
         if (isDevelopmentMode()) {
-          console.log(`✅ Updated pageView layout for plugin ${pluginId}:`, pluginBounds);
+          logger.info('Updated page view layout for plugin', {
+            pluginId,
+            viewId,
+            bounds: pluginBounds,
+          });
         } else {
-          console.log(`✅ Updated pageView layout for plugin ${pluginId}`);
+          logger.info('Updated page view layout for plugin', { pluginId, viewId });
         }
       } else if (viewType === 'temp') {
         // 临时视图：直接更新为全屏
         this.deps.updateBounds(viewId, fullBounds);
         this.deps.scheduleViewportDebug(viewId, 'window-resize(temp)');
-        console.log(`✅ Updated temporary view: ${viewId}`);
+        logger.info('Updated temporary view layout', { viewId });
       } else if (viewType === 'pool') {
         // 🆕 浏览器池视图：根据 displayMode 决定是否更新
         const displayMode = viewInfo.metadata?.displayMode;
@@ -334,7 +346,7 @@ export class WebContentsViewLayoutController {
               viewId,
               viewId === CLOUD_WORKBENCH_VIEW_ID ? pluginBounds : fullBounds
             );
-            console.log(`✅ Updated pool view (fullscreen): ${viewId}`);
+            logger.info('Updated pool view layout for fullscreen mode', { viewId });
             break;
 
           case 'offscreen':
@@ -347,29 +359,29 @@ export class WebContentsViewLayoutController {
 
           case 'docked-right':
             if (this.rightDockedPoolView?.viewId !== viewId) {
-              console.warn(
-                `⚠️ Pool view ${viewId} is marked as docked-right but not tracked as active dock view`
-              );
+              logger.warn('Pool view is marked docked-right but not tracked as active dock view', {
+                viewId,
+              });
               break;
             }
 
             if (!rightDockBounds) {
-              console.warn(
-                `⚠️ Right dock bounds not available for docked view ${viewId}, fallback to full bounds`
-              );
+              logger.warn('Right dock bounds not available for docked view, fallback to full bounds', {
+                viewId,
+              });
               this.deps.updateBounds(viewId, fullBounds);
               break;
             }
 
             this.deps.updateBounds(viewId, rightDockBounds);
-            console.log(`✅ Updated pool view (docked-right): ${viewId}`);
+            logger.info('Updated pool view layout for docked-right mode', { viewId });
             break;
 
           default:
             // 🆕 displayMode 未设置：打印警告，默认不处理
             // 这通常表示旧代码创建的视图或状态不一致
             if (displayMode === undefined) {
-              console.warn(`⚠️ Pool view ${viewId} has no displayMode set, skipping resize`);
+              logger.warn('Pool view has no displayMode set, skipping resize', { viewId });
             }
             break;
         }
@@ -383,11 +395,11 @@ export class WebContentsViewLayoutController {
   calculatePluginBounds(pluginId: string): ViewBounds | null {
     const workspace = this.calculateMainWorkspaceBounds();
     if (!workspace) {
-      console.warn('⚠️ Main window not found');
+      logger.warn('Main window not found while calculating plugin bounds', { pluginId });
       return null;
     }
 
-    console.log(`✅ Calculated plugin bounds for plugin ${pluginId}:`, workspace.pluginBounds);
+    logger.info('Calculated plugin bounds', { pluginId, bounds: workspace.pluginBounds });
     return workspace.pluginBounds;
   }
 
@@ -415,12 +427,12 @@ export class WebContentsViewLayoutController {
   ): boolean {
     const viewInfo = this.deps.pool.get(viewId);
     if (!viewInfo) {
-      console.warn(`[setRightDockedPoolView] View not found: ${viewId}`);
+      logger.warn('Cannot set right docked pool view because view was not found', { viewId });
       return false;
     }
 
     if (this.deps.getViewType(viewId) !== 'pool') {
-      console.warn(`[setRightDockedPoolView] Only pool views can be docked-right: ${viewId}`);
+      logger.warn('Cannot set right docked pool view for non-pool view', { viewId });
       return false;
     }
 
@@ -453,9 +465,11 @@ export class WebContentsViewLayoutController {
       this.handleWindowResize();
     }
 
-    console.log(
-      `✅ [setRightDockedPoolView] Docked right view set: ${viewId} (size=${String(size)}, plugin=${normalizedPluginId ?? 'none'})`
-    );
+    logger.info('Docked right view set', {
+      viewId,
+      size,
+      pluginId: normalizedPluginId,
+    });
     return true;
   }
 
@@ -486,7 +500,7 @@ export class WebContentsViewLayoutController {
     }
 
     this.handleWindowResize();
-    console.log(`✅ [clearRightDockedPoolView] Cleared docked right view: ${dockedViewId}`);
+    logger.info('Cleared docked right view', { viewId: dockedViewId });
     return true;
   }
 
@@ -508,7 +522,7 @@ export class WebContentsViewLayoutController {
   setViewDisplayMode(viewId: string, displayMode: ViewDisplayMode): boolean {
     const viewInfo = this.deps.pool.get(viewId);
     if (!viewInfo) {
-      console.warn(`[setViewDisplayMode] View not found: ${viewId}`);
+      logger.warn('Cannot set view display mode because view was not found', { viewId });
       return false;
     }
 
@@ -538,7 +552,7 @@ export class WebContentsViewLayoutController {
       this.handleWindowResize();
     }
 
-    console.log(`✅ [setViewDisplayMode] Set displayMode=${displayMode} for view: ${viewId}`);
+    logger.info('Set view display mode', { viewId, displayMode });
     return true;
   }
 
