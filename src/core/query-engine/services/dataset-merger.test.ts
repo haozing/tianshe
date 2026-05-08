@@ -12,6 +12,19 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { DatasetMerger, UnionConfig } from './dataset-merger';
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+vi.mock('../../logger', () => ({
+  createLogger: vi.fn(() => mockLogger),
+}));
+
 // Mock DuckDBService
 const createMockDuckDBService = () => ({
   execute: vi.fn().mockResolvedValue(undefined),
@@ -49,11 +62,6 @@ const createMockDuckDBService = () => ({
   }),
 });
 
-// Mock console
-const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
 describe('DatasetMerger', () => {
   let merger: DatasetMerger;
   let mockDuckDB: ReturnType<typeof createMockDuckDBService>;
@@ -61,9 +69,9 @@ describe('DatasetMerger', () => {
   beforeEach(() => {
     mockDuckDB = createMockDuckDBService();
     merger = new DatasetMerger(mockDuckDB as any);
-    consoleLogSpy.mockClear();
-    consoleWarnSpy.mockClear();
-    consoleErrorSpy.mockClear();
+    mockLogger.info.mockClear();
+    mockLogger.warn.mockClear();
+    mockLogger.error.mockClear();
   });
 
   // ========== 基本合并 ==========
@@ -228,7 +236,9 @@ describe('DatasetMerger', () => {
 
       await merger.mergeDatasets(config);
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Only one dataset'));
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        'Only one dataset provided; union operation is unnecessary'
+      );
     });
 
     it('缺少 datasetId 应该返回错误', async () => {
@@ -280,7 +290,9 @@ describe('DatasetMerger', () => {
 
       await merger.mergeDatasets(config);
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('unknown dataset'));
+      expect(mockLogger.warn).toHaveBeenCalledWith('Column mapping references unknown dataset', {
+        datasetId: 'unknown_dataset',
+      });
     });
   });
 

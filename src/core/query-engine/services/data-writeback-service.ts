@@ -6,6 +6,13 @@
 import type { IQueryDuckDBService } from '../interfaces/IQueryDuckDBService';
 import { SQLUtils } from '../utils/sql-utils';
 import { createValidator } from '../validators/common-validators';
+import { createLogger } from '../../logger';
+
+const logger = createLogger('DataWritebackService');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * 写回模式
@@ -161,7 +168,12 @@ export class DataWritebackService {
       if (useTransaction) {
         savepointName = `savepoint_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         await this.duckdbService.executeWithParams(`SAVEPOINT ${savepointName}`, []);
-        console.log(`[DataWritebackService] Created savepoint: ${savepointName}`);
+        logger.info('Created writeback savepoint', {
+          sourceDatasetId: config.sourceDatasetId,
+          targetTable: config.targetTable,
+          mode: config.mode,
+          savepointName,
+        });
       }
 
       // 4. 根据模式执行写回
@@ -194,7 +206,13 @@ export class DataWritebackService {
       }
 
       const executionTime = Date.now() - startTime;
-      console.log(`[DataWritebackService] Writeback completed: ${rowsAffected} rows affected`);
+      logger.info('Writeback completed', {
+        sourceDatasetId: config.sourceDatasetId,
+        targetTable: config.targetTable,
+        mode: config.mode,
+        rowsAffected,
+        durationMs: executionTime,
+      });
 
       return {
         success: true,
@@ -208,14 +226,23 @@ export class DataWritebackService {
       if (savepointName) {
         try {
           await this.duckdbService.executeWithParams(`ROLLBACK TO SAVEPOINT ${savepointName}`, []);
-          console.log(`[DataWritebackService] Rolled back to savepoint: ${savepointName}`);
+          logger.info('Rolled back to writeback savepoint', { savepointName });
         } catch (rollbackError) {
-          console.error(`[DataWritebackService] Rollback error:`, rollbackError);
+          logger.error('Failed to rollback writeback savepoint', {
+            savepointName,
+            errorMessage: getErrorMessage(rollbackError),
+          });
         }
       }
 
       const executionTime = Date.now() - startTime;
-      console.error(`[DataWritebackService] Writeback error:`, error);
+      logger.error('Writeback failed', {
+        sourceDatasetId: config.sourceDatasetId,
+        targetTable: config.targetTable,
+        mode: config.mode,
+        durationMs: executionTime,
+        errorMessage: getErrorMessage(error),
+      });
 
       return {
         success: false,
@@ -231,9 +258,12 @@ export class DataWritebackService {
   async rollback(savepointName: string): Promise<void> {
     try {
       await this.duckdbService.executeWithParams(`ROLLBACK TO SAVEPOINT ${savepointName}`, []);
-      console.log(`[DataWritebackService] Rolled back to savepoint: ${savepointName}`);
+      logger.info('Rolled back to savepoint', { savepointName });
     } catch (error) {
-      console.error(`[DataWritebackService] Rollback error:`, error);
+      logger.error('Rollback failed', {
+        savepointName,
+        errorMessage: getErrorMessage(error),
+      });
       throw error;
     }
   }
@@ -244,9 +274,12 @@ export class DataWritebackService {
   async releaseSavepoint(savepointName: string): Promise<void> {
     try {
       await this.duckdbService.executeWithParams(`RELEASE SAVEPOINT ${savepointName}`, []);
-      console.log(`[DataWritebackService] Released savepoint: ${savepointName}`);
+      logger.info('Released savepoint', { savepointName });
     } catch (error) {
-      console.error(`[DataWritebackService] Release savepoint error:`, error);
+      logger.error('Failed to release savepoint', {
+        savepointName,
+        errorMessage: getErrorMessage(error),
+      });
       throw error;
     }
   }
@@ -475,10 +508,13 @@ export class DataWritebackService {
           `DROP VIEW IF EXISTS ${SQLUtils.escapeIdentifier(sourceDatasetId)}`,
           []
         );
-        console.log(`[DataWritebackService] Cleaned up source view: ${sourceDatasetId}`);
+        logger.info('Cleaned up source view', { sourceDatasetId });
       }
     } catch (error) {
-      console.warn(`[DataWritebackService] Cleanup error (non-fatal):`, error);
+      logger.warn('Source cleanup failed during writeback', {
+        sourceDatasetId,
+        errorMessage: getErrorMessage(error),
+      });
       // 清理失败不影响主流程
     }
   }

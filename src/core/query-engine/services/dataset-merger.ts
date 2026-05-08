@@ -5,6 +5,13 @@
 
 import type { IQueryDuckDBService } from '../interfaces/IQueryDuckDBService';
 import { SQLUtils } from '../utils/sql-utils';
+import { createLogger } from '../../logger';
+
+const logger = createLogger('DatasetMerger');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * Union 配置
@@ -116,7 +123,10 @@ export class DatasetMerger {
 
       // 3. 分析列结构，找出所有唯一列
       const allColumns = this.extractAllColumns(datasets, config);
-      console.log(`[DatasetMerger] Merged columns:`, Array.from(allColumns));
+      logger.info('Merged dataset columns', {
+        sourceCount: config.datasets.length,
+        columns: Array.from(allColumns),
+      });
 
       // 4. 为每个数据集生成 SELECT 语句（字段对齐）
       const selectQueries = config.datasets.map((datasetConfig, index) => {
@@ -142,7 +152,7 @@ export class DatasetMerger {
         ${unionSQL}
       `);
 
-      console.log(`[DatasetMerger] Created temporary view: ${viewName}`);
+      logger.info('Created merged dataset temporary view', { viewName });
 
       const executionTime = Date.now() - startTime;
 
@@ -155,7 +165,10 @@ export class DatasetMerger {
       };
     } catch (error) {
       const executionTime = Date.now() - startTime;
-      console.error(`[DatasetMerger] Error:`, error);
+      logger.error('Dataset merge failed', {
+        durationMs: executionTime,
+        errorMessage: getErrorMessage(error),
+      });
 
       return {
         success: false,
@@ -171,9 +184,12 @@ export class DatasetMerger {
   async dropView(viewName: string): Promise<void> {
     try {
       await this.runExecute(`DROP VIEW IF EXISTS ${SQLUtils.escapeIdentifier(viewName)}`);
-      console.log(`[DatasetMerger] Dropped view: ${viewName}`);
+      logger.info('Dropped merged dataset view', { viewName });
     } catch (error) {
-      console.error(`[DatasetMerger] Error dropping view:`, error);
+      logger.error('Failed to drop merged dataset view', {
+        viewName,
+        errorMessage: getErrorMessage(error),
+      });
       throw error;
     }
   }
@@ -284,7 +300,7 @@ export class DatasetMerger {
 
     // 警告：只有一个数据集
     if (config.datasets.length === 1) {
-      console.warn('[DatasetMerger] Only one dataset provided, union operation is unnecessary');
+      logger.warn('Only one dataset provided; union operation is unnecessary');
     }
 
     // 验证每个数据集的 ID
@@ -299,7 +315,7 @@ export class DatasetMerger {
       Object.keys(config.columnMapping).forEach((datasetId) => {
         const datasetExists = config.datasets.some((d) => d.datasetId === datasetId);
         if (!datasetExists) {
-          console.warn(`[DatasetMerger] Column mapping for unknown dataset: ${datasetId}`);
+          logger.warn('Column mapping references unknown dataset', { datasetId });
         }
       });
     }

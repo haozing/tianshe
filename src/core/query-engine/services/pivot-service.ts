@@ -6,6 +6,13 @@
 import type { IQueryDuckDBService } from '../interfaces/IQueryDuckDBService';
 import { SQLUtils } from '../utils/sql-utils';
 import { validateColumnsExist } from '../validators/common-validators';
+import { createLogger } from '../../logger';
+
+const logger = createLogger('PivotService');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * Pivot 配置
@@ -133,7 +140,11 @@ export class PivotService {
 
       // 4. 获取透视列的所有唯一值（用于生成列名）
       const pivotValues = await this.getPivotValues(datasetId, config.pivotColumn);
-      console.log(`[PivotService] Found ${pivotValues.length} unique pivot values`);
+      logger.info('Found unique pivot values', {
+        datasetId,
+        pivotColumn: config.pivotColumn,
+        count: pivotValues.length,
+      });
 
       // 5. 构建 PIVOT SQL
       const pivotSQL = this.buildPivotSQL(datasetId, config, pivotValues);
@@ -147,7 +158,7 @@ export class PivotService {
         ${pivotSQL}
       `);
 
-      console.log(`[PivotService] Created temporary view: ${viewName}`);
+      logger.info('Created pivot temporary view', { datasetId, viewName });
 
       // 7. 获取结果列列表
       const resultColumns = this.getPivotResultColumns(config, pivotValues);
@@ -162,7 +173,11 @@ export class PivotService {
       };
     } catch (error) {
       const executionTime = Date.now() - startTime;
-      console.error(`[PivotService] Pivot error:`, error);
+      logger.error('Pivot failed', {
+        datasetId,
+        durationMs: executionTime,
+        errorMessage: getErrorMessage(error),
+      });
 
       return {
         success: false,
@@ -203,7 +218,7 @@ export class PivotService {
         ${unpivotSQL}
       `);
 
-      console.log(`[PivotService] Created temporary view: ${viewName}`);
+      logger.info('Created unpivot temporary view', { datasetId, viewName });
 
       // 6. 获取结果列列表
       const resultColumns = this.getUnpivotResultColumns(config);
@@ -218,7 +233,11 @@ export class PivotService {
       };
     } catch (error) {
       const executionTime = Date.now() - startTime;
-      console.error(`[PivotService] Unpivot error:`, error);
+      logger.error('Unpivot failed', {
+        datasetId,
+        durationMs: executionTime,
+        errorMessage: getErrorMessage(error),
+      });
 
       return {
         success: false,
@@ -234,9 +253,12 @@ export class PivotService {
   async dropView(viewName: string): Promise<void> {
     try {
       await this.runExecute(`DROP VIEW IF EXISTS ${SQLUtils.escapeIdentifier(viewName)}`);
-      console.log(`[PivotService] Dropped view: ${viewName}`);
+      logger.info('Dropped pivot view', { viewName });
     } catch (error) {
-      console.error(`[PivotService] Error dropping view:`, error);
+      logger.error('Failed to drop pivot view', {
+        viewName,
+        errorMessage: getErrorMessage(error),
+      });
       throw error;
     }
   }
