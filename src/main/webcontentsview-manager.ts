@@ -20,6 +20,7 @@ import {
 } from '../constants/layout';
 import type { PluginLayoutInfo } from './plugin-layout';
 import type { JSPluginManager } from '../core/js-plugin/manager';
+import { createLogger } from '../core/logger';
 import type { ActivityBarViewContribution } from '../types/js-plugin';
 import { WebContentsViewSecurityController } from './webcontentsview-security-controller';
 import { WebContentsViewStealthController } from './webcontentsview-stealth-controller';
@@ -41,6 +42,9 @@ import {
   type ViewSource,
   type WebContentsViewInfo,
 } from './webcontentsview-types';
+
+const logger = createLogger('WebContentsViewManager');
+
 export type {
   DetachScopedViewsOptions,
   ViewBounds,
@@ -194,14 +198,14 @@ export class WebContentsViewManager {
     const existing = this.registry.get(registration.id);
     if (existing) {
       if (existing.metadata?.temporary || registration.metadata?.temporary) {
-        console.log(`Updating temporary view registration: ${registration.id}`);
+        logger.info('Updating temporary view registration', { viewId: registration.id });
         this.registry.set(registration.id, registration);
       } else {
-        console.warn(`View already registered: ${registration.id}, skipping update`);
+        logger.warn('View already registered, skipping update', { viewId: registration.id });
       }
     } else {
       this.registry.set(registration.id, registration);
-      console.log(`View registered: ${registration.id} (registry: ${this.registry.size})`);
+      logger.info('View registered', { viewId: registration.id, registrySize: this.registry.size });
     }
   }
 
@@ -210,9 +214,9 @@ export class WebContentsViewManager {
     const cachedView = this.pool.get(viewId);
     if (cachedView) {
       cachedView.lastAccessedAt = Date.now();
-      console.log(`[Performance] View reused from pool: ${viewId} (instant, no creation needed)`);
+      logger.info('View reused from pool', { viewId });
       this.ensurePluginPageViewLoaded(viewId, cachedView).catch((error) => {
-        console.error(`Failed to ensure plugin page view loaded: ${viewId}`, error);
+        logger.error('Failed to ensure plugin page view loaded', { viewId, error });
       });
       return cachedView;
     }
@@ -224,22 +228,22 @@ export class WebContentsViewManager {
 
     const pendingActivation = this.viewActivationTasks.get(viewId);
     if (pendingActivation) {
-      console.log(`[Performance] View activation already in progress: ${viewId}`);
+      logger.info('View activation already in progress', { viewId });
       const viewInfo = await pendingActivation;
       viewInfo.lastAccessedAt = Date.now();
       return viewInfo;
     }
 
-    console.log(`[Performance] Activating new view: ${viewId}...`);
+    logger.info('Activating new view', { viewId });
     const activationTask = this.lifecycleController.createViewFromRegistration(registration);
     this.viewActivationTasks.set(viewId, activationTask);
 
     try {
       const result = await activationTask;
       const duration = Date.now() - perfStart;
-      console.log(`[Performance] View activation completed: ${viewId} in ${duration}ms`);
+      logger.info('View activation completed', { viewId, durationMs: duration });
       this.ensurePluginPageViewLoaded(viewId, result).catch((error) => {
-        console.error(`Failed to ensure plugin page view loaded: ${viewId}`, error);
+        logger.error('Failed to ensure plugin page view loaded', { viewId, error });
       });
       return result;
     } finally {
@@ -352,7 +356,7 @@ export class WebContentsViewManager {
     // 再从注册表中移除
     this.registry.delete(viewId);
 
-    console.log(`✅ View deleted: ${viewId} (registry: ${this.registry.size})`);
+    logger.info('View deleted', { viewId, registrySize: this.registry.size });
   }
 
   /**
@@ -507,7 +511,7 @@ export class WebContentsViewManager {
     this.activePluginId = null;
     this.layoutController.reset();
     this.pluginPageController.reset();
-    console.log('✅ All WebContentsViews cleaned up');
+    logger.info('All WebContentsViews cleaned up');
   }
   getStats(): {
     registered: number;
@@ -550,10 +554,10 @@ export class WebContentsViewManager {
           metadata: registration.metadata,
         };
         mainWindow.webContents.send('plugin:view-created', viewData);
-        console.log(`📢 Notified frontend: plugin:view-created for ${viewId}`);
+        logger.info('Notified frontend that plugin view was created', { viewId });
       }
     } catch (error) {
-      console.error(`❌ Failed to notify view created:`, error);
+      logger.error('Failed to notify view created', { viewId, error });
     }
   }
 
@@ -566,10 +570,10 @@ export class WebContentsViewManager {
       const mainWindow = this.windowManager.getMainWindowV3();
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('plugin:view-closed', { viewId });
-        console.log(`📢 Notified frontend: plugin:view-closed for ${viewId}`);
+        logger.info('Notified frontend that plugin view was closed', { viewId });
       }
     } catch (error) {
-      console.error(`❌ Failed to notify view closed:`, error);
+      logger.error('Failed to notify view closed', { viewId, error });
     }
   }
   // ========== Plugin Activity Bar view management ==========
@@ -669,7 +673,7 @@ export class WebContentsViewManager {
   setViewSource(viewId: string, source: ViewSource): boolean {
     const viewInfo = this.pool.get(viewId);
     if (!viewInfo) {
-      console.warn(`[setViewSource] View not found: ${viewId}`);
+      logger.warn('View not found while setting source', { viewId, source });
       return false;
     }
 
@@ -679,7 +683,7 @@ export class WebContentsViewManager {
     }
     viewInfo.metadata.source = source;
 
-    console.log(`✅ [setViewSource] Set source=${source} for view: ${viewId}`);
+    logger.info('View source set', { viewId, source });
     return true;
   }
 

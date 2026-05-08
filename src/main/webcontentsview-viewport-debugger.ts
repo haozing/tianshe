@@ -1,7 +1,10 @@
 import type { Rectangle } from 'electron';
 import { isDevelopmentMode } from '../constants/runtime-config';
+import { createLogger } from '../core/logger';
 import type { WindowManager } from './window-manager';
 import type { WebContentsViewInfo } from './webcontentsview-manager';
+
+const logger = createLogger('WebContentsViewViewportDebugger');
 
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -112,7 +115,9 @@ export class WebContentsViewViewportDebugger {
     if (this.lastViewportDebugKey.get(viewId) === key) return;
     this.lastViewportDebugKey.set(viewId, key);
 
-    console.log(`🧪 [viewport] ${viewId} (${reason})`, {
+    logger.debug('Viewport diagnostics', {
+      viewId,
+      reason,
       pluginId: viewInfo.metadata?.pluginId,
       viewType: this.deps.getViewType(viewId),
       activityBarWidth: this.deps.getActivityBarWidth(),

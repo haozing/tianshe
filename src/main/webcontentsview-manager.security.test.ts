@@ -48,6 +48,15 @@ vi.mock('../core/browser-core/web-request-hub', () => ({
   })),
 }));
 
+vi.mock('../core/logger', () => ({
+  createLogger: () => ({
+    debug: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  }),
+}));
+
 vi.mock('./internal-browser-devtools', () => ({
   maybeOpenInternalBrowserDevTools: vi.fn(() => false),
 }));

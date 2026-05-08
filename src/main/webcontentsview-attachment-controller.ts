@@ -1,4 +1,5 @@
 import { isDevelopmentMode } from '../constants/runtime-config';
+import { createLogger } from '../core/logger';
 import type { WindowManager } from './window-manager';
 import type { WebContentsViewLayoutController } from './webcontentsview-layout-controller';
 import type { WebContentsViewViewportDebugger } from './webcontentsview-viewport-debugger';
@@ -8,6 +9,8 @@ import {
   type ViewBounds,
   type WebContentsViewInfo,
 } from './webcontentsview-types';
+
+const logger = createLogger('WebContentsViewAttachmentController');
 
 function boundsAlmostEqual(
   actual: { x: number; y: number; width: number; height: number },
@@ -51,7 +54,7 @@ export class WebContentsViewAttachmentController {
       throw new Error(`Window not found: ${windowId}`);
     }
 
-    console.log(`📐 Attaching view with bounds:`, bounds);
+    logger.info('Attaching view with bounds', { viewId, windowId, bounds });
     // 添加到窗口
     window.contentView.addChildView(viewInfo.view);
 
@@ -64,7 +67,7 @@ export class WebContentsViewAttachmentController {
     viewInfo.view.setBounds(bounds);
     viewInfo.view.setVisible(true);
 
-    console.log(`✅ View attached: ${viewId} -> ${windowId}`);
+    logger.info('View attached', { viewId, windowId });
 
     this.deps.viewportDebugger.schedule(viewId, 'attach');
   }
@@ -114,13 +117,13 @@ export class WebContentsViewAttachmentController {
   attachViewOffscreen(viewId: string, windowId: string = 'main'): boolean {
     const viewInfo = this.deps.pool.get(viewId);
     if (!viewInfo) {
-      console.warn(`[attachViewOffscreen] View not found: ${viewId}`);
+      logger.warn('View not found while attaching offscreen', { viewId, windowId });
       return false;
     }
 
     const window = this.deps.windowManager.getWindowById(windowId);
     if (!window || window.isDestroyed()) {
-      console.warn(`[attachViewOffscreen] Window not found or destroyed: ${windowId}`);
+      logger.warn('Window not found or destroyed while attaching offscreen', { viewId, windowId });
       return false;
     }
 
@@ -139,7 +142,7 @@ export class WebContentsViewAttachmentController {
     viewInfo.bounds = offscreenBounds;
     viewInfo.lastAccessedAt = Date.now();
 
-    console.log(`✅ [attachViewOffscreen] View attached offscreen: ${viewId} -> ${windowId}`);
+    logger.info('View attached offscreen', { viewId, windowId });
     return true;
   }
 
@@ -162,7 +165,7 @@ export class WebContentsViewAttachmentController {
         count++;
       }
     }
-    console.log(`✅ Detached ${count} view(s)${windowId ? ` from ${windowId}` : ''}`);
+    logger.info('Detached views', { count, windowId, preserveDockedRight });
   }
 
   /**
@@ -205,7 +208,7 @@ export class WebContentsViewAttachmentController {
       count++;
     }
 
-    console.log(`✅ Detached ${count} ${scope} view(s)${windowId ? ` from ${windowId}` : ''}`);
+    logger.info('Detached scoped views', { count, scope, windowId, preserveDockedRight });
   }
 
   private isPluginOwnedView(viewId: string, viewInfo: WebContentsViewInfo): boolean {
@@ -259,7 +262,8 @@ export class WebContentsViewAttachmentController {
       try {
         const actual = viewInfo.view.getBounds();
         if (!boundsAlmostEqual(actual, bounds)) {
-          console.warn(`⚠️ [updateBounds] setBounds mismatch for ${viewId}:`, {
+          logger.warn('View bounds mismatch after setBounds', {
+            viewId,
             requested: bounds,
             actual,
           });
@@ -271,7 +275,7 @@ export class WebContentsViewAttachmentController {
           });
         }
       } catch (error) {
-        console.warn(`⚠️ [updateBounds] Failed to verify bounds for ${viewId}:`, error);
+        logger.warn('Failed to verify view bounds', { viewId, error });
       }
     }
 

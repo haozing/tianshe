@@ -459,9 +459,10 @@ rg -n "\bconsole\.(log|warn|error|info|debug)\s*\(" src/main src/core src/render
 - 已完成 duckdb utils 小批次：`src/main/duckdb/utils.ts` 的 25 处生产 direct `console.*` 已迁移到 `createLogger('DuckDBUtils')`，覆盖临时文件清理、DuckDB 值转换、重试、完整性检查/修复和事务 rollback 日志，并从 baseline 移除；JSDoc 示例中的 `console.error` 保留为文档示例，不计入架构护栏。
 - 已完成 window manager 小批次：`src/main/window-manager.ts` 的 18 处直接 `console.*` 已迁移到 `createLogger('WindowManager')`，覆盖主窗口、popup、hidden automation host、resize callback 和 cleanup 日志，并从 baseline 移除；本批不改变窗口生命周期和 resize debounce 行为。
 - 已完成 small main/profile/webhook 小批次：`src/main/file-storage.ts` 的 9 处、`src/main/webhook/sender.ts` 的 9 处、`src/main/sync/sync-outbox-emitter.ts` 的 2 处、`src/main/profile/browser-launcher.ts` 的 2 处、`src/main/profile/chrome-runtime-shared.ts` 的 1 处直接 `console.*` 已迁移到模块 logger，并从 baseline 移除；profile 页面脚本内用于 canary/探针的 console 输出本批不动。
-- 截至本批，`src/main/ipc-handlers` 生产代码已无直接 `console.*`，`SchedulerService`、main service composition、query template service、duckdb utils、window manager 以及上述小模块也已清零；后续重点转向 duckdb dataset storage、webcontentsview 系列等非 IPC 热点。
+- 已完成 webcontentsview manager/attachment/viewport 小批次：`src/main/webcontentsview-manager.ts` 的 17 处、`src/main/webcontentsview-attachment-controller.ts` 的 9 处、`src/main/webcontentsview-viewport-debugger.ts` 的 1 处直接 `console.*` 已迁移到模块 logger，并从 baseline 移除；本批不改变 view 注册/激活、attachment/offscreen、viewport 诊断触发语义。
+- 截至本批，`src/main/ipc-handlers` 生产代码已无直接 `console.*`，`SchedulerService`、main service composition、query template service、duckdb utils、window manager、小 main/profile/webhook 模块，以及 webcontentsview manager/attachment/viewport 也已清零；后续重点转向 duckdb dataset storage、webcontentsview lifecycle/layout/state/stealth/plugin-page 等非 IPC 热点。
 - 本批只做日志出口替换和结构化字段补齐，不改变 CRUD、密码加解密、profile/group/tag/saved site 业务错误语义。
-- 阶段 5 仍保留为未完成：仓内还有 duckdb dataset storage、webcontentsview 系列等高频热点，后续继续按模块递减，不做全仓一键替换。
+- 阶段 5 仍保留为未完成：仓内还有 duckdb dataset storage、webcontentsview lifecycle/layout/state/stealth/plugin-page 等高频热点，后续继续按模块递减，不做全仓一键替换。
 
 ## 9. 阶段 6：共享错误 envelope 与 IPC 稳定错误码
 
@@ -615,7 +616,7 @@ npm run test:architecture
 - [x] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步确认 `docs/plugin-helpers-reference.md`。
 - [x] 阶段 3：ProfileService 深拆到 900 行以下。
 - [x] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
-- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag/utils、IPC wrapper、profile/browser IPC、dataset route、JS plugin route/handler、account IPC、query template IPC/service、tag/extension packages IPC、dataset folder IPC、registration-only IPC、file IPC、system IPC、scheduler service、main service composition、window manager、small main/profile/webhook 小批次）
+- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag/utils、IPC wrapper、profile/browser IPC、dataset route、JS plugin route/handler、account IPC、query template IPC/service、tag/extension packages IPC、dataset folder IPC、registration-only IPC、file IPC、system IPC、scheduler service、main service composition、window manager、small main/profile/webhook、webcontentsview manager/attachment/viewport 小批次）
 - [ ] 阶段 6：建立共享 error envelope，统一 IPC 稳定错误码。（已完成 IPC 工具层基础设施、旧错误消息兼容推断、dataset route 基础 errorDetails、JS plugin route/handler 部分 P1 code，route 业务 code 待继续收敛）
 
 ## 13. 每轮完成后必须更新
