@@ -55,6 +55,7 @@ import {
 
 // 浏览器池管理
 import { stopBrowserPool, getBrowserPoolManager } from '../core/browser-pool';
+import { createLogger } from '../core/logger';
 import { fingerprintManager } from '../core/stealth';
 
 // HTTP API 配置和类型
@@ -70,6 +71,10 @@ import { redactSensitiveUrl } from '../utils/redaction';
 
 const tiansheEdition = resolveTiansheEdition();
 const appRuntime = new AppRuntime();
+const logger = createLogger('MainProcess');
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 const assertPrimaryRendererSender: IpcSenderGuard = createMainWindowIpcSenderGuard(
   () => appRuntime.mainWindow
@@ -120,7 +125,7 @@ function initializePluginIPC(): void {
   );
   jsPluginIPCHandler.register();
 
-  console.log('[OK] JS Plugin IPC handlers registered');
+  logger.info('JS Plugin IPC handlers registered');
 }
 
 /**
@@ -130,7 +135,7 @@ function initializeSchedulerIPC(): void {
   const schedulerIPCHandler = new SchedulerIPCHandler(appRuntime.requireSchedulerService());
   schedulerIPCHandler.register();
 
-  console.log('[OK] Scheduler IPC handlers registered');
+  logger.info('Scheduler IPC handlers registered');
 }
 
 /**
@@ -139,7 +144,7 @@ function initializeSchedulerIPC(): void {
 function initializeObservationIPC(): void {
   registerObservationHandlers(appRuntime.requireDuckDBService());
 
-  console.log('[OK] Observation IPC handlers registered');
+  logger.info('Observation IPC handlers registered');
 }
 
 /**
@@ -155,7 +160,7 @@ function initializeHttpApiIPC(): void {
   );
   httpApiIPCHandler.register();
 
-  console.log('[OK] HTTP API IPC handlers registered');
+  logger.info('HTTP API IPC handlers registered');
 }
 
 /**
@@ -165,7 +170,7 @@ function initializeOcrPoolIPC(): void {
   const ocrPoolIPCHandler = new OCRPoolIPCHandler(appRuntime.requireStore());
   ocrPoolIPCHandler.register();
 
-  console.log('[OK] OCR Pool IPC handlers registered');
+  logger.info('OCR Pool IPC handlers registered');
 }
 
 /**
@@ -185,7 +190,7 @@ function initializeIPC(): void {
     appRuntime.requireViewManager()
   );
 
-  console.log('[OK] IPC handlers initialized');
+  logger.info('IPC handlers initialized');
 }
 
 /**
@@ -193,7 +198,7 @@ function initializeIPC(): void {
  */
 async function initializeUpdater(): Promise<void> {
   if (!appRuntime.mainWindow) {
-    console.warn('⚠️  Main window not created, skipping updater initialization');
+    logger.warn('Main window not created, skipping updater initialization');
     return;
   }
 
@@ -206,19 +211,24 @@ async function initializeUpdater(): Promise<void> {
 
     // 延迟10秒后首次检查更新（避免影响启动速度）
     setTimeout(() => {
-      console.log('[CHECK] Running first update check...');
+      logger.info('Running first update check');
       updateManager.checkForUpdates().catch((error) => {
-        console.error('[ERROR] First update check failed:', error.message);
+        logger.error('First update check failed', {
+          errorMessage: getErrorMessage(error),
+          error,
+        });
       });
 
       // 启动定时检查（每4小时）
       updateManager.startPeriodicCheck(4 * 60 * 60 * 1000);
     }, 10000);
 
-    console.log('[OK] UpdateManager initialized');
+    logger.info('UpdateManager initialized');
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('[ERROR] Failed to initialize UpdateManager:', message, error);
+    logger.error('Failed to initialize UpdateManager', {
+      errorMessage: getErrorMessage(error),
+      error,
+    });
   }
 }
 
@@ -239,34 +249,42 @@ function startResourceMonitoring(): () => void {
     const heapTotalMB = Math.round(memUsage.heapTotal / 1024 / 1024);
     const rssMB = Math.round(memUsage.rss / 1024 / 1024);
 
-    console.log(`[MONITOR] Resource Monitor:
-  Views: Created=${stats.created}, Destroyed=${stats.destroyed}, Active=${stats.active}, Failed=${stats.failed}
-  Memory: Heap=${heapUsedMB}MB/${heapTotalMB}MB, RSS=${rssMB}MB`);
+    logger.info('Resource monitor snapshot', {
+      viewsCreated: stats.created,
+      viewsDestroyed: stats.destroyed,
+      viewsActive: stats.active,
+      viewsFailed: stats.failed,
+      heapUsedMB,
+      heapTotalMB,
+      rssMB,
+    });
 
     // 检测潜在的内存泄漏
     if (stats.leakRisk > 5) {
-      console.warn(
-        `[WARN] Memory leak risk detected: ${stats.leakRisk} views not properly cleaned up`
-      );
-      console.warn(`   Consider investigating view lifecycle or calling force GC`);
+      logger.warn('Memory leak risk detected in view resources', {
+        leakRisk: stats.leakRisk,
+        suggestion: 'Investigate view lifecycle or call force GC',
+      });
     }
 
     // 如果堆内存使用超过 80%，建议 GC
     const heapUsagePercent = (memUsage.heapUsed / memUsage.heapTotal) * 100;
     if (heapUsagePercent > 80) {
-      console.warn(`[WARN] High heap usage: ${Math.round(heapUsagePercent)}%`);
+      logger.warn('High heap usage detected', {
+        heapUsagePercent: Math.round(heapUsagePercent),
+      });
       if (global.gc) {
-        console.log(`   Triggering garbage collection...`);
+        logger.info('Triggering garbage collection after high heap usage');
         global.gc();
       }
     }
   }, 60000); // 每60秒检查一次
 
-  console.log('[OK] Resource monitoring started (interval: 60s)');
+  logger.info('Resource monitoring started', { intervalMs: 60000 });
 
   return () => {
     clearInterval(intervalId);
-    console.log('[OK] Resource monitoring stopped');
+    logger.info('Resource monitoring stopped');
   };
 }
 
@@ -276,7 +294,7 @@ function startResourceMonitoring(): () => void {
 async function startHttpServer(): Promise<void> {
   // 如果启动正在进行中，直接等待而不是重新启动
   if (appRuntime.httpServerStartPromise) {
-    console.log('[HTTP] Server start already in progress, waiting...');
+    logger.info('HTTP server start already in progress, waiting');
     return appRuntime.httpServerStartPromise;
   }
 
@@ -298,7 +316,7 @@ async function startHttpServer(): Promise<void> {
 
   const startTask = (async () => {
     try {
-      console.log('\n[HTTP] Starting HTTP Server (MCP + REST API)...');
+      logger.info('Starting HTTP server (MCP + REST API)');
 
       // 读取 HTTP API 配置
       const storedHttpApiConfig = normalizeHttpApiConfig(
@@ -310,7 +328,7 @@ async function startHttpServer(): Promise<void> {
       const httpApiConfig = resolveEffectiveHttpApiConfig(storedHttpApiConfig);
 
       if (!httpApiConfig.enabled) {
-        console.log('   [SKIP] HTTP Server start skipped because effective config is disabled');
+        logger.info('HTTP server start skipped because effective config is disabled');
         appRuntime.httpMcpServer = null;
         return;
       }
@@ -319,13 +337,13 @@ async function startHttpServer(): Promise<void> {
       if (httpApiConfig.callbackUrl) {
         try {
           webhookSender.setCallbackUrl(httpApiConfig.callbackUrl);
-          console.log(
-            `   [CONFIG] Webhook callback URL: ${redactSensitiveUrl(httpApiConfig.callbackUrl)}`
-          );
+          logger.info('Webhook callback URL configured', {
+            callbackUrl: redactSensitiveUrl(httpApiConfig.callbackUrl),
+          });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = getErrorMessage(error);
           webhookSender.setCallbackUrl(undefined);
-          console.warn(`   [CONFIG] Ignoring invalid webhook callback URL: ${message}`);
+          logger.warn('Ignoring invalid webhook callback URL', { errorMessage: message });
         }
       }
 
@@ -369,47 +387,41 @@ async function startHttpServer(): Promise<void> {
       );
 
       if (startTimedOut) {
-        console.warn(
-          `   [WARN] HTTP Server started after timeout; stopping late server on port ${mcpPort}`
-        );
+        logger.warn('HTTP server started after timeout; stopping late server', {
+          port: mcpPort,
+        });
         await startedServer.stop().catch((stopError) => {
-          console.error('   [ERROR] Failed to stop late HTTP Server:', stopError);
+          logger.error('Failed to stop late HTTP server', { error: stopError });
         });
         return;
       }
 
       appRuntime.httpMcpServer = startedServer;
 
-      console.log(`   [OK] HTTP Server started on port ${mcpPort}`);
+      logger.info('HTTP server started', { port: mcpPort, host: mcpHost });
       // MCP 端点（仅在启用时显示）
       if (httpApiConfig.enableMcp) {
         const mcpBaseUrl = `http://${mcpHost}:${mcpPort}/mcp`;
-        console.log(`   [MCP] Claude Code Configuration:`);
-        console.log(`      Transport: http`);
-        console.log(`      URL: ${mcpBaseUrl}`);
-        console.log(
-          `      Note: use session_prepare to bind profile, engine, visibility, and scopes`
-        );
+        logger.info('MCP endpoint enabled', {
+          transport: 'http',
+          url: mcpBaseUrl,
+          note: 'use session_prepare to bind profile, engine, visibility, and scopes',
+        });
       } else {
-        console.log(`   [MCP] MCP endpoint disabled`);
+        logger.info('MCP endpoint disabled');
       }
-      console.log(`   [REST] Orchestration API:`);
-      console.log(
-        `      Capabilities: http://${mcpHost}:${mcpPort}${HTTP_SERVER_DEFAULTS.ORCHESTRATION_API_V1_PREFIX}/capabilities`
-      );
-      console.log(
-        `      Session Create: http://${mcpHost}:${mcpPort}${HTTP_SERVER_DEFAULTS.ORCHESTRATION_API_V1_PREFIX}/sessions`
-      );
-      console.log(
-        `      Invoke: http://${mcpHost}:${mcpPort}${HTTP_SERVER_DEFAULTS.ORCHESTRATION_API_V1_PREFIX}/invoke`
-      );
+      logger.info('REST orchestration API endpoints ready', {
+        capabilitiesUrl: `http://${mcpHost}:${mcpPort}${HTTP_SERVER_DEFAULTS.ORCHESTRATION_API_V1_PREFIX}/capabilities`,
+        sessionCreateUrl: `http://${mcpHost}:${mcpPort}${HTTP_SERVER_DEFAULTS.ORCHESTRATION_API_V1_PREFIX}/sessions`,
+        invokeUrl: `http://${mcpHost}:${mcpPort}${HTTP_SERVER_DEFAULTS.ORCHESTRATION_API_V1_PREFIX}/invoke`,
+        healthUrl: `http://${mcpHost}:${mcpPort}/health`,
+      });
       if (httpApiConfig.enableAuth) {
-        console.log(`   [AUTH] Token authentication enabled`);
+        logger.info('HTTP API token authentication enabled');
       }
-      console.log(`   [CHECK] Health Check: http://${mcpHost}:${mcpPort}/health`);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error('   [ERROR] HTTP Server failed to start:', errorMessage);
+      const errorMessage = getErrorMessage(error);
+      logger.error('HTTP server failed to start', { errorMessage, error });
       if (
         error &&
         typeof error === 'object' &&
@@ -419,27 +431,37 @@ async function startHttpServer(): Promise<void> {
           const runtime = await probeLocalHttpRuntime({
             port: HTTP_SERVER_DEFAULTS.PORT,
           });
-          console.error(`   [DIAG] ${runtime.diagnosis.summary}`);
+          logger.error('HTTP runtime diagnosis', {
+            summary: runtime.diagnosis.summary,
+            port: HTTP_SERVER_DEFAULTS.PORT,
+          });
           if (runtime.diagnosis.detail) {
-            console.error(`   [DETAIL] ${runtime.diagnosis.detail}`);
+            logger.error('HTTP runtime diagnosis detail', {
+              detail: runtime.diagnosis.detail,
+              port: HTTP_SERVER_DEFAULTS.PORT,
+            });
           }
           if (runtime.diagnosis.suggestedAction) {
-            console.error(`   [HINT] ${runtime.diagnosis.suggestedAction}`);
+            logger.error('HTTP runtime diagnosis suggested action', {
+              suggestedAction: runtime.diagnosis.suggestedAction,
+              port: HTTP_SERVER_DEFAULTS.PORT,
+            });
           }
         } catch (diagnosticError) {
-          const diagnosticMessage =
-            diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError);
-          console.error(
-            `   [DIAG] Failed to inspect occupied port ${HTTP_SERVER_DEFAULTS.PORT}: ${diagnosticMessage}`
-          );
+          logger.error('Failed to inspect occupied HTTP port', {
+            port: HTTP_SERVER_DEFAULTS.PORT,
+            errorMessage: getErrorMessage(diagnosticError),
+            error: diagnosticError,
+          });
         }
       }
       if (error && typeof error === 'object' && (error as { code?: string }).code === 'EACCES') {
-        console.error(
-          `   [HINT] Port permission denied on ${HTTP_SERVER_DEFAULTS.PORT}. Please check local port policy/occupation.`
-        );
+        logger.error('HTTP server port permission denied', {
+          port: HTTP_SERVER_DEFAULTS.PORT,
+          suggestion: 'Check local port policy or occupation',
+        });
       }
-      console.error('   Please check if the port is already in use or view the full error log');
+      logger.error('HTTP server startup failed; check port usage or full error log');
       throw error;
     }
   })();
@@ -473,18 +495,20 @@ async function stopHttpServer(): Promise<void> {
   const httpMcpServer = appRuntime.httpMcpServer;
 
   if (!httpMcpServer) {
-    console.log('[HTTP] Server is not running');
+    logger.info('HTTP server is not running');
     return;
   }
 
   try {
-    console.log('[HTTP] Stopping HTTP Server...');
+    logger.info('Stopping HTTP server');
     await httpMcpServer.stop();
     appRuntime.httpMcpServer = null;
-    console.log('   [OK] HTTP Server stopped');
+    logger.info('HTTP server stopped');
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('   [ERROR] Failed to stop HTTP Server:', errorMessage);
+    logger.error('Failed to stop HTTP server', {
+      errorMessage: getErrorMessage(error),
+      error,
+    });
     throw error;
   }
 }
@@ -503,8 +527,9 @@ async function initializeBrowserControlApi(): Promise<void> {
   );
 
   if (!httpApiConfig.enabled) {
-    console.log('\n[HTTP] HTTP Server disabled in settings');
-    console.log('   To enable, go to Settings > HTTP API and toggle the switch');
+    logger.info('HTTP server disabled in settings', {
+      suggestion: 'Enable it in Settings > HTTP API',
+    });
     return;
   }
 
@@ -513,7 +538,7 @@ async function initializeBrowserControlApi(): Promise<void> {
 
 async function handleInitializationFailure(error: unknown): Promise<void> {
   const err = error as Error;
-  console.error('[ERROR] Failed to initialize application:', error);
+  logger.error('Failed to initialize application', { error });
   logStartup(`INITIALIZATION ERROR: ${err.message}`);
   logStartup(`Stack: ${err.stack}`);
   dialog.showErrorBox(
