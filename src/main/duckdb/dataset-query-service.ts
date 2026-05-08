@@ -17,9 +17,12 @@ import { DatasetStorageService, sanitizeDatasetId } from './dataset-storage-serv
 import { parseRows, quoteIdentifier, quoteQualifiedName, runInDuckDbTransaction } from './utils';
 import { runPrepared } from './statement-executor';
 import type { QueryResult } from './types';
+import { createLogger } from '../../core/logger';
 import type { QueryEngine } from '../../core/query-engine';
 import { assertReadOnlySQL, isSelectLikeSQL } from '../../utils/sql-readonly';
 import AhoCorasick from 'aho-corasick';
+
+const logger = createLogger('DatasetQueryService');
 
 // ✅ 查询超时配置（毫秒）
 const QUERY_TIMEOUT_MS = 60000; // 60秒默认超时
@@ -111,9 +114,11 @@ export class DatasetQueryService {
 
     // 🔄 使用队列机制执行查询，避免并发 ATTACH 导致文件锁定
     return this.storageService.executeInQueue(safeDatasetId, async () => {
-      console.log(
-        `🔍 Querying dataset: ${safeDatasetId} (offset: ${safeOffset}, limit: ${safeLimit})`
-      );
+      logger.info('Querying dataset', {
+        datasetId: safeDatasetId,
+        offset: safeOffset,
+        limit: safeLimit,
+      });
 
       const dataset = await this.metadataService.getDatasetInfo(safeDatasetId);
       if (!dataset) throw new Error(`Dataset not found: ${safeDatasetId}`);
@@ -149,7 +154,10 @@ export class DatasetQueryService {
           finalSql = this.schemaService.wrapWithComputedColumns(finalSql, computedColumns);
         }
 
-        console.log(`[Query] Executing SQL: ${finalSql.substring(0, 200)}...`);
+        logger.info('Executing dataset query SQL', {
+          datasetId: safeDatasetId,
+          sqlPreview: finalSql.substring(0, 200),
+        });
         // ✅ 添加查询超时保护
         const result = await withTimeout(
           this.conn.runAndReadAll(finalSql),
@@ -159,7 +167,11 @@ export class DatasetQueryService {
         const rows = parseRows(result);
         const columns = result.columnNames();
 
-        console.log(`[Query] Result: ${rows.length} rows, ${columns.length} columns`);
+        logger.info('Dataset query completed', {
+          datasetId: safeDatasetId,
+          rowCount: rows.length,
+          columnCount: columns.length,
+        });
 
         // 更新最后查询时间
         await runPrepared(this.conn, 'UPDATE datasets SET last_queried_at = ? WHERE id = ?', [
@@ -357,17 +369,22 @@ export class DatasetQueryService {
     // 🔒 使用队列机制确保串行执行，避免并发 ATTACH 导致文件锁定
     return this.storageService.executeInQueue(sanitizedId, async () => {
       const startTime = Date.now();
-      console.log(`[AC] Starting Aho-Corasick filtering for dataset: ${datasetId}`);
-      console.log(
-        `[AC] Dictionary: ${dictDatasetId}, Field: ${dictField}, Blacklist: ${isBlacklist}`
-      );
+      logger.info('Starting Aho-Corasick dataset filtering', {
+        datasetId: sanitizedId,
+        targetField,
+        dictDatasetId: sanitizeDatasetId(dictDatasetId),
+        dictField,
+        isBlacklist,
+      });
 
       // 🆕 确保数据集已 attach
       const dataset = await this.metadataService.getDatasetInfo(sanitizedId);
       if (dataset) {
         const escapedPath = dataset.filePath.replace(/\\/g, '\\\\').replace(/'/g, "''");
         await this.storageService.smartAttach(sanitizedId, escapedPath);
-        console.log(`[AC] Attached main dataset: ${sanitizedId}`);
+        logger.info('Attached main dataset for Aho-Corasick filtering', {
+          datasetId: sanitizedId,
+        });
       }
 
       const sanitizedDictId = sanitizeDatasetId(dictDatasetId);
@@ -375,7 +392,10 @@ export class DatasetQueryService {
       if (dictDataset) {
         const escapedPath = dictDataset.filePath.replace(/\\/g, '\\\\').replace(/'/g, "''");
         await this.storageService.smartAttach(sanitizedDictId, escapedPath);
-        console.log(`[AC] Attached dictionary dataset: ${sanitizedDictId}`);
+        logger.info('Attached dictionary dataset for Aho-Corasick filtering', {
+          datasetId: sanitizedId,
+          dictDatasetId: sanitizedDictId,
+        });
       }
 
       // 步骤1: 加载词库
@@ -388,10 +408,18 @@ export class DatasetQueryService {
         .map((row) => String(row.word || ''))
         .filter((w) => w.length > 0);
 
-      console.log(`[AC] Loaded ${words.length} words in ${Date.now() - startTime}ms`);
+      logger.info('Loaded Aho-Corasick dictionary words', {
+        datasetId: sanitizedId,
+        dictDatasetId: sanitizedDictId,
+        wordCount: words.length,
+        durationMs: Date.now() - startTime,
+      });
 
       if (words.length === 0) {
-        console.warn('[AC] Dictionary is empty, returning empty result');
+        logger.warn('Aho-Corasick dictionary is empty, returning empty result', {
+          datasetId: sanitizedId,
+          dictDatasetId: sanitizedDictId,
+        });
         return [];
       }
 
@@ -402,7 +430,12 @@ export class DatasetQueryService {
         ac.add(word, word);
       }
       ac.build_fail();
-      console.log(`[AC] AC automaton built in ${Date.now() - acStartTime}ms`);
+      logger.info('Aho-Corasick automaton built', {
+        datasetId: sanitizedId,
+        dictDatasetId: sanitizedDictId,
+        wordCount: words.length,
+        durationMs: Date.now() - acStartTime,
+      });
 
       // 步骤3: 分批处理主数据集
       const BATCH_SIZE = 10000; // 每批处理10000行，避免内存溢出
@@ -458,15 +491,23 @@ export class DatasetQueryService {
         totalProcessed += rows.length;
         offset += BATCH_SIZE;
 
-        console.log(
-          `[AC] Batch ${Math.floor(offset / BATCH_SIZE)}: processed ${rows.length} rows in ${Date.now() - batchStartTime}ms, total matched: ${matchedRowIds.length}/${totalProcessed}`
-        );
+        logger.info('Processed Aho-Corasick dataset batch', {
+          datasetId: sanitizedId,
+          batch: Math.floor(offset / BATCH_SIZE),
+          rowCount: rows.length,
+          durationMs: Date.now() - batchStartTime,
+          matchedCount: matchedRowIds.length,
+          totalProcessed,
+        });
       }
 
       const totalTime = Date.now() - startTime;
-      console.log(
-        `[AC] Filtering completed: ${matchedRowIds.length} matched out of ${totalProcessed} rows in ${totalTime}ms`
-      );
+      logger.info('Aho-Corasick filtering completed', {
+        datasetId: sanitizedId,
+        matchedCount: matchedRowIds.length,
+        totalProcessed,
+        durationMs: totalTime,
+      });
 
       return matchedRowIds;
     });
