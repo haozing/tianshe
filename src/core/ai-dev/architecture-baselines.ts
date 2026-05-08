@@ -223,7 +223,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/webcontentsview-stealth-controller.ts': 19,
   'src/main/webcontentsview-viewport-debugger.ts': 1,
   'src/main/webhook/sender.ts': 9,
-  'src/main/window-manager.ts': 18,
   'src/preload/index.ts': 1,
   'src/renderer/src/App.tsx': 5,
   'src/renderer/src/components/AccountCenter/ProfileFormDialog.tsx': 1,

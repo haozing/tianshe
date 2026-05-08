@@ -38,6 +38,7 @@ import { AIRPA_RUNTIME_CONFIG, isDevelopmentMode } from '../constants/runtime-co
 import { WINDOWS_TITLEBAR_OVERLAY_HEIGHT } from '../constants/layout';
 import { attachNavigationGuards } from '../core/browser-core/navigation-guard';
 import { getSessionWebRequestHub } from '../core/browser-core/web-request-hub';
+import { createLogger } from '../core/logger';
 import {
   formatRendererBuildWarning,
   getRendererBuildFreshness,
@@ -48,6 +49,8 @@ import {
   buildMainWindowErrorHtml,
   toErrorMessage,
 } from './window-manager-diagnostics';
+
+const logger = createLogger('WindowManager');
 
 // ==================== 类型定义 ====================
 
@@ -268,7 +271,7 @@ export class WindowManager {
       unsubscribeCspHeaders();
       unsubscribeImageHeaders();
       this.windows.delete('main');
-      console.log('✅ Main window closed');
+      logger.info('Main window closed');
     });
 
     // 设置尺寸变化事件监听器（resize + 全屏）
@@ -283,7 +286,7 @@ export class WindowManager {
     };
     this.windows.set('main', windowInfo);
 
-    console.log('✅ Main window created');
+    logger.info('Main window created');
 
     return window;
   }
@@ -424,7 +427,7 @@ export class WindowManager {
     // 关闭主窗口
     this.closeWindowById('main');
 
-    console.log('✅ All windows cleaned up');
+    logger.info('All windows cleaned up');
   }
 
   // =====================================================
@@ -443,7 +446,7 @@ export class WindowManager {
    *   title: '登录 - example.com',
    *   width: 1200,
    *   height: 800,
-   *   onClose: () => { console.log('弹窗已关闭'); }
+   *   onClose: () => undefined
    * });
    */
   createPopupWindow(popupId: string, config?: PopupWindowConfig): BrowserWindow {
@@ -452,7 +455,7 @@ export class WindowManager {
     // 如果已存在同 ID 的弹窗，立即从 Map 删除并标记为"已被替换"
     const existingInfo = this.windows.get(windowId);
     if (existingInfo) {
-      console.log(`ℹ️  Popup ${popupId} already exists, replacing it`);
+      logger.info('Popup already exists, replacing it', { popupId, windowId });
 
       // 立即从 Map 删除，防止竞态条件
       this.windows.delete(windowId);
@@ -526,7 +529,7 @@ export class WindowManager {
       detachPopupNavigationGuards();
       // 检查窗口是否已被替换（防止竞态条件）
       if ((popupWindow as BrowserWindowWithReplaced).__replaced) {
-        console.log(`ℹ️  Popup ${popupId} was replaced, skipping cleanup`);
+        logger.info('Popup was replaced, skipping cleanup', { popupId, windowId });
         return;
       }
 
@@ -536,12 +539,12 @@ export class WindowManager {
         try {
           popupInfo.onClose();
         } catch (error) {
-          console.error(`❌ Error in popup onClose callback:`, error);
+          logger.error('Error in popup onClose callback', { popupId, windowId, error });
         }
       }
       // 从存储删除
       this.windows.delete(windowId);
-      console.log(`✅ Popup window closed: ${popupId}`);
+      logger.info('Popup window closed', { popupId, windowId });
     });
 
     // 记录弹窗信息
@@ -554,7 +557,7 @@ export class WindowManager {
     };
     this.windows.set(`popup-${popupId}`, popupInfo);
 
-    console.log(`✅ Popup window created: ${popupId} (${width}x${height})`);
+    logger.info('Popup window created', { popupId, windowId, width, height });
 
     return popupWindow;
   }
@@ -609,11 +612,11 @@ export class WindowManager {
         try {
           hostInfo.onClose();
         } catch (error) {
-          console.error(`❌ Error in hidden automation host onClose callback:`, error);
+          logger.error('Error in hidden automation host onClose callback', { windowId, error });
         }
       }
       this.windows.delete(windowId);
-      console.log(`✅ Hidden automation host closed: ${windowId}`);
+      logger.info('Hidden automation host closed', { windowId });
     });
 
     this.windows.set(windowId, {
@@ -624,7 +627,7 @@ export class WindowManager {
       onClose: config?.onClose,
     });
 
-    console.log(`✅ Hidden automation host created: ${windowId} (${width}x${height})`);
+    logger.info('Hidden automation host created', { windowId, width, height });
     return hostWindow;
   }
 
@@ -701,7 +704,7 @@ export class WindowManager {
       resizeTimeout = setTimeout(() => {
         // 防御性检查：窗口可能已销毁
         if (window.isDestroyed()) {
-          console.log(`⚠️  Window already destroyed, skipping resize callback`);
+          logger.warn('Window already destroyed, skipping resize callback');
           return;
         }
 
@@ -713,11 +716,11 @@ export class WindowManager {
           try {
             callback(bounds);
           } catch (error) {
-            console.error(`❌ Error in main window resize callback:`, error);
+            logger.error('Error in main window resize callback', { bounds, error });
           }
         });
 
-        console.log(`🔄 Main window size changed, new bounds:`, bounds);
+        logger.debug('Main window size changed', { bounds });
       }, WINDOW_RESIZE_DEBOUNCE_MS);
     };
 
@@ -738,7 +741,7 @@ export class WindowManager {
       if (resizeTimeout) {
         clearTimeout(resizeTimeout);
         resizeTimeout = null;
-        console.log(`🧹 Resize timer cleaned up`);
+        logger.debug('Resize timer cleaned up');
       }
       if (settleTimeout) {
         clearTimeout(settleTimeout);
@@ -769,9 +772,7 @@ export class WindowManager {
     // 窗口关闭时清理定时器
     window.once('closed', cleanup);
 
-    console.log(
-      `✅ Main window size change listeners setup (resize + resized + full-screen + maximize)`
-    );
+    logger.info('Main window size change listeners setup');
   }
 
   // =====================================================
@@ -823,14 +824,18 @@ export class WindowManager {
    */
   registerMainWindowResizeCallback(callback: (bounds: Rectangle) => void): () => void {
     this.mainWindowResizeCallbacks.push(callback);
-    console.log('✅ Registered resize callback for main window');
+    logger.info('Registered resize callback for main window', {
+      callbackCount: this.mainWindowResizeCallbacks.length,
+    });
 
     // 返回清理函数
     return () => {
       const index = this.mainWindowResizeCallbacks.indexOf(callback);
       if (index > -1) {
         this.mainWindowResizeCallbacks.splice(index, 1);
-        console.log('✅ Unregistered resize callback for main window');
+        logger.info('Unregistered resize callback for main window', {
+          callbackCount: this.mainWindowResizeCallbacks.length,
+        });
       }
     };
   }

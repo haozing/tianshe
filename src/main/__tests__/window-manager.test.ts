@@ -22,6 +22,15 @@ vi.mock('../internal-browser-devtools', () => ({
   maybeOpenInternalBrowserDevTools: mockMaybeOpenInternalBrowserDevTools,
 }));
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    debug: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  }),
+}));
+
 // Mock Electron modules
 vi.mock('electron', () => {
   const mockBrowserWindow = vi.fn().mockImplementation(function (this: any, options: any) {
