@@ -195,7 +195,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/duckdb/import-worker.ts': 3,
   'src/main/duckdb/log-service.ts': 2,
   'src/main/duckdb/plugin-table-bootstrap.ts': 5,
-  'src/main/duckdb/query-template-service.ts': 28,
   'src/main/duckdb/scheduled-task-service.ts': 1,
   'src/main/duckdb/service.ts': 23,
   'src/main/duckdb/sql-template.ts': 1,

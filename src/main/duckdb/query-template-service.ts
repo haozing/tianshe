@@ -5,6 +5,7 @@
 
 import type { DuckDBConnection } from '@duckdb/node-api';
 import type { QueryConfig } from '../../core/query-engine/types';
+import { createLogger } from '../../core/logger';
 import { parseRows, quoteIdentifier, quoteQualifiedName } from './utils';
 import { allPrepared } from './statement-executor';
 import { generateId } from '../../utils/id-generator';
@@ -13,6 +14,8 @@ import {
   normalizeRuntimeSQL,
   shouldUseLiveQueryTemplate,
 } from '../../utils/query-runtime';
+
+const logger = createLogger('QueryTemplateService');
 
 export interface QueryTemplateConfig {
   id: string;
@@ -100,7 +103,11 @@ export class QueryTemplateService {
   ): Promise<void> {
     const snapshotTableRef = quoteQualifiedName(`ds_${datasetId}`, snapshotTableName);
     await this.conn.run(`CREATE TABLE ${snapshotTableRef} AS ${snapshotSQL}`);
-    console.log(`[QueryTemplateService] Snapshot table created: ${snapshotTableRef}`);
+    logger.info('Snapshot table created', {
+      datasetId,
+      snapshotTableName,
+      snapshotTableRef,
+    });
   }
 
   private async refreshSnapshotTable(
@@ -126,10 +133,12 @@ export class QueryTemplateService {
         try {
           await this.dropSnapshotTable(datasetId, replacementTableName);
         } catch (cleanupError) {
-          console.error(
-            `[QueryTemplateService] Failed to cleanup refreshed snapshot table:`,
-            cleanupError
-          );
+          logger.error('Failed to cleanup refreshed snapshot table', {
+            datasetId,
+            snapshotTableName,
+            replacementTableName,
+            error: cleanupError,
+          });
         }
       }
 
@@ -180,7 +189,11 @@ export class QueryTemplateService {
     const now = Date.now();
 
     try {
-      console.log(`[QueryTemplateService] Creating query template: ${params.name}`);
+      logger.info('Creating query template', {
+        datasetId: params.datasetId,
+        templateId,
+        templateName: params.name,
+      });
 
       // 检查模板名称是否已存在
       const existingTemplates = await this.listQueryTemplates(params.datasetId);
@@ -220,16 +233,29 @@ export class QueryTemplateService {
         ]
       );
 
-      console.log(`[QueryTemplateService] Query template metadata saved: ${templateId}`);
+      logger.info('Query template metadata saved', {
+        datasetId: params.datasetId,
+        templateId,
+      });
       return templateId;
     } catch (error) {
-      console.error(`[QueryTemplateService] Failed to create query template:`, error);
+      logger.error('Failed to create query template', {
+        datasetId: params.datasetId,
+        templateId,
+        templateName: params.name,
+        error,
+      });
 
       // 回滚：删除可能已创建的快照对象
       try {
         await this.dropSnapshotTable(params.datasetId, snapshotTableName);
       } catch (cleanupError) {
-        console.error(`[QueryTemplateService] Failed to cleanup query template:`, cleanupError);
+        logger.error('Failed to cleanup query template snapshot', {
+          datasetId: params.datasetId,
+          templateId,
+          snapshotTableName,
+          error: cleanupError,
+        });
       }
 
       throw error;
@@ -240,7 +266,7 @@ export class QueryTemplateService {
    * 列出数据集的所有查询模板
    */
   async listQueryTemplates(datasetId: string): Promise<QueryTemplateConfig[]> {
-    console.log(`[QueryTemplateService] Listing query templates for dataset: ${datasetId}`);
+    logger.info('Listing query templates', { datasetId });
 
     const result = await allPrepared(this.conn, `
       SELECT
@@ -274,7 +300,7 @@ export class QueryTemplateService {
    * 获取单个查询模板配置
    */
   async getQueryTemplate(templateId: string): Promise<QueryTemplateConfig | null> {
-    console.log(`[QueryTemplateService] Getting query template: ${templateId}`);
+    logger.info('Getting query template', { templateId });
 
     // 🆕 先更新访问统计
     try {
@@ -289,7 +315,7 @@ export class QueryTemplateService {
         [Date.now(), templateId]
       );
     } catch (error) {
-      console.error(`[QueryTemplateService] Failed to update access stats:`, error);
+      logger.error('Failed to update query template access stats', { templateId, error });
       // 继续执行，不因统计失败而中断
     }
 
@@ -338,7 +364,7 @@ export class QueryTemplateService {
       generatedSQL?: string;
     }
   ): Promise<void> {
-    console.log(`[QueryTemplateService] Updating query template: ${templateId}`);
+    logger.info('Updating query template', { templateId });
 
     const template = await this.getQueryTemplate(templateId);
     if (!template) {
@@ -396,7 +422,7 @@ export class QueryTemplateService {
           );
 
           await this.dropSnapshotTable(template.datasetId, template.snapshotTableName);
-          console.log(`[QueryTemplateService] Live query template updated without snapshot rebuild: ${templateId}`);
+          logger.info('Live query template updated without snapshot rebuild', { templateId });
           return;
         }
 
@@ -454,9 +480,9 @@ export class QueryTemplateService {
         );
       }
 
-      console.log(`[QueryTemplateService] Query template updated: ${templateId}`);
+      logger.info('Query template updated', { templateId });
     } catch (error) {
-      console.error(`[QueryTemplateService] Failed to update query template:`, error);
+      logger.error('Failed to update query template', { templateId, error });
       throw error;
     }
   }
@@ -465,7 +491,7 @@ export class QueryTemplateService {
    * 刷新查询模板快照（不修改 queryConfig）
    */
   async refreshQueryTemplateSnapshot(templateId: string): Promise<void> {
-    console.log(`[QueryTemplateService] Refreshing query template snapshot: ${templateId}`);
+    logger.info('Refreshing query template snapshot', { templateId });
 
     const template = await this.getQueryTemplate(templateId);
     if (!template) {
@@ -487,7 +513,7 @@ export class QueryTemplateService {
       const snapshotSQL = await this.buildSnapshotSQL(template.datasetId, template.queryConfig);
       await this.refreshSnapshotTable(template.datasetId, snapshotTableName, snapshotSQL);
     } catch (error) {
-      console.error(`[QueryTemplateService] Failed to refresh query template snapshot:`, error);
+      logger.error('Failed to refresh query template snapshot', { templateId, error });
       throw error;
     }
   }
@@ -496,7 +522,7 @@ export class QueryTemplateService {
    * 删除查询模板（同时删除快照对象）
    */
   async deleteQueryTemplate(templateId: string): Promise<void> {
-    console.log(`[QueryTemplateService] Deleting query template: ${templateId}`);
+    logger.info('Deleting query template', { templateId });
 
     const template = await this.getQueryTemplate(templateId);
     if (!template) {
@@ -507,15 +533,18 @@ export class QueryTemplateService {
       // 1. 删除快照对象
       await this.dropSnapshotTable(template.datasetId, template.snapshotTableName);
       if (template.snapshotTableName) {
-        console.log(`[QueryTemplateService] Snapshot object dropped: ${template.snapshotTableName}`);
+        logger.info('Query template snapshot object dropped', {
+          templateId,
+          snapshotTableName: template.snapshotTableName,
+        });
       }
 
       // 2. 删除元数据
       await this.conn.run(`DELETE FROM dataset_query_templates WHERE id = ?`, [templateId]);
 
-      console.log(`[QueryTemplateService] Query template deleted: ${templateId}`);
+      logger.info('Query template deleted', { templateId });
     } catch (error) {
-      console.error(`[QueryTemplateService] Failed to delete query template:`, error);
+      logger.error('Failed to delete query template', { templateId, error });
       throw error;
     }
   }
@@ -524,7 +553,10 @@ export class QueryTemplateService {
    * 调整查询模板顺序
    */
   async reorderQueryTemplates(datasetId: string, templateIds: string[]): Promise<void> {
-    console.log(`[QueryTemplateService] Reordering query templates for dataset: ${datasetId}`);
+    logger.info('Reordering query templates', {
+      datasetId,
+      templateCount: templateIds.length,
+    });
 
     try {
       for (let i = 0; i < templateIds.length; i++) {
@@ -534,9 +566,16 @@ export class QueryTemplateService {
         );
       }
 
-      console.log(`[QueryTemplateService] Query templates reordered`);
+      logger.info('Query templates reordered', {
+        datasetId,
+        templateCount: templateIds.length,
+      });
     } catch (error) {
-      console.error(`[QueryTemplateService] Failed to reorder query templates:`, error);
+      logger.error('Failed to reorder query templates', {
+        datasetId,
+        templateCount: templateIds.length,
+        error,
+      });
       throw error;
     }
   }
@@ -566,7 +605,7 @@ export class QueryTemplateService {
    * 默认查询模板用于自动保存用户的筛选/排序/清洗等操作
    */
   async getOrCreateDefaultQueryTemplate(datasetId: string): Promise<QueryTemplateConfig> {
-    console.log(`[QueryTemplateService] Getting or creating default query template for dataset: ${datasetId}`);
+    logger.info('Getting or creating default query template', { datasetId });
 
     // 1. 按 is_default 查找默认模板（唯一来源）
     const defaultResult = await allPrepared(this.conn, `
@@ -584,13 +623,18 @@ export class QueryTemplateService {
     if (defaultRows.length > 1 && row) {
       await this.ensureSingleDefaultQueryTemplate(datasetId, row.id as string);
       row.is_default = true;
-      console.warn(
-        `[QueryTemplateService] Found ${defaultRows.length} default templates, kept: ${row.id} for dataset ${datasetId}`
-      );
+      logger.warn('Found multiple default query templates; kept first by order', {
+        datasetId,
+        defaultCount: defaultRows.length,
+        keptTemplateId: row.id,
+      });
     }
 
     if (row) {
-      console.log(`[QueryTemplateService] Found existing default query template: ${row.id}`);
+      logger.info('Found existing default query template', {
+        datasetId,
+        templateId: row.id,
+      });
 
       const queryConfig = JSON.parse(row.query_config as string);
       const snapshotTableName = String(row.snapshot_table_name ?? '').trim() || undefined;
@@ -629,7 +673,7 @@ export class QueryTemplateService {
     }
 
     // 2. 创建新的默认查询模板元数据
-    console.log(`[QueryTemplateService] Creating new default query template for dataset: ${datasetId}`);
+    logger.info('Creating new default query template', { datasetId });
 
     const templateId = generateId('template');
     const now = Date.now();
@@ -673,7 +717,7 @@ export class QueryTemplateService {
       );
       await this.ensureSingleDefaultQueryTemplate(datasetId, templateId);
 
-      console.log(`[QueryTemplateService] Default query template metadata created: ${templateId}`);
+      logger.info('Default query template metadata created', { datasetId, templateId });
 
       return {
         id: templateId,
@@ -687,7 +731,7 @@ export class QueryTemplateService {
         updatedAt: now,
       };
     } catch (error) {
-      console.error(`[QueryTemplateService] Failed to create default query template:`, error);
+      logger.error('Failed to create default query template', { datasetId, templateId, error });
       throw error;
     }
   }
