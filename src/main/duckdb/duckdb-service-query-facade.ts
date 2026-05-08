@@ -1,5 +1,8 @@
 import type { CleanConfig, QueryConfig, QueryExecutionResult, QueryEngine } from '../../core/query-engine';
+import { createLogger } from '../../core/logger';
 import type { DatasetService } from './dataset-service';
+
+const logger = createLogger('DuckDBServiceQueryFacade');
 
 export interface DuckDBServiceQueryFacade {
   queryWithEngine(datasetId: string, config: QueryConfig): Promise<QueryExecutionResult>;
@@ -225,9 +228,11 @@ async buildExportSQL(datasetId: string, queryConfig: QueryConfig): Promise<strin
       : undefined,
   };
 
-  console.log('[DuckDBService] Building export SQL without pagination');
-  console.log('[DuckDBService] Original sort config:', queryConfig.sort);
-  console.log('[DuckDBService] Export sort config:', configWithoutPagination.sort);
+  logger.info('Building export SQL without pagination', {
+    datasetId,
+    hasOriginalSort: !!queryConfig.sort,
+    hasExportSort: !!configWithoutPagination.sort,
+  });
 
   // 2. 使用 QueryEngine 生成SQL
   let sql = await this.queryEngine.buildSQL(datasetId, configWithoutPagination);
@@ -240,7 +245,7 @@ async buildExportSQL(datasetId: string, queryConfig: QueryConfig): Promise<strin
     sql = sql.replace(/\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?\s*$/gi, '');
   }
 
-  console.log('[DuckDBService] Export SQL generated (without LIMIT/OFFSET)');
+  logger.info('Generated export SQL without LIMIT/OFFSET', { datasetId });
   return sql;
 },
 
@@ -276,7 +281,7 @@ async ensureDatasetAttached(datasetId: string): Promise<void> {
 
   // ? 使用队列保护的 ATTACH 方法（方案A）
   return await this.datasetService.withDatasetAttached(datasetId, async () => {
-    console.log(`[Service] Database attached: ds_${datasetId}`);
+    logger.info('Dataset database attached for query facade', { datasetId });
   });
 },
 

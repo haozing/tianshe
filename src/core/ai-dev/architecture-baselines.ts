@@ -179,7 +179,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/duckdb/dataset-service.ts': 3,
   'src/main/duckdb/dependency-manager.ts': 1,
   'src/main/duckdb/duckdb-service-dataset-facade.ts': 6,
-  'src/main/duckdb/duckdb-service-query-facade.ts': 5,
   'src/main/duckdb/import-worker-csv.ts': 8,
   'src/main/duckdb/import-worker-schema-analysis.ts': 2,
   'src/main/duckdb/import-worker.ts': 3,
