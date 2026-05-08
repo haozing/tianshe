@@ -6,8 +6,11 @@
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import { app } from 'electron';
+import { createLogger } from '../core/logger';
 import type { AttachmentMetadata } from './duckdb/types';
 import { getUnknownErrorMessage } from './ipc-utils';
+
+const logger = createLogger('FileStorage');
 
 export const MAX_ATTACHMENT_BASE64_PREVIEW_BYTES = 10 * 1024 * 1024;
 export const MAX_ATTACHMENT_UPLOAD_BYTES = 500 * 1024 * 1024;
@@ -166,7 +169,7 @@ export class FileStorage {
 
       return metadata;
     } catch (error: unknown) {
-      console.error('[FileStorage] Failed to save file:', error);
+      logger.error('Failed to save file', { datasetId, originalFilename, error });
       throw new Error(`保存文件失败: ${getUnknownErrorMessage(error)}`);
     }
   }
@@ -205,7 +208,12 @@ export class FileStorage {
         mimeType: this.getMimeType(originalFilename),
       };
     } catch (error: unknown) {
-      console.error('[FileStorage] Failed to save file from path:', error);
+      logger.error('Failed to save file from path', {
+        datasetId,
+        sourcePath,
+        originalFilename,
+        error,
+      });
       throw new Error(`保存文件失败: ${getUnknownErrorMessage(error)}`);
     }
   }
@@ -220,12 +228,12 @@ export class FileStorage {
 
       if (fs.existsSync(fullPath)) {
         await fs.unlink(fullPath);
-        console.log('[FileStorage] File deleted:', relativePath);
+        logger.info('File deleted', { relativePath });
       } else {
-        console.warn('[FileStorage] File not found:', relativePath);
+        logger.warn('File not found while deleting', { relativePath });
       }
     } catch (error: unknown) {
-      console.error('[FileStorage] Failed to delete file:', error);
+      logger.error('Failed to delete file', { relativePath, error });
       throw new Error(`删除文件失败: ${getUnknownErrorMessage(error)}`);
     }
   }
@@ -298,7 +306,7 @@ export class FileStorage {
       const base64 = fileBuffer.toString('base64');
       return `data:${mimeType};base64,${base64}`;
     } catch (error: unknown) {
-      console.error('[FileStorage] Failed to read file as Base64:', error);
+      logger.error('Failed to read file as Base64', { relativePath, maxBytes, error });
       throw new Error(`读取文件失败: ${getUnknownErrorMessage(error)}`);
     }
   }
@@ -313,10 +321,10 @@ export class FileStorage {
 
       if (fs.existsSync(datasetDir)) {
         await fs.remove(datasetDir);
-        console.log('[FileStorage] Dataset files deleted:', datasetId);
+        logger.info('Dataset files deleted', { datasetId });
       }
     } catch (error: unknown) {
-      console.error('[FileStorage] Failed to delete dataset files:', error);
+      logger.error('Failed to delete dataset files', { datasetId, error });
       throw new Error(`删除数据集文件失败: ${getUnknownErrorMessage(error)}`);
     }
   }
@@ -347,7 +355,7 @@ export class FileStorage {
 
       return totalSize;
     } catch (error: unknown) {
-      console.error('[FileStorage] Failed to get dataset files size:', error);
+      logger.error('Failed to get dataset files size', { datasetId, error });
       return 0;
     }
   }

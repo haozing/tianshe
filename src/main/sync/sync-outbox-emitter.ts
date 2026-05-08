@@ -1,6 +1,9 @@
 import type { SyncOutboxService } from './sync-outbox-service';
 import type { SyncDomain, SyncEntityType } from '../../types/sync-contract';
+import { createLogger } from '../../core/logger';
 import { getCurrentCloudSyncScopeKey } from '../cloud-sync/context';
+
+const logger = createLogger('SyncOutboxEmitter');
 
 interface EmitSyncOutboxOptions {
   syncOutboxService?: SyncOutboxService | null;
@@ -36,10 +39,13 @@ export async function emitSyncOutboxUpsert(options: EmitSyncOutboxOptions): Prom
       idempotencyKey: normalizeNonEmpty(options.idempotencyKey || '') || undefined,
     });
   } catch (error) {
-    console.warn(
-      `[SyncOutboxEmitter] Failed to enqueue upsert event (${options.logSource || 'unknown'}):`,
-      error
-    );
+    logger.warn('Failed to enqueue sync outbox upsert event', {
+      logSource: options.logSource || 'unknown',
+      domain: options.domain,
+      entityType: options.entityType,
+      localId,
+      error,
+    });
   }
 }
 
@@ -62,9 +68,12 @@ export async function emitSyncOutboxDelete(options: EmitSyncOutboxOptions): Prom
       idempotencyKey: normalizeNonEmpty(options.idempotencyKey || '') || undefined,
     });
   } catch (error) {
-    console.warn(
-      `[SyncOutboxEmitter] Failed to enqueue delete event (${options.logSource || 'unknown'}):`,
-      error
-    );
+    logger.warn('Failed to enqueue sync outbox delete event', {
+      logSource: options.logSource || 'unknown',
+      domain: options.domain,
+      entityType: options.entityType,
+      localId,
+      error,
+    });
   }
 }

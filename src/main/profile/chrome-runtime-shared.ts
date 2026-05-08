@@ -4,7 +4,10 @@ import path from 'node:path';
 import { app } from 'electron';
 import type { SessionConfig } from '../../core/browser-pool/types';
 import { getFingerprintPreflightIssues as getCanonicalFingerprintPreflightIssues } from '../../core/fingerprint/fingerprint-validation';
+import { createLogger } from '../../core/logger';
 import { AIRPA_RUNTIME_CONFIG, resolveUserDataDir } from '../../constants/runtime-config';
+
+const logger = createLogger('ChromeRuntimeShared');
 
 export type ChromeLaunchProxy = {
   server: string;
@@ -248,9 +251,11 @@ export async function validateChromeRuntime(chromePath: string): Promise<void> {
   if (!runtimePinned && !warnedUnpinnedChromeRuntimePaths.has(chromePath)) {
     warnedUnpinnedChromeRuntimePaths.add(chromePath);
     const detectedLabel = detectedVersion ? ` version=${detectedVersion}` : '';
-    console.warn(
-      `[ExtensionFactory] Chrome runtime compatibility is unpinned for ${chromePath}${detectedLabel}. The current local Chromium build has passed real-page --ruyi startup verification, but future runtime swaps must be revalidated.`
-    );
+    logger.warn('Chrome runtime compatibility is unpinned', {
+      chromePath,
+      detectedVersion,
+      detectedLabel,
+    });
   }
 
   if (expectedVersion) {

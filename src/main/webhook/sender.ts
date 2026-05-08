@@ -4,8 +4,11 @@
  */
 
 import { BroadcastHandler, HookBus } from '../../core/hookbus';
+import { createLogger } from '../../core/logger';
 import { redactSensitiveText, redactSensitiveUrl } from '../../utils/redaction';
 import { assertPublicHttpTarget, parsePublicHttpUrl } from '../network-target-policy';
+
+const logger = createLogger('WebhookSender');
 
 /**
  * 内置埋点列表（写死，无需配置）
@@ -36,11 +39,9 @@ export class WebhookSender {
   setCallbackUrl(url?: string): void {
     const normalizedUrl = String(url || '').trim();
     this.callbackUrl = normalizedUrl ? parsePublicHttpUrl(normalizedUrl).toString() : undefined;
-    console.log(
-      `[WebhookSender] Callback URL updated: ${
-        this.callbackUrl ? redactSensitiveUrl(this.callbackUrl) : '(disabled)'
-      }`
-    );
+    logger.info('Callback URL updated', {
+      callbackUrl: this.callbackUrl ? redactSensitiveUrl(this.callbackUrl) : '(disabled)',
+    });
   }
 
   /**
@@ -60,7 +61,7 @@ export class WebhookSender {
       });
     });
 
-    console.log(`[WebhookSender] Registered ${BUILTIN_EVENTS.length} event listeners`);
+    logger.info('Registered webhook event listeners', { eventCount: BUILTIN_EVENTS.length });
   }
 
   /**
@@ -106,13 +107,19 @@ export class WebhookSender {
       });
 
       if (!response.ok) {
-        console.error(`[WebhookSender] Failed to send ${eventId}: HTTP ${response.status}`);
+        logger.error('Failed to send webhook callback', {
+          eventId,
+          status: response.status,
+        });
       } else {
-        console.log(`[WebhookSender] Sent: ${eventId}`);
+        logger.info('Webhook callback sent', { eventId });
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[WebhookSender] Error sending ${eventId}:`, redactSensitiveText(errorMessage));
+      logger.error('Error sending webhook callback', {
+        eventId,
+        error: redactSensitiveText(errorMessage),
+      });
       // 失败就失败，不重试（按用户要求）
     }
   }
@@ -126,7 +133,7 @@ export class WebhookSender {
 
     // 防重检查：已注册则跳过
     if (this.pluginEventHandlers.has(fullEventId)) {
-      console.log(`[WebhookSender] Plugin event already registered: ${fullEventId}`);
+      logger.info('Plugin webhook event already registered', { pluginId, eventId, fullEventId });
       return;
     }
 
@@ -138,7 +145,7 @@ export class WebhookSender {
     this.pluginEventHandlers.set(fullEventId, handler);
     this.hookBus.on(fullEventId, handler);
 
-    console.log(`[WebhookSender] Plugin event registered: ${fullEventId}`);
+    logger.info('Plugin webhook event registered', { pluginId, eventId, fullEventId });
   }
 
   /**
@@ -152,7 +159,7 @@ export class WebhookSender {
     if (handler) {
       this.hookBus.off(fullEventId, handler);
       this.pluginEventHandlers.delete(fullEventId);
-      console.log(`[WebhookSender] Plugin event unregistered: ${fullEventId}`);
+      logger.info('Plugin webhook event unregistered', { pluginId, eventId, fullEventId });
     }
   }
 
@@ -179,7 +186,10 @@ export class WebhookSender {
     }
 
     if (toRemove.length > 0) {
-      console.log(`[WebhookSender] Unregistered ${toRemove.length} events for plugin: ${pluginId}`);
+      logger.info('Unregistered plugin webhook events', {
+        pluginId,
+        eventCount: toRemove.length,
+      });
     }
   }
 }

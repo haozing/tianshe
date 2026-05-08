@@ -5,6 +5,10 @@
  * 浏览器启动统一通过 BrowserPoolManager 进行
  */
 
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('BrowserLauncher');
+
 /**
  * 代理认证凭据存储
  * key: `${host}:${port}`
@@ -56,9 +60,12 @@ export function setupProxyAuthHandler(app: Electron.App): void {
     if (credentials) {
       event.preventDefault();
       callback(credentials.username, credentials.password);
-      console.log(`[BrowserLauncher] Proxy auth provided for ${authInfo.host}:${authInfo.port}`);
+      logger.info('Proxy auth provided', {
+        proxyHost: authInfo.host,
+        proxyPort: authInfo.port,
+      });
     }
   });
 
-  console.log('[BrowserLauncher] Proxy auth handler registered');
+  logger.info('Proxy auth handler registered');
 }

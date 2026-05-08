@@ -16,6 +16,15 @@ vi.mock('electron', () => ({
   },
 }));
 
+vi.mock('../core/logger', () => ({
+  createLogger: () => ({
+    debug: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  }),
+}));
+
 describe('FileStorage path boundaries', () => {
   beforeEach(async () => {
     userDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'tianshe-file-storage-'));
