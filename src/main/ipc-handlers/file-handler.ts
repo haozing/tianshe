@@ -9,6 +9,33 @@ import { handleIPCError } from '../ipc-utils';
 import { assertMainWindowIpcSender } from '../ipc-authorization';
 import type { IpcRouteDefinition } from '../ipc-route-registry';
 import { ipcRouteRegistry } from '../ipc-route-registry';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('FileIPCHandler');
+
+function normalizeFileIpcError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+
+  return { raw: String(error) };
+}
+
+function logFileIpcError(
+  channel: string,
+  error: unknown,
+  fields: Record<string, unknown> = {}
+): void {
+  logger.error('File IPC handler failed', {
+    channel,
+    ...fields,
+    error: normalizeFileIpcError(error),
+  });
+}
 
 export class FileIPCHandler {
   constructor(private readonly mainWindow?: BrowserWindow) {}
@@ -39,9 +66,12 @@ export class FileIPCHandler {
         ) => {
           try {
             this.assertSender(event, 'file:upload');
-            console.log(
-              `[FileIPCHandler] Uploading file: ${fileData.filename} for dataset: ${datasetId}`
-            );
+            logger.info('Uploading file', {
+              operation: 'file:upload',
+              datasetId,
+              filename: fileData.filename,
+              size: fileData.buffer?.length,
+            });
 
             const buffer = Buffer.from(fileData.buffer);
             const metadata = await fileStorage.saveFile(datasetId, buffer, fileData.filename);
@@ -51,7 +81,10 @@ export class FileIPCHandler {
               metadata,
             };
           } catch (error: unknown) {
-            console.error('[FileIPCHandler] Upload failed:', error);
+            logFileIpcError('file:upload', error, {
+              datasetId,
+              filename: fileData?.filename,
+            });
             return handleIPCError(error);
           }
         },
@@ -68,7 +101,7 @@ export class FileIPCHandler {
         handler: async (event: IpcMainInvokeEvent, relativePath: string) => {
           try {
             this.assertSender(event, 'file:delete');
-            console.log(`[FileIPCHandler] Deleting file: ${relativePath}`);
+            logger.info('Deleting file', { operation: 'file:delete', relativePath });
 
             await fileStorage.deleteFile(relativePath);
 
@@ -76,7 +109,7 @@ export class FileIPCHandler {
               success: true,
             };
           } catch (error: unknown) {
-            console.error('[FileIPCHandler] Delete failed:', error);
+            logFileIpcError('file:delete', error, { relativePath });
             return handleIPCError(error);
           }
         },
@@ -93,7 +126,7 @@ export class FileIPCHandler {
         handler: async (event: IpcMainInvokeEvent, relativePath: string) => {
           try {
             this.assertSender(event, 'file:open');
-            console.log(`[FileIPCHandler] Opening file: ${relativePath}`);
+            logger.info('Opening file', { operation: 'file:open', relativePath });
 
             const fullPath = fileStorage.getFilePath(relativePath);
 
@@ -107,7 +140,7 @@ export class FileIPCHandler {
               success: true,
             };
           } catch (error: unknown) {
-            console.error('[FileIPCHandler] Open failed:', error);
+            logFileIpcError('file:open', error, { relativePath });
             return handleIPCError(error);
           }
         },
@@ -126,7 +159,7 @@ export class FileIPCHandler {
               url,
             };
           } catch (error: unknown) {
-            console.error('[FileIPCHandler] Get URL failed:', error);
+            logFileIpcError('file:getUrl', error, { relativePath });
             return handleIPCError(error);
           }
         },
@@ -150,7 +183,7 @@ export class FileIPCHandler {
               data: imageData,
             };
           } catch (error: unknown) {
-            console.error('[FileIPCHandler] Get image data failed:', error);
+            logFileIpcError('file:getImageData', error, { relativePath });
             return handleIPCError(error);
           }
         },
@@ -167,7 +200,10 @@ export class FileIPCHandler {
         handler: async (event: IpcMainInvokeEvent, datasetId: string) => {
           try {
             this.assertSender(event, 'file:deleteDatasetFiles');
-            console.log(`[FileIPCHandler] Deleting all files for dataset: ${datasetId}`);
+            logger.info('Deleting all files for dataset', {
+              operation: 'file:deleteDatasetFiles',
+              datasetId,
+            });
 
             await fileStorage.deleteDatasetFiles(datasetId);
 
@@ -175,7 +211,7 @@ export class FileIPCHandler {
               success: true,
             };
           } catch (error: unknown) {
-            console.error('[FileIPCHandler] Delete dataset files failed:', error);
+            logFileIpcError('file:deleteDatasetFiles', error, { datasetId });
             return handleIPCError(error);
           }
         },
@@ -215,7 +251,11 @@ export class FileIPCHandler {
               metadata,
             };
           } catch (error: unknown) {
-            console.error('[FileIPCHandler] Upload from path failed:', error);
+            logFileIpcError('file:upload-from-path', error, {
+              datasetId,
+              filename: fileData?.filename,
+              hasFilePath: Boolean(fileData?.filePath),
+            });
             return handleIPCError(error);
           }
         },
@@ -225,6 +265,6 @@ export class FileIPCHandler {
 
   register(): void {
     ipcRouteRegistry.registerAll(this.createRoutes());
-    console.log('✅ File IPC handlers registered');
+    logger.info('File IPC handlers registered');
   }
 }

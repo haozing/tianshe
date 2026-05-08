@@ -10,11 +10,17 @@
  * - 删除数据集文件
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ipcMain, shell } from 'electron';
 import { FileIPCHandler } from './file-handler';
 import { fileStorage } from '../file-storage';
 import { ipcRouteRegistry } from '../ipc-route-registry';
+
+const { mockLoggerInfo, mockLoggerWarn, mockLoggerError } = vi.hoisted(() => ({
+  mockLoggerInfo: vi.fn(),
+  mockLoggerWarn: vi.fn(),
+  mockLoggerError: vi.fn(),
+}));
 
 // Mock electron 模块
 vi.mock('electron', () => ({
@@ -55,24 +61,21 @@ vi.mock('../ipc-utils', () => ({
   }),
 }));
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    info: mockLoggerInfo,
+    warn: mockLoggerWarn,
+    error: mockLoggerError,
+  }),
+}));
+
 describe('FileIPCHandler', () => {
   let handler: FileIPCHandler;
 
-  // Mock console 方法避免测试输出污染
-  const originalConsoleLog = console.log;
-  const originalConsoleError = console.error;
-
   beforeEach(() => {
-    console.log = vi.fn();
-    console.error = vi.fn();
     vi.clearAllMocks();
     ipcRouteRegistry.unregisterAll();
     handler = new FileIPCHandler();
-  });
-
-  afterEach(() => {
-    console.log = originalConsoleLog;
-    console.error = originalConsoleError;
   });
 
   describe('register', () => {
@@ -91,7 +94,7 @@ describe('FileIPCHandler', () => {
       expect(ipcMain.handle).toHaveBeenCalledWith('file:deleteDatasetFiles', expect.any(Function));
 
       // 验证日志输出
-      expect(console.log).toHaveBeenCalledWith('✅ File IPC handlers registered');
+      expect(mockLoggerInfo).toHaveBeenCalledWith('File IPC handlers registered');
     });
 
     it('rejects file operations from unauthorized senders when a main window is configured', async () => {
@@ -148,8 +151,13 @@ describe('FileIPCHandler', () => {
         success: true,
         metadata: mockMetadata,
       });
-      expect(console.log).toHaveBeenCalledWith(
-        `[FileIPCHandler] Uploading file: ${fileData.filename} for dataset: ${datasetId}`
+      expect(mockLoggerInfo).toHaveBeenCalledWith(
+        'Uploading file',
+        expect.objectContaining({
+          operation: 'file:upload',
+          datasetId,
+          filename: fileData.filename,
+        })
       );
     });
 
@@ -175,9 +183,9 @@ describe('FileIPCHandler', () => {
         success: false,
         error: errorMessage,
       });
-      expect(console.error).toHaveBeenCalledWith(
-        '[FileIPCHandler] Upload failed:',
-        expect.any(Error)
+      expect(mockLoggerError).toHaveBeenCalledWith(
+        'File IPC handler failed',
+        expect.objectContaining({ channel: 'file:upload', datasetId })
       );
     });
 
@@ -292,7 +300,10 @@ describe('FileIPCHandler', () => {
       expect(response).toEqual({
         success: true,
       });
-      expect(console.log).toHaveBeenCalledWith(`[FileIPCHandler] Deleting file: ${relativePath}`);
+      expect(mockLoggerInfo).toHaveBeenCalledWith(
+        'Deleting file',
+        expect.objectContaining({ operation: 'file:delete', relativePath })
+      );
     });
 
     it('应该处理文件删除失败的情况', async () => {
@@ -313,9 +324,9 @@ describe('FileIPCHandler', () => {
         success: false,
         error: errorMessage,
       });
-      expect(console.error).toHaveBeenCalledWith(
-        '[FileIPCHandler] Delete failed:',
-        expect.any(Error)
+      expect(mockLoggerError).toHaveBeenCalledWith(
+        'File IPC handler failed',
+        expect.objectContaining({ channel: 'file:delete', relativePath })
       );
     });
 
@@ -363,7 +374,10 @@ describe('FileIPCHandler', () => {
       expect(response).toEqual({
         success: true,
       });
-      expect(console.log).toHaveBeenCalledWith(`[FileIPCHandler] Opening file: ${relativePath}`);
+      expect(mockLoggerInfo).toHaveBeenCalledWith(
+        'Opening file',
+        expect.objectContaining({ operation: 'file:open', relativePath })
+      );
     });
 
     it('应该处理文件不存在的情况', async () => {
@@ -387,9 +401,9 @@ describe('FileIPCHandler', () => {
         success: false,
         error: '文件不存在',
       });
-      expect(console.error).toHaveBeenCalledWith(
-        '[FileIPCHandler] Open failed:',
-        expect.any(Error)
+      expect(mockLoggerError).toHaveBeenCalledWith(
+        'File IPC handler failed',
+        expect.objectContaining({ channel: 'file:open', relativePath })
       );
     });
 
@@ -414,9 +428,9 @@ describe('FileIPCHandler', () => {
         success: false,
         error: errorMessage,
       });
-      expect(console.error).toHaveBeenCalledWith(
-        '[FileIPCHandler] Open failed:',
-        expect.any(Error)
+      expect(mockLoggerError).toHaveBeenCalledWith(
+        'File IPC handler failed',
+        expect.objectContaining({ channel: 'file:open', relativePath })
       );
     });
 
@@ -485,9 +499,9 @@ describe('FileIPCHandler', () => {
         success: false,
         error: errorMessage,
       });
-      expect(console.error).toHaveBeenCalledWith(
-        '[FileIPCHandler] Get URL failed:',
-        expect.any(Error)
+      expect(mockLoggerError).toHaveBeenCalledWith(
+        'File IPC handler failed',
+        expect.objectContaining({ channel: 'file:getUrl', relativePath })
       );
     });
 
@@ -554,9 +568,9 @@ describe('FileIPCHandler', () => {
         success: false,
         error: errorMessage,
       });
-      expect(console.error).toHaveBeenCalledWith(
-        '[FileIPCHandler] Get image data failed:',
-        expect.any(Error)
+      expect(mockLoggerError).toHaveBeenCalledWith(
+        'File IPC handler failed',
+        expect.objectContaining({ channel: 'file:getImageData', relativePath })
       );
     });
 
@@ -619,8 +633,9 @@ describe('FileIPCHandler', () => {
       expect(response).toEqual({
         success: true,
       });
-      expect(console.log).toHaveBeenCalledWith(
-        `[FileIPCHandler] Deleting all files for dataset: ${datasetId}`
+      expect(mockLoggerInfo).toHaveBeenCalledWith(
+        'Deleting all files for dataset',
+        expect.objectContaining({ operation: 'file:deleteDatasetFiles', datasetId })
       );
     });
 
@@ -642,9 +657,9 @@ describe('FileIPCHandler', () => {
         success: false,
         error: errorMessage,
       });
-      expect(console.error).toHaveBeenCalledWith(
-        '[FileIPCHandler] Delete dataset files failed:',
-        expect.any(Error)
+      expect(mockLoggerError).toHaveBeenCalledWith(
+        'File IPC handler failed',
+        expect.objectContaining({ channel: 'file:deleteDatasetFiles', datasetId })
       );
     });
 
@@ -743,7 +758,7 @@ describe('FileIPCHandler', () => {
       await uploadHandler(null, datasetId, fileData);
 
       // Assert: 验证错误被记录
-      expect(console.error).toHaveBeenCalled();
+      expect(mockLoggerError).toHaveBeenCalled();
     });
   });
 
