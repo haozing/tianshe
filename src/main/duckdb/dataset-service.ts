@@ -26,6 +26,7 @@ import { DependencyManager } from './dependency-manager';
 import { ValidationEngine } from './validation-engine';
 import type { QueryEngine } from '../../core/query-engine/QueryEngine';
 import type { CleanConfig } from '../../core/query-engine/types';
+import { createLogger } from '../../core/logger';
 import {
   escapeSqlStringLiteral,
   getDatasetPath,
@@ -42,6 +43,8 @@ import type {
   EnhancedColumnSchema,
 } from './types';
 import type { ExportOptions, ExportProgress } from '../../types/electron';
+
+const logger = createLogger('DatasetService');
 
 type BaseDatasetColumnDefinition = Pick<
   EnhancedColumnSchema,
@@ -144,7 +147,7 @@ export class DatasetService {
         this.configureRowIdSequence(attachKey, tableName, startValue),
     });
 
-    console.log('✅ DatasetService initialized with modular architecture');
+    logger.info('DatasetService initialized with modular architecture');
   }
 
 
@@ -474,7 +477,12 @@ export class DatasetService {
           isGroupDefault: true,
         });
 
-        console.log(`✅ Created empty dataset: ${datasetId}`);
+        logger.info('Created empty dataset', {
+          datasetId,
+          datasetName,
+          folderId: options?.folderId ?? null,
+          tabGroupId,
+        });
 
         // 触发 Webhook 回调事件（不阻塞数据库操作）
         this.hookBus?.emit('webhook:dataset.created', {
@@ -495,6 +503,6 @@ export class DatasetService {
    */
   async cleanup(): Promise<void> {
     await this.importService.cleanup();
-    console.log('✅ All services cleaned up');
+    logger.info('DatasetService cleanup completed');
   }
 }
