@@ -38,6 +38,7 @@ import {
   attachProfileLiveSessionLease,
 } from '../../core/browser-pool/profile-live-session-lease';
 import { fingerprintManager } from '../../core/stealth';
+import { createIPCFailureResponse } from '../ipc-utils';
 import { createIpcHandler, handleIPCError, IpcError, type IpcSenderGuard } from './utils';
 import { createLogger } from '../../core/logger';
 import type { WebContentsViewManager } from '../webcontentsview-manager';
@@ -340,7 +341,9 @@ export function registerProfileHandlers(
         const strategy = launchOptions?.strategy || 'any';
 
         if (strategy === 'specific' && !launchOptions?.browserId) {
-          return { success: false, error: 'strategy=specific requires browserId' };
+          return createIPCFailureResponse('strategy=specific requires browserId', 'INVALID_INPUT', {
+            context: { profileId, strategy },
+          });
         }
 
         // 获取浏览器（可能复用空闲的，或创建新的，或进入等待队列）
@@ -518,22 +521,26 @@ export function registerProfileHandlers(
         const poolManager = getBrowserPoolManager();
         const pooled = poolManager.listBrowsers().find((b) => b.id === browserId);
         if (!pooled) {
-          return { success: false, error: `Browser not found: ${browserId}` };
+          return createIPCFailureResponse(`Browser not found: ${browserId}`, 'BROWSER_POOL_BROWSER_NOT_FOUND', {
+            context: { browserId },
+          });
         }
 
         if (pooled.engine !== 'electron') {
           if (!hasBrowserInstance(pooled)) {
-            return {
-              success: false,
-              error: `Browser is not ready to show (status=${pooled.status})`,
-            };
+            return createIPCFailureResponse(
+              `Browser is not ready to show (status=${pooled.status})`,
+              'BROWSER_NOT_READY',
+              { context: { browserId, status: pooled.status, engine: pooled.engine } }
+            );
           }
 
           if (typeof pooled.browser.show !== 'function') {
-            return {
-              success: false,
-              error: 'Browser does not support show/bringToFront.',
-            };
+            return createIPCFailureResponse(
+              'Browser does not support show/bringToFront.',
+              'OPERATION_FAILED',
+              { context: { browserId, engine: pooled.engine } }
+            );
           }
 
           try {
@@ -610,7 +617,11 @@ export function registerProfileHandlers(
 
         const viewId = 'viewId' in pooled ? pooled.viewId : undefined;
         if (!viewId) {
-          return { success: false, error: `Browser view is not ready (status=${pooled.status})` };
+          return createIPCFailureResponse(
+            `Browser view is not ready (status=${pooled.status})`,
+            'BROWSER_NOT_READY',
+            { context: { browserId, status: pooled.status, engine: pooled.engine } }
+          );
         }
 
         // 如果已经在某个 popup 里打开了，直接聚焦该窗口即可
@@ -641,7 +652,9 @@ export function registerProfileHandlers(
         });
 
         if (!popupId) {
-          return { success: false, error: 'Failed to open browser popup' };
+          return createIPCFailureResponse('Failed to open browser popup', 'BROWSER_NOT_READY', {
+            context: { browserId, viewId },
+          });
         }
 
         const popupWindowId = `popup-${popupId}`;

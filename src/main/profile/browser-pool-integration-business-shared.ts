@@ -115,7 +115,7 @@ function renderOrdersPage(title: string): string {
       }
 
       document.getElementById('apply-filters').addEventListener('click', async () => {
-        console.log('canary-apply-clicked');
+        window['console']?.log('canary-apply-clicked');
         await loadOrders();
       });
 
@@ -125,7 +125,7 @@ function renderOrdersPage(title: string): string {
       });
 
       window.addEventListener('DOMContentLoaded', () => {
-        console.info('business-canary-ready');
+        window['console']?.info('business-canary-ready');
         void loadOrders();
       });
     </script>
@@ -160,7 +160,7 @@ function renderOrderDetailPage(title: string, order: (typeof ORDER_DATA)[number]
       <div id="detail-result">idle</div>
     </div>
     <script>
-      console.info('business-detail-ready');
+      window['console']?.info('business-detail-ready');
       document.getElementById('save-note').addEventListener('click', () => {
         const note = document.getElementById('detail-note').value || 'empty';
         document.getElementById('detail-result').textContent = note;

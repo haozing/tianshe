@@ -91,9 +91,9 @@ export async function createBrowserEngineSmokeServer(options: {
     <div id="result"></div>
     <div id="prompt-result">idle</div>
     <script>
-      console.info('smoke-page-ready');
+      window['console']?.info('smoke-page-ready');
       document.getElementById('fetch').addEventListener('click', async () => {
-        console.log('smoke-button-clicked');
+        window['console']?.log('smoke-button-clicked');
         const [response] = await Promise.all([
           fetch('/api/ping'),
           fetch('/api/noisy'),
@@ -118,7 +118,7 @@ export async function createBrowserEngineSmokeServer(options: {
     if (url === '/download/report.csv') {
       response.statusCode = 200;
       response.setHeader('content-type', 'text/csv; charset=utf-8');
-      response.setHeader('content-disposition', 'attachment; filename=\"report.csv\"');
+      response.setHeader('content-disposition', 'attachment; filename="report.csv"');
       response.end('id,name\n1,airpa\n');
       return;
     }

@@ -29,7 +29,7 @@ import {
 } from '../../core/browser-pool/profile-live-session-lease';
 import { createIpcHandler, createIpcVoidHandler } from './utils';
 import type { IpcSenderGuard } from './utils';
-import { handleIPCError } from '../ipc-utils';
+import { createIPCFailureResponse, handleIPCError } from '../ipc-utils';
 import { createLogger } from '../../core/logger';
 import type { WebContentsViewManager } from '../webcontentsview-manager';
 import type { WindowManager } from '../window-manager';
@@ -203,23 +203,27 @@ export function registerAccountHandlers(
         // 获取账号信息
         const account = await accountService.get(accountId);
         if (!account) {
-          return { success: false, error: `Account not found: ${accountId}` };
+          return createIPCFailureResponse(`Account not found: ${accountId}`, 'NOT_FOUND', {
+            context: { accountId },
+          });
         }
 
         if (!account.platformId) {
-          return {
-            success: false,
-            error: '账号未关联平台，请先在账号管理中选择平台',
-          };
+          return createIPCFailureResponse(
+            '账号未关联平台，请先在账号管理中选择平台',
+            'INVALID_INPUT',
+            { context: { accountId, field: 'platformId' } }
+          );
         }
 
         // 仅按 platformId 解析所属平台（开发阶段不兼容历史字段回退）
         const platform = await savedSiteService.get(account.platformId);
         if (!platform) {
-          return {
-            success: false,
-            error: '账号所属平台不存在，请先在账号管理中重新选择平台',
-          };
+          return createIPCFailureResponse(
+            '账号所属平台不存在，请先在账号管理中重新选择平台',
+            'NOT_FOUND',
+            { context: { accountId, platformId: account.platformId } }
+          );
         }
 
         const accountProfileIdRaw = String(account.profileId || '').trim();
@@ -230,19 +234,21 @@ export function registerAccountHandlers(
 
         const effectiveProfileId = accountProfileId;
         if (!effectiveProfileId) {
-          return {
-            success: false,
-            error: '当前账号未绑定浏览器环境，请先在账号管理中为该账号绑定浏览器环境',
-          };
+          return createIPCFailureResponse(
+            '当前账号未绑定浏览器环境，请先在账号管理中为该账号绑定浏览器环境',
+            'INVALID_INPUT',
+            { context: { accountId, field: 'profileId' } }
+          );
         }
 
         // 获取关联的 Profile
         const profile = await profileService.get(effectiveProfileId);
         if (!profile) {
-          return {
-            success: false,
-            error: '绑定的浏览器环境已不存在，请先在账号管理中为该账号重绑浏览器环境',
-          };
+          return createIPCFailureResponse(
+            '绑定的浏览器环境已不存在，请先在账号管理中为该账号重绑浏览器环境',
+            'BROWSER_POOL_PROFILE_NOT_FOUND',
+            { context: { accountId, profileId: effectiveProfileId } }
+          );
         }
 
         // 通过浏览器池获取浏览器（使用关联的 Profile）
@@ -350,10 +356,9 @@ export function registerAccountHandlers(
 
           if (!popupId) {
             await safeReleaseHandle();
-            return {
-              success: false,
-              error: '登录窗口打开失败，请重试',
-            };
+            return createIPCFailureResponse('登录窗口打开失败，请重试', 'BROWSER_NOT_READY', {
+              context: { accountId, profileId: effectiveProfileId, browserId: handle.browserId },
+            });
           }
 
           popupOwnsHandle = true;

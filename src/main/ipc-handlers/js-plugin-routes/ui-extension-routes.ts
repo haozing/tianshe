@@ -1,7 +1,7 @@
 import { type IpcMainInvokeEvent } from 'electron';
 import { ipcRouteRegistry } from '../../ipc-route-registry';
 import type { DuckDBService } from '../../duckdb/service';
-import { handleIPCError } from '../../ipc-utils';
+import { createIPCFailureResponse, handleIPCError } from '../../ipc-utils';
 import type { JSPluginManager } from '../../../core/js-plugin/manager';
 import type { ButtonExecutor } from '../../../core/js-plugin/button-executor';
 import { logPluginRouteInfo, logPluginRouteWarning } from './plugin-route-logger';
@@ -166,7 +166,9 @@ function registerExecuteActionColumn({
         const rowData = queryResult.rows[0];
 
         if (!rowData) {
-          return { success: false, error: `Row ${rowid} not found` };
+          return createIPCFailureResponse(`Row ${rowid} not found`, 'NOT_FOUND', {
+            context: { datasetId, rowId: rowid },
+          });
         }
 
         const datasetInfo = await duckdb.getDatasetInfo(datasetId);

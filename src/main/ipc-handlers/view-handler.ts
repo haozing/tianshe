@@ -20,7 +20,7 @@ import {
   type ViewSource,
 } from '../webcontentsview-manager';
 import { WindowManager } from '../window-manager';
-import { handleIPCError } from '../ipc-utils';
+import { createIPCFailureResponse, handleIPCError } from '../ipc-utils';
 import type { IpcRouteDefinition } from '../ipc-route-registry';
 import { ipcRouteRegistry } from '../ipc-route-registry';
 
@@ -170,6 +170,9 @@ export class ViewIPCHandler {
             const configuredWorkbenchUrl = getConfiguredWorkbenchUrl();
             if (!configuredWorkbenchUrl) {
               return {
+                ...createIPCFailureResponse('Workbench URL is not configured', 'INVALID_INPUT', {
+                  reasonCode: 'workbench-url-not-configured',
+                }),
                 success: false,
                 reason: 'workbench-url-not-configured',
               };
@@ -196,6 +199,10 @@ export class ViewIPCHandler {
             if (targetUrl.origin !== expectedOrigin) {
               await clearCookie();
               return {
+                ...createIPCFailureResponse('Invalid workbench origin', 'PERMISSION_DENIED', {
+                  reasonCode: 'invalid-workbench-origin',
+                  context: { targetOrigin: targetUrl.origin, expectedOrigin },
+                }),
                 success: false,
                 reason: 'invalid-workbench-origin',
                 cookieName,
@@ -207,6 +214,10 @@ export class ViewIPCHandler {
             if (!persisted?.token || !persisted?.user) {
               await clearCookie();
               return {
+                ...createIPCFailureResponse('Cloud auth is not ready', 'PERMISSION_DENIED', {
+                  reasonCode: 'cloud-auth-not-ready',
+                  context: { targetOrigin: targetUrl.origin },
+                }),
                 success: false,
                 reason: 'cloud-auth-not-ready',
                 targetOrigin: targetUrl.origin,
@@ -217,6 +228,10 @@ export class ViewIPCHandler {
               await clearCookie();
               await invalidateCloudAuthSession('expired');
               return {
+                ...createIPCFailureResponse('Cloud auth session expired', 'PERMISSION_DENIED', {
+                  reasonCode: 'cloud-auth-expired',
+                  context: { targetOrigin: targetUrl.origin },
+                }),
                 success: false,
                 reason: 'cloud-auth-expired',
                 targetOrigin: targetUrl.origin,
@@ -243,10 +258,11 @@ export class ViewIPCHandler {
             } catch (error) {
               await clearCookie();
               await invalidateCloudAuthSession('workbench_sync_failed');
+              const failure = handleIPCError(error);
               return {
+                ...failure,
                 success: false,
                 reason: 'cookie-write-failed',
-                error: handleIPCError(error).error,
                 targetOrigin: targetUrl.origin,
               };
             }

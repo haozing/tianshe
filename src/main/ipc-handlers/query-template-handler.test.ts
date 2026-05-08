@@ -15,6 +15,17 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../ipc-utils', () => ({
+  createIPCFailureResponse: vi.fn((message, code = 'OPERATION_FAILED', options = {}) => ({
+    success: false,
+    error: message,
+    code,
+    errorDetails: {
+      code,
+      message,
+      ...(options.context ? { context: options.context } : {}),
+      ...(options.reasonCode ? { reasonCode: options.reasonCode } : {}),
+    },
+  })),
   handleIPCError: vi.fn((error) => ({
     success: false,
     error: error instanceof Error ? error.message : String(error),
@@ -145,9 +156,10 @@ describe('QueryTemplateIPCHandler', () => {
       queryConfig: {},
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       success: false,
       error: 'templateId is required',
+      code: 'MISSING_PARAMETER',
     });
     expect(duckdb.updateQueryTemplate).not.toHaveBeenCalled();
   });
@@ -176,9 +188,10 @@ describe('QueryTemplateIPCHandler', () => {
     const handler = handlers.get('query-template:refresh')!;
     const result = await handler({} as any, {});
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       success: false,
       error: 'templateId is required',
+      code: 'MISSING_PARAMETER',
     });
     expect(duckdb.refreshQueryTemplateSnapshot).not.toHaveBeenCalled();
   });
@@ -199,9 +212,10 @@ describe('QueryTemplateIPCHandler', () => {
       datasetId: 'ds1',
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       success: false,
       error: 'templateIds is required',
+      code: 'MISSING_PARAMETER',
     });
     expect(duckdb.reorderQueryTemplates).not.toHaveBeenCalled();
   });
@@ -223,9 +237,10 @@ describe('QueryTemplateIPCHandler', () => {
     const handler = handlers.get('query-template:query')!;
     const result = await handler({} as any, {});
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       success: false,
       error: 'templateId is required',
+      code: 'MISSING_PARAMETER',
     });
   });
 

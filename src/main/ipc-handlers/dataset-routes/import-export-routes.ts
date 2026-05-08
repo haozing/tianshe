@@ -7,6 +7,7 @@ import type { DuckDBService } from '../../duckdb/service';
 import type { ExportOptions, ExportPathParams, ExportProgress } from '../../../types/dataset-export';
 import { createDatasetRouteErrorResult } from './dataset-route-errors';
 import { logDatasetRouteError } from './dataset-route-logger';
+import { IpcError } from '../errors';
 
 export const MAX_IMPORT_RECORDS_BASE64_BYTES = 500 * 1024 * 1024;
 
@@ -123,7 +124,12 @@ function registerSelectImportFile(): void {
         );
 
         if (result.canceled || result.filePaths.length === 0) {
-          return { success: false, canceled: true, error: 'No file selected' };
+          return {
+            ...createDatasetRouteErrorResult(
+              new IpcError('OPERATION_FAILED', 'No file selected', { reasonCode: 'USER_CANCELED' })
+            ),
+            canceled: true,
+          };
         }
 
         return { success: true, canceled: false, filePath: result.filePaths[0] };

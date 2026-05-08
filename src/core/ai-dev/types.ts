@@ -46,26 +46,36 @@ export const silentLogger: Logger = {
   error: () => {},
 };
 
+type ConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+function writeToRuntimeConsole(level: ConsoleLogLevel, message: string, args: unknown[]): void {
+  const runtimeConsole = globalThis['console'];
+  const writer = runtimeConsole?.[level] ?? runtimeConsole?.log;
+  if (typeof writer !== 'function') {
+    return;
+  }
+  writer.call(runtimeConsole, message, ...args);
+}
+
+function createConsoleLogger(prefix: string): Logger {
+  return {
+    debug: (msg, ...args) => writeToRuntimeConsole('debug', `[${prefix}] ${msg}`, args),
+    info: (msg, ...args) => writeToRuntimeConsole('info', `[${prefix}] ${msg}`, args),
+    warn: (msg, ...args) => writeToRuntimeConsole('warn', `[${prefix}] ${msg}`, args),
+    error: (msg, ...args) => writeToRuntimeConsole('error', `[${prefix}] ${msg}`, args),
+  };
+}
+
 /**
  * 控制台日志
  */
-export const consoleLogger: Logger = {
-  debug: (msg, ...args) => console.debug(`[AI-Dev] ${msg}`, ...args),
-  info: (msg, ...args) => console.info(`[AI-Dev] ${msg}`, ...args),
-  warn: (msg, ...args) => console.warn(`[AI-Dev] ${msg}`, ...args),
-  error: (msg, ...args) => console.error(`[AI-Dev] ${msg}`, ...args),
-};
+export const consoleLogger: Logger = createConsoleLogger('AI-Dev');
 
 /**
  * 创建带自定义前缀的控制台日志
  */
 export function createLogger(prefix: string): Logger {
-  return {
-    debug: (msg, ...args) => console.debug(`[${prefix}] ${msg}`, ...args),
-    info: (msg, ...args) => console.info(`[${prefix}] ${msg}`, ...args),
-    warn: (msg, ...args) => console.warn(`[${prefix}] ${msg}`, ...args),
-    error: (msg, ...args) => console.error(`[${prefix}] ${msg}`, ...args),
-  };
+  return createConsoleLogger(prefix);
 }
 
 // ============================================

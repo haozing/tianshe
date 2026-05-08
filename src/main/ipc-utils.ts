@@ -30,6 +30,14 @@ export interface IPCDetailedErrorResult {
   logContext: Record<string, unknown>;
 }
 
+export interface IPCFailureResponseOptions {
+  details?: string;
+  suggestion?: string;
+  context?: Record<string, unknown>;
+  reasonCode?: string;
+  retryable?: boolean;
+}
+
 function redactStructuredError(error: StructuredError): StructuredError {
   return {
     ...error,
@@ -99,6 +107,28 @@ export function createIPCErrorEnvelope(
       context: error instanceof Error ? { name: error.name } : undefined,
     })
   );
+}
+
+export function createIPCFailureResponse(
+  message: string,
+  code: SharedErrorCode = ErrorCode.OPERATION_FAILED,
+  options?: IPCFailureResponseOptions
+): IPCErrorResponse {
+  const errorDetails = redactStructuredError(
+    createStructuredError(code, message, {
+      details: options?.details,
+      suggestion: options?.suggestion,
+      context: options?.context,
+      reasonCode: options?.reasonCode,
+      retryable: options?.retryable,
+    })
+  );
+  return {
+    success: false,
+    error: errorDetails.message,
+    code: errorDetails.code as SharedErrorCode,
+    errorDetails,
+  };
 }
 
 /**

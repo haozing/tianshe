@@ -65,6 +65,17 @@ vi.mock('../../constants/cloud', () => ({
 
 // Mock ipc-utils 模块
 vi.mock('../ipc-utils', () => ({
+  createIPCFailureResponse: vi.fn((message, code = 'OPERATION_FAILED', options = {}) => ({
+    success: false,
+    error: message,
+    code,
+    errorDetails: {
+      code,
+      message,
+      ...(options.context ? { context: options.context } : {}),
+      ...(options.reasonCode ? { reasonCode: options.reasonCode } : {}),
+    },
+  })),
   handleIPCError: vi.fn((error: unknown) => {
     if (error instanceof Error) {
       return { success: false, error: error.message };
@@ -586,10 +597,11 @@ describe('ViewIPCHandler', () => {
       });
 
       expect(setCookie).not.toHaveBeenCalled();
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         reason: 'cloud-auth-not-ready',
         targetOrigin: 'http://localhost:8080',
+        code: 'PERMISSION_DENIED',
       });
     });
 
@@ -625,12 +637,13 @@ describe('ViewIPCHandler', () => {
       });
 
       expect(setCookie).not.toHaveBeenCalled();
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         reason: 'invalid-workbench-origin',
         cookieName: 'Admin-Token',
         targetOrigin: 'http://example.com',
         expectedOrigin: 'http://localhost:8080',
+        code: 'PERMISSION_DENIED',
       });
     });
 

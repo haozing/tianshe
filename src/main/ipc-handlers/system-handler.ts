@@ -10,7 +10,11 @@ import { isIP } from 'node:net';
 import Store from 'electron-store';
 import { LogStorageService } from '../log-storage-service';
 import { DownloadManager } from '../download';
-import { getUnknownErrorMessage, handleIPCError } from '../ipc-utils';
+import {
+  createIPCFailureResponse,
+  getUnknownErrorMessage,
+  handleIPCError,
+} from '../ipc-utils';
 import { DEFAULT_HTTP_API_CONFIG, type HttpApiConfig } from '../../constants/http-api';
 import { isDevelopmentMode } from '../../constants/runtime-config';
 import { getDeviceFingerprint } from '../system/device-fingerprint';
@@ -328,8 +332,8 @@ export class SystemIPCHandler {
           });
 
           return {
+            ...createIPCFailureResponse(errorMessage, 'OPERATION_FAILED'),
             success: false,
-            error: errorMessage,
             fingerprint: undefined,
           };
         }
@@ -430,8 +434,9 @@ export class SystemIPCHandler {
               error,
             });
             return {
-              success: false,
-              error: error,
+              ...createIPCFailureResponse(error, 'INVALID_INPUT', {
+                context: { errorType: 'INVALID_URL' },
+              }),
               errorType: 'INVALID_URL',
               retryable: false,
               url: url,
@@ -472,8 +477,11 @@ export class SystemIPCHandler {
             const retryable = response.status >= 500 && response.status < 600;
 
             return {
-              success: false,
-              error: error,
+              ...createIPCFailureResponse(
+                error,
+                response.status >= 500 ? 'REQUEST_FAILED' : 'OPERATION_FAILED',
+                { context: { statusCode: response.status, errorType: 'HTTP_ERROR' } }
+              ),
               errorType: response.status >= 500 ? 'SERVER_ERROR' : 'HTTP_ERROR',
               retryable: retryable,
               url: redactSensitiveUrl(response.url || normalizedUrl),
@@ -507,8 +515,9 @@ export class SystemIPCHandler {
                 sizeMB,
               });
               return {
-                success: false,
-                error: error,
+                ...createIPCFailureResponse(error, 'INVALID_INPUT', {
+                  context: { errorType: 'FILE_TOO_LARGE', contentLength },
+                }),
                 errorType: 'FILE_TOO_LARGE',
                 retryable: false,
                 url: redactSensitiveUrl(url),
@@ -539,8 +548,9 @@ export class SystemIPCHandler {
               size: buffer.length,
             });
             return {
-              success: false,
-              error: error,
+              ...createIPCFailureResponse(error, 'INVALID_INPUT', {
+                context: { errorType: 'FILE_TOO_LARGE', size: buffer.length },
+              }),
               errorType: 'FILE_TOO_LARGE',
               retryable: false,
               url: redactSensitiveUrl(url),
@@ -647,8 +657,17 @@ export class SystemIPCHandler {
           });
 
           return {
-            success: false,
-            error: errorMessage,
+            ...createIPCFailureResponse(
+              errorMessage,
+              errorType === 'TIMEOUT'
+                ? 'TIMEOUT'
+                : errorType === 'NETWORK_ERROR'
+                  ? 'NETWORK_ERROR'
+                  : errorType === 'INVALID_URL'
+                    ? 'INVALID_INPUT'
+                    : 'OPERATION_FAILED',
+              { context: { errorType, statusCode }, retryable }
+            ),
             errorType: errorType,
             retryable: retryable,
             url: redactSensitiveUrl(normalizedUrl),

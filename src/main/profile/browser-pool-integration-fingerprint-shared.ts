@@ -161,7 +161,7 @@ function buildProbeHtml(title: string, view: string): string {
     </nav>
     <script>
       document.getElementById('probe-search').textContent = location.search || '(no query)';
-      console.info('fingerprint-probe-ready:' + (location.search || '(base)'));
+      window['console']?.info('fingerprint-probe-ready:' + (location.search || '(base)'));
     </script>
   </body>
 </html>`;

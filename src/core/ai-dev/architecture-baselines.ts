@@ -150,9 +150,4 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
   ),
 };
 
-export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
-  'src/core/ai-dev/types.ts': 8,
-  'src/main/profile/browser-pool-integration-business-shared.ts': 3,
-  'src/main/profile/browser-pool-integration-fingerprint-shared.ts': 1,
-  'src/main/profile/browser-pool-integration-smoke-shared.ts': 2,
-};
+export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {};

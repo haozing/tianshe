@@ -6,7 +6,7 @@
 import { IpcMainInvokeEvent } from 'electron';
 import type { DuckDBService } from '../duckdb/service';
 import { quoteQualifiedName } from '../duckdb/utils';
-import { handleIPCError } from '../ipc-utils';
+import { createIPCFailureResponse, handleIPCError } from '../ipc-utils';
 import type { IpcRouteDefinition } from '../ipc-route-registry';
 import { ipcRouteRegistry } from '../ipc-route-registry';
 import { normalizeRuntimeSQL, shouldUseLiveQueryTemplate } from '../../utils/query-runtime';
@@ -112,7 +112,9 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
           const template = await duckdb.getQueryTemplate(templateId);
 
           if (!template) {
-            return { success: false, error: `Template not found: ${templateId}` };
+            return createIPCFailureResponse(`Template not found: ${templateId}`, 'NOT_FOUND', {
+              context: { templateId },
+            });
           }
 
           return { success: true, template };
@@ -139,7 +141,9 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
       ) => {
         try {
           if (!params.templateId) {
-            return { success: false, error: 'templateId is required' };
+            return createIPCFailureResponse('templateId is required', 'MISSING_PARAMETER', {
+              context: { field: 'templateId' },
+            });
           }
 
           logger.info('Updating query template', {
@@ -171,7 +175,9 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
       handler: async (_event: IpcMainInvokeEvent, params: { templateId: string }) => {
         try {
           if (!params?.templateId) {
-            return { success: false, error: 'templateId is required' };
+            return createIPCFailureResponse('templateId is required', 'MISSING_PARAMETER', {
+              context: { field: 'templateId' },
+            });
           }
 
           await duckdb.refreshQueryTemplateSnapshot(params.templateId);
@@ -217,7 +223,9 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
       ) => {
         try {
           if (!params.templateIds) {
-            return { success: false, error: 'templateIds is required' };
+            return createIPCFailureResponse('templateIds is required', 'MISSING_PARAMETER', {
+              context: { field: 'templateIds' },
+            });
           }
 
           logger.info('Reordering query templates', {
@@ -252,7 +260,9 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
       ) => {
         try {
           if (!params.templateId) {
-            return { success: false, error: 'templateId is required' };
+            return createIPCFailureResponse('templateId is required', 'MISSING_PARAMETER', {
+              context: { field: 'templateId' },
+            });
           }
 
           logger.info('Querying query template', {
@@ -265,7 +275,9 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
           // 1. 获取模板配置
           const template = await duckdb.getQueryTemplate(params.templateId);
           if (!template) {
-            return { success: false, error: 'Template not found' };
+            return createIPCFailureResponse('Template not found', 'NOT_FOUND', {
+              context: { templateId: params.templateId },
+            });
           }
 
           const offset = params.offset || 0;
@@ -282,10 +294,13 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
               template.queryConfig || {}
             );
             if (!sqlPreview.success || !sqlPreview.sql) {
-              return {
-                success: false,
-                error: sqlPreview.error || 'Failed to generate live query SQL',
-              };
+              return createIPCFailureResponse(
+                sqlPreview.error || 'Failed to generate live query SQL',
+                'QUERY_SQL_GENERATION_FAILED',
+                {
+                  context: { templateId: params.templateId, datasetId: template.datasetId },
+                }
+              );
             }
 
             const runtimeSQL = normalizeRuntimeSQL(sqlPreview.sql, template.queryConfig || {});
@@ -301,7 +316,9 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
             );
           } else {
             if (!template.snapshotTableName) {
-              return { success: false, error: 'Template snapshot not found' };
+              return createIPCFailureResponse('Template snapshot not found', 'NOT_FOUND', {
+                context: { templateId: params.templateId, datasetId: template.datasetId },
+              });
             }
             const fromTableRef = quoteQualifiedName(
               `ds_${template.datasetId}`,

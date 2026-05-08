@@ -49,6 +49,17 @@ vi.mock('electron-store', () => {
 
 // Mock ipc-utils
 vi.mock('../ipc-utils', () => ({
+  createIPCFailureResponse: vi.fn((message, code = 'OPERATION_FAILED', options = {}) => ({
+    success: false,
+    error: message,
+    code,
+    errorDetails: {
+      code,
+      message,
+      ...(options.context ? { context: options.context } : {}),
+      ...(options.retryable !== undefined ? { retryable: options.retryable } : {}),
+    },
+  })),
   getUnknownErrorMessage: vi.fn((error, fallback = 'Unknown error occurred') => {
     if (error instanceof Error) return error.message;
     if (typeof error === 'string') return error;

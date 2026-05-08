@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   getUnknownErrorMessage,
   handleIPCError,
+  createIPCFailureResponse,
   createIPCErrorResult,
   inferErrorCodeFromMessage,
 } from './ipc-utils';
@@ -90,6 +91,34 @@ describe('ipc-utils', () => {
           message: 'Profile not found: abc',
         },
       });
+    });
+  });
+
+  describe('createIPCFailureResponse', () => {
+    it('creates a structured response for deliberate business failures', () => {
+      const result = createIPCFailureResponse('templateId is required', 'MISSING_PARAMETER', {
+        context: { field: 'templateId' },
+      });
+
+      expect(result).toMatchObject({
+        success: false,
+        error: 'templateId is required',
+        code: 'MISSING_PARAMETER',
+        errorDetails: {
+          code: 'MISSING_PARAMETER',
+          message: 'templateId is required',
+          context: { field: 'templateId' },
+        },
+      });
+    });
+
+    it('redacts sensitive context and messages', () => {
+      const result = createIPCFailureResponse('token=secret failed', 'OPERATION_FAILED', {
+        context: { filePath: 'C:\\Users\\alice\\secret.txt' },
+      });
+
+      expect(result.error).toBe('token=[REDACTED] failed');
+      expect(result.errorDetails.context).toEqual({ filePath: '[REDACTED_PATH]' });
     });
   });
 

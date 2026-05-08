@@ -10,7 +10,7 @@ import fs from 'fs-extra';
 import { JSPluginManager } from '../../core/js-plugin/manager';
 import { readManifest } from '../../core/js-plugin/loader';
 import { ButtonExecutor } from '../../core/js-plugin/button-executor';
-import { handleIPCError } from '../ipc-utils';
+import { createIPCFailureResponse, handleIPCError } from '../ipc-utils';
 import { IpcError } from './errors';
 import { createLogger } from '../../core/logger';
 import type { DuckDBService } from '../duckdb/service';
@@ -141,10 +141,10 @@ export class JSPluginIPCHandler {
           const shouldShowDevOptions =
             (!app.isPackaged && isDevelopmentMode()) || (httpApiConfig.enableDevMode ?? false);
           if (!shouldShowDevOptions) {
-            return {
-              success: false,
-              error: 'Local plugin import is only available in developer mode',
-            };
+            return createIPCFailureResponse(
+              'Local plugin import is only available in developer mode',
+              'PERMISSION_DENIED'
+            );
           }
 
           let pluginPath = sourcePath;
@@ -185,7 +185,9 @@ export class JSPluginIPCHandler {
 
             if (result.canceled || result.filePaths.length === 0) {
               logger.info('Plugin import canceled by user');
-              return { success: false, error: 'User canceled' };
+              return createIPCFailureResponse('User canceled', 'OPERATION_FAILED', {
+                reasonCode: 'USER_CANCELED',
+              });
             }
 
             pluginPath = result.filePaths[0];
