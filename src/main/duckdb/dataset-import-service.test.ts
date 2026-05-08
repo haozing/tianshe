@@ -11,8 +11,19 @@ const workerState = vi.hoisted(() => ({
   instances: [] as any[],
 }));
 
+const mockLogger = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
 vi.mock('fs-extra', () => ({
   default: mockFs,
+}));
+
+vi.mock('../../core/logger', () => ({
+  createLogger: vi.fn(() => mockLogger),
 }));
 
 vi.mock('worker_threads', () => {
@@ -117,7 +128,6 @@ describe('dataset-import-service failure cleanup', () => {
   });
 
   it('logs checked worker path candidates when import worker is missing', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     mockFs.pathExistsSync.mockReturnValue(false);
     const metadataService = {
       saveMetadata: vi.fn(),
@@ -131,7 +141,12 @@ describe('dataset-import-service failure cleanup', () => {
     await worker.emit('exit', 1);
 
     await expect(importPromise).rejects.toThrow('Worker exited unexpectedly with code 1');
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('import-worker.js was not found'));
-    warnSpy.mockRestore();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'Import worker was not found in expected locations, falling back to dev path',
+      expect.objectContaining({
+        fallbackPath: expect.stringContaining('import-worker.js'),
+        candidates: expect.arrayContaining([expect.stringContaining('import-worker.js')]),
+      })
+    );
   });
 });

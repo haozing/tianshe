@@ -25,6 +25,13 @@ import {
 import { sanitizeDatasetId } from './dataset-storage-service';
 import { generateId } from '../../utils/id-generator';
 import type { DatasetPlacementOptions, ImportTask, ImportProgress } from './types';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('DatasetImportService');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export class DatasetImportService {
   // Worker 管理
@@ -58,14 +65,21 @@ export class DatasetImportService {
           await fs.remove(filePath);
         }
       } catch (error) {
-        console.warn(`[Import] Failed to cleanup file ${filePath}:`, error);
+        logger.warn('Failed to cleanup import artifact file', {
+          datasetId,
+          filePath,
+          errorMessage: getErrorMessage(error),
+        });
       }
     }
 
     try {
       await this.metadataService.deleteMetadata(datasetId);
     } catch (error) {
-      console.warn(`[Import] Failed to cleanup metadata for ${datasetId}:`, error);
+      logger.warn('Failed to cleanup import metadata', {
+        datasetId,
+        errorMessage: getErrorMessage(error),
+      });
     }
   }
 
@@ -96,11 +110,10 @@ export class DatasetImportService {
       return existingPath;
     }
 
-    console.warn(
-      `[Import] import-worker.js was not found in expected locations; falling back to ${devPath}. Checked: ${candidates.join(
-        ', '
-      )}`
-    );
+    logger.warn('Import worker was not found in expected locations, falling back to dev path', {
+      fallbackPath: devPath,
+      candidates,
+    });
     return devPath;
   }
 
@@ -137,7 +150,10 @@ export class DatasetImportService {
         throw error;
       }
       // fs.stat 失败（文件不存在、权限不足等），记录警告但继续尝试导入
-      console.warn('[Import] Failed to check file size, continuing import:', error);
+      logger.warn('Failed to check import file size, continuing import', {
+        filePath,
+        errorMessage: getErrorMessage(error),
+      });
     }
 
     const datasetId = generateId('dataset');
@@ -174,8 +190,12 @@ export class DatasetImportService {
       try {
         worker = new Worker(workerPath, { workerData: task });
       } catch (error: unknown) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        console.error(`[Import] Failed to start worker: ${workerPath}`, error);
+        const errorMsg = getErrorMessage(error);
+        logger.error('Failed to start import worker', {
+          datasetId,
+          workerPath,
+          errorMessage: errorMsg,
+        });
         onProgress?.({
           datasetId,
           status: 'failed',
@@ -241,7 +261,10 @@ export class DatasetImportService {
         // （正常完成/错误时已经清理了 Map）
         if (code !== 0 && this.importWorkers.has(datasetId)) {
           const errorMsg = `Worker exited unexpectedly with code ${code}`;
-          console.error(`[Import] ${errorMsg}`);
+          logger.error('Import worker exited unexpectedly', {
+            datasetId,
+            exitCode: code,
+          });
           void rejectWithCleanup(new Error(errorMsg), errorMsg);
         }
       });
@@ -263,7 +286,10 @@ export class DatasetImportService {
         const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 5000));
         await Promise.race([terminatePromise, timeoutPromise]);
       } catch (error) {
-        console.error(`Failed to terminate worker for ${datasetId}:`, error);
+        logger.error('Failed to terminate import worker', {
+          datasetId,
+          errorMessage: getErrorMessage(error),
+        });
       } finally {
         this.clearImportTracking(datasetId);
       }
@@ -307,7 +333,11 @@ export class DatasetImportService {
       if (error instanceof Error && error.message.includes('文件过大')) {
         throw error;
       }
-      console.warn('[ImportRecords] Failed to check file size:', error);
+      logger.warn('Failed to check import-records file size', {
+        targetDatasetId,
+        filePath,
+        errorMessage: getErrorMessage(error),
+      });
     }
 
     // Step 2: 生成临时数据库ID和路径
@@ -351,10 +381,11 @@ export class DatasetImportService {
       try {
         await this.metadataService.incrementRowCount(targetDatasetId, recordsInserted);
       } catch (countError) {
-        console.warn(
-          `[ImportRecords] Failed to increment row_count for ${targetDatasetId}:`,
-          countError
-        );
+        logger.warn('Failed to increment dataset row_count after importing records', {
+          targetDatasetId,
+          recordsInserted,
+          errorMessage: getErrorMessage(countError),
+        });
       }
 
       onProgress?.({
@@ -378,7 +409,11 @@ export class DatasetImportService {
           await fs.remove(walPath);
         }
       } catch (error) {
-        console.error('[ImportRecords] Failed to cleanup temp file:', error);
+        logger.error('Failed to cleanup import-records temp files', {
+          targetDatasetId,
+          tempOutputPath,
+          errorMessage: getErrorMessage(error),
+        });
       }
     }
   }
@@ -418,8 +453,12 @@ export class DatasetImportService {
       try {
         worker = new Worker(workerPath, { workerData: task });
       } catch (error: unknown) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        console.error(`[ImportRecords] Failed to start worker: ${workerPath}`, error);
+        const errorMsg = getErrorMessage(error);
+        logger.error('Failed to start import-records worker', {
+          targetDatasetId,
+          workerPath,
+          errorMessage: errorMsg,
+        });
         reject(new Error(errorMsg));
         return;
       }
@@ -437,13 +476,19 @@ export class DatasetImportService {
         } else if (message.type === 'complete') {
           resolve();
         } else if (message.type === 'error') {
-          console.error('[ImportRecords] Worker error:', message.error);
+          logger.error('Import-records worker returned an error', {
+            targetDatasetId,
+            errorMessage: String(message.error),
+          });
           reject(new Error(message.error));
         }
       });
 
       worker.on('error', (error) => {
-        console.error('[ImportRecords] Worker thread error:', error);
+        logger.error('Import-records worker thread error', {
+          targetDatasetId,
+          errorMessage: getErrorMessage(error),
+        });
         reject(error);
       });
 
@@ -452,7 +497,10 @@ export class DatasetImportService {
       worker.on('exit', (code) => {
         if (code !== 0 && !resolved) {
           const errorMsg = `Worker stopped unexpectedly with exit code ${code}`;
-          console.error(`[ImportRecords] ${errorMsg}`);
+          logger.error('Import-records worker exited unexpectedly', {
+            targetDatasetId,
+            exitCode: code,
+          });
           reject(new Error(errorMsg));
         }
       });
@@ -534,14 +582,22 @@ export class DatasetImportService {
 
       return recordsInserted;
     } catch (error) {
-      console.error('[ImportRecords] Cross-database insert failed:', error);
+      logger.error('Cross-database import-records insert failed', {
+        targetDatasetId: safeTargetId,
+        tempDatasetId: safeTempId,
+        errorMessage: getErrorMessage(error),
+      });
       throw error;
     } finally {
       // DETACH 临时数据库
       try {
         await this.conn.run(`DETACH ${quoteIdentifier(tempAlias)}`);
       } catch (error) {
-        console.warn('[ImportRecords] Failed to detach temp database:', error);
+        logger.warn('Failed to detach import-records temp database', {
+          targetDatasetId: safeTargetId,
+          tempDatasetId: safeTempId,
+          errorMessage: getErrorMessage(error),
+        });
       }
       // 目标库保持 ATTACH（由现有的智能管理机制处理）
     }
