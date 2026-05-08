@@ -108,6 +108,12 @@ npx vitest run src/main/sync/sync-local-apply-service.test.ts
 npx vitest run src/main/ipc-utils.test.ts
 ```
 
+完成情况：2026-05-08
+
+- 已新增 `tianshe-review/runtime-profile-contract-baseline.md`，记录 Ruyi client、helpers.profile、ProfileService、SyncLocalApplyService 的稳定入口。
+- 已新增 `src/core/ai-dev/runtime-profile-contract-baseline.test.ts`，静态锁定关键公开方法和 Ruyi remote command dispatch 覆盖。
+- 已将契约基线测试接入 `npm run test:architecture`。
+
 ## 4. 阶段 1：Ruyi client 深拆
 
 ### 当前问题
@@ -527,7 +533,7 @@ npm run test:architecture
 
 ## 12. 后续任务列表
 
-- [ ] 阶段 0：补契约清单和测试基线。
+- [x] 阶段 0：补契约清单和测试基线。
 - [ ] 阶段 1：Ruyi client 深拆到 900 行以下。
 - [ ] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步 `docs/plugin-helpers-reference.md`。
 - [ ] 阶段 3：ProfileService 深拆到 900 行以下。

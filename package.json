@@ -27,7 +27,7 @@
     "test": "npm run test:open",
     "test:open": "node scripts/test-edition.js open",
     "test:open:full": "node scripts/test-edition.js open --full",
-    "test:architecture": "vitest run src/core/ai-dev/architecture-maintenance-guard.test.ts src/core/ai-dev/architecture-boundary.test.ts",
+    "test:architecture": "vitest run src/core/ai-dev/architecture-maintenance-guard.test.ts src/core/ai-dev/architecture-boundary.test.ts src/core/ai-dev/runtime-profile-contract-baseline.test.ts",
     "test:main-bootstrap": "vitest run src/main/app-runtime.test.ts src/main/bootstrap/app-ready-bootstrap.test.ts src/main/bootstrap/runtime-error-bootstrap.test.ts src/main/bootstrap/shutdown-bootstrap.test.ts src/main/bootstrap/stdio-bootstrap.test.ts src/main/browser-pool-readiness.test.ts",
     "test:browser-pool": "vitest run src/core/browser-pool/__tests__/pool-manager.test.ts src/core/browser-pool/__tests__/pool-manager.closed-persistent.test.ts src/core/browser-pool/__tests__/wait-queue.test.ts src/core/browser-pool/__tests__/global-pool.test.ts src/core/browser-pool/__tests__/profile-live-session-lease.test.ts",
     "test:dataset-ipc": "vitest run src/main/ipc-handlers/dataset-handler.test.ts src/renderer/src/stores/__tests__/datasetStore.test.ts",
