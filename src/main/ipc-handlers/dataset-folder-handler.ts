@@ -7,6 +7,33 @@ import type { DuckDBService } from '../duckdb/service';
 import type { IpcRouteDefinition } from '../ipc-route-registry';
 import { handleIPCError } from '../ipc-utils';
 import { ipcRouteRegistry } from '../ipc-route-registry';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('DatasetFolderIPCHandler');
+
+function normalizeDatasetFolderIpcError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+
+  return { raw: String(error) };
+}
+
+function logDatasetFolderIpcError(
+  channel: string,
+  error: unknown,
+  fields: Record<string, unknown> = {}
+): void {
+  logger.error('Dataset folder IPC handler failed', {
+    channel,
+    ...fields,
+    error: normalizeDatasetFolderIpcError(error),
+  });
+}
 
 export function createDatasetFolderRoutes(duckDBService: DuckDBService): IpcRouteDefinition[] {
   const folderService = duckDBService.getFolderService();
@@ -26,7 +53,7 @@ export function createDatasetFolderRoutes(duckDBService: DuckDBService): IpcRout
           );
           return { success: true, folderId };
         } catch (error) {
-          console.error('[IPC] folder:create error:', error);
+          logDatasetFolderIpcError('folder:create', error, { parentId, pluginId });
           return handleIPCError(error);
         }
       },
@@ -40,7 +67,7 @@ export function createDatasetFolderRoutes(duckDBService: DuckDBService): IpcRout
           const tree = await folderService.getFolderTree();
           return { success: true, tree };
         } catch (error) {
-          console.error('[IPC] folder:get-tree error:', error);
+          logDatasetFolderIpcError('folder:get-tree', error);
           return handleIPCError(error);
         }
       },
@@ -54,7 +81,7 @@ export function createDatasetFolderRoutes(duckDBService: DuckDBService): IpcRout
           await folderService.moveDatasetToFolder(datasetId, folderId);
           return { success: true };
         } catch (error) {
-          console.error('[IPC] folder:move-dataset error:', error);
+          logDatasetFolderIpcError('folder:move-dataset', error, { datasetId, folderId });
           return handleIPCError(error);
         }
       },
@@ -68,7 +95,7 @@ export function createDatasetFolderRoutes(duckDBService: DuckDBService): IpcRout
           await folderService.deleteFolder(folderId, deleteContents);
           return { success: true };
         } catch (error) {
-          console.error('[IPC] folder:delete error:', error);
+          logDatasetFolderIpcError('folder:delete', error, { folderId, deleteContents });
           return handleIPCError(error);
         }
       },
@@ -82,7 +109,7 @@ export function createDatasetFolderRoutes(duckDBService: DuckDBService): IpcRout
           await folderService.updateFolder(folderId, updates);
           return { success: true };
         } catch (error) {
-          console.error('[IPC] folder:update error:', error);
+          logDatasetFolderIpcError('folder:update', error, { folderId });
           return handleIPCError(error);
         }
       },
@@ -96,7 +123,10 @@ export function createDatasetFolderRoutes(duckDBService: DuckDBService): IpcRout
           await folderService.reorderTables(folderId, tableIds);
           return { success: true };
         } catch (error) {
-          console.error('[IPC] folder:reorder-tables error:', error);
+          logDatasetFolderIpcError('folder:reorder-tables', error, {
+            folderId,
+            tableCount: tableIds?.length,
+          });
           return handleIPCError(error);
         }
       },
@@ -110,7 +140,9 @@ export function createDatasetFolderRoutes(duckDBService: DuckDBService): IpcRout
           await folderService.reorderFolders(folderIds);
           return { success: true };
         } catch (error) {
-          console.error('[IPC] folder:reorder-folders error:', error);
+          logDatasetFolderIpcError('folder:reorder-folders', error, {
+            folderCount: folderIds?.length,
+          });
           return handleIPCError(error);
         }
       },
@@ -124,7 +156,7 @@ export function createDatasetFolderRoutes(duckDBService: DuckDBService): IpcRout
           await folderService.createFoldersForExistingPlugins();
           return { success: true };
         } catch (error) {
-          console.error('[IPC] folder:create-for-existing-plugins error:', error);
+          logDatasetFolderIpcError('folder:create-for-existing-plugins', error);
           return handleIPCError(error);
         }
       },
@@ -135,5 +167,5 @@ export function createDatasetFolderRoutes(duckDBService: DuckDBService): IpcRout
 /** @deprecated 使用 createDatasetFolderRoutes + ipcRouteRegistry.registerAll */
 export function registerDatasetFolderHandlers(duckDBService: DuckDBService): void {
   ipcRouteRegistry.registerAll(createDatasetFolderRoutes(duckDBService));
-  console.log('✅ Dataset folder IPC handlers registered');
+  logger.info('Dataset folder IPC handlers registered');
 }

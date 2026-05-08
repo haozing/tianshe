@@ -1,4 +1,7 @@
 import type { DuckDBService } from '../duckdb/service';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('DatasetFolderIPCBootstrap');
 
 type DatasetFolderHandlersModule = {
   registerDatasetFolderHandlers?: (duckdbService: DuckDBService) => void;
@@ -34,12 +37,10 @@ export function registerDatasetFolderHandlersFromModule(
   const datasetFolderModule = mod as DatasetFolderHandlersModule;
   const registerDatasetFolderHandlers = resolveRegisterDatasetFolderHandlers(datasetFolderModule);
   if (typeof registerDatasetFolderHandlers !== 'function') {
-    console.error(
-      '[ERROR] Dataset folder handlers module shape mismatch:',
-      getObjectKeys(datasetFolderModule),
-      'defaultKeys=',
-      getObjectKeys(datasetFolderModule.default)
-    );
+    logger.error('Dataset folder handlers module shape mismatch', {
+      moduleKeys: getObjectKeys(datasetFolderModule),
+      defaultKeys: getObjectKeys(datasetFolderModule.default),
+    });
     throw new TypeError('registerDatasetFolderHandlers is not a function');
   }
   registerDatasetFolderHandlers(duckdbService);

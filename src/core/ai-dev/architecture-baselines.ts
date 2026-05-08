@@ -208,8 +208,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/index.ts': 51,
   'src/main/internal-browser-devtools.ts': 1,
   'src/main/ipc.ts': 1,
-  'src/main/ipc-handlers/dataset-folder-handler-bootstrap.ts': 1,
-  'src/main/ipc-handlers/dataset-folder-handler.ts': 9,
   'src/main/ipc-handlers/file-handler.ts': 12,
   'src/main/ipc-handlers/http-api-handler.ts': 2,
   'src/main/ipc-handlers/observation-handler.ts': 1,
