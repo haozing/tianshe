@@ -7,6 +7,9 @@ import { useEffect, useState } from 'react';
 import { AlertCircle, Cpu, Globe, ChevronRight } from 'lucide-react';
 import { usePluginStore, usePoolStatus, useMemoryUsage } from '../../stores/pluginStore';
 import { useUIStore } from '../../stores/uiStore';
+import { createRendererLogger } from '../../lib/logger';
+
+const logger = createRendererLogger('ResourceMonitor');
 
 export function ResourceMonitor() {
   const { startResourceMonitoring, stopResourceMonitoring } = usePluginStore();
@@ -36,12 +39,18 @@ export function ResourceMonitor() {
         } else {
           const errorMsg = result.error || '未知错误';
           setDeviceIdError(errorMsg);
-          console.error('[ResourceMonitor] Failed to get device ID:', errorMsg);
+          logger.error('Failed to get device ID', {
+            operation: 'resourceMonitor.deviceFingerprint.load',
+            error: errorMsg,
+          });
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         setDeviceIdError(errorMsg);
-        console.error('[ResourceMonitor] Exception while fetching device ID:', error);
+        logger.error('Exception while fetching device ID', {
+          operation: 'resourceMonitor.deviceFingerprint.load',
+          error,
+        });
       }
     };
     fetchDeviceId();
@@ -66,7 +75,10 @@ export function ResourceMonitor() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (error) {
-      console.error('[ResourceMonitor] 复制失败:', error);
+      logger.error('Failed to copy device ID', {
+        operation: 'resourceMonitor.deviceFingerprint.copy',
+        error,
+      });
     }
   };
 

@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { toast } from '../../lib/toast';
 import { cn } from '../../lib/utils';
+import { createRendererLogger } from '../../lib/logger';
 import type {
   CreateProfileParams,
   UpdateProfileParams,
@@ -43,6 +44,8 @@ import {
   DEFAULT_BROWSER_PROFILE,
   BROWSER_POOL_LIMITS,
 } from '../../../../constants/browser-pool';
+
+const logger = createRendererLogger('ProfileFormDialog');
 
 interface ProfileFormDialogProps {
   open: boolean;
@@ -782,7 +785,10 @@ export function ProfileFormDialog({
         setGroupId(created.id);
       }
     } catch (error) {
-      console.error('[ProfileFormDialog] Failed to create group:', error);
+      logger.error('Failed to create profile group', {
+        operation: 'profile.group.create',
+        error,
+      });
       toast.error('创建分组失败', error instanceof Error ? error.message : '未知错误');
     }
   };

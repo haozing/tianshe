@@ -17,6 +17,7 @@ import {
   UserRound,
 } from 'lucide-react';
 import { useUIStore, type ActiveView } from '../../stores/uiStore';
+import { createRendererLogger } from '../../lib/logger';
 import { renderStringIcon } from '../../lib/string-icon';
 import { cn } from '../../lib/utils';
 import type { JSPluginInfo } from '../../../../types/js-plugin';
@@ -29,6 +30,8 @@ import {
   areControlledAppShellPagesHidden,
   type AppShellConfig,
 } from '../../../../shared/app-shell-config';
+
+const logger = createRendererLogger('ActivityBar');
 
 interface ActivityBarButtonProps {
   icon: React.ReactNode;
@@ -162,7 +165,11 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
       }
 
       setWidth(width).catch((error) => {
-        console.error('[ActivityBar] Failed to sync activity bar width:', error);
+        logger.error('Failed to sync activity bar width', {
+          operation: 'activityBar.width.sync',
+          width,
+          error,
+        });
       });
     };
 
@@ -222,7 +229,10 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
           }
         }
       } catch (error) {
-        console.error('[ActivityBar] Failed to load plugins:', error);
+        logger.error('Failed to load activity bar plugins', {
+          operation: 'activityBar.plugins.load',
+          error,
+        });
       }
     }
 
@@ -263,11 +273,17 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
               preserveDockedRight: true,
             });
           } else {
-            console.warn('[ActivityBar] View detach API is unavailable in renderer context');
+            logger.warn('View detach API is unavailable in renderer context', {
+              operation: 'activityBar.view.detach',
+            });
           }
         }
       } catch (error) {
-        console.error('[ActivityBar] Failed to detach views:', error);
+        logger.error('Failed to detach views', {
+          operation: 'activityBar.view.detach',
+          pluginId,
+          error,
+        });
       }
 
       // 3. 设置活动插件视图
@@ -276,7 +292,11 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
       // 4. 显示插件视图（布局自动从 manifest 计算）
       await window.electronAPI.jsPlugin.showPluginView(pluginId);
     } catch (error) {
-      console.error(`[ActivityBar] Failed to show plugin view ${pluginId}:`, error);
+      logger.error('Failed to show plugin view', {
+        operation: 'activityBar.pluginView.show',
+        pluginId,
+        error,
+      });
     }
   }, [activePluginView, setActivePluginView]);
 
@@ -387,10 +407,11 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
             hiddenPluginViewForCloudAuthRef.current = activePluginView;
           }
         } catch (error) {
-          console.error(
-            `[ActivityBar] Failed to hide plugin view ${activePluginView} for cloud auth dialog:`,
-            error
-          );
+          logger.error('Failed to hide plugin view for cloud auth dialog', {
+            operation: 'activityBar.cloudAuth.hidePluginView',
+            pluginId: activePluginView,
+            error,
+          });
         }
         return;
       }
@@ -404,10 +425,11 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
       try {
         await window.electronAPI.jsPlugin.showPluginView(hiddenPluginId);
       } catch (error) {
-        console.error(
-          `[ActivityBar] Failed to restore plugin view ${hiddenPluginId} after cloud auth dialog:`,
-          error
-        );
+        logger.error('Failed to restore plugin view after cloud auth dialog', {
+          operation: 'activityBar.cloudAuth.restorePluginView',
+          pluginId: hiddenPluginId,
+          error,
+        });
       }
     };
 

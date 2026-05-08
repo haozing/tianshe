@@ -14,6 +14,9 @@ import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } fr
 import { Button } from '../ui/button';
 import { ConfigFormField } from './ConfigFormField';
 import { Alert, AlertDescription } from '../ui/alert';
+import { createRendererLogger } from '../../lib/logger';
+
+const logger = createRendererLogger('PluginConfigDialog');
 
 /**
  * 根据插件配置 schema 动态生成 zod 验证 schema
@@ -121,7 +124,11 @@ export function PluginConfigDialog({
         setError('该插件没有可配置项');
       }
     } catch (err) {
-      console.error('[PluginConfigDialog] Failed to load config schema:', err);
+      logger.error('Failed to load config schema', {
+        operation: 'plugin.config.schema.load',
+        pluginId,
+        error: err,
+      });
       setConfigSchema({});
       setError('无法加载配置信息');
     }
@@ -140,7 +147,12 @@ export function PluginConfigDialog({
           const value = await window.electronAPI.jsPlugin.getConfig(pluginId, key);
           values[key] = value !== undefined ? value : schema[key].default;
         } catch (err) {
-          console.error(`[PluginConfigDialog] Failed to load config "${key}":`, err);
+          logger.error('Failed to load config value', {
+            operation: 'plugin.config.value.load',
+            pluginId,
+            configKey: key,
+            error: err,
+          });
           values[key] = schema[key].default;
         }
       }
@@ -148,7 +160,11 @@ export function PluginConfigDialog({
       // 使用 reset 更新表单值
       reset(values);
     } catch (validationErr) {
-      console.error('[PluginConfigDialog] Failed to load plugin config:', validationErr);
+      logger.error('Failed to load plugin config', {
+        operation: 'plugin.config.load',
+        pluginId,
+        error: validationErr,
+      });
       setError(validationErr instanceof Error ? validationErr.message : '加载配置失败');
     } finally {
       setLoading(false);
@@ -173,7 +189,11 @@ export function PluginConfigDialog({
         setSuccess(false);
       }, 1000);
     } catch (saveErr) {
-      console.error('[PluginConfigDialog] Failed to save plugin config:', saveErr);
+      logger.error('Failed to save plugin config', {
+        operation: 'plugin.config.save',
+        pluginId,
+        error: saveErr,
+      });
       setError(saveErr instanceof Error ? saveErr.message : '保存配置失败');
     }
   });

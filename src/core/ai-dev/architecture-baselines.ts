@@ -155,9 +155,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/profile/browser-pool-integration-business-shared.ts': 3,
   'src/main/profile/browser-pool-integration-fingerprint-shared.ts': 1,
   'src/main/profile/browser-pool-integration-smoke-shared.ts': 2,
-  'src/renderer/src/components/AccountCenter/ProfileFormDialog.tsx': 1,
-  'src/renderer/src/components/AccountCenter/ProfileList.tsx': 3,
-  'src/renderer/src/components/ActivityBar/index.tsx': 7,
   'src/renderer/src/components/DatasetsPage/CustomPageViewer.tsx': 2,
   'src/renderer/src/components/DatasetsPage/DatasetTable.tsx': 5,
   'src/renderer/src/components/DatasetsPage/ExportDialog.tsx': 1,
@@ -174,7 +171,4 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/renderer/src/components/DatasetsPage/panels/LookupPanel.tsx': 1,
   'src/renderer/src/components/DatasetsPage/panels/SamplePanel.tsx': 1,
   'src/renderer/src/components/DatasetsPage/useDatasetsWorkspaceController.ts': 3,
-  'src/renderer/src/components/PluginMarket/PluginConfigDialog.tsx': 4,
-  'src/renderer/src/components/PluginMarket/ResourceMonitor.tsx': 3,
-  'src/renderer/src/components/PluginMarket/UninstallPluginDialog.tsx': 3,
 };

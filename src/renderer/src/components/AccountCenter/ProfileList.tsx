@@ -27,8 +27,11 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { cn } from '../../lib/utils';
+import { createRendererLogger } from '../../lib/logger';
 import { toast } from '../../lib/toast';
 import type { AutomationEngine, BrowserProfile, PoolBrowserInfo } from '../../../../types/profile';
+
+const logger = createRendererLogger('ProfileList');
 
 interface ProfileListProps {
   profiles: BrowserProfile[];
@@ -234,7 +237,11 @@ function ProfileCard({
         await onProfileMutationApplied?.();
       }
     } catch (error) {
-      console.error('[ProfileList] Failed to delete profile:', error);
+      logger.error('Failed to delete profile', {
+        operation: 'profile.delete',
+        profileId: profile.id,
+        error,
+      });
       toast.error('删除失败', error instanceof Error ? error.message : '未知错误');
     } finally {
       setIsDeleteConfirmOpen(false);
@@ -261,7 +268,14 @@ function ProfileCard({
 
       await onProfileDataChanged?.({ refreshRunning: true });
     } catch (error) {
-      console.error('[ProfileList] Failed to launch profile browser:', error);
+      logger.error('Failed to launch profile browser', {
+        operation: 'profile.browser.launch',
+        profileId: profile.id,
+        engine,
+        strategy: launchOptions?.strategy || 'reuse',
+        browserId: launchOptions?.browserId,
+        error,
+      });
       toast.error('启动失败', error instanceof Error ? error.message : '未知错误');
     } finally {
       setIsLaunching(false);
@@ -311,10 +325,12 @@ function ProfileCard({
           return;
         }
       } catch (error) {
-        console.warn(
-          '[ProfileList] Failed to activate existing persistent browser, fallback to launch:',
-          error
-        );
+        logger.warn('Failed to activate existing persistent browser; fallback to launch', {
+          operation: 'profile.browser.activateExisting',
+          profileId: profile.id,
+          engine,
+          error,
+        });
       }
     }
     await launchWithOptions();

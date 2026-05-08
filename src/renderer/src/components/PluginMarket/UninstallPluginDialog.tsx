@@ -8,6 +8,9 @@ import { Dialog } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { AlertTriangle, Table, Loader2, CheckCircle2, Circle } from 'lucide-react';
 import { Alert, AlertDescription } from '../ui/alert';
+import { createRendererLogger } from '../../lib/logger';
+
+const logger = createRendererLogger('UninstallPluginDialog');
 
 interface PluginTable {
   id: string;
@@ -73,11 +76,19 @@ export function UninstallPluginDialog({
       if (result.success && result.tables) {
         setTables(result.tables);
       } else {
-        console.error('[UninstallPluginDialog] Failed to load plugin tables:', result.error);
+        logger.error('Failed to load plugin tables', {
+          operation: 'plugin.uninstall.tables.load',
+          pluginId,
+          error: result.error,
+        });
         setTables([]);
       }
     } catch (error) {
-      console.error('[UninstallPluginDialog] Failed to load plugin tables:', error);
+      logger.error('Failed to load plugin tables', {
+        operation: 'plugin.uninstall.tables.load',
+        pluginId,
+        error,
+      });
       setTables([]);
     } finally {
       setLoading(false);
@@ -91,7 +102,12 @@ export function UninstallPluginDialog({
       await onConfirm(deleteTables);
       onOpenChange(false);
     } catch (error) {
-      console.error('[UninstallPluginDialog] Failed to uninstall plugin:', error);
+      logger.error('Failed to uninstall plugin', {
+        operation: 'plugin.uninstall.confirm',
+        pluginId,
+        deleteTables: deleteOption === 'plugin-and-tables',
+        error,
+      });
     } finally {
       setSubmitting(false);
     }
