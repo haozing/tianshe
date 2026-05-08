@@ -2,6 +2,7 @@ import { type IpcMainInvokeEvent } from 'electron';
 import { ipcRouteRegistry } from '../../ipc-route-registry';
 import type { DuckDBService } from '../../duckdb/service';
 import { handleIPCError } from '../../ipc-utils';
+import { logDatasetRouteError } from './dataset-route-logger';
 
 export function registerDatasetQueryPreviewRoutes(duckdb: DuckDBService): void {
   registerExecuteQuery(duckdb);
@@ -95,7 +96,7 @@ function registerPreviewFilterCount(duckdb: DuckDBService): void {
         const result = await duckdb.previewFilterCount(datasetId, filterConfig);
         return { success: true, result };
       } catch (error: unknown) {
-        console.error('[Dataset] Error previewing filter:', error);
+        logDatasetRouteError('Error previewing filter', error, { datasetId: params.datasetId });
         return handleIPCError(error);
       }
     },
@@ -120,7 +121,9 @@ function registerPreviewAggregate(duckdb: DuckDBService): void {
         const result = await duckdb.previewAggregate(datasetId, aggregateConfig, options);
         return { success: true, result };
       } catch (error: unknown) {
-        console.error('[Dataset] Error previewing aggregate:', error);
+        logDatasetRouteError('Error previewing aggregate', error, {
+          datasetId: params.datasetId,
+        });
         return handleIPCError(error);
       }
     },
@@ -145,7 +148,7 @@ function registerPreviewSample(duckdb: DuckDBService): void {
         const result = await duckdb.previewSample(datasetId, sampleConfig, queryConfig);
         return { success: true, result };
       } catch (error: unknown) {
-        console.error('[Dataset] Error previewing sample:', error);
+        logDatasetRouteError('Error previewing sample', error, { datasetId: params.datasetId });
         return handleIPCError(error);
       }
     },
@@ -170,7 +173,7 @@ function registerPreviewLookup(duckdb: DuckDBService): void {
         const result = await duckdb.previewLookup(datasetId, lookupConfig, options);
         return { success: true, result };
       } catch (error: unknown) {
-        console.error('[Dataset] Error previewing lookup:', error);
+        logDatasetRouteError('Error previewing lookup', error, { datasetId: params.datasetId });
         return handleIPCError(error);
       }
     },
@@ -195,7 +198,7 @@ function registerPreviewGroup(duckdb: DuckDBService): void {
         const result = await duckdb.previewGroup(datasetId, groupConfig, options);
         return { success: true, result };
       } catch (error: unknown) {
-        console.error('[Dataset] Error previewing group:', error);
+        logDatasetRouteError('Error previewing group', error, { datasetId: params.datasetId });
         return handleIPCError(error);
       }
     },

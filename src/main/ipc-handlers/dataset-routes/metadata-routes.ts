@@ -2,6 +2,9 @@ import { type IpcMainInvokeEvent } from 'electron';
 import { ipcRouteRegistry } from '../../ipc-route-registry';
 import type { DuckDBService } from '../../duckdb/service';
 import { handleIPCError } from '../../ipc-utils';
+import { IpcError } from '../errors';
+import { createDatasetRouteErrorResult } from './dataset-route-errors';
+import { logDatasetRouteError, logDatasetRouteWarning } from './dataset-route-logger';
 
 export function registerDatasetMetadataRoutes(duckdb: DuckDBService): void {
   registerListDatasets(duckdb);
@@ -38,24 +41,25 @@ function registerGetDatasetInfo(duckdb: DuckDBService): void {
         const dataset = await duckdb.getDatasetInfo(datasetId);
 
         if (!dataset) {
-          return { success: false, error: `Dataset not found: ${datasetId}` };
+          return createDatasetRouteErrorResult(IpcError.notFound('Dataset', datasetId));
         }
 
         if (dataset.schema && Array.isArray(dataset.schema)) {
           const missingFieldType = dataset.schema.filter((col) => !col.fieldType);
           if (missingFieldType.length > 0) {
-            console.warn(
-              `[IPC] WARNING ${missingFieldType.length} columns missing fieldType:`,
-              missingFieldType.map((col) => col.name)
-            );
+            logDatasetRouteWarning('Dataset columns missing fieldType', {
+              datasetId,
+              missingCount: missingFieldType.length,
+              columnNames: missingFieldType.map((col) => col.name),
+            });
           }
         } else {
-          console.warn(`[IPC] WARNING Dataset has no valid schema!`);
+          logDatasetRouteWarning('Dataset has no valid schema', { datasetId });
         }
 
         return { success: true, dataset };
       } catch (error: unknown) {
-        console.error(`[IPC] Error in getDatasetInfo:`, error);
+        logDatasetRouteError('Error in getDatasetInfo', error, { datasetId });
         return handleIPCError(error);
       }
     },

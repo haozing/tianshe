@@ -2,6 +2,7 @@ import { type IpcMainInvokeEvent } from 'electron';
 import { ipcRouteRegistry } from '../../ipc-route-registry';
 import type { DuckDBService } from '../../duckdb/service';
 import { createDatasetRouteErrorResult } from './dataset-route-errors';
+import { logDatasetRouteError, logDatasetRouteWarning } from './dataset-route-logger';
 
 export function registerDatasetRecordRoutes(duckdb: DuckDBService): void {
   registerInsertRecord(duckdb);
@@ -106,9 +107,10 @@ function registerHardDeleteRows(duckdb: DuckDBService): void {
       }
     ): Promise<{ success: boolean; deletedCount?: number; error?: string; code?: string }> => {
       try {
-        console.warn(
-          `[IPC] PERMANENTLY deleting ${params.rowIds.length} rows from dataset ${params.datasetId}`
-        );
+        logDatasetRouteWarning('Permanently deleting dataset rows', {
+          datasetId: params.datasetId,
+          rowCount: params.rowIds.length,
+        });
 
         const deletedCount = await duckdb.hardDeleteRows(params.datasetId, params.rowIds);
 
@@ -117,7 +119,10 @@ function registerHardDeleteRows(duckdb: DuckDBService): void {
           deletedCount,
         };
       } catch (error) {
-        console.error('[IPC] Failed to hard delete rows:', error);
+        logDatasetRouteError('Failed to hard delete rows', error, {
+          datasetId: params.datasetId,
+          rowCount: params.rowIds.length,
+        });
         return createDatasetRouteErrorResult(error);
       }
     },

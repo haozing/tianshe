@@ -6,6 +6,7 @@ import { ipcRouteRegistry } from '../../ipc-route-registry';
 import type { DuckDBService } from '../../duckdb/service';
 import type { ExportOptions, ExportPathParams, ExportProgress } from '../../../types/dataset-export';
 import { createDatasetRouteErrorResult } from './dataset-route-errors';
+import { logDatasetRouteError } from './dataset-route-logger';
 
 export const MAX_IMPORT_RECORDS_BASE64_BYTES = 500 * 1024 * 1024;
 
@@ -235,7 +236,7 @@ function registerExportDataset(duckdb: DuckDBService): void {
           event.sender.send('duckdb:export-progress', progress);
         });
       } catch (error: unknown) {
-        console.error('[Dataset] Error exporting dataset:', error);
+        logDatasetRouteError('Error exporting dataset', error);
         const errorResult = createDatasetRouteErrorResult(error);
         return {
           success: false,
@@ -245,6 +246,7 @@ function registerExportDataset(duckdb: DuckDBService): void {
           executionTime: 0,
           error: errorResult.error,
           code: errorResult.code,
+          errorDetails: errorResult.errorDetails,
         };
       }
     },
@@ -352,7 +354,7 @@ function registerImportRecordsFromFile(duckdb: DuckDBService): void {
           recordsInserted: result.recordsInserted,
         };
       } catch (error: unknown) {
-        console.error('[Dataset] Error importing records from file:', error);
+        logDatasetRouteError('Error importing records from file', error, { datasetId });
         return createDatasetRouteErrorResult(error);
       }
     },

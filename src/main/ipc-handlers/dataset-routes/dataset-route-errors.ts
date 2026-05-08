@@ -1,11 +1,13 @@
 import { getUnknownErrorMessage } from '../../../utils/error-message';
 import { redactSensitiveText } from '../../../utils/redaction';
+import { createStructuredError, type StructuredError } from '../../../types/error-codes';
 import { IpcError, type IpcErrorCode } from '../errors';
 
-export interface DatasetRouteErrorResult {
+export interface DatasetRouteErrorResult extends Record<string, unknown> {
   success: false;
   error: string;
   code: IpcErrorCode;
+  errorDetails: StructuredError;
 }
 
 const DATASET_ERROR_CODE_PATTERNS: Array<{ pattern: RegExp; code: IpcErrorCode }> = [
@@ -35,17 +37,26 @@ export function createDatasetRouteErrorResult(
   fallbackCode: IpcErrorCode = 'INTERNAL_ERROR'
 ): DatasetRouteErrorResult {
   if (error instanceof IpcError) {
+    const message = redactSensitiveText(error.message);
     return {
       success: false,
-      error: redactSensitiveText(error.message),
+      error: message,
       code: error.code,
+      errorDetails: createStructuredError(error.code, message, {
+        context: error.details,
+      }),
     };
   }
 
   const message = getUnknownErrorMessage(error);
+  const redactedMessage = redactSensitiveText(message);
+  const code = inferDatasetRouteErrorCode(message, fallbackCode);
   return {
     success: false,
-    error: redactSensitiveText(message),
-    code: inferDatasetRouteErrorCode(message, fallbackCode),
+    error: redactedMessage,
+    code,
+    errorDetails: createStructuredError(code, redactedMessage, {
+      context: error instanceof Error ? { name: error.name } : undefined,
+    }),
   };
 }

@@ -1,6 +1,7 @@
 import { type IpcMainInvokeEvent } from 'electron';
 import { ipcRouteRegistry } from '../../ipc-route-registry';
 import { handleIPCError } from '../../ipc-utils';
+import { logDatasetRouteError } from './dataset-route-logger';
 
 const DATASET_SCHEMA_UPDATED_CHANNEL = 'dataset:schema-updated';
 
@@ -27,7 +28,7 @@ export function registerDatasetRoute(options: {
         return await options.handler(event, ...args);
       } catch (error: unknown) {
         if (options.logError) {
-          console.error(options.logError, error);
+          logDatasetRouteError(options.logError, error, { channel: options.channel });
         }
         return handleIPCError(error);
       }

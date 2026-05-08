@@ -1,6 +1,8 @@
 import { type IpcMainInvokeEvent } from 'electron';
 import type { DuckDBService } from '../../duckdb/service';
 import { validateDatasetColumnNamePolicy } from '../../../utils/dataset-column-name-policy';
+import { IpcError } from '../errors';
+import { createDatasetRouteErrorResult } from './dataset-route-errors';
 import { registerDatasetRoute, registerSchemaMutationRoute } from './route-utils';
 
 export function registerDatasetSchemaRoutes(duckdb: DuckDBService): void {
@@ -170,7 +172,9 @@ function registerValidateColumnName(duckdb: DuckDBService): void {
     handler: async (_event: IpcMainInvokeEvent, datasetId: string, columnName: string) => {
       const dataset = await duckdb.getDatasetInfo(datasetId);
       if (!dataset) {
-        return { success: false, error: '数据集不存在' };
+        return createDatasetRouteErrorResult(
+          new IpcError('NOT_FOUND', '数据集不存在', { datasetId })
+        );
       }
 
       const policyResult = validateDatasetColumnNamePolicy(columnName);

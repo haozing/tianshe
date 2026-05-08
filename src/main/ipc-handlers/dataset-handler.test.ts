@@ -36,6 +36,14 @@ vi.mock('../ipc-utils', () => ({
   })),
 }));
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 import { DatasetIPCHandler, normalizeImportRecordsBase64Payload } from './dataset-handler';
 import { ipcRouteRegistry } from '../ipc-route-registry';
 import type { DuckDBService } from '../duckdb/service';
@@ -294,6 +302,10 @@ describe('DatasetIPCHandler', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('not found');
+      expect(result.code).toBe('NOT_FOUND');
+      expect(result.errorDetails).toMatchObject({
+        code: 'NOT_FOUND',
+      });
     });
   });
 
@@ -731,6 +743,10 @@ describe('DatasetIPCHandler', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('数据集不存在');
+      expect(result.code).toBe('NOT_FOUND');
+      expect(result.errorDetails).toMatchObject({
+        code: 'NOT_FOUND',
+      });
     });
   });
 
