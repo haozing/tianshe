@@ -64,7 +64,6 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
     [
       'src/core/js-plugin/manager.test.ts',
       'src/core/js-plugin/namespaces/database.ts',
-      'src/core/js-plugin/namespaces/profile.ts',
       'src/core/js-plugin/plugin-loader.test.ts',
       'src/core/js-plugin/registry.ts',
     ]
@@ -166,7 +165,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/core/js-plugin/namespaces/advanced.ts': 1,
   'src/core/js-plugin/namespaces/button.ts': 8,
   'src/core/js-plugin/namespaces/ffi.ts': 1,
-  'src/core/js-plugin/namespaces/profile.ts': 21,
   'src/core/js-plugin/namespaces/saved-site.ts': 3,
   'src/core/js-plugin/namespaces/utils/interval.ts': 6,
   'src/core/js-plugin/namespaces/window.ts': 12,

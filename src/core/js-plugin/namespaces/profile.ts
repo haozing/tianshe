@@ -50,204 +50,19 @@ import type {
   IWindowManager,
 } from '../../browser-pool/ports';
 import type { InternalDevToolsOpener } from './window';
-import type { BrowserInterface } from '../../../types/browser-interface';
 import type { BrowserRuntimeDescriptor } from '../../../types/browser-interface';
-import {
-  getBrowserPoolManager,
-  showBrowserView,
-  hideBrowserView,
-  showBrowserViewInPopup,
-  closeBrowserPopup,
-} from '../../browser-pool';
-import {
-  acquireProfileLiveSessionLease,
-  attachProfileLiveSessionLease,
-} from '../../browser-pool/profile-live-session-lease';
 import type { AutomationEngine, BrowserHandle, ReleaseOptions } from '../../browser-pool/types';
-import {
-  getPresetById,
-  getDefaultFingerprint,
-  FINGERPRINT_PRESET_OPTIONS,
-} from '../../../constants/fingerprint-defaults';
-import { mergeFingerprintConfig } from '../../../constants/fingerprint-defaults';
-import {
-  buildProfileResourceKey,
-  resourceCoordinator,
-} from '../../resource-coordinator';
-import {
-  generateVariant,
-  applyPreset as applyPresetConfig,
-} from '../../../constants/fingerprint-defaults';
-import { fingerprintManager } from '../../stealth';
-import { validateFingerprintConfig } from '../../fingerprint/fingerprint-validation';
 import {
   getStaticEngineRuntimeDescriptor,
 } from '../../browser-pool/engine-capability-registry';
-
-const DEFAULT_RESOURCE_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
-
-const PLUGIN_BROWSER_PRIVATE_API_MIGRATIONS = {
-  session: 'browser.getCookies(filter?), browser.setCookie(cookie), browser.clearCookies(), browser.getUserAgent()',
-  cdp: 'browser.startNetworkCapture(options), browser.getNetworkEntries(filter), browser.waitForResponse(urlPattern, timeout)',
-  capture: 'browser.screenshot(options), browser.screenshotDetailed(options), browser.snapshot(options)',
-} as const;
-
-type PluginBrowserBlockedProperty = keyof typeof PLUGIN_BROWSER_PRIVATE_API_MIGRATIONS;
-
-function createPrivateBrowserApiError(property: PluginBrowserBlockedProperty): Error {
-  const migration = PLUGIN_BROWSER_PRIVATE_API_MIGRATIONS[property];
-  const error = new Error(
-    `browser.${property} is not available in plugin runtime. Migrate to ${migration}.`
-  ) as Error & {
-    code?: string;
-    details?: Record<string, unknown>;
-  };
-  error.name = 'PluginBrowserApiError';
-  error.code = 'PLUGIN_BROWSER_PRIVATE_API_BLOCKED';
-  error.details = {
-    property,
-    migration,
-  };
-  return error;
-}
-
-function createPluginBrowserFacade(browser: BrowserInterface): BrowserInterface {
-  const target: Record<string, unknown> = {};
-  const hasCapability =
-    typeof browser.hasCapability === 'function'
-      ? browser.hasCapability.bind(browser)
-      : (_name: string) => false;
-
-  const bindMethod = <K extends keyof BrowserInterface>(name: K): void => {
-    const value = browser[name];
-    if (typeof value === 'function') {
-      target[name as string] = (value as Function).bind(browser);
-    } else if (value !== undefined) {
-      target[name as string] = value;
-    }
-  };
-
-  bindMethod('describeRuntime');
-  target.hasCapability = hasCapability;
-  bindMethod('goto');
-  bindMethod('back');
-  bindMethod('forward');
-  bindMethod('reload');
-  bindMethod('getCurrentUrl');
-  bindMethod('title');
-  bindMethod('snapshot');
-  bindMethod('click');
-  bindMethod('type');
-  bindMethod('select');
-  bindMethod('waitForSelector');
-  bindMethod('getText');
-  bindMethod('getAttribute');
-  bindMethod('search');
-  bindMethod('evaluate');
-  bindMethod('evaluateWithArgs');
-  bindMethod('screenshot');
-  bindMethod('screenshotDetailed');
-  bindMethod('getCookies');
-  bindMethod('setCookie');
-  bindMethod('clearCookies');
-  bindMethod('getUserAgent');
-  bindMethod('startNetworkCapture');
-  bindMethod('stopNetworkCapture');
-  bindMethod('getNetworkEntries');
-  bindMethod('getNetworkSummary');
-  bindMethod('clearNetworkEntries');
-  bindMethod('waitForResponse');
-  bindMethod('startConsoleCapture');
-  bindMethod('stopConsoleCapture');
-  bindMethod('getConsoleMessages');
-  bindMethod('clearConsoleMessages');
-  bindMethod('show');
-  bindMethod('hide');
-  bindMethod('clickAtNormalized');
-  bindMethod('dragNormalized');
-  bindMethod('moveToNormalized');
-  bindMethod('scrollAtNormalized');
-  bindMethod('clickText');
-  bindMethod('findTextNormalized');
-  bindMethod('findTextNormalizedDetailed');
-  bindMethod('findText');
-  bindMethod('textExists');
-  bindMethod('recognizeText');
-  bindMethod('setDownloadBehavior');
-  bindMethod('listDownloads');
-  bindMethod('waitForDownload');
-  bindMethod('cancelDownload');
-  bindMethod('waitForDialog');
-  bindMethod('handleDialog');
-  bindMethod('listTabs');
-  bindMethod('createTab');
-  bindMethod('activateTab');
-  bindMethod('closeTab');
-  if (hasCapability('emulation.identity')) {
-    bindMethod('setEmulationIdentity');
-    bindMethod('clearEmulation');
-  }
-  if (hasCapability('emulation.viewport')) {
-    bindMethod('setViewportEmulation');
-  }
-  bindMethod('enableRequestInterception');
-  bindMethod('disableRequestInterception');
-  bindMethod('getInterceptedRequests');
-  bindMethod('clearInterceptedRequests');
-  bindMethod('waitForInterceptedRequest');
-  bindMethod('continueRequest');
-  bindMethod('fulfillRequest');
-  bindMethod('failRequest');
-  bindMethod('setWindowOpenPolicy');
-  bindMethod('getWindowOpenPolicy');
-  bindMethod('clearWindowOpenPolicy');
-
-  if (browser.native) {
-    target.native = browser.native;
-  }
-
-  if (typeof browser.withAbortSignal === 'function') {
-    target.withAbortSignal = (signal: AbortSignal) =>
-      createPluginBrowserFacade(browser.withAbortSignal!(signal));
-  }
-
-  return new Proxy(target as unknown as BrowserInterface, {
-    get(currentTarget, prop, receiver) {
-      if (
-        typeof prop === 'string' &&
-        Object.prototype.hasOwnProperty.call(PLUGIN_BROWSER_PRIVATE_API_MIGRATIONS, prop)
-      ) {
-        throw createPrivateBrowserApiError(prop as PluginBrowserBlockedProperty);
-      }
-      return Reflect.get(currentTarget, prop, receiver);
-    },
-    has(currentTarget, prop) {
-      if (
-        typeof prop === 'string' &&
-        Object.prototype.hasOwnProperty.call(PLUGIN_BROWSER_PRIVATE_API_MIGRATIONS, prop)
-      ) {
-        return false;
-      }
-      return Reflect.has(currentTarget, prop);
-    },
-    ownKeys(currentTarget) {
-      return Reflect.ownKeys(currentTarget).filter(
-        (key) =>
-          typeof key !== 'string' ||
-          !Object.prototype.hasOwnProperty.call(PLUGIN_BROWSER_PRIVATE_API_MIGRATIONS, key)
-      );
-    },
-    getOwnPropertyDescriptor(currentTarget, prop) {
-      if (
-        typeof prop === 'string' &&
-        Object.prototype.hasOwnProperty.call(PLUGIN_BROWSER_PRIVATE_API_MIGRATIONS, prop)
-      ) {
-        return undefined;
-      }
-      return Reflect.getOwnPropertyDescriptor(currentTarget, prop);
-    },
-  });
-}
+import { ProfileCrudNamespace } from './profile-crud-namespace';
+import {
+  ProfileFingerprintNamespace,
+  type FingerprintValidationResult,
+  type GenerateFingerprintOptions,
+  type PresetInfo,
+} from './profile-fingerprint-namespace';
+import { ProfileLaunchNamespace } from './profile-launch-namespace';
 
 /**
  * 启动选项
@@ -339,116 +154,10 @@ export interface WithLeaseOptions extends LaunchOptions {
   release?: ReleaseOptions;
 }
 
-interface ManagedProfileLease {
-  handle: BrowserHandle;
-  refCount: number;
-  renewTimer: NodeJS.Timeout | null;
-  released: boolean;
-  release: (options?: ReleaseOptions) => Promise<void>;
-  renew: (extensionMs?: number) => Promise<void>;
-}
-
-/**
- * 指纹生成选项（暴露给插件）
- */
-export interface GenerateFingerprintOptions {
-  /** 操作系统 */
-  os?: 'windows' | 'macos' | 'linux';
-  /** 浏览器 */
-  browser?: 'chrome' | 'firefox' | 'edge';
-  /** 浏览器最小版本 */
-  browserMinVersion?: number;
-  /** 浏览器最大版本 */
-  browserMaxVersion?: number;
-  /** 设备类型 */
-  device?: 'desktop' | 'mobile';
-  /** 语言列表 */
-  locales?: string[];
-  /** 屏幕宽度范围 */
-  screenWidth?: { min?: number; max?: number };
-  /** 屏幕高度范围 */
-  screenHeight?: { min?: number; max?: number };
-}
-
-function normalizeLocaleList(locales?: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const rawLocale of Array.isArray(locales) ? locales : []) {
-    const locale = String(rawLocale || '').trim();
-    if (!locale || seen.has(locale)) {
-      continue;
-    }
-    seen.add(locale);
-    out.push(locale);
-  }
-  return out;
-}
-
-function parseFingerprintVersionMajor(version: string | undefined): number | null {
-  const major = Number.parseInt(String(version || '').split('.')[0] || '', 10);
-  return Number.isFinite(major) && major > 0 ? major : null;
-}
-
-function resolveDimensionWithinRange(
-  current: number,
-  range?: { min?: number; max?: number }
-): number | undefined {
-  if (!range) {
-    return undefined;
-  }
-
-  const min =
-    typeof range.min === 'number' && Number.isFinite(range.min) && range.min > 0
-      ? Math.round(range.min)
-      : undefined;
-  const max =
-    typeof range.max === 'number' && Number.isFinite(range.max) && range.max > 0
-      ? Math.round(range.max)
-      : undefined;
-  const lower = min ?? max ?? Math.max(1, Math.round(current));
-  const upper = max ?? min ?? Math.max(lower, Math.round(current));
-  if (lower > upper) {
-    return lower;
-  }
-
-  const safeCurrent = Math.max(lower, Math.min(upper, Math.round(current)));
-  if (lower === upper) {
-    return lower;
-  }
-  const span = upper - lower;
-  const offset = Math.min(span, Math.abs(safeCurrent - lower));
-  return lower + Math.floor(Math.random() * (offset + 1));
-}
-
-/**
- * 指纹验证结果
- */
-export interface FingerprintValidationResult {
-  /** 是否有效 */
-  valid: boolean;
-  /** 警告信息列表 */
-  warnings: string[];
-}
-
-/**
- * 预设信息（简化版，用于列表展示）
- */
-export interface PresetInfo {
-  id: string;
-  name: string;
-  description: string;
-  os: string;
-  browser: string;
-}
-
-/**
- * Profile 命名空间
- */
 export class ProfileNamespace {
-  private readonly pluginConfigKeys = {
-    visibleLayout: ['profile.launch.visibleLayout', 'profileLaunchVisibleLayout'] as const,
-    rightDockSize: ['profile.launch.rightDockSize', 'profileLaunchRightDockSize'] as const,
-  };
+  private readonly crudNamespace: ProfileCrudNamespace;
+  private readonly fingerprintNamespace: ProfileFingerprintNamespace;
+  private readonly launchNamespace: ProfileLaunchNamespace;
 
   constructor(
     private pluginId: string,
@@ -458,7 +167,26 @@ export class ProfileNamespace {
     private windowManager: IWindowManager,
     private getPluginConfig?: (key: string) => Promise<any>,
     private devToolsOpener?: InternalDevToolsOpener
-  ) {}
+  ) {
+    this.crudNamespace = new ProfileCrudNamespace({
+      pluginId,
+      profileService,
+      groupService,
+    });
+    this.launchNamespace = new ProfileLaunchNamespace({
+      pluginId,
+      profileService,
+      viewManager,
+      windowManager,
+      getPluginConfig,
+      devToolsOpener,
+    });
+    this.fingerprintNamespace = new ProfileFingerprintNamespace({
+      pluginId,
+      getProfile: (profileId) => this.profileService.get(profileId),
+      updateProfile: (profileId, params) => this.update(profileId, params),
+    });
+  }
 
   describeEngineRuntime(engine: AutomationEngine = 'electron'): BrowserRuntimeDescriptor {
     return getStaticEngineRuntimeDescriptor(engine);
@@ -469,190 +197,6 @@ export class ProfileNamespace {
       electron: getStaticEngineRuntimeDescriptor('electron'),
       extension: getStaticEngineRuntimeDescriptor('extension'),
       ruyi: getStaticEngineRuntimeDescriptor('ruyi'),
-    };
-  }
-
-  private normalizeVisibleLayout(value: unknown): 'right-docked' | 'fullscreen' | undefined {
-    if (typeof value !== 'string') return undefined;
-    const normalized = value.trim().toLowerCase();
-    if (
-      normalized === 'right-docked' ||
-      normalized === 'right_docked' ||
-      normalized === 'docked-right'
-    ) {
-      return 'right-docked';
-    }
-    if (normalized === 'fullscreen' || normalized === 'full') {
-      return 'fullscreen';
-    }
-    return undefined;
-  }
-
-  private normalizeRightDockSize(value: unknown): number | string | undefined {
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return value;
-    }
-    if (typeof value === 'string' && value.trim().length > 0) {
-      return value.trim();
-    }
-    return undefined;
-  }
-
-  private async readPluginConfigValue<T>(
-    keys: readonly string[],
-    parser: (value: unknown) => T | undefined
-  ): Promise<T | undefined> {
-    if (!this.getPluginConfig) return undefined;
-
-    for (const key of keys) {
-      try {
-        const raw = await this.getPluginConfig(key);
-        const parsed = parser(raw);
-        if (parsed !== undefined) {
-          return parsed;
-        }
-      } catch (error) {
-        console.warn(`[Profile.launch] Failed to read plugin config "${key}":`, error);
-      }
-    }
-
-    return undefined;
-  }
-
-  private async resolveVisibleLayout(
-    options?: LaunchOptions
-  ): Promise<'right-docked' | 'fullscreen'> {
-    return (
-      options?.visibleLayout ??
-      (await this.readPluginConfigValue(
-        this.pluginConfigKeys.visibleLayout,
-        this.normalizeVisibleLayout.bind(this)
-      )) ??
-      'right-docked'
-    );
-  }
-
-  private async resolveRightDockSize(
-    options?: LaunchOptions
-  ): Promise<number | string | undefined> {
-    return (
-      options?.rightDockSize ??
-      (await this.readPluginConfigValue(
-        this.pluginConfigKeys.rightDockSize,
-        this.normalizeRightDockSize.bind(this)
-      ))
-    );
-  }
-
-  private async applyHandleVisibility(
-    handle: BrowserHandle,
-    visible: boolean,
-    state: {
-      visibleLayout: 'right-docked' | 'fullscreen';
-      rightDockSize?: number | string;
-    }
-  ): Promise<void> {
-    if (handle.viewId) {
-      if (visible) {
-        const shown = showBrowserView(handle.viewId, this.viewManager, this.windowManager, {
-          windowId: 'main',
-          source: 'pool',
-          layout: state.visibleLayout === 'fullscreen' ? 'fullscreen' : 'docked-right',
-          rightDockSize: state.rightDockSize,
-          pluginId: this.pluginId,
-        });
-        if (!shown) {
-          throw new Error(
-            `[Profile.launch] Failed to show browser view ${handle.viewId} (layout=${state.visibleLayout})`
-          );
-        }
-      } else {
-        hideBrowserView(handle.viewId, this.viewManager);
-      }
-      return;
-    }
-
-    // 非 Electron 引擎：尝试使用 BrowserInterface.show/hide
-    if (visible && typeof handle.browser.show === 'function') {
-      await handle.browser.show();
-    } else if (!visible && typeof handle.browser.hide === 'function') {
-      await handle.browser.hide();
-    }
-  }
-
-  private attachVisibilityControlsToHandle(
-    handle: BrowserHandle,
-    state: {
-      visibleLayout: 'right-docked' | 'fullscreen';
-      rightDockSize?: number | string;
-    }
-  ): BrowserHandle {
-    const originalShow =
-      typeof handle.browser.show === 'function'
-        ? handle.browser.show.bind(handle.browser)
-        : undefined;
-    const originalHide =
-      typeof handle.browser.hide === 'function'
-        ? handle.browser.hide.bind(handle.browser)
-        : undefined;
-    const originalRelease = handle.release.bind(handle);
-
-    handle.browser.show = async () => {
-      if (!handle.viewId) {
-        if (originalShow) {
-          await originalShow();
-        }
-        return;
-      }
-
-      await this.applyHandleVisibility(handle, true, state);
-      if (originalShow) {
-        // Electron 引擎下保留 focus 行为
-        await originalShow().catch(() => undefined);
-      }
-    };
-
-    handle.browser.hide = async () => {
-      if (!handle.viewId) {
-        if (originalHide) {
-          await originalHide();
-        }
-        return;
-      }
-
-      await this.applyHandleVisibility(handle, false, state);
-      if (originalHide) {
-        await originalHide().catch(() => undefined);
-      }
-    };
-
-    handle.release = async (releaseOptions?: ReleaseOptions) => {
-      if (handle.viewId) {
-        // 释放前统一回收可见布局，避免残留 dock/split 影响后续切换
-        await this.applyHandleVisibility(handle, false, state).catch(() => undefined);
-      } else if (originalHide) {
-        await originalHide().catch(() => undefined);
-      }
-      return originalRelease(releaseOptions);
-    };
-
-    return handle;
-  }
-
-  private wrapBrowserHandle(handle: BrowserHandle): BrowserHandle {
-    return {
-      ...handle,
-      browser: createPluginBrowserFacade(handle.browser),
-      release: handle.release.bind(handle),
-      renew: handle.renew.bind(handle),
-    };
-  }
-
-  private wrapPopupBrowserHandle(handle: PopupBrowserHandle): PopupBrowserHandle {
-    return {
-      ...this.wrapBrowserHandle(handle),
-      popupId: handle.popupId,
-      closePopup: handle.closePopup.bind(handle),
     };
   }
 
@@ -669,126 +213,7 @@ export class ProfileNamespace {
     options: WithLeaseOptions | undefined,
     handler: (ctx: WithLeaseRunContext) => Promise<T>
   ): Promise<T> {
-    const normalizedProfileId = String(profileId || '').trim();
-    if (!normalizedProfileId) {
-      throw new Error('profileId is required');
-    }
-
-    const resourceKey = buildProfileResourceKey(normalizedProfileId);
-    const resourceWaitTimeoutMs =
-      typeof options?.resourceWaitTimeoutMs === 'number' && options.resourceWaitTimeoutMs > 0
-        ? options.resourceWaitTimeoutMs
-        : DEFAULT_RESOURCE_WAIT_TIMEOUT_MS;
-    const releaseOptions: ReleaseOptions = {
-      navigateTo: 'about:blank',
-      ...(options?.release || {}),
-    };
-
-    const runWithLease = async (): Promise<T> => {
-      const context = resourceCoordinator.getCurrentContext();
-      const existingLease = context?.profileLeases.get(normalizedProfileId) as
-        | ManagedProfileLease
-        | undefined;
-
-      if (existingLease) {
-        existingLease.refCount += 1;
-        try {
-          return await handler({
-            browser: existingLease.handle.browser,
-            browserId: existingLease.handle.browserId,
-            sessionId: existingLease.handle.sessionId,
-            engine: existingLease.handle.engine,
-            viewId: existingLease.handle.viewId,
-            release: existingLease.release,
-            renew: existingLease.renew,
-          });
-        } finally {
-          existingLease.refCount -= 1;
-        }
-      }
-
-      const profile = await this.profileService.get(normalizedProfileId);
-      const lockTimeoutMs =
-        typeof profile?.lockTimeoutMs === 'number' && profile.lockTimeoutMs > 0
-          ? profile.lockTimeoutMs
-          : 120000;
-      const renewIntervalMs =
-        typeof options?.renewIntervalMs === 'number' && options.renewIntervalMs > 0
-          ? options.renewIntervalMs
-          : Math.max(10000, Math.min(60000, Math.floor(lockTimeoutMs / 2)));
-
-      const handle = await this.launch(normalizedProfileId, {
-        ...options,
-        timeout: options?.timeout ?? resourceWaitTimeoutMs,
-        signal: options?.signal,
-      });
-
-      const releaseHandle = async (overrideReleaseOptions?: ReleaseOptions) => {
-        if (lease.released) return;
-        lease.released = true;
-        if (lease.renewTimer) {
-          clearInterval(lease.renewTimer);
-          lease.renewTimer = null;
-        }
-        context?.profileLeases.delete(normalizedProfileId);
-        await handle.release({
-          ...releaseOptions,
-          ...(overrideReleaseOptions || {}),
-        });
-      };
-
-      const lease: ManagedProfileLease = {
-        handle,
-        refCount: 1,
-        renewTimer: null,
-        released: false,
-        release: releaseHandle,
-        renew: async (extensionMs?: number) => {
-          if (lease.released) return;
-          await handle.renew(extensionMs);
-        },
-      };
-      context?.profileLeases.set(normalizedProfileId, lease);
-
-      if (options?.autoRenew !== false) {
-        lease.renewTimer = setInterval(() => {
-          void handle.renew(options?.renewExtensionMs).catch(() => undefined);
-        }, renewIntervalMs);
-        lease.renewTimer.unref?.();
-      }
-
-      try {
-        return await handler({
-          browser: handle.browser,
-          browserId: handle.browserId,
-          sessionId: handle.sessionId,
-          engine: handle.engine,
-          viewId: handle.viewId,
-          release: lease.release,
-          renew: lease.renew,
-        });
-      } finally {
-        lease.refCount -= 1;
-        if (lease.refCount <= 0 && !lease.released) {
-          await lease.release();
-        }
-      }
-    };
-
-    const currentContext = resourceCoordinator.getCurrentContext();
-    if (currentContext?.heldKeys.has(resourceKey)) {
-      return await runWithLease();
-    }
-
-    return await resourceCoordinator.runExclusive(
-      [resourceKey],
-      {
-        ownerToken: currentContext?.ownerToken,
-        timeoutMs: resourceWaitTimeoutMs,
-        signal: options?.signal,
-      },
-      runWithLease
-    );
+    return this.launchNamespace.withLease(profileId, options, handler);
   }
 
   /**
@@ -808,7 +233,7 @@ export class ProfileNamespace {
    * const idle = await helpers.profile.list({ status: 'idle' });
    */
   async list(params?: ProfileListParams): Promise<BrowserProfile[]> {
-    return this.profileService.list(params);
+    return this.crudNamespace.list(params);
   }
 
   /**
@@ -825,7 +250,7 @@ export class ProfileNamespace {
    * }
    */
   async get(id: string): Promise<BrowserProfile | null> {
-    return this.profileService.get(id);
+    return this.crudNamespace.get(id);
   }
 
   /**
@@ -867,10 +292,7 @@ export class ProfileNamespace {
    * });
    */
   async create(params: CreateProfileParams): Promise<BrowserProfile> {
-    console.log(`[Profile] Creating profile for plugin ${this.pluginId}: ${params.name}`);
-    const profile = await this.profileService.create(params);
-    console.log(`[Profile] Profile created: ${profile.id} (${profile.name})`);
-    return profile;
+    return this.crudNamespace.create(params);
   }
 
   /**
@@ -903,39 +325,7 @@ export class ProfileNamespace {
    * });
    */
   async update(id: string, params: UpdateProfileParams): Promise<BrowserProfile> {
-    console.log(`[Profile] Updating profile for plugin ${this.pluginId}: ${id}`);
-    const profile = await this.profileService.update(id, params);
-
-    const runtimeChanged = params.fingerprint !== undefined || params.engine !== undefined;
-
-    if (runtimeChanged) {
-      try {
-        fingerprintManager.clearCache(profile.id);
-      } catch {
-        // ignore
-      }
-
-      try {
-        fingerprintManager.clearCache(profile.partition);
-      } catch {
-        // ignore
-      }
-
-      try {
-        const poolManager = getBrowserPoolManager();
-        const destroyedCount = await poolManager.destroyProfileBrowsers(id);
-        if (destroyedCount > 0) {
-          console.log(
-            `[Profile] Runtime fields changed, destroyed ${destroyedCount} browser(s) for profile: ${id}`
-          );
-        }
-      } catch {
-        // ignore
-      }
-    }
-
-    console.log(`[Profile] Profile updated: ${profile.id}`);
-    return profile;
+    return this.crudNamespace.update(id, params);
   }
 
   /**
@@ -961,10 +351,7 @@ export class ProfileNamespace {
    * }
    */
   async delete(id: string): Promise<void> {
-    console.log(`[Profile] Deleting profile for plugin ${this.pluginId}: ${id}`);
-    // 与 UI 删除行为保持一致：保留账号并解除平台绑定，避免出现悬空绑定
-    await this.profileService.deleteWithCascade(id);
-    console.log(`[Profile] Profile deleted: ${id}`);
+    return this.crudNamespace.delete(id);
   }
 
   /**
@@ -985,16 +372,7 @@ export class ProfileNamespace {
    * }
    */
   async isAvailable(id: string): Promise<boolean> {
-    try {
-      const poolManager = getBrowserPoolManager();
-      const stats = await poolManager.getProfileStats(id);
-      if (!stats) return false;
-
-      return stats.browserCount === 0;
-    } catch {
-      // 如果池未初始化，回退到原始检查
-      return this.profileService.isAvailable(id);
-    }
+    return this.crudNamespace.isAvailable(id);
   }
 
   /**
@@ -1013,7 +391,7 @@ export class ProfileNamespace {
     active: number;
     error: number;
   }> {
-    return this.profileService.getStats();
+    return this.crudNamespace.getStats();
   }
 
   /**
@@ -1028,7 +406,7 @@ export class ProfileNamespace {
    * }
    */
   async listGroups(): Promise<any[]> {
-    return this.groupService.listTree();
+    return this.crudNamespace.listGroups();
   }
 
   /**
@@ -1072,86 +450,7 @@ export class ProfileNamespace {
    * await Promise.all(handles.map(h => h.release()));
    */
   async launch(profileId: string, options?: LaunchOptions): Promise<BrowserHandle> {
-    const poolManager = getBrowserPoolManager();
-    const profileLease = await acquireProfileLiveSessionLease(profileId, {
-      timeoutMs: options?.timeout || 30000,
-      signal: options?.signal,
-    });
-
-    // 🔍 诊断日志：获取浏览器前的池状态
-    const preStats = await poolManager.getStats();
-    const queueStats = poolManager.getWaitQueueStats();
-    console.log(
-      `[Profile.launch] 🔍 获取浏览器前状态:`,
-      `总数=${preStats.totalBrowsers}, 空闲=${preStats.idleBrowsers}, 锁定=${preStats.lockedBrowsers}, 等待队列=${queueStats.totalWaiting}`,
-      `| plugin=${this.pluginId}, profile=${profileId}, timeout=${options?.timeout || 30000}ms`
-    );
-
-    const acquireStartTime = Date.now();
-
-    // 获取浏览器句柄（source 使用 'internal' 表示插件内部调用）
-    let handle: BrowserHandle;
-    try {
-      handle = await poolManager.acquire(
-        profileId,
-        {
-          strategy: options?.strategy || 'any',
-          browserId: options?.browserId,
-          timeout: options?.timeout || 30000,
-          signal: options?.signal,
-          engine: options?.engine,
-        },
-        'internal',
-        this.pluginId
-      );
-    } catch (error) {
-      await profileLease?.release().catch(() => undefined);
-      // 🔍 诊断日志：获取失败时的池状态
-      const failStats = await poolManager.getStats();
-      const failQueueStats = poolManager.getWaitQueueStats();
-      const browsers = poolManager.listBrowsers();
-      console.error(
-        `[Profile.launch] ❌ 获取浏览器失败:`,
-        `耗时=${Date.now() - acquireStartTime}ms`,
-        `| 当前状态: 总数=${failStats.totalBrowsers}, 空闲=${failStats.idleBrowsers}, 锁定=${failStats.lockedBrowsers}, 等待=${failQueueStats.totalWaiting}`
-      );
-      console.error(
-        `[Profile.launch] 📋 浏览器列表:`,
-        browsers.map((b) => `${b.id.slice(0, 8)}(${b.status},profile=${b.sessionId})`).join(', ')
-      );
-      throw error;
-    }
-
-    const acquireDuration = Date.now() - acquireStartTime;
-    console.log(
-      `[Profile.launch] ✅ 获取浏览器成功: browser=${handle.browserId.slice(0, 8)}, 耗时=${acquireDuration}ms`
-    );
-
-    try {
-      // 如果指定了初始 URL，导航到该 URL
-      if (options?.url) {
-        await handle.browser.goto(options.url);
-      }
-
-      // 根据 visible 参数控制浏览器显示/隐藏（默认隐藏）
-      const visibilityState = {
-        visibleLayout: await this.resolveVisibleLayout(options),
-        rightDockSize: await this.resolveRightDockSize(options),
-      };
-      await this.applyHandleVisibility(handle, options?.visible === true, visibilityState);
-      handle = this.attachVisibilityControlsToHandle(handle, visibilityState);
-      handle = attachProfileLiveSessionLease(handle, profileLease);
-
-      console.log(
-        `[Profile] Browser launched for plugin ${this.pluginId}: profile=${profileId}, browser=${handle.browserId}`
-      );
-
-      return this.wrapBrowserHandle(handle);
-    } catch (error) {
-      await handle.release({ destroy: true }).catch(() => undefined);
-      await profileLease?.release().catch(() => undefined);
-      throw error;
-    }
+    return this.launchNamespace.launch(profileId, options);
   }
 
   /**
@@ -1172,12 +471,7 @@ export class ProfileNamespace {
     lockedCount: number;
     waitingCount: number;
   } | null> {
-    try {
-      const poolManager = getBrowserPoolManager();
-      return poolManager.getProfileStats(profileId);
-    } catch {
-      return null;
-    }
+    return this.launchNamespace.getUsage(profileId);
   }
 
   /**
@@ -1223,272 +517,7 @@ export class ProfileNamespace {
    * });
    */
   async launchPopup(profileId: string, options?: LaunchPopupOptions): Promise<PopupBrowserHandle> {
-    const poolManager = getBrowserPoolManager();
-    const acquireOptions = {
-      strategy: options?.strategy || 'any',
-      browserId: options?.browserId,
-      timeout: options?.timeout || 30000,
-      signal: options?.signal,
-      engine: options?.engine,
-    };
-    const tryAdoptExistingHandle = async () =>
-      await poolManager.adoptSamePluginLockedBrowser(
-        profileId,
-        {
-          ...acquireOptions,
-          requireViewId: false,
-        },
-        'internal',
-        this.pluginId
-      );
-
-    let reusedLease: Awaited<ReturnType<typeof acquireProfileLiveSessionLease>> | null = null;
-    let reusedHandle: BrowserHandle | null = null;
-    try {
-      reusedLease = await acquireProfileLiveSessionLease(profileId, {
-        timeoutMs: options?.timeout || 30000,
-        signal: options?.signal,
-      });
-    } catch (error) {
-      reusedHandle = await tryAdoptExistingHandle();
-      if (!reusedHandle) {
-        throw error;
-      }
-    }
-
-    if (!reusedHandle) {
-      try {
-        reusedHandle = await poolManager.acquire(profileId, acquireOptions, 'internal', this.pluginId);
-      } catch (error) {
-        await reusedLease?.release().catch(() => undefined);
-        reusedHandle = await tryAdoptExistingHandle();
-        if (!reusedHandle) {
-          throw error;
-        }
-      }
-    }
-
-    try {
-      const initialUrl = options?.url || '';
-      if (initialUrl) {
-        await reusedHandle.browser.goto(initialUrl);
-      }
-
-      const viewId = reusedHandle.viewId;
-      if (!viewId) {
-        const showBrowser = reusedHandle.browser.show;
-        if (typeof showBrowser === 'function') {
-          let externalClosed = false;
-          await showBrowser.call(reusedHandle.browser);
-          return this.wrapPopupBrowserHandle(
-            attachProfileLiveSessionLease(
-              {
-                ...reusedHandle,
-                popupId: `external:${reusedHandle.browserId}`,
-                closePopup: () => {
-                  if (externalClosed) return;
-                  externalClosed = true;
-
-                  void (async () => {
-                    if (typeof reusedHandle.browser.hide === 'function') {
-                      await reusedHandle.browser.hide().catch(() => undefined);
-                    }
-
-                    if (options?.onClose) {
-                      try {
-                        options.onClose();
-                      } catch (error) {
-                        console.error(
-                          '[Profile.launchPopup] Error in external popup onClose callback',
-                          error
-                        );
-                      }
-                    }
-                  })();
-                },
-              },
-              reusedLease
-            )
-          );
-        }
-        throw new Error(`Browser ${reusedHandle.browserId} has no associated viewId`);
-      }
-
-      let defaultTitle = 'Browser';
-      if (initialUrl) {
-        try {
-          defaultTitle = new URL(initialUrl).hostname;
-        } catch {
-          // ignore URL parse failure
-        }
-      }
-
-      const popupId = showBrowserViewInPopup(viewId, this.viewManager, this.windowManager, {
-        title: options?.title || defaultTitle,
-        width: options?.width || 1200,
-        height: options?.height || 800,
-        openDevTools: options?.openDevTools,
-        onViewReady: (view) => {
-          this.devToolsOpener?.(view.webContents, {
-            override: options?.openDevTools,
-            mode: 'detach',
-          });
-        },
-        onClose: options?.onClose,
-      });
-
-      if (!popupId) {
-        throw new Error(`Failed to create popup for browser ${reusedHandle.browserId}`);
-      }
-
-      const popupIdValue = popupId;
-      console.log(
-        `[Profile] Browser launched in popup for plugin ${this.pluginId}: profile=${profileId}, browser=${reusedHandle.browserId}, popup=${popupIdValue}`
-      );
-
-      return this.wrapPopupBrowserHandle(
-        attachProfileLiveSessionLease(
-          {
-            ...reusedHandle,
-            popupId: popupIdValue,
-            closePopup: () => {
-              closeBrowserPopup(popupIdValue, this.windowManager);
-            },
-          },
-          reusedLease
-        )
-      );
-    } catch (error) {
-      await reusedHandle?.release({ destroy: true }).catch(() => undefined);
-      await reusedLease?.release().catch(() => undefined);
-      throw error;
-    }
-
-    /*
-    const profileLease = await acquireProfileLiveSessionLease(profileId, {
-      timeoutMs: options?.timeout || 30000,
-      signal: options?.signal,
-    });
-
-    // 获取浏览器句柄
-    let handle: BrowserHandle;
-    try {
-      handle = await poolManager.acquire(
-        profileId,
-        {
-          strategy: options?.strategy || 'any',
-          browserId: options?.browserId,
-          timeout: options?.timeout || 30000,
-          signal: options?.signal,
-          engine: options?.engine,
-        },
-        'internal',
-        this.pluginId
-      );
-    } catch (error) {
-      await profileLease?.release().catch(() => undefined);
-      throw error;
-    }
-
-    try {
-      // 如果指定了初始 URL，导航到该 URL
-      if (options?.url) {
-        await handle.browser.goto(options.url);
-      }
-
-      const viewId = handle.viewId;
-
-      if (!viewId) {
-        // 非 Electron 引擎没有 viewId，直接前置外部窗口即可（headed）
-        if (typeof handle.browser.show === 'function') {
-          let externalClosed = false;
-          await handle.browser.show();
-          return this.wrapPopupBrowserHandle(
-            attachProfileLiveSessionLease(
-              {
-                ...handle,
-                popupId: `external:${handle.browserId}`,
-                closePopup: () => {
-                  if (externalClosed) return;
-                  externalClosed = true;
-
-                  void (async () => {
-                    if (typeof handle.browser.hide === 'function') {
-                      await handle.browser.hide().catch(() => undefined);
-                    }
-
-                    if (options?.onClose) {
-                      try {
-                        options.onClose();
-                      } catch (error) {
-                        console.error(
-                          '[Profile.launchPopup] Error in external popup onClose callback',
-                          error
-                        );
-                      }
-                    }
-                  })();
-                },
-              },
-              profileLease
-            )
-          );
-        }
-        throw new Error(`Browser ${handle.browserId} has no associated viewId`);
-      }
-
-      // 提取域名用于默认标题
-      let defaultTitle = 'Browser';
-      if (options?.url) {
-        try {
-          defaultTitle = new URL(options.url).hostname;
-        } catch {
-          // 忽略 URL 解析错误
-        }
-      }
-
-      // 在弹窗中显示浏览器
-      const popupId = showBrowserViewInPopup(viewId, this.viewManager, this.windowManager, {
-        title: options?.title || defaultTitle,
-        width: options?.width || 1200,
-        height: options?.height || 800,
-        openDevTools: options?.openDevTools,
-        onViewReady: (view) => {
-          this.devToolsOpener?.(view.webContents, {
-            override: options?.openDevTools,
-            mode: 'detach',
-          });
-        },
-        onClose: options?.onClose,
-      });
-
-      if (!popupId) {
-        throw new Error(`Failed to create popup for browser ${handle.browserId}`);
-      }
-
-      console.log(
-        `[Profile] Browser launched in popup for plugin ${this.pluginId}: profile=${profileId}, browser=${handle.browserId}, popup=${popupId}`
-      );
-
-      // 返回扩展的句柄
-      return this.wrapPopupBrowserHandle(
-        attachProfileLiveSessionLease(
-          {
-            ...handle,
-            popupId,
-            closePopup: () => {
-              closeBrowserPopup(popupId, this.windowManager);
-            },
-          },
-          profileLease
-        )
-      );
-    } catch (error) {
-      await handle.release({ destroy: true }).catch(() => undefined);
-      await profileLease?.release().catch(() => undefined);
-      throw error;
-    }
-    */
+    return this.launchNamespace.launchPopup(profileId, options);
   }
 
   // =====================================================
@@ -1535,76 +564,7 @@ export class ProfileNamespace {
   async generateFingerprint(
     options?: GenerateFingerprintOptions
   ): Promise<Partial<FingerprintConfig>> {
-    if (options?.device === 'mobile') {
-      throw new Error(
-        'profile.generateFingerprint currently supports desktop native fingerprint presets only.'
-      );
-    }
-
-    const matchingPresets = FINGERPRINT_PRESET_OPTIONS.filter((preset) => {
-      if (options?.os && preset.os.toLowerCase() !== options.os) {
-        return false;
-      }
-      if (options?.browser && preset.browser.toLowerCase() !== options.browser) {
-        return false;
-      }
-
-      const major = parseFingerprintVersionMajor(preset.config.identity.hardware.browserVersion);
-      if (options?.browserMinVersion !== undefined && (major === null || major < options.browserMinVersion)) {
-        return false;
-      }
-      if (options?.browserMaxVersion !== undefined && (major === null || major > options.browserMaxVersion)) {
-        return false;
-      }
-
-      return true;
-    });
-
-    if (matchingPresets.length === 0) {
-      throw new Error('No canonical fingerprint preset matches the requested constraints.');
-    }
-
-    const selectedPreset =
-      matchingPresets[Math.floor(Math.random() * Math.max(1, matchingPresets.length))];
-    let fingerprint = generateVariant(selectedPreset.config);
-
-    const locales = normalizeLocaleList(options?.locales);
-    const nextWidth = resolveDimensionWithinRange(
-      fingerprint.identity.display.width,
-      options?.screenWidth
-    );
-    const nextHeight = resolveDimensionWithinRange(
-      fingerprint.identity.display.height,
-      options?.screenHeight
-    );
-
-    fingerprint = mergeFingerprintConfig(fingerprint, {
-      identity: {
-        region:
-          locales.length > 0
-            ? {
-                primaryLanguage: locales[0],
-                languages: locales,
-              }
-            : undefined,
-        display:
-          nextWidth || nextHeight
-            ? {
-                width: nextWidth ?? fingerprint.identity.display.width,
-                height: nextHeight ?? fingerprint.identity.display.height,
-                availWidth: nextWidth ?? fingerprint.identity.display.availWidth,
-                availHeight: nextHeight
-                  ? Math.max(0, nextHeight - 40)
-                  : fingerprint.identity.display.availHeight,
-              }
-            : undefined,
-      },
-    });
-
-    console.log(
-      `[Profile] Generated canonical fingerprint preset ${selectedPreset.id} for plugin ${this.pluginId}`
-    );
-    return fingerprint;
+    return this.fingerprintNamespace.generateFingerprint(options);
   }
 
   /**
@@ -1626,13 +586,7 @@ export class ProfileNamespace {
    * const windowsPresets = presets.filter(p => p.os === 'windows');
    */
   async getPresets(): Promise<PresetInfo[]> {
-    return FINGERPRINT_PRESET_OPTIONS.map((preset) => ({
-      id: preset.id,
-      name: preset.name,
-      description: preset.description,
-      os: preset.os.toLowerCase(),
-      browser: preset.browser.toLowerCase(),
-    }));
+    return this.fingerprintNamespace.getPresets();
   }
 
   /**
@@ -1648,11 +602,7 @@ export class ProfileNamespace {
    * }
    */
   async getPresetConfig(presetId: string): Promise<FingerprintConfig | null> {
-    const preset = getPresetById(presetId);
-    if (!preset) {
-      return null;
-    }
-    return applyPresetConfig(presetId);
+    return this.fingerprintNamespace.getPresetConfig(presetId);
   }
 
   /**
@@ -1674,18 +624,7 @@ export class ProfileNamespace {
    * const profile = await helpers.profile.applyPreset('profile-id', 'macos-chrome-m1');
    */
   async applyPreset(profileId: string, presetId: string): Promise<BrowserProfile> {
-    const preset = getPresetById(presetId);
-    if (!preset) {
-      throw new Error(`Preset not found: ${presetId}`);
-    }
-
-    const fingerprint = applyPresetConfig(presetId);
-
-    console.log(
-      `[Profile] Applying preset ${presetId} to profile ${profileId} for plugin ${this.pluginId}`
-    );
-
-    return this.update(profileId, { fingerprint });
+    return this.fingerprintNamespace.applyPreset(profileId, presetId);
   }
 
   /**
@@ -1713,20 +652,7 @@ export class ProfileNamespace {
    * }
    */
   async randomizeFingerprint(profileId: string): Promise<BrowserProfile> {
-    const profile = await this.profileService.get(profileId);
-    if (!profile) {
-      throw new Error(`Profile not found: ${profileId}`);
-    }
-
-    // 基于现有指纹生成变体
-    const baseFingerprint = profile.fingerprint || getDefaultFingerprint(profile.engine);
-    const variant = generateVariant(baseFingerprint);
-
-    console.log(
-      `[Profile] Randomizing fingerprint for profile ${profileId} by plugin ${this.pluginId}`
-    );
-
-    return this.update(profileId, { fingerprint: variant });
+    return this.fingerprintNamespace.randomizeFingerprint(profileId);
   }
 
   /**
@@ -1754,13 +680,7 @@ export class ProfileNamespace {
     profileId: string,
     options?: GenerateFingerprintOptions
   ): Promise<BrowserProfile> {
-    const fingerprint = await this.generateFingerprint(options);
-
-    console.log(
-      `[Profile] Regenerating fingerprint for profile ${profileId} by plugin ${this.pluginId}`
-    );
-
-    return this.update(profileId, { fingerprint });
+    return this.fingerprintNamespace.regenerateFingerprint(profileId, options);
   }
 
   /**
@@ -1797,21 +717,7 @@ export class ProfileNamespace {
   async validateFingerprint(
     config: Partial<FingerprintConfig>
   ): Promise<FingerprintValidationResult> {
-    const inferredEngine =
-      config.identity?.hardware?.browserFamily === 'firefox'
-        ? 'ruyi'
-        : config.identity?.hardware?.browserFamily === 'electron'
-          ? 'electron'
-          : 'extension';
-    const result = validateFingerprintConfig(
-      mergeFingerprintConfig(getDefaultFingerprint(inferredEngine), config),
-      inferredEngine
-    );
-
-    return {
-      valid: result.valid,
-      warnings: result.warnings,
-    };
+    return this.fingerprintNamespace.validateFingerprint(config);
   }
 
   /**
@@ -1826,6 +732,6 @@ export class ProfileNamespace {
    * console.log('默认 UA:', defaultFp.userAgent);
    */
   async getDefaultFingerprint(engine: AutomationEngine = 'electron'): Promise<FingerprintConfig> {
-    return getDefaultFingerprint(engine);
+    return this.fingerprintNamespace.getDefaultFingerprint(engine);
   }
 }

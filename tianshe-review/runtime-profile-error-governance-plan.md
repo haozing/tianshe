@@ -20,7 +20,7 @@
 | 文件 | 当前行数 | 直接 `console.*` | 架构护栏目标组 | 当前判断 |
 | --- | ---: | ---: | --- | --- |
 | `src/main/profile/ruyi-firefox-client.ts` | 884 | 0 | 已退出 `main-runtime` 大文件目标 | 已拆出 active context tracker、dialog、emulation、window、storage/cookie、capture、input、tab、navigation、network controllers，client 保留 lifecycle、dispatch 和兼容薄入口 |
-| `src/core/js-plugin/namespaces/profile.ts` | 1831 | 33 raw / 21 guard baseline | `js-plugin-runtime` | helpers.profile 同时承担 CRUD、launch、lease、popup、browser facade、fingerprint、visibility、engine 能力包装 |
+| `src/core/js-plugin/namespaces/profile.ts` | 737 | 12 raw docs / 0 guard baseline | 已退出 `js-plugin-runtime` 大文件目标 | 已拆出 browser facade、CRUD/stat/group、fingerprint、launch/lease/popup/visibility；namespace 保留公开 helper facade 和 engine 描述 |
 | `src/main/duckdb/profile-service.ts` | 1509 | 15 | `duckdb-core` | Profile CRUD、fingerprint 持久化、schema bootstrap、partition cleanup、cascade delete、observation 仍集中在单一服务 |
 | `src/main/sync/sync-local-apply-service.ts` | 1201 | 0 | `main-runtime` | apply dispatcher、各实体 apply、metadata mapping、跨实体 local id resolution、payload normalization 混在一起 |
 | `src/core/logger.ts` | 327 | 0 | logger 基础设施 | 已有 `createLogger()`、字段清洗和 redaction，可作为迁移目标 |
@@ -39,7 +39,7 @@
 | `src/main/duckdb/dataset-storage-service.ts` | 45 |
 | `src/main/ipc-handlers/system-handler.ts` | 43 |
 | `src/main/ipc-handlers/profile-ipc-handler.ts` | 36 |
-| `src/core/js-plugin/namespaces/profile.ts` | 33 |
+| `src/core/js-plugin/namespaces/profile.ts` | 12 docs only / 0 guard |
 | `src/main/webcontentsview-lifecycle-controller.ts` | 33 |
 | `src/main/scheduler/scheduler-service.ts` | 29 |
 | `src/main/duckdb/query-template-service.ts` | 28 |
@@ -205,11 +205,11 @@ npm run test:architecture
 
 | 新模块 | 迁移内容 | 说明 |
 | --- | --- | --- |
-| `profile-namespace-browser-facade.ts` | `createPluginBrowserFacade()`、private API migration 提示、blocked property error | 先拆，纯度最高 |
-| `profile-namespace-launch.ts` | `launch()`、lease attach、resource wait、launch option normalization | 保持 namespace facade 调用 |
-| `profile-namespace-popup.ts` | popup launch、popup handle wrap、close popup browser、visibility attach | 和 launch 相关但 UI 语义更强 |
-| `profile-namespace-crud.ts` | list/get/create/update/delete、group list、usage/stat 方法 | 只调用 `ProfileService` / `ProfileGroupService` |
-| `profile-namespace-fingerprint.ts` | preset、default config、generate、validate、randomize、regenerate | 可复用 stealth/fingerprint 现有 helper |
+| `profile-browser-facade.ts` | `createPluginBrowserFacade()`、private API migration 提示、blocked property error | 已完成 |
+| `profile-launch-namespace.ts` | `withLease()`、`launch()`、`launchPopup()`、usage、visibility、popup handle wrap、resource wait | 已完成，保持 namespace facade 调用 |
+| `profile-crud-namespace.ts` | list/get/create/update/delete、group list、stat 方法、runtime cache 清理 | 已完成，只调用 `ProfileService` / `ProfileGroupService` |
+| `profile-fingerprint-namespace.ts` | preset、default config、generate、validate、randomize、regenerate | 已完成，复用 stealth/fingerprint 现有 helper |
+| `profile-namespace-engine.ts` | engine support、capability registry、engine descriptors | 暂不单拆，当前只剩 2 个薄 facade 方法，继续留在 `profile.ts` 更轻 |
 | `profile-namespace-engine.ts` | engine support、capability registry、engine descriptors | 防止 namespace 继续吸收 runtime capability |
 | `profile-namespace-logger.ts` 或局部 `createLogger('JSPluginProfileNamespace')` | 替换直接 `console.*` | 不需要单独服务，可只是模块级 logger |
 
@@ -240,10 +240,20 @@ npm run test:architecture
 
 ```powershell
 npx vitest run src/core/js-plugin/namespaces/profile.test.ts src/core/js-plugin/namespaces/profile.with-lease.test.ts
-npx eslint src/core/js-plugin/namespaces/profile.ts src/core/js-plugin/namespaces/profile-namespace-*.ts
+npx eslint src/core/js-plugin/namespaces/profile.ts src/core/js-plugin/namespaces/profile-browser-facade.ts src/core/js-plugin/namespaces/profile-crud-namespace.ts src/core/js-plugin/namespaces/profile-fingerprint-namespace.ts src/core/js-plugin/namespaces/profile-launch-namespace.ts
 npm run typecheck
 npm run test:architecture
 ```
+
+完成情况：2026-05-08
+
+- 已新增 `profile-browser-facade.ts`，将插件侧 browser facade / 私有 API 屏蔽逻辑从 `profile.ts` 移出。
+- 已新增 `profile-fingerprint-namespace.ts`，承接 generate/preset/apply/randomize/regenerate/validate/default fingerprint 行为；内部日志改为 `createLogger()`。
+- 已新增 `profile-crud-namespace.ts`，承接 list/get/create/update/delete/isAvailable/getStats/listGroups，并保留 fingerprint cache 清理与 profile browser 销毁语义。
+- 已新增 `profile-launch-namespace.ts`，承接 `withLease()`、`launch()`、`getUsage()`、`launchPopup()`、可见性控制、popup handle 包装和 resource wait 逻辑；直接 `console.*` 迁移为 logger。
+- `src/core/js-plugin/namespaces/profile.ts` 已从 1831 行降到 737 行，低于 900 行护栏；`src/core/ai-dev/architecture-baselines.ts` 已移除该文件的大文件目标和 direct console baseline。
+- `docs/plugin-helpers-reference.md` 的公开 helper surface 未变化，本阶段没有新增/删除 `helpers.profile.*` API，也没有新增稳定错误码文档项。
+- 已验证：`npm run typecheck`、`npm run test:architecture`、`npx vitest run src/core/js-plugin/namespaces/profile.test.ts src/core/js-plugin/namespaces/profile.with-lease.test.ts src/core/ai-dev/runtime-profile-contract-baseline.test.ts`、相关 eslint 均通过。
 
 ## 6. 阶段 3：ProfileService 深拆
 
@@ -542,7 +552,7 @@ npm run test:architecture
 
 - [x] 阶段 0：补契约清单和测试基线。
 - [x] 阶段 1：Ruyi client 深拆到 900 行以下。
-- [ ] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步 `docs/plugin-helpers-reference.md`。
+- [x] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步确认 `docs/plugin-helpers-reference.md`。
 - [ ] 阶段 3：ProfileService 深拆到 900 行以下。
 - [ ] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
 - [ ] 阶段 5：按模块递减 logger baseline。
