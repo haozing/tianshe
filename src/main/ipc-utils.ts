@@ -53,6 +53,34 @@ function createLogContext(error: unknown): Record<string, unknown> {
     : { raw: String(error) };
 }
 
+export function inferErrorCodeFromMessage(message: string): SharedErrorCode {
+  const normalized = String(message || '').trim().toLowerCase();
+  if (!normalized) {
+    return ErrorCode.OPERATION_FAILED;
+  }
+
+  if (/\b(timeout|timed out)\b|超时/.test(normalized)) {
+    return ErrorCode.TIMEOUT;
+  }
+  if (/\b(permission denied|unauthorized|forbidden|access denied)\b|权限|未授权|无权限|拒绝/.test(normalized)) {
+    return ErrorCode.PERMISSION_DENIED;
+  }
+  if (/\b(not found|missing)\b|未找到|找不到|不存在/.test(normalized)) {
+    return ErrorCode.NOT_FOUND;
+  }
+  if (/\b(already exists|duplicate|conflict)\b|已存在|重复|冲突/.test(normalized)) {
+    return ErrorCode.ALREADY_EXISTS;
+  }
+  if (/\b(busy|locked|in use)\b|占用|繁忙|锁定/.test(normalized)) {
+    return ErrorCode.RESOURCE_BUSY;
+  }
+  if (/\b(invalid input|invalid parameter|validation|required)\b|参数|无效|非法|不能为空|校验|验证|格式/.test(normalized)) {
+    return ErrorCode.INVALID_INPUT;
+  }
+
+  return ErrorCode.OPERATION_FAILED;
+}
+
 export function createIPCErrorEnvelope(
   error: unknown,
   defaultMessage = 'Unknown error occurred'
@@ -65,8 +93,9 @@ export function createIPCErrorEnvelope(
     return redactStructuredError(error);
   }
 
+  const message = getUnknownErrorMessage(error, defaultMessage);
   return redactStructuredError(
-    createStructuredError(ErrorCode.OPERATION_FAILED, getUnknownErrorMessage(error, defaultMessage), {
+    createStructuredError(inferErrorCodeFromMessage(message), message, {
       context: error instanceof Error ? { name: error.name } : undefined,
     })
   );

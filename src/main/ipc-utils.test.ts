@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { getUnknownErrorMessage, handleIPCError, createIPCErrorResult } from './ipc-utils';
+import {
+  getUnknownErrorMessage,
+  handleIPCError,
+  createIPCErrorResult,
+  inferErrorCodeFromMessage,
+} from './ipc-utils';
 
 describe('ipc-utils', () => {
   describe('getUnknownErrorMessage', () => {
@@ -58,6 +63,33 @@ describe('ipc-utils', () => {
       );
       expect(result.error).toBe('Failed at [REDACTED_PATH]: [REDACTED_SQL]');
       expect(result.code).toBe('OPERATION_FAILED');
+    });
+  });
+
+  describe('inferErrorCodeFromMessage', () => {
+    it('maps common legacy error messages to stable codes', () => {
+      expect(inferErrorCodeFromMessage('Profile not found: abc')).toBe('NOT_FOUND');
+      expect(inferErrorCodeFromMessage('Permission denied: delete profile')).toBe(
+        'PERMISSION_DENIED'
+      );
+      expect(inferErrorCodeFromMessage('Browser acquire timeout')).toBe('TIMEOUT');
+      expect(inferErrorCodeFromMessage('Invalid parameter: datasetId')).toBe('INVALID_INPUT');
+      expect(inferErrorCodeFromMessage('平台「抖店」已存在')).toBe('ALREADY_EXISTS');
+      expect(inferErrorCodeFromMessage('Browser is busy: locked')).toBe('RESOURCE_BUSY');
+      expect(inferErrorCodeFromMessage('普通错误消息')).toBe('OPERATION_FAILED');
+    });
+
+    it('uses inferred code for ordinary Error envelopes', () => {
+      const result = handleIPCError(new Error('Profile not found: abc'));
+      expect(result).toMatchObject({
+        success: false,
+        error: 'Profile not found: abc',
+        code: 'NOT_FOUND',
+        errorDetails: {
+          code: 'NOT_FOUND',
+          message: 'Profile not found: abc',
+        },
+      });
     });
   });
 

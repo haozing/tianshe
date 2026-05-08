@@ -222,7 +222,7 @@ describe('IPC Handler 工具函数', () => {
       expect(response).toMatchObject({
         success: false,
         error: 'Unauthorized sender',
-        code: 'OPERATION_FAILED',
+        code: 'PERMISSION_DENIED',
       });
     });
   });
