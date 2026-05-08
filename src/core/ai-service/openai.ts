@@ -17,6 +17,9 @@ import {
   getUnknownErrorMessage,
   getUnknownErrorName,
 } from '../../utils/error-message';
+import { createLogger } from '../logger';
+
+const logger = createLogger('OpenAIService');
 
 // Re-export all types from the centralized types file
 export type {
@@ -119,6 +122,14 @@ export class OpenAIService {
   constructor(serviceConfig?: OpenAIServiceConfig) {
     this.callerId = serviceConfig?.callerId || 'OpenAIService';
     this.apiKeyProvider = serviceConfig?.apiKeyProvider;
+  }
+
+  private logRequest(operation: string, data?: Record<string, unknown>): void {
+    logger.info('OpenAI service request', {
+      callerId: this.callerId,
+      operation,
+      ...data,
+    });
   }
 
   // ========== 配置管理 ==========
@@ -398,9 +409,10 @@ export class OpenAIService {
     const client = await this.getClient();
     const model = options.model || this.config.defaultModel || 'gpt-4o-mini';
 
-    console.log(
-      `[${this.callerId}] OpenAI chat request (${options.messages.length} messages, model: ${model})`
-    );
+    this.logRequest('chat', {
+      messageCount: options.messages.length,
+      model,
+    });
 
     try {
       const response = await client.chat.completions.create({
@@ -432,9 +444,10 @@ export class OpenAIService {
     const client = await this.getClient();
     const model = options.model || this.config.defaultModel || 'gpt-4o-mini';
 
-    console.log(
-      `[${this.callerId}] OpenAI chat stream request (${options.messages.length} messages, model: ${model})`
-    );
+    this.logRequest('chatStream', {
+      messageCount: options.messages.length,
+      model,
+    });
 
     try {
       const stream = (await client.chat.completions.create({
@@ -567,7 +580,10 @@ export class OpenAIService {
     const client = await this.getClient();
     const model = options?.model || 'text-embedding-3-small';
 
-    console.log(`[${this.callerId}] OpenAI embed request (model: ${model})`);
+    this.logRequest('embed', {
+      model,
+      inputCount: Array.isArray(input) ? input.length : 1,
+    });
 
     try {
       const response = await client.embeddings.create({
@@ -592,7 +608,7 @@ export class OpenAIService {
     const client = await this.getClient();
     const model = options?.model || 'dall-e-3';
 
-    console.log(`[${this.callerId}] OpenAI image generation (model: ${model})`);
+    this.logRequest('generateImage', { model });
 
     try {
       const response = await client.images.generate({
@@ -628,7 +644,7 @@ export class OpenAIService {
 
     const client = await this.getClient();
 
-    console.log(`[${this.callerId}] OpenAI image edit`);
+    this.logRequest('editImage', { model: options?.model || 'dall-e-2' });
 
     try {
       const imageBuffer = Buffer.isBuffer(image) ? image : Buffer.from(image, 'base64');
@@ -675,7 +691,7 @@ export class OpenAIService {
     const client = await this.getClient();
     const model = options?.model || 'whisper-1';
 
-    console.log(`[${this.callerId}] OpenAI transcribe (model: ${model})`);
+    this.logRequest('transcribe', { model });
 
     try {
       let audioBuffer: Buffer;
@@ -741,7 +757,7 @@ export class OpenAIService {
     const client = await this.getClient();
     const model = options?.model || 'tts-1';
 
-    console.log(`[${this.callerId}] OpenAI TTS (model: ${model})`);
+    this.logRequest('textToSpeech', { model });
 
     try {
       const response = await client.audio.speech.create({
@@ -770,7 +786,9 @@ export class OpenAIService {
 
     const client = await this.getClient();
 
-    console.log(`[${this.callerId}] OpenAI moderation`);
+    this.logRequest('moderation', {
+      inputCount: Array.isArray(input) ? input.length : 1,
+    });
 
     try {
       const response = await client.moderations.create({
@@ -795,7 +813,7 @@ export class OpenAIService {
 
     const client = await this.getClient();
 
-    console.log(`[${this.callerId}] Creating batch (${options.requests.length} requests)`);
+    this.logRequest('createBatch', { requestCount: options.requests.length });
 
     try {
       const jsonlContent = options.requests.map((req) => JSON.stringify(req)).join('\n');
@@ -899,7 +917,7 @@ export class OpenAIService {
 
     const client = await this.getClient();
 
-    console.log(`[${this.callerId}] Uploading file: ${filename} (purpose: ${purpose})`);
+    this.logRequest('uploadFile', { filename, purpose });
 
     try {
       const fileObj = new File([new Uint8Array(file)], filename);

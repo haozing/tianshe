@@ -152,7 +152,6 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
 
 export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/core/ai-dev/types.ts': 8,
-  'src/core/ai-service/openai.ts': 10,
   'src/core/js-plugin/loader.ts': 12,
   'src/core/js-plugin/namespaces/button.ts': 8,
   'src/core/js-plugin/namespaces/utils/interval.ts': 6,
