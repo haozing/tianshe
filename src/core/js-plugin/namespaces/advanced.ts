@@ -30,6 +30,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
 import { getUnknownErrorCode } from '../../../utils/error-message';
+import { createLogger } from '../../logger';
+
+const logger = createLogger('AdvancedNamespace');
 
 /**
  * 桌面捕获源类型
@@ -237,7 +240,12 @@ export class DesktopCapturerAPI {
    * });
    */
   async getSources(options: DesktopCapturerOptions): Promise<DesktopSource[]> {
-    console.log(`[DesktopCapturer] Getting sources for plugin: ${this.pluginId}`, options);
+    logger.info('Getting desktop capture sources for plugin', {
+      pluginId: this.pluginId,
+      sourceTypes: options.types,
+      thumbnailSize: options.thumbnailSize,
+      fetchWindowIcons: options.fetchWindowIcons,
+    });
 
     const sources = await desktopCapturer.getSources({
       types: options.types,

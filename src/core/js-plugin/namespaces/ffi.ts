@@ -23,6 +23,9 @@ import type {
   LibraryInfo,
 } from '../../ffi';
 import type { JSPluginManifest } from '../../../types/js-plugin';
+import { createLogger } from '../../logger';
+
+const logger = createLogger('FFINamespace');
 
 // Re-export types and classes
 export { Library, FFICallback } from '../../ffi';
@@ -52,7 +55,7 @@ export class FFINamespace {
     _manifest: JSPluginManifest
   ) {
     this.ffiService = new FFIService({ callerId: pluginId });
-    console.log(`[FFI] Initialized for plugin: ${pluginId}`);
+    logger.info('FFI namespace initialized', { pluginId });
   }
 
   /**

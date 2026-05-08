@@ -646,9 +646,11 @@ export class PluginHelpers {
       const poolManager = getBrowserPoolManager();
       const released = await poolManager.releaseByPlugin(this.pluginId);
       if (released.browsers > 0 || released.requests > 0) {
-        console.log(
-          `  ✓ Browser pool resources released (browsers: ${released.browsers}, requests: ${released.requests})`
-        );
+        logger.info('Browser pool resources released for plugin', {
+          pluginId: this.pluginId,
+          browsers: released.browsers,
+          requests: released.requests,
+        });
       }
     } catch (error) {
       logger.error(`[PluginHelpers] Failed to release browser pool resources:`, error);

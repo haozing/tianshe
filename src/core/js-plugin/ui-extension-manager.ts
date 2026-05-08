@@ -713,8 +713,6 @@ export class UIExtensionManager {
               }, '*');
 
             } catch (error) {
-              console.error('[ERROR] [Plugin Page] Failed to initialize plugin API:', error);
-
               // 显示错误提示
               document.body.insertAdjacentHTML('afterbegin', \`
                 <div style="position: fixed; top: 0; left: 0; right: 0; background: #f44336; color: white; padding: 12px; text-align: center; z-index: 9999;">
