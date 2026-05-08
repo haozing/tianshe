@@ -49,6 +49,23 @@ vi.mock('@duckdb/node-api', () => ({
   },
 }));
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    debug: (message: string) => {
+      if (vi.isMockFunction(console.debug)) console.debug(message);
+    },
+    info: (message: string) => {
+      if (vi.isMockFunction(console.log)) console.log(message);
+    },
+    warn: (message: string) => {
+      if (vi.isMockFunction(console.warn)) console.warn(message);
+    },
+    error: (message: string) => {
+      if (vi.isMockFunction(console.error)) console.error(message);
+    },
+  }),
+}));
+
 import fs from 'fs-extra';
 import { app } from 'electron';
 import * as crypto from 'crypto';

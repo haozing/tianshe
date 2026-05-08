@@ -7,6 +7,7 @@ import fs from 'fs-extra';
 import type { DuckDBResultReader } from '@duckdb/node-api';
 import * as crypto from 'crypto';
 
+import { createLogger } from '../../core/logger';
 import {
   getDuckDBDataDir,
   getImportsDir,
@@ -15,6 +16,8 @@ import {
   getFileSize,
 } from '../../utils/data-paths';
 import { getUnknownErrorMessage } from '../ipc-utils';
+
+const logger = createLogger('DuckDBUtils');
 
 // 🔽 数据路径工具已下沉到 src/utils/data-paths.ts
 export { getDuckDBDataDir, getImportsDir, getTempDir, ensureDirectories, getFileSize };
@@ -118,7 +121,7 @@ export async function cleanupTempFiles(daysToKeep: number = 1): Promise<number> 
       }
     }
   } catch (error) {
-    console.error('Failed to cleanup temp files:', error);
+    logger.error('Failed to cleanup temp files', { daysToKeep, error });
   }
 
   return deletedCount;
@@ -163,7 +166,7 @@ export async function cleanupTempFile(filePath: string): Promise<void> {
       await fs.remove(filePath);
     }
   } catch (error) {
-    console.warn(`Failed to cleanup temp file: ${filePath}`, error);
+    logger.warn('Failed to cleanup temp file', { filePath, error });
   }
 }
 
@@ -207,13 +210,15 @@ function convertDuckDBValue(value: any): any {
         bigintValue < BigInt(Number.MIN_SAFE_INTEGER)
       ) {
         // 超出安全范围，返回字符串保持精度
-        console.debug(`BigInt value ${value} exceeds safe integer range, returning as string`);
+        logger.debug('BigInt value exceeds safe integer range, returning as string', {
+          value: value.toString(),
+        });
         return value.toString();
       }
       // 安全范围内，转换为 Number
       return Number(value);
     } catch (error) {
-      console.warn('Failed to convert BigInt:', error);
+      logger.warn('Failed to convert BigInt', { error });
       // 降级方案：转换为字符串
       return value.toString();
     }
@@ -237,7 +242,7 @@ function convertDuckDBValue(value: any): any {
       try {
         return value.toArray();
       } catch (error) {
-        console.warn('Failed to convert DuckDB LIST using toArray:', error);
+        logger.warn('Failed to convert DuckDB LIST using toArray', { error });
       }
     }
 
@@ -246,7 +251,7 @@ function convertDuckDBValue(value: any): any {
       try {
         return Array.from(value);
       } catch (error) {
-        console.warn('Failed to convert DuckDB value using Array.from:', error);
+        logger.warn('Failed to convert DuckDB value using Array.from', { error });
       }
     }
 
@@ -276,7 +281,7 @@ function convertDuckDBValue(value: any): any {
 
         return `${year}-${month}-${day}`;
       } catch (error) {
-        console.warn('Failed to convert DuckDBTimestampValue:', error);
+        logger.warn('Failed to convert DuckDBTimestampValue', { error });
       }
     }
 
@@ -293,7 +298,7 @@ function convertDuckDBValue(value: any): any {
 
         return `${year}-${month}-${day}`;
       } catch (error) {
-        console.warn('Failed to convert DuckDBDateValue:', error);
+        logger.warn('Failed to convert DuckDBDateValue', { error });
       }
     }
 
@@ -315,7 +320,7 @@ function convertDuckDBValue(value: any): any {
 
         return `${year}-${month}-${day}`;
       } catch (error) {
-        console.warn('Failed to convert DuckDB Date object:', error);
+        logger.warn('Failed to convert DuckDB Date object', { error });
       }
     }
 
@@ -342,7 +347,7 @@ function convertDuckDBValue(value: any): any {
           return `${year}-${month}-${day}`;
         }
       } catch (error) {
-        console.warn('Failed to convert DuckDB Date/Timestamp:', error);
+        logger.warn('Failed to convert DuckDB Date/Timestamp', { error });
       }
     }
 
@@ -359,7 +364,7 @@ function convertDuckDBValue(value: any): any {
           }
         }
       } catch (error) {
-        console.warn('Failed to convert DuckDB Decimal:', error);
+        logger.warn('Failed to convert DuckDB Decimal', { error });
       }
     }
   }
@@ -480,19 +485,30 @@ export async function withRetry<T>(
 
       // 检查是否可重试
       if (!isRetryableError(lastError, retryableErrors)) {
-        console.error(`❌ Non-retryable error encountered:`, lastError.message);
+        logger.error('Non-retryable error encountered', { error: lastError.message });
         throw lastError;
       }
 
       // 最后一次尝试失败，不再重试
       if (attempt === maxAttempts) {
-        console.error(`❌ Max retry attempts (${maxAttempts}) reached`);
+        logger.error(`Max retry attempts (${maxAttempts}) reached`, {
+          maxAttempts,
+          error: lastError.message,
+        });
         break;
       }
 
       // 等待后重试
-      console.warn(`⚠️  Attempt ${attempt}/${maxAttempts} failed: ${lastError.message}`);
-      console.log(`🔄 Retrying in ${currentDelay}ms...`);
+      logger.warn(`Attempt ${attempt}/${maxAttempts} failed`, {
+        attempt,
+        maxAttempts,
+        error: lastError.message,
+      });
+      logger.info(`Retrying in ${currentDelay}ms`, {
+        attempt,
+        maxAttempts,
+        delayMs: currentDelay,
+      });
 
       await new Promise((resolve) => setTimeout(resolve, currentDelay));
 
@@ -637,7 +653,7 @@ export async function checkDatabaseIntegrity(dbPath: string): Promise<DatabaseIn
         if (conn) conn.closeSync();
         if (db) db.closeSync();
       } catch (closeError) {
-        console.warn('Failed to close database during integrity check:', closeError);
+        logger.warn('Failed to close database during integrity check', { dbPath, error: closeError });
       }
     }
   } catch (error: unknown) {
@@ -657,7 +673,7 @@ export async function checkDatabaseIntegrity(dbPath: string): Promise<DatabaseIn
  */
 export async function repairDatabase(dbPath: string): Promise<boolean> {
   try {
-    console.log(`🔧 Attempting to repair database: ${dbPath}`);
+    logger.info('Attempting to repair database', { dbPath });
 
     // 1. 删除 WAL 和其他辅助文件
     const auxiliaryFiles = [
@@ -675,32 +691,39 @@ export async function repairDatabase(dbPath: string): Promise<boolean> {
         if (await fs.pathExists(filePath)) {
           await fs.remove(filePath);
           removedCount++;
-          console.log(`🗑️  Removed auxiliary file: ${path.basename(filePath)}`);
+          logger.info('Removed database auxiliary file', {
+            dbPath,
+            auxiliaryFile: path.basename(filePath),
+          });
         }
       } catch (removeError) {
-        console.warn(`Failed to remove ${filePath}:`, removeError);
+        logger.warn('Failed to remove database auxiliary file', {
+          dbPath,
+          filePath,
+          error: removeError,
+        });
       }
     }
 
     if (removedCount > 0) {
-      console.log(`✅ Removed ${removedCount} auxiliary file(s)`);
+      logger.info(`Removed ${removedCount} auxiliary file(s)`, { dbPath, removedCount });
 
       // 2. 重新检查完整性
       const checkResult = await checkDatabaseIntegrity(dbPath);
 
       if (checkResult.isValid) {
-        console.log(`✅ Database repaired successfully`);
+        logger.info('Database repaired successfully', { dbPath });
         return true;
       } else {
-        console.error(`❌ Database still corrupted after repair attempt`);
+        logger.error('Database still corrupted after repair attempt', { dbPath });
         return false;
       }
     } else {
-      console.log(`ℹ️  No auxiliary files to remove`);
+      logger.info('No auxiliary files to remove', { dbPath });
       return false;
     }
   } catch (error) {
-    console.error(`Failed to repair database:`, error);
+    logger.error('Failed to repair database', { dbPath, error });
     return false;
   }
 }
@@ -724,7 +747,7 @@ export async function runInDuckDbTransaction<T>(
     try {
       await conn.run('ROLLBACK');
     } catch (rollbackError) {
-      console.error('[runInDuckDbTransaction] ROLLBACK failed:', rollbackError);
+      logger.error('DuckDB transaction rollback failed', { error: rollbackError });
     }
     throw error;
   }
