@@ -21,7 +21,7 @@
 | --- | ---: | ---: | --- | --- |
 | `src/main/profile/ruyi-firefox-client.ts` | 884 | 0 | 已退出 `main-runtime` 大文件目标 | 已拆出 active context tracker、dialog、emulation、window、storage/cookie、capture、input、tab、navigation、network controllers，client 保留 lifecycle、dispatch 和兼容薄入口 |
 | `src/core/js-plugin/namespaces/profile.ts` | 737 | 12 raw docs / 0 guard baseline | 已退出 `js-plugin-runtime` 大文件目标 | 已拆出 browser facade、CRUD/stat/group、fingerprint、launch/lease/popup/visibility；namespace 保留公开 helper facade 和 engine 描述 |
-| `src/main/duckdb/profile-service.ts` | 1509 | 15 | `duckdb-core` | Profile CRUD、fingerprint 持久化、schema bootstrap、partition cleanup、cascade delete、observation 仍集中在单一服务 |
+| `src/main/duckdb/profile-service.ts` | 869 | 0 | 已退出 `duckdb-core` 大文件目标 | 已拆出 row mapper、fingerprint persistence、schema bootstrap、partition cleanup；service 保留 CRUD/status/observation/cascade transaction facade |
 | `src/main/sync/sync-local-apply-service.ts` | 1201 | 0 | `main-runtime` | apply dispatcher、各实体 apply、metadata mapping、跨实体 local id resolution、payload normalization 混在一起 |
 | `src/core/logger.ts` | 327 | 0 | logger 基础设施 | 已有 `createLogger()`、字段清洗和 redaction，可作为迁移目标 |
 | `src/main/ipc-utils.ts` | 34 | 0 | IPC 错误工具 | `createIPCErrorResult()` 返回 `userError/logContext`，尚未带稳定 code |
@@ -308,6 +308,17 @@ npm run typecheck
 npm run test:architecture
 ```
 
+完成情况：2026-05-08
+
+- 已新增 `profile-row-mapper.ts`，承接 DB row -> `BrowserProfile` 映射和 JSON 解析。
+- 已新增 `profile-fingerprint-persistence.ts`，承接 system default fingerprint、engine 切换时的 fingerprint materialize、fingerprint validation。
+- 已新增 `profile-partition-cleanup-service.ts`，承接 Electron partition 清理、延期清理队列、extension profile 文件清理；日志改为 `createLogger()`。
+- 已新增 `profile-schema-bootstrap.ts`，承接 profile/profile_groups 建表、schema migration/backfill、非法 profile 清理、默认 profile 修复。
+- `ProfileService` 保留 public CRUD/status/stats、observation span、cascade delete transaction 这类领域 facade；为兼容现有测试和内部替换点，保留了少量 private thin delegates。
+- `src/main/duckdb/profile-service.ts` 已从 1509 行降到 869 行，低于 900 行护栏；直接 `console.*` 从 15 降到 0，`src/core/ai-dev/architecture-baselines.ts` 已移除该文件的大文件目标和 direct console baseline。
+- 暂不单拆 `profile-cascade-delete-service.ts`：当前 cascade delete 与 observation span、事务回滚测试、partition cleanup 委托耦合较强，且行数目标已经达成；后续如果继续收缩，可单独拆这一块。
+- 已验证：`npm run typecheck`、`npm run test:architecture`、`npx vitest run src/main/duckdb/profile-service.delete-with-cascade.test.ts src/main/duckdb/profile-service.fingerprint-normalization.test.ts src/main/duckdb/profile-service.observation.test.ts src/main/duckdb/dev-schema-bootstrap.test.ts src/main/duckdb/account-service.create-with-auto-profile.test.ts`、相关 eslint 均通过。
+
 ## 7. 阶段 4：SyncLocalApplyService 深拆
 
 ### 当前问题
@@ -553,7 +564,7 @@ npm run test:architecture
 - [x] 阶段 0：补契约清单和测试基线。
 - [x] 阶段 1：Ruyi client 深拆到 900 行以下。
 - [x] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步确认 `docs/plugin-helpers-reference.md`。
-- [ ] 阶段 3：ProfileService 深拆到 900 行以下。
+- [x] 阶段 3：ProfileService 深拆到 900 行以下。
 - [ ] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
 - [ ] 阶段 5：按模块递减 logger baseline。
 - [ ] 阶段 6：建立共享 error envelope，统一 IPC 稳定错误码。

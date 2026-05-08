@@ -1,26 +1,13 @@
 /**
- * ProfileService - 浏览器配置管理服务
+ * ProfileService - 婵炴潙绻楅～宥夊闯閵娾晛甯崇紓鍐惧枤椤撴悂鎮堕崱妯荤疀闁? *
+ * v2 闁哄鍩栭悗顖炲冀缁嬭法濡囬柡鍫濈Т婵喖鏁嶅畝鍐槹閻?BrowserProfile 闁?CRUD 闁瑰灝绉崇紞?
  *
- * v2 架构核心服务，负责 BrowserProfile 的 CRUD 操作
- *
- * 设计原则：
- * - 平台提供能力，插件决定如何使用
- * - 不强制绑定关系，由插件自己管理
- */
+ * 閻犱焦宕橀鎼佸储閻斿嘲鐏熼柨? * - 妤犵偛鍟胯ぐ鎾箵閹邦亞杩旈柤瀹犳婵繘鏁嶇仦鎯х祷濞寸姾娉涢崰鍛偓瑙勮壘椤┭勬媴閺囨艾鈻忛柣? * - 濞戞挸绉村閬嶅礆閸撲胶鎷ㄩ悗瑙勮壘閸櫻呭寲娴兼瑧绀夐柣銏ｉ哺瑜板啯绂掗幆鏉挎鐎规瓕浜鎼佹偠? */
 
 import { DuckDBConnection } from '@duckdb/node-api';
 import { parseRows, runInDuckDbTransaction } from './utils';
 import { allPrepared, runPrepared } from './statement-executor';
-import { SchemaMigrationEngine } from './migration-engine';
-import {
-  BROWSER_PROFILE_SCHEMA_BACKFILLS,
-  BROWSER_PROFILE_SCHEMA_MIGRATIONS,
-  runSchemaBackfills,
-} from './schema-migrations';
 import { v4 as uuidv4 } from 'uuid';
-import fs from 'node:fs';
-import path from 'node:path';
-import { app, session } from 'electron';
 import type {
   BrowserProfile,
   ProfileListParams,
@@ -28,33 +15,20 @@ import type {
   UpdateProfileParams,
   ProxyConfig,
   FingerprintConfig,
-  FingerprintCoreConfig,
-  FingerprintSourceConfig,
   ProfileStatus,
   AutomationEngine,
-  DeepPartial,
 } from '../../types/profile';
 import {
   UNBOUND_PROFILE_ID,
-  isAutomationEngine,
   normalizeProfileBrowserQuota,
   normalizeAutomationEngine,
 } from '../../types/profile';
-import { getDefaultFingerprint } from '../profile/presets';
 import {
   DEFAULT_BROWSER_PROFILE,
   DEFAULT_BROWSER_POOL_CONFIG,
   BROWSER_POOL_LIMITS,
 } from '../../constants/browser-pool';
-import {
-  extractFingerprintCoreConfig,
-  mergeFingerprintConfig,
-  mergeFingerprintCoreConfig,
-  materializeFingerprintConfigFromCore,
-  materializeFingerprintConfigForEngine,
-} from '../../constants/fingerprint-defaults';
-import { validateFingerprintConfig } from '../../core/fingerprint/fingerprint-validation';
-import { resolveUserDataDir } from '../../constants/runtime-config';
+import { extractFingerprintCoreConfig } from '../../constants/fingerprint-defaults';
 import { observationService } from '../../core/observability/observation-service';
 import { attachErrorContextArtifact } from '../../core/observability/error-context-artifact';
 import {
@@ -62,6 +36,14 @@ import {
   getCurrentTraceContext,
   withTraceContext,
 } from '../../core/observability/observation-context';
+import { createLogger } from '../../core/logger';
+import {
+  ProfileFingerprintPersistence,
+  type BuildFingerprintForPersistenceOptions,
+} from './profile-fingerprint-persistence';
+import { ProfilePartitionCleanupService } from './profile-partition-cleanup-service';
+import { ProfileSchemaBootstrap } from './profile-schema-bootstrap';
+import { mapProfileRowToProfile } from './profile-row-mapper';
 
 const ALLOWED_PROXY_TYPES: Array<Exclude<ProxyConfig['type'], 'none'>> = [
   'http',
@@ -69,198 +51,55 @@ const ALLOWED_PROXY_TYPES: Array<Exclude<ProxyConfig['type'], 'none'>> = [
   'socks4',
   'socks5',
 ];
-const DEFERRED_PARTITION_CLEANUP_FILE = 'profile-partition-cleanup.json';
-const PARTITION_DELETE_RETRY_DELAYS_MS = [200, 350, 550, 800, 1200, 1600];
-
-function isCanonicalFingerprintConfig(value: unknown): value is FingerprintConfig {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-
-  const fingerprint = value as Partial<FingerprintConfig>;
-  return (
-    typeof fingerprint.identity === 'object' &&
-    fingerprint.identity !== null &&
-    typeof fingerprint.source === 'object' &&
-    fingerprint.source !== null &&
-    typeof fingerprint.identity.region?.timezone === 'string' &&
-    typeof fingerprint.identity.hardware?.userAgent === 'string' &&
-    typeof fingerprint.source.mode === 'string' &&
-    fingerprint.source.fileFormat === 'txt'
-  );
-}
+const logger = createLogger('ProfileService');
 
 /**
- * Profile 服务
+ * Profile 闁哄牆绉存慨?
  */
 export class ProfileService {
-  constructor(private conn: DuckDBConnection) {}
+  private readonly fingerprintPersistence: ProfileFingerprintPersistence;
+  private readonly partitionCleanupService: ProfilePartitionCleanupService;
+  private readonly schemaBootstrap: ProfileSchemaBootstrap;
 
-  private getUserDataDir(): string {
-    return resolveUserDataDir(app.getPath('userData'));
-  }
-
-  private getDeferredPartitionCleanupPath(): string {
-    return path.join(this.getUserDataDir(), DEFERRED_PARTITION_CLEANUP_FILE);
-  }
-
-  private async wait(ms: number): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  private isRetryablePartitionCleanupError(error: unknown): boolean {
-    const code =
-      typeof error === 'object' && error !== null ? String((error as any).code || '') : '';
-    return code === 'EBUSY' || code === 'ENOTEMPTY' || code === 'EPERM';
-  }
-
-  private async readDeferredPartitionCleanupEntries(): Promise<string[]> {
-    try {
-      const filePath = this.getDeferredPartitionCleanupPath();
-      if (!fs.existsSync(filePath)) {
-        return [];
-      }
-
-      const raw = await fs.promises.readFile(filePath, 'utf8');
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed)
-        ? parsed.map((entry) => String(entry || '').trim()).filter(Boolean)
-        : [];
-    } catch {
-      return [];
-    }
-  }
-
-  private async writeDeferredPartitionCleanupEntries(entries: string[]): Promise<void> {
-    const filePath = this.getDeferredPartitionCleanupPath();
-    const normalized = Array.from(
-      new Set(entries.map((entry) => String(entry || '').trim()).filter(Boolean))
+  constructor(private conn: DuckDBConnection) {
+    this.fingerprintPersistence = new ProfileFingerprintPersistence();
+    this.partitionCleanupService = new ProfilePartitionCleanupService();
+    this.schemaBootstrap = new ProfileSchemaBootstrap(
+      conn,
+      this.fingerprintPersistence,
+      this.partitionCleanupService
     );
-
-    if (normalized.length === 0) {
-      await fs.promises.rm(filePath, { force: true }).catch(() => undefined);
-      return;
-    }
-
-    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.promises.writeFile(filePath, JSON.stringify(normalized, null, 2), 'utf8');
-  }
-
-  private async enqueueDeferredPartitionCleanup(storagePath: string): Promise<void> {
-    const entries = await this.readDeferredPartitionCleanupEntries();
-    entries.push(storagePath);
-    await this.writeDeferredPartitionCleanupEntries(entries);
-  }
-
-  private async removePartitionStoragePath(
-    storagePath: string
-  ): Promise<'removed' | 'missing' | 'deferred'> {
-    if (!storagePath || !fs.existsSync(storagePath)) {
-      return 'missing';
-    }
-
-    for (let attempt = 0; attempt < PARTITION_DELETE_RETRY_DELAYS_MS.length; attempt++) {
-      try {
-        await fs.promises.rm(storagePath, { recursive: true, force: true });
-        return 'removed';
-      } catch (error) {
-        if (!this.isRetryablePartitionCleanupError(error)) {
-          throw error;
-        }
-
-        if (attempt === PARTITION_DELETE_RETRY_DELAYS_MS.length - 1) {
-          return 'deferred';
-        }
-
-        await this.wait(PARTITION_DELETE_RETRY_DELAYS_MS[attempt]);
-      }
-    }
-
-    return 'deferred';
   }
 
   async sweepDeferredPartitionCleanup(): Promise<void> {
-    const entries = await this.readDeferredPartitionCleanupEntries();
-    if (entries.length === 0) {
-      return;
-    }
+    await this.partitionCleanupService.sweepDeferredPartitionCleanup();
+  }
 
-    const remaining: string[] = [];
-    for (const storagePath of entries) {
-      try {
-        const result = await this.removePartitionStoragePath(storagePath);
-        if (result === 'deferred') {
-          remaining.push(storagePath);
-        }
-      } catch (error) {
-        console.warn(
-          `[ProfileService] Failed to sweep deferred partition cleanup: ${storagePath}`,
-          error
-        );
-        remaining.push(storagePath);
-      }
-    }
+  private buildSystemDefaultFingerprint(): FingerprintConfig {
+    return this.fingerprintPersistence.buildSystemDefaultFingerprint();
+  }
 
-    await this.writeDeferredPartitionCleanupEntries(remaining);
+  private buildFingerprintForPersistence(
+    engine: AutomationEngine,
+    options: BuildFingerprintForPersistenceOptions = {}
+  ): FingerprintConfig {
+    return this.fingerprintPersistence.buildFingerprintForPersistence(engine, options);
+  }
+
+  private assertValidFingerprintConfig(
+    fingerprint: FingerprintConfig,
+    engine: AutomationEngine,
+    label: string
+  ): void {
+    this.fingerprintPersistence.assertValidFingerprintConfig(fingerprint, engine, label);
   }
 
   private async purgePartitionData(partition: string): Promise<void> {
-    try {
-      const ses = session.fromPartition(partition);
-
-      // 尽量先清理 session 内部存储，避免文件句柄占用导致删除失败
-      try {
-        await ses.clearStorageData();
-      } catch {
-        // ignore
-      }
-      try {
-        await ses.clearCache();
-      } catch {
-        // ignore
-      }
-      try {
-        ses.flushStorageData();
-      } catch {
-        // ignore
-      }
-      try {
-        await ses.cookies.flushStore();
-      } catch {
-        // ignore
-      }
-
-      const storagePath = ses.storagePath;
-      if (storagePath && fs.existsSync(storagePath)) {
-        const result = await this.removePartitionStoragePath(storagePath);
-        if (result === 'deferred') {
-          await this.enqueueDeferredPartitionCleanup(storagePath);
-          console.log(
-            `[ProfileService] Deferred partition cleanup until next launch: ${partition} (${storagePath})`
-          );
-        }
-      }
-    } catch (error) {
-      console.warn(`[ProfileService] Failed to purge partition data: ${partition}`, error);
-    }
+    await this.partitionCleanupService.purgePartitionData(partition);
   }
 
   private async purgeExtensionProfileData(profileId: string): Promise<void> {
-    const userDataDir = this.getUserDataDir();
-    const targets = [
-      path.join(userDataDir, 'extension', 'chrome', 'profiles', profileId),
-      path.join(userDataDir, 'extension', 'chrome', 'control-runtime', profileId),
-    ];
-
-    for (const target of targets) {
-      try {
-        if (fs.existsSync(target)) {
-          await fs.promises.rm(target, { recursive: true, force: true });
-        }
-      } catch (error) {
-        console.warn(`[ProfileService] Failed to purge extension profile data: ${target}`, error);
-      }
-    }
+    await this.partitionCleanupService.purgeExtensionProfileData(profileId);
   }
 
   private normalizeProxyConfig(proxy: ProxyConfig | null | undefined): ProxyConfig | null {
@@ -324,458 +163,13 @@ export class ProfileService {
     );
   }
 
-  private getChromiumMajorVersion(): number {
-    const chrome = (process.versions && (process.versions as any).chrome) || '';
-    const major = Number.parseInt(String(chrome).split('.')[0] || '', 10);
-    return Number.isFinite(major) && major > 0 ? major : 120;
-  }
-
-  private buildSystemDefaultFingerprint(): FingerprintConfig {
-    const major = this.getChromiumMajorVersion();
-    const fullVersion = `${major}.0.0.0`;
-
-    if (process.platform === 'win32') {
-      return mergeFingerprintConfig(getDefaultFingerprint('electron'), {
-        identity: {
-          hardware: {
-            browserFamily: 'electron',
-            browserVersion: fullVersion,
-            userAgent:
-              `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ` +
-              `Chrome/${fullVersion} Safari/537.36 Edg/${fullVersion}`,
-          },
-        },
-      });
-    }
-
-    return mergeFingerprintConfig(getDefaultFingerprint('electron'), {
-      identity: {
-        hardware: {
-          browserFamily: 'electron',
-          browserVersion: fullVersion,
-        },
-      },
-    });
-  }
-
-  private mergeFingerprintSourceConfig(
-    _base: FingerprintSourceConfig,
-    _overrides: Partial<FingerprintSourceConfig> | undefined
-  ): FingerprintSourceConfig {
-    return {
-      mode: 'generated',
-      fileFormat: 'txt',
-    };
-  }
-
-  private buildFingerprintForPersistence(
-    engine: AutomationEngine,
-    options: {
-      fingerprintCore?: DeepPartial<FingerprintCoreConfig>;
-      fingerprintSource?: Partial<FingerprintSourceConfig>;
-      baseFingerprint?: FingerprintConfig;
-      fallbackSharedFingerprint?: FingerprintConfig;
-      overrides?: DeepPartial<FingerprintConfig>;
-    } = {}
-  ): FingerprintConfig {
-    if (options.fingerprintCore || options.fingerprintSource) {
-      const baseFingerprint =
-        options.baseFingerprint ??
-        options.fallbackSharedFingerprint ??
-        getDefaultFingerprint(engine);
-      const mergedCore = mergeFingerprintCoreConfig(
-        extractFingerprintCoreConfig(baseFingerprint),
-        options.fingerprintCore ?? {}
-      );
-      const mergedSource = this.mergeFingerprintSourceConfig(
-        baseFingerprint.source,
-        options.fingerprintSource
-      );
-      return materializeFingerprintConfigFromCore(mergedCore, mergedSource, engine);
-    }
-
-    const seed =
-      options.baseFingerprint ??
-      (options.fallbackSharedFingerprint
-        ? mergeFingerprintConfig(getDefaultFingerprint(engine), {
-            identity: {
-              region: {
-                timezone: options.fallbackSharedFingerprint.identity.region.timezone,
-                languages: [...options.fallbackSharedFingerprint.identity.region.languages],
-              },
-              hardware: {
-                osFamily: options.fallbackSharedFingerprint.identity.hardware.osFamily,
-                hardwareConcurrency:
-                  options.fallbackSharedFingerprint.identity.hardware.hardwareConcurrency,
-                deviceMemory: options.fallbackSharedFingerprint.identity.hardware.deviceMemory,
-              },
-              display: {
-                width: options.fallbackSharedFingerprint.identity.display.width,
-                height: options.fallbackSharedFingerprint.identity.display.height,
-              },
-              graphics: {
-                webgl: {
-                  maskedVendor:
-                    options.fallbackSharedFingerprint.identity.graphics?.webgl?.maskedVendor,
-                  maskedRenderer:
-                    options.fallbackSharedFingerprint.identity.graphics?.webgl?.maskedRenderer,
-                },
-              },
-            },
-            source: {
-              mode: 'generated',
-              fileFormat: 'txt',
-            },
-          })
-        : getDefaultFingerprint(engine));
-
-    const merged = options.overrides ? mergeFingerprintConfig(seed, options.overrides) : seed;
-    return materializeFingerprintConfigForEngine(merged, engine);
-  }
-
-  private assertValidFingerprintConfig(
-    fingerprint: FingerprintConfig,
-    engine: AutomationEngine,
-    label: string
-  ): void {
-    const validation = validateFingerprintConfig(fingerprint, engine);
-    if (!validation.valid) {
-      throw new Error(`${label} fingerprint is invalid: ${validation.warnings.join(', ')}`);
-    }
-  }
-
-  private async tableExists(tableName: string): Promise<boolean> {
-    try {
-      const escapedTableName = tableName.replace(/'/g, "''");
-      const result = await this.conn.runAndReadAll(`PRAGMA table_info('${escapedTableName}')`);
-      return parseRows(result).length > 0;
-    } catch {
-      return false;
-    }
-  }
-
-  private async cleanupInvalidStoredProfiles(): Promise<void> {
-    const result = await this.conn.runAndReadAll(`
-      SELECT id, partition, engine, fingerprint
-      FROM browser_profiles
-      ORDER BY id ASC
-    `);
-    const rows = parseRows(result);
-    const invalidProfiles: Array<{
-      id: string;
-      partition: string;
-      reason: string;
-    }> = [];
-
-    for (const row of rows) {
-      const id = String(row.id || '').trim();
-      if (!id) {
-        continue;
-      }
-
-      const rawEngine = String(row.engine || '').trim();
-      if (!isAutomationEngine(rawEngine)) {
-        invalidProfiles.push({
-          id,
-          partition: String(row.partition || '').trim(),
-          reason: `unsupported engine: ${rawEngine || '(empty)'}`,
-        });
-        continue;
-      }
-
-      const fingerprint = this.parseJSON<unknown>(row.fingerprint);
-      if (!isCanonicalFingerprintConfig(fingerprint)) {
-        invalidProfiles.push({
-          id,
-          partition: String(row.partition || '').trim(),
-          reason: 'non-canonical fingerprint payload',
-        });
-        continue;
-      }
-
-      const validation = validateFingerprintConfig(fingerprint, rawEngine);
-      if (!validation.valid) {
-        invalidProfiles.push({
-          id,
-          partition: String(row.partition || '').trim(),
-          reason: validation.warnings.join(', '),
-        });
-      }
-    }
-
-    if (invalidProfiles.length === 0) {
-      return;
-    }
-
-    const profileIds = invalidProfiles.map((profile) => profile.id);
-    const placeholders = profileIds.map(() => '?').join(', ');
-    const hasAccountsTable = await this.tableExists('accounts');
-    const hasProfileExtensionsTable = await this.tableExists('profile_extensions');
-
-    await runInDuckDbTransaction(this.conn, async () => {
-      if (hasAccountsTable) {
-        await runPrepared(
-          this.conn,
-          `
-          UPDATE accounts
-          SET profile_id = ?
-          WHERE profile_id IN (${placeholders})
-        `,
-          [UNBOUND_PROFILE_ID, ...profileIds]
-        );
-      }
-
-      if (hasProfileExtensionsTable) {
-        await runPrepared(
-          this.conn,
-          `
-          DELETE FROM profile_extensions
-          WHERE profile_id IN (${placeholders})
-        `,
-          profileIds
-        );
-      }
-
-      await runPrepared(
-        this.conn,
-        `
-        DELETE FROM browser_profiles
-        WHERE id IN (${placeholders})
-      `,
-        profileIds
-      );
-    });
-
-    for (const profile of invalidProfiles) {
-      if (profile.partition) {
-        await this.purgePartitionData(profile.partition);
-      }
-      await this.purgeExtensionProfileData(profile.id);
-    }
-
-    console.warn(
-      `[ProfileService] Removed ${invalidProfiles.length} invalid profile(s): ${invalidProfiles
-        .map((profile) => `${profile.id} [${profile.reason}]`)
-        .join('; ')}`
-    );
-  }
-
-  private async ensureBrowserProfilesLatestSchema(): Promise<void> {
-    await new SchemaMigrationEngine(this.conn).migrate(BROWSER_PROFILE_SCHEMA_MIGRATIONS);
-    await runSchemaBackfills(this.conn, BROWSER_PROFILE_SCHEMA_BACKFILLS);
-  }
-
-  private async ensureDefaultProfileExists(): Promise<void> {
-    const systemDefaultFingerprint = this.buildSystemDefaultFingerprint();
-    const fingerprintJson = JSON.stringify(systemDefaultFingerprint);
-    const fingerprintCoreJson = JSON.stringify(
-      extractFingerprintCoreConfig(systemDefaultFingerprint)
-    );
-    const fingerprintSourceJson = JSON.stringify(systemDefaultFingerprint.source);
-    const result = await allPrepared(
-      this.conn,
-      `
-      SELECT fingerprint, fingerprint_core, fingerprint_source
-      FROM browser_profiles
-      WHERE id = ?
-      LIMIT 1
-    `,
-      [DEFAULT_BROWSER_PROFILE.id]
-    );
-
-    const rows = parseRows(result);
-    if (rows.length === 0) {
-      await runPrepared(
-        this.conn,
-        `
-        INSERT INTO browser_profiles (
-          id, name, engine, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
-          notes, tags, color, status, quota, idle_timeout_ms, lock_timeout_ms, is_system,
-          created_at, updated_at
-        ) VALUES (?, ?, 'electron', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `,
-        [
-          DEFAULT_BROWSER_PROFILE.id,
-          DEFAULT_BROWSER_PROFILE.name,
-          null,
-          DEFAULT_BROWSER_PROFILE.partition,
-          null,
-          fingerprintJson,
-          fingerprintCoreJson,
-          fingerprintSourceJson,
-          DEFAULT_BROWSER_PROFILE.notes,
-          JSON.stringify(DEFAULT_BROWSER_PROFILE.tags),
-          DEFAULT_BROWSER_PROFILE.color,
-          DEFAULT_BROWSER_PROFILE.quota,
-          DEFAULT_BROWSER_PROFILE.idleTimeoutMs,
-          DEFAULT_BROWSER_PROFILE.lockTimeoutMs,
-        ]
-      );
-      return;
-    }
-
-    let currentFingerprint: any = null;
-    try {
-      currentFingerprint =
-        typeof rows[0]?.fingerprint === 'string'
-          ? JSON.parse(rows[0].fingerprint)
-          : (rows[0]?.fingerprint ?? null);
-    } catch {
-      currentFingerprint = null;
-    }
-
-    const needsFingerprintRefresh =
-      !isCanonicalFingerprintConfig(currentFingerprint) ||
-      (process.platform === 'win32' &&
-        (!String(currentFingerprint.identity.hardware.userAgent || '').includes('Edg/') ||
-          currentFingerprint.identity.hardware.browserFamily !==
-            systemDefaultFingerprint.identity.hardware.browserFamily));
-    let currentFingerprintCore: any = null;
-    try {
-      currentFingerprintCore =
-        typeof rows[0]?.fingerprint_core === 'string'
-          ? JSON.parse(rows[0].fingerprint_core)
-          : (rows[0]?.fingerprint_core ?? null);
-    } catch {
-      currentFingerprintCore = null;
-    }
-    let currentFingerprintSource: any = null;
-    try {
-      currentFingerprintSource =
-        typeof rows[0]?.fingerprint_source === 'string'
-          ? JSON.parse(rows[0].fingerprint_source)
-          : (rows[0]?.fingerprint_source ?? null);
-    } catch {
-      currentFingerprintSource = null;
-    }
-
-    const updateFields = [
-      `name = ?`,
-      `engine = 'electron'`,
-      `partition = ?`,
-      `notes = ?`,
-      `tags = ?`,
-      `color = ?`,
-      `status = COALESCE(NULLIF(status, ''), 'idle')`,
-      `quota = ?`,
-      `idle_timeout_ms = ?`,
-      `lock_timeout_ms = ?`,
-      `is_system = TRUE`,
-      `updated_at = CURRENT_TIMESTAMP`,
-    ];
-    const updateValues: any[] = [
-      DEFAULT_BROWSER_PROFILE.name,
-      DEFAULT_BROWSER_PROFILE.partition,
-      DEFAULT_BROWSER_PROFILE.notes,
-      JSON.stringify(DEFAULT_BROWSER_PROFILE.tags),
-      DEFAULT_BROWSER_PROFILE.color,
-      DEFAULT_BROWSER_PROFILE.quota,
-      DEFAULT_BROWSER_PROFILE.idleTimeoutMs,
-      DEFAULT_BROWSER_PROFILE.lockTimeoutMs,
-    ];
-    const needsFingerprintCoreRefresh = !currentFingerprintCore || needsFingerprintRefresh;
-    const needsFingerprintSourceRefresh = !currentFingerprintSource || needsFingerprintRefresh;
-    if (needsFingerprintCoreRefresh) {
-      updateFields.push(`fingerprint_core = ?`);
-      updateValues.push(fingerprintCoreJson);
-    }
-    if (needsFingerprintSourceRefresh) {
-      updateFields.push(`fingerprint_source = ?`);
-      updateValues.push(fingerprintSourceJson);
-    }
-    if (needsFingerprintRefresh) {
-      updateFields.push(`fingerprint = ?`);
-      updateValues.push(fingerprintJson);
-    }
-    updateValues.push(DEFAULT_BROWSER_PROFILE.id);
-
-    await runPrepared(
-      this.conn,
-      `
-      UPDATE browser_profiles
-      SET ${updateFields.join(', ')}
-      WHERE id = ?
-    `,
-      updateValues
-    );
-  }
-
   /**
-   * 初始化表结构
+   * 闁告帗绻傞～鎰板礌閺嶎兙鈧啰绱掗幘瀵糕偓?
    *
-   * 开发阶段以当前 schema 为准，启动时直接收敛到最新表结构
+   * 鐎殿喒鍋撻柛娆愬灴濡礁鈻撻崗闀愮鞍鐟滅増鎸告晶?schema 濞戞挸鎼崳顖炴晬鐏炶姤鍎欓柛鏂诲妽濡炲倿鎯勭€涙ê澶嶉柡鈧懜鍨異闁告帞澧楀〒鍫曞棘閹峰被鈧啰绱掗幘瀵糕偓?
    */
   async initTable(): Promise<void> {
-    // 创建分组表
-    await this.conn.run(`
-      CREATE TABLE IF NOT EXISTS profile_groups (
-        id              VARCHAR PRIMARY KEY,
-        name            VARCHAR NOT NULL,
-        parent_id       VARCHAR,
-        color           VARCHAR,
-        icon            VARCHAR,
-        description     TEXT,
-        sort_order      INTEGER DEFAULT 0,
-        created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // 创建 Profile 表（包含 v2 新字段）
-    await this.conn.run(`
-      CREATE TABLE IF NOT EXISTS browser_profiles (
-        id              VARCHAR PRIMARY KEY,
-        name            VARCHAR NOT NULL,
-        engine          VARCHAR DEFAULT 'electron',
-        group_id        VARCHAR,
-        partition       VARCHAR NOT NULL UNIQUE,
-        proxy_config    JSON,
-        fingerprint     JSON NOT NULL,
-        fingerprint_core JSON,
-        fingerprint_source JSON,
-        notes           TEXT,
-        tags            JSON DEFAULT '[]',
-        color           VARCHAR,
-        status          VARCHAR DEFAULT 'idle',
-        last_error      TEXT,
-        last_active_at  TIMESTAMP,
-        total_uses      INTEGER DEFAULT 0,
-        quota           INTEGER DEFAULT 1,
-        idle_timeout_ms INTEGER DEFAULT 300000,
-        lock_timeout_ms INTEGER DEFAULT 300000,
-        is_system       BOOLEAN DEFAULT FALSE,
-        created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    await this.ensureBrowserProfilesLatestSchema();
-    await this.cleanupInvalidStoredProfiles();
-
-    // 创建索引
-    await this.conn.run(`
-      CREATE INDEX IF NOT EXISTS idx_profile_groups_parent_id
-      ON profile_groups(parent_id)
-    `);
-
-    await this.conn.run(`
-      CREATE INDEX IF NOT EXISTS idx_browser_profiles_group_id
-      ON browser_profiles(group_id)
-    `);
-
-    await this.conn.run(`
-      CREATE INDEX IF NOT EXISTS idx_browser_profiles_status
-      ON browser_profiles(status)
-    `);
-
-    await this.conn.run(`
-      CREATE INDEX IF NOT EXISTS idx_browser_profiles_is_system
-      ON browser_profiles(is_system)
-    `);
-
-    await this.ensureDefaultProfileExists();
-
-    console.log('[ProfileService] Tables initialized');
+    await this.schemaBootstrap.initTable();
   }
 
   // =====================================================
@@ -783,7 +177,7 @@ export class ProfileService {
   // =====================================================
 
   /**
-   * 创建 Profile
+   * 闁告帗绋戠紓?Profile
    */
   async create(params: CreateProfileParams): Promise<BrowserProfile> {
     const id = uuidv4();
@@ -809,7 +203,7 @@ export class ProfileService {
       });
 
       try {
-        // 合并默认指纹配置
+        // 闁告艾鐗嗛懟鐔割渶濡鍚囬柟绋挎川濮规鏌婂鍥╂瀭
         const fingerprint = this.buildFingerprintForPersistence(engine, {
           fingerprintCore: params.fingerprintCore,
           fingerprintSource: params.fingerprintSource,
@@ -818,7 +212,11 @@ export class ProfileService {
         const fingerprintCore = extractFingerprintCoreConfig(fingerprint);
         const fingerprintSource = fingerprint.source;
 
-        this.assertValidFingerprintConfig(fingerprint, engine, `Profile "${params.name}"`);
+        this.assertValidFingerprintConfig(
+          fingerprint,
+          engine,
+          `Profile "${params.name}"`
+        );
 
         const normalizedProxy = this.normalizeProxyConfig(params.proxy);
 
@@ -826,9 +224,11 @@ export class ProfileService {
         const quotaResolution = normalizeProfileBrowserQuota(requestedQuota);
         const quota = quotaResolution.quota;
         if (quotaResolution.forced) {
-          console.warn(
-            `[ProfileService] quota for profile "${params.name}" is forced to 1 (received ${requestedQuota})`
-          );
+          logger.warn('Profile quota forced to 1', {
+            profileId: id,
+            profileName: params.name,
+            requestedQuota,
+          });
         }
         const idleTimeoutMs = this.normalizeIdleTimeoutMs(params.idleTimeoutMs);
         const lockTimeoutMs = this.normalizeLockTimeoutMs(params.lockTimeoutMs);
@@ -860,7 +260,10 @@ export class ProfileService {
           ]
         );
 
-        console.log(`[ProfileService] Created profile: ${params.name} (${id})`);
+        logger.info('Created profile', {
+          profileId: id,
+          profileName: params.name,
+        });
         const created = await this.get(id);
         await span.succeed({
           attrs: {
@@ -897,7 +300,7 @@ export class ProfileService {
   }
 
   /**
-   * 获取单个 Profile
+   * 闁兼儳鍢茶ぐ鍥础閺囨岸鍤?Profile
    */
   async get(id: string): Promise<BrowserProfile | null> {
     const result = await allPrepared(
@@ -916,18 +319,18 @@ export class ProfileService {
 
     const rows = parseRows(result);
     if (rows.length === 0) return null;
-    return this.mapRowToProfile(rows[0]);
+    return mapProfileRowToProfile(rows[0]);
   }
 
   /**
-   * 获取默认浏览器 Profile
+   * 闁兼儳鍢茶ぐ鍥渶濡鍚囨繛鏉戠箺椤秹宕?Profile
    */
   async getDefault(): Promise<BrowserProfile | null> {
     return this.get(DEFAULT_BROWSER_PROFILE.id);
   }
 
   /**
-   * 列出 Profile
+   * 闁告帗顨呴崵?Profile
    */
   async list(params?: ProfileListParams): Promise<BrowserProfile[]> {
     let sql = `
@@ -942,7 +345,7 @@ export class ProfileService {
 
     const bindValues: any[] = [];
 
-    // 过滤条件
+    // 閺夆晛娲﹂幎銈夊级閳ュ弶顐?
     if (params?.filter) {
       const { groupId, groupIds, status, tags, keyword } = params.filter;
 
@@ -969,16 +372,16 @@ export class ProfileService {
         bindValues.push(`%${keyword}%`, `%${keyword}%`);
       }
 
-      // tags 过滤需要特殊处理（JSON 数组）
+      // tags filter uses DuckDB JSON array matching.
       if (tags && tags.length > 0) {
-        // DuckDB JSON 查询
+        // DuckDB JSON 闁哄被鍎撮?
         const tagConditions = tags.map(() => `list_contains(tags::VARCHAR[], ?)`).join(' OR ');
         sql += ` AND (${tagConditions})`;
         bindValues.push(...tags);
       }
     }
 
-    // 排序
+    // 闁圭儤甯掔花?
     const sortField = params?.sortBy || 'createdAt';
     const sortOrder = params?.sortOrder || 'desc';
     const fieldMap: Record<string, string> = {
@@ -990,7 +393,7 @@ export class ProfileService {
     };
     sql += ` ORDER BY ${fieldMap[sortField] || 'created_at'} ${sortOrder.toUpperCase()}`;
 
-    // 分页
+    // 闁告帒妫濋妴?
     if (params?.limit) {
       sql += ` LIMIT ?`;
       bindValues.push(params.limit);
@@ -1001,20 +404,20 @@ export class ProfileService {
       bindValues.push(params.offset);
     }
 
-    // 如果没有占位符，直接执行（避免无意义的 prepare，且可规避部分并发场景下的 prepared statement 执行异常）
+    // Avoid prepare overhead when there are no placeholders.
     if (bindValues.length === 0) {
       const result = await this.conn.runAndReadAll(sql);
       const rows = parseRows(result);
-      return rows.map((row) => this.mapRowToProfile(row));
+      return rows.map((row) => mapProfileRowToProfile(row));
     }
 
     const result = await allPrepared(this.conn, sql, bindValues);
     const rows = parseRows(result);
-    return rows.map((row) => this.mapRowToProfile(row));
+    return rows.map((row) => mapProfileRowToProfile(row));
   }
 
   /**
-   * 更新 Profile
+   * 闁哄洤鐡ㄩ弻?Profile
    */
   async update(id: string, params: UpdateProfileParams): Promise<BrowserProfile> {
     const currentTraceContext = getCurrentTraceContext();
@@ -1103,7 +506,11 @@ export class ProfileService {
         const nextFingerprintSource = nextFingerprint.source;
 
         if (shouldRecomputeFingerprint) {
-          this.assertValidFingerprintConfig(nextFingerprint, targetEngine, `Profile "${id}"`);
+          this.assertValidFingerprintConfig(
+            nextFingerprint,
+            targetEngine,
+            `Profile "${id}"`
+          );
         }
 
         if (shouldRecomputeFingerprint) {
@@ -1137,9 +544,10 @@ export class ProfileService {
           params.quota !== undefined || quotaResolution.quota !== currentQuotaResolution.quota;
         if (shouldPersistNormalizedQuota) {
           if (params.quota !== undefined && quotaResolution.forced) {
-            console.warn(
-              `[ProfileService] quota for profile ${id} is forced to 1 (received ${params.quota})`
-            );
+            logger.warn('Profile quota forced to 1', {
+              profileId: id,
+              requestedQuota: params.quota,
+            });
           }
           fields.push('quota = ?');
           values.push(quotaResolution.quota);
@@ -1187,7 +595,7 @@ export class ProfileService {
           );
         }
 
-        console.log(`[ProfileService] Updated profile: ${id}`);
+        logger.info('Updated profile', { profileId: id });
         const updated = await this.get(id);
         await span.succeed({
           attrs: {
@@ -1223,25 +631,24 @@ export class ProfileService {
   }
 
   /**
-   * 删除 Profile
+   * 闁告帞濞€濞?Profile
    */
   async delete(id: string): Promise<void> {
-    // 检查是否存在
     const profile = await this.get(id);
     if (!profile) {
       throw new Error(`Profile not found: ${id}`);
     }
 
-    // 系统内置 Profile 不可删除
+    // 缂侇垵宕电划娲礃閸涱垳鏋?Profile 濞戞挸绉磋ぐ鏌ュ礆閻樼粯鐝?
     if (profile.isSystem) {
-      throw new Error('系统内置的浏览器配置不可删除');
+      throw new Error('System browser profiles cannot be deleted');
     }
 
     if (profile.status === 'active') {
-      throw new Error('无法删除正在使用的浏览器配置');
+      throw new Error('Cannot delete an active browser profile');
     }
 
-    // 删除 Profile
+    // 闁告帞濞€濞?Profile
     await runPrepared(
       this.conn,
       `
@@ -1252,20 +659,16 @@ export class ProfileService {
 
     await runPrepared(this.conn, `DELETE FROM browser_profiles WHERE id = ?`, [id]);
 
-    // 删除 Profile 通常意味着用户希望同时删除本地会话数据
+    // 闁告帞濞€濞?Profile 闂侇偅鑹鹃悥鍫曞箛韫囨挻鍤勯柣顐熷亾闁活潿鍔嶉崺娑氭暜鐏炵偓绠块柛姘湰濡炲倿宕氶悩缁樼彑闁哄牜鍓欏﹢瀛樺濮樺磭妯堥柡浣哄瀹?
     await this.purgePartitionData(profile.partition);
     await this.purgeExtensionProfileData(id);
 
-    console.log(`[ProfileService] Deleted profile: ${id}`);
+    logger.info('Deleted profile', { profileId: id });
   }
 
   /**
-   * 事务性删除 Profile（保留账号数据并解除账号环境绑定）
-   *
-   * v2 架构：使用数据库事务确保原子性
-   * - 如果任何步骤失败，所有更改都会回滚
-   * - 先验证再操作，避免事务中的异常
-   */
+   * 濞存粌顑呮慨鐔煎箑瑜嶉崹褰掓⒔?Profile闁挎稑鐗呯换姘舵偩濞嗘帒顦╅柛娆撴敱閺嗙喖骞戦鑹板珯閻熸瑱缍佸▍搴ｆ嫻閿曗偓瑜板潡鎮抽姘兼殧缂備焦鍨甸悾楣冩晬?   *
+   * v2 闁哄鍩栭悗顖炴晬濮橆偄鈻忛柣顫妽閺嗙喖骞戦鑲╂皑濞存粌顑呮慨鐔烘兜椤旇崵绠介柛妯煎枎閻℃瑩骞€?   * - 濠碘€冲€归悘澶嬬鐠佸磭绉挎慨婵勫劦椤庡啯寰勬潏顐バ曢柨娑樻湰婢у秹寮垫径瀣函闁衡偓瑜版帒鍘村ù鍏艰壘濞叉牕顭?   * - 闁稿繐鐗撻悰娆戞嫚娴ｇ鏅欓柟鍨С缂嶆棃鏁嶅畝鍕級闁稿繐绉崇花銊╁礉閳ヨ尪鍘柣銊ュ缁辨挾鏁?   */
   async deleteWithCascade(id: string): Promise<void> {
     const currentTraceContext = getCurrentTraceContext();
     const traceContext = createChildTraceContext({
@@ -1284,24 +687,23 @@ export class ProfileService {
       });
 
       try {
-        // 1. 验证（在事务外执行，失败时不需要回滚）
-        const profile = await this.get(id);
+        // 1. 濡ょ姴鐭侀惁澶愭晬閸繃韬ù婊冾儏婵喐寰勯弽銊モ挃閻炴稑鐭夌槐婵囧緞鏉堫偉袝闁哄啯婀圭粭澶愭閳ь剛鎲版担鍛婄婵犲﹥鐔槐?
+    const profile = await this.get(id);
         if (!profile) {
           throw new Error(`Profile not found: ${id}`);
         }
 
         if (profile.isSystem) {
-          throw new Error('系统内置的浏览器配置不可删除');
+          throw new Error('System browser profiles cannot be deleted');
         }
 
         if (profile.status === 'active') {
-          throw new Error('无法删除正在使用的浏览器配置');
+          throw new Error('Cannot delete an active browser profile');
         }
 
-        // 2. 事务性删除
         try {
           await runInDuckDbTransaction(this.conn, async () => {
-            // 删除环境前，先把关联账号统一标记为未绑定
+            // 闁告帞濞€濞呭酣鎮抽姘兼殧闁告挸绋勭槐婵嬪礂閸喎惟闁稿繐鐤囨禒鍫㈡嫻閿曗偓瑜拌法绱掗悢鍓侇伇闁哄秴娲╅鍥ㄧ▔閻戞ɑ寮撶紓浣瑰灥閻?
             await runPrepared(
               this.conn,
               `
@@ -1312,7 +714,7 @@ export class ProfileService {
               [UNBOUND_PROFILE_ID, id]
             );
 
-            // 再删除 profile 本身
+            // 闁告劕绉撮崹褰掓⒔?profile 闁哄牜鍓濋棅?
             await runPrepared(
               this.conn,
               `
@@ -1323,15 +725,15 @@ export class ProfileService {
 
             await runPrepared(this.conn, `DELETE FROM browser_profiles WHERE id = ?`, [id]);
           });
-          console.log(
-            `[ProfileService] Deleted profile and marked linked accounts as unbound: ${id}`
-          );
+          logger.info('Deleted profile and marked linked accounts as unbound', {
+            profileId: id,
+          });
         } catch (error) {
-          console.error(`[ProfileService] Failed to delete profile ${id}, rolled back:`, error);
+          logger.error(`Failed to delete profile ${id}, rolled back`, error);
           throw error;
         }
 
-        // 事务提交后再清理 partition 数据，避免因为清理失败导致数据库回滚
+        // 濞存粌顑呮慨鐔煎箵閹邦亝鍞夐柛姘閸熲偓婵炴挸鎳愰幃?partition 闁轰胶澧楀畵渚€鏁嶅畝鍕級闁稿繐绉村ú婊勭▔閻戞顏搁柣鐐叉閵囨垹鎷归妷銉殼闁煎嘲鐡ㄩ弳鐔煎箲椤旇偐姘ㄩ柛銉у仦缁?
         await this.purgePartitionData(profile.partition);
         await this.purgeExtensionProfileData(id);
 
@@ -1361,12 +763,10 @@ export class ProfileService {
   }
 
   // =====================================================
-  // 状态管理
-  // =====================================================
+  // 闁绘鍩栭埀顑胯兌椤撴悂鎮?  // =====================================================
 
   /**
-   * 更新状态
-   */
+   * 闁哄洤鐡ㄩ弻濠囨偐閼哥鍋?   */
   async updateStatus(id: string, status: ProfileStatus, error?: string): Promise<void> {
     await runPrepared(
       this.conn,
@@ -1378,11 +778,14 @@ export class ProfileService {
       [status, error || null, id]
     );
 
-    console.log(`[ProfileService] Updated status: ${id} -> ${status}`);
+    logger.info('Updated profile status', {
+      profileId: id,
+      status,
+    });
   }
 
   /**
-   * 增加使用次数
+   * 濠⒀呭仜婵偞鎷呯捄銊︽殢婵炲棌鍓濋弳?
    */
   async incrementUsage(id: string): Promise<void> {
     await runPrepared(
@@ -1397,22 +800,18 @@ export class ProfileService {
   }
 
   /**
-   * 检查是否可用
-   */
+   * 婵☆偀鍋撻柡灞诲劜濡叉悂宕ラ敃鈧ぐ鏌ユ偨?   */
   async isAvailable(id: string): Promise<boolean> {
     const profile = await this.get(id);
     return profile !== null && profile.status === 'idle';
   }
 
   /**
-   * 重置所有 active 状态为 idle
+   * 闂佹彃绉堕悿鍡涘箥閳ь剟寮?active 闁绘鍩栭埀顑挎鐠?idle
    *
-   * 用于应用启动时同步状态，解决以下问题：
-   * - 应用崩溃后 Profile 状态可能仍为 active
-   * - 内存中没有对应的浏览器实例
-   *
-   * @returns 重置的数量
-   */
+   * 闁活潿鍔嬬花顒佹償閺冨倹鏆忛柛姘煎灠婵晠寮捄鐑樺€辨慨婵勫劤婵悂骞€娓氬﹦绀夐悷娆欑到閸犲懏绂掗妷銈囩憮闂傚偆鍣ｉ。浠嬫晬?   * - 閹煎瓨姊婚弫銈呯暦閳哄倻鐨鹃柛?Profile 闁绘鍩栭埀顑跨瑜版煡鎳楅幋鎺旂煗濞?active
+   * - 闁告劕鎳庨悺銊︾▔椤撶喓姊鹃柡鍫濐槸椤曨喗鎯旈弮鍌涚暠婵炴潙绻楅～宥夊闯閵娿儳鏉藉〒?   *
+   * @returns 闂佹彃绉堕悿鍡涙儍閸曨剚娈堕梺?   */
   async resetAllActiveStatus(): Promise<number> {
     const result = await this.conn.runAndReadAll(`
       UPDATE browser_profiles
@@ -1425,18 +824,18 @@ export class ProfileService {
     const count = rows.length;
 
     if (count > 0) {
-      console.log(`[ProfileService] Reset ${count} profile(s) from 'active' to 'idle' on startup`);
+      logger.info('Reset active profiles to idle on startup', { count });
     }
 
     return count;
   }
 
   // =====================================================
-  // 统计
+  // 缂備胶鍠曢?
   // =====================================================
 
   /**
-   * 获取统计信息
+   * 闁兼儳鍢茶ぐ鍥╃磼閻旀椿鍚€濞ｅ洠鍓濇导?
    */
   async getStats(): Promise<{
     total: number;
@@ -1467,63 +866,4 @@ export class ProfileService {
     };
   }
 
-  // =====================================================
-  // 辅助方法
-  // =====================================================
-
-  /**
-   * 将数据库行映射为 BrowserProfile
-   */
-  private mapRowToProfile(row: any): BrowserProfile {
-    const engine = normalizeAutomationEngine(row.engine);
-    const fingerprint = materializeFingerprintConfigForEngine(
-      this.parseJSON<FingerprintConfig>(row.fingerprint),
-      engine
-    );
-    const fingerprintCore =
-      this.parseJSON<FingerprintCoreConfig | null>(row.fingerprint_core) ||
-      extractFingerprintCoreConfig(fingerprint);
-    const fingerprintSource =
-      this.parseJSON<FingerprintSourceConfig | null>(row.fingerprint_source) || fingerprint.source;
-
-    return {
-      id: String(row.id),
-      name: String(row.name),
-      engine,
-      groupId: row.group_id ? String(row.group_id) : null,
-      partition: String(row.partition),
-      proxy: row.proxy_config ? this.parseJSON<ProxyConfig>(row.proxy_config) : null,
-      fingerprint,
-      fingerprintCore,
-      fingerprintSource,
-      notes: row.notes ? String(row.notes) : null,
-      tags: this.parseJSON<string[]>(row.tags) || [],
-      color: row.color ? String(row.color) : null,
-      status: (row.status as ProfileStatus) || 'idle',
-      lastError: row.last_error ? String(row.last_error) : null,
-      lastActiveAt: row.last_active_at ? new Date(row.last_active_at) : null,
-      totalUses: Number(row.total_uses) || 0,
-      quota: Number(row.quota) || 1,
-      idleTimeoutMs:
-        Number(row.idle_timeout_ms) || DEFAULT_BROWSER_POOL_CONFIG.defaultIdleTimeoutMs,
-      lockTimeoutMs:
-        Number(row.lock_timeout_ms) || DEFAULT_BROWSER_POOL_CONFIG.defaultLockTimeoutMs,
-      isSystem: row.is_system === true || row.is_system === 1,
-      createdAt: new Date(row.created_at),
-      updatedAt: new Date(row.updated_at),
-    };
-  }
-
-  /**
-   * 安全解析 JSON
-   */
-  private parseJSON<T>(value: any): T {
-    if (!value) return value;
-    if (typeof value === 'object') return value as T;
-    try {
-      return JSON.parse(String(value));
-    } catch {
-      return value as T;
-    }
-  }
 }

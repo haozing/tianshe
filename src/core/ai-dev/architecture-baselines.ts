@@ -100,7 +100,6 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
       'src/main/duckdb/__tests__/dataset-service.integration.test.ts',
       'src/main/duckdb/dataset-schema-service.ts',
       'src/main/duckdb/dataset-service.ts',
-      'src/main/duckdb/profile-service.ts',
       'src/main/duckdb/utils.test.ts',
     ]
   ),
@@ -200,7 +199,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/duckdb/import-worker.ts': 3,
   'src/main/duckdb/log-service.ts': 2,
   'src/main/duckdb/profile-group-service.ts': 4,
-  'src/main/duckdb/profile-service.ts': 15,
   'src/main/duckdb/plugin-table-bootstrap.ts': 5,
   'src/main/duckdb/query-template-service.ts': 28,
   'src/main/duckdb/saved-site-service.ts': 3,
