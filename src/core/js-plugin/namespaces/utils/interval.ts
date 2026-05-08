@@ -6,6 +6,9 @@
 
 import { ValidationError } from '../../errors';
 import { toError } from '../../../../utils/error-message';
+import { createLogger } from '../../../logger';
+
+const logger = createLogger('IntervalUtils');
 
 /**
  * 定时任务控制器接口
@@ -154,9 +157,7 @@ export class IntervalUtils {
 
       // 防止重叠执行
       if (opts.skipIfRunning && isRunning) {
-        console.warn(
-          `[IntervalUtils] Task still running, skipping this cycle (plugin: ${this.pluginId})`
-        );
+        logger.warn('Interval task still running; skipping cycle', { pluginId: this.pluginId });
         return;
       }
 
@@ -167,7 +168,10 @@ export class IntervalUtils {
         try {
           opts.onStart();
         } catch (error) {
-          console.error(`[IntervalUtils] onStart callback failed:`, error);
+          logger.error('Interval onStart callback failed', {
+            pluginId: this.pluginId,
+            errorMessage: toError(error).message,
+          });
         }
       }
 
@@ -180,7 +184,10 @@ export class IntervalUtils {
           try {
             opts.onComplete();
           } catch (error) {
-            console.error(`[IntervalUtils] onComplete callback failed:`, error);
+            logger.error('Interval onComplete callback failed', {
+              pluginId: this.pluginId,
+              errorMessage: toError(error).message,
+            });
           }
         }
       } catch (error: unknown) {
@@ -189,10 +196,16 @@ export class IntervalUtils {
           try {
             await opts.errorHandler(toError(error));
           } catch (handlerError) {
-            console.error(`[IntervalUtils] Error handler failed:`, handlerError);
+            logger.error('Interval error handler failed', {
+              pluginId: this.pluginId,
+              errorMessage: toError(handlerError).message,
+            });
           }
         } else {
-          console.error(`[IntervalUtils] Task failed (plugin: ${this.pluginId}):`, error);
+          logger.error('Interval task failed', {
+            pluginId: this.pluginId,
+            errorMessage: toError(error).message,
+          });
         }
       } finally {
         isRunning = false;
@@ -217,7 +230,10 @@ export class IntervalUtils {
     // 立即执行一次
     if (opts.immediate) {
       wrappedHandler().catch((error) => {
-        console.error(`[IntervalUtils] Initial execution failed:`, error);
+        logger.error('Initial interval execution failed', {
+          pluginId: this.pluginId,
+          errorMessage: toError(error).message,
+        });
       });
     }
 

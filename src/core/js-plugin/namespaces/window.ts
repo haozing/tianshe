@@ -10,13 +10,23 @@ import type {
   IWindowManager,
 } from '../../browser-pool/ports';
 import type { IProfileService } from '../../../types/service-interfaces';
-import type { FingerprintConfig } from '../../../types/profile';
 import { buildStealthConfigFromFingerprint } from '../../fingerprint/fingerprint-projections';
 import { getDefaultFingerprint, mergeFingerprintConfig } from '../../../constants/fingerprint-defaults';
 import type { StealthConfig } from '../../stealth';
 import { createBlockedNavigationError } from '../../browser-core/navigation-guard';
 import { getUnknownErrorMessage } from '../../../utils/error-message';
+import { createLogger } from '../../logger';
 
+const logger = createLogger('WindowNamespace');
+
+function getUrlPreview(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return '[invalid-url]';
+  }
+}
 
 /**
  * 模态窗口配置
@@ -99,10 +109,12 @@ export class WindowNamespace {
     }
 
     if (config.partition && config.partition !== profile.partition) {
-      console.warn(
-        `[WindowNamespace] Partition mismatch for profile ${profileId}, ` +
-          `requested=${config.partition}, using=${profile.partition}`
-      );
+      logger.warn('Partition mismatch for profile modal window', {
+        pluginId: this.pluginId,
+        profileId,
+        requestedPartition: config.partition,
+        profilePartition: profile.partition,
+      });
     }
 
     const mergedFingerprint = mergeFingerprintConfig(
@@ -150,7 +162,13 @@ export class WindowNamespace {
    * });
    */
   async openModal(config: ModalWindowConfig): Promise<ModalWindowResult> {
-    console.log(`🪟 [WindowNamespace] Opening modal window for plugin: ${this.pluginId}`, config);
+    logger.info('Opening plugin modal window', {
+      pluginId: this.pluginId,
+      title: config.title,
+      urlPreview: getUrlPreview(config.url),
+      partition: config.partition,
+      profileId: config.profileId,
+    });
 
     const width = config.width || 1000;
     const height = config.height || 700;
@@ -189,7 +207,7 @@ export class WindowNamespace {
           override: config.openDevTools,
           mode: 'detach',
         });
-        console.log(`  ✅ Modal window shown (ready-to-show)`);
+        logger.info('Plugin modal window shown', { pluginId: this.pluginId });
       });
 
       const stealthViewId = `plugin-modal:${this.pluginId}:${Date.now()}`;
@@ -198,10 +216,11 @@ export class WindowNamespace {
         try {
           this.viewManager.detachStealthFromWebContents(stealthViewId, modalWebContents);
         } catch (error) {
-          console.warn(
-            `⚠️ [WindowNamespace] Failed to detach stealth for modal window (non-critical):`,
-            error
-          );
+          logger.warn('Failed to detach stealth for modal window', {
+            pluginId: this.pluginId,
+            stealthViewId,
+            errorMessage: getUnknownErrorMessage(error),
+          });
         }
       });
 
@@ -213,11 +232,18 @@ export class WindowNamespace {
           { profileId: config.profileId, source: 'plugin', stealth: resolved.stealth }
         );
       } catch (error) {
-        console.warn(`⚠️ [WindowNamespace] Failed to apply stealth for modal window:`, error);
+        logger.warn('Failed to apply stealth for modal window', {
+          pluginId: this.pluginId,
+          stealthViewId,
+          errorMessage: getUnknownErrorMessage(error),
+        });
       }
 
       // 3. 加载 URL（异步，不等待）
-      console.log(`  🌐 Loading URL: ${config.url}`);
+      logger.info('Loading plugin modal URL', {
+        pluginId: this.pluginId,
+        urlPreview: getUrlPreview(config.url),
+      });
       const blockedNavigationError = createBlockedNavigationError(config.url);
       if (blockedNavigationError) {
         throw blockedNavigationError;
@@ -226,7 +252,11 @@ export class WindowNamespace {
 
       // 4. 监听加载失败
       activeWindow.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
-        console.error(`  ❌ Failed to load URL: ${errorDescription} (code: ${errorCode})`);
+        logger.error('Plugin modal URL load failed', {
+          pluginId: this.pluginId,
+          errorCode,
+          errorDescription,
+        });
       });
 
       // 5. 等待登录完成
@@ -239,7 +269,10 @@ export class WindowNamespace {
 
       return result;
     } catch (error: unknown) {
-      console.error(`❌ [WindowNamespace] Modal window error:`, error);
+      logger.error('Plugin modal window failed', {
+        pluginId: this.pluginId,
+        errorMessage: getUnknownErrorMessage(error),
+      });
 
       // 确保关闭窗口
       if (window && !window.isDestroyed()) {
@@ -299,7 +332,10 @@ export class WindowNamespace {
       // 监听 URL 导航（立即响应，无需等待轮询）
       navigateHandler = (event: any, url: string) => {
         if (this.checkSuccessUrl(url, successPattern)) {
-          console.log(`  ✅ Success detected (did-navigate)! URL: ${url}`);
+          logger.info('Plugin modal success detected by navigation', {
+            pluginId: this.pluginId,
+            urlPreview: getUrlPreview(url),
+          });
           cleanup();
           resolve({
             success: true,
@@ -312,7 +348,10 @@ export class WindowNamespace {
       // 监听页面内导航（SPA 应用常用）
       navigateInPageHandler = (event: any, url: string) => {
         if (this.checkSuccessUrl(url, successPattern)) {
-          console.log(`  ✅ Success detected (did-navigate-in-page)! URL: ${url}`);
+          logger.info('Plugin modal success detected by in-page navigation', {
+            pluginId: this.pluginId,
+            urlPreview: getUrlPreview(url),
+          });
           cleanup();
           resolve({
             success: true,
@@ -348,7 +387,10 @@ export class WindowNamespace {
 
         // 使用辅助方法判断是否成功
         if (this.checkSuccessUrl(currentUrl, successPattern)) {
-          console.log(`  ✅ Success detected (polling)! URL: ${currentUrl}`);
+          logger.info('Plugin modal success detected by polling', {
+            pluginId: this.pluginId,
+            urlPreview: getUrlPreview(currentUrl),
+          });
           cleanup();
           resolve({
             success: true,
@@ -357,7 +399,10 @@ export class WindowNamespace {
         }
       }, 1000); // 每1秒检查一次（从3秒优化到1秒）
 
-      console.log(`  ⏳ Waiting for success condition (timeout: ${timeout}ms)...`);
+      logger.info('Waiting for plugin modal success condition', {
+        pluginId: this.pluginId,
+        timeoutMs: timeout,
+      });
     });
   }
 

@@ -45,7 +45,9 @@ import type {
 } from '../../../types/duckdb';
 import type { PluginContext } from '../context';
 import { getUnknownErrorMessage } from '../../../utils/error-message';
+import { createLogger } from '../../logger';
 
+const logger = createLogger('ButtonNamespace');
 
 /**
  * 按钮配置
@@ -162,7 +164,12 @@ export class ButtonNamespace {
       // 检查列是否已存在
       const existingSchema = await this.duckdb.getDatasetInfo(datasetId);
       if (existingSchema?.schema?.some((col: EnhancedColumnSchema) => col.name === config.columnName)) {
-        console.log(`[ButtonNamespace] 按钮列 "${config.columnName}" 已存在，跳过创建`);
+        logger.info('Button column already exists; skipping create', {
+          pluginId: this.pluginId,
+          tableCode,
+          datasetId,
+          columnName: config.columnName,
+        });
         return { success: true, columnName: config.columnName };
       }
 
@@ -184,11 +191,21 @@ export class ButtonNamespace {
         metadata: columnSchema.metadata,
       });
 
-      console.log(`[ButtonNamespace] 已添加按钮列 "${config.columnName}" 到表 "${tableCode}"`);
+      logger.info('Button column added to table', {
+        pluginId: this.pluginId,
+        tableCode,
+        datasetId,
+        columnName: config.columnName,
+      });
 
       return { success: true, columnName: config.columnName };
     } catch (error: unknown) {
-      console.error(`[ButtonNamespace] 添加按钮失败:`, error);
+      logger.error('Failed to add button column', {
+        pluginId: this.pluginId,
+        tableCode,
+        columnName: config.columnName,
+        errorMessage: getUnknownErrorMessage(error),
+      });
       return {
         success: false,
         columnName: config.columnName,
@@ -233,11 +250,21 @@ export class ButtonNamespace {
       // 更新列元数据
       await this.duckdb.updateColumnMetadata(datasetId, columnName, newMetadata);
 
-      console.log(`[ButtonNamespace] 已更新按钮 "${columnName}"`);
+      logger.info('Button column updated', {
+        pluginId: this.pluginId,
+        tableCode,
+        datasetId,
+        columnName,
+      });
 
       return { success: true };
     } catch (error: unknown) {
-      console.error(`[ButtonNamespace] 更新按钮失败:`, error);
+      logger.error('Failed to update button column', {
+        pluginId: this.pluginId,
+        tableCode,
+        columnName,
+        errorMessage: getUnknownErrorMessage(error),
+      });
       return { success: false, error: getUnknownErrorMessage(error) };
     }
   }
@@ -260,11 +287,21 @@ export class ButtonNamespace {
 
       await this.duckdb.deleteColumn(datasetId, columnName);
 
-      console.log(`[ButtonNamespace] 已删除按钮列 "${columnName}"`);
+      logger.info('Button column removed', {
+        pluginId: this.pluginId,
+        tableCode,
+        datasetId,
+        columnName,
+      });
 
       return { success: true };
     } catch (error: unknown) {
-      console.error(`[ButtonNamespace] 删除按钮失败:`, error);
+      logger.error('Failed to remove button column', {
+        pluginId: this.pluginId,
+        tableCode,
+        columnName,
+        errorMessage: getUnknownErrorMessage(error),
+      });
       return { success: false, error: getUnknownErrorMessage(error) };
     }
   }
@@ -321,7 +358,7 @@ export class ButtonNamespace {
   private getDataTableId(tableCode: string): string | null {
     const context = this.getContext();
     if (!context) {
-      console.warn('[ButtonNamespace] PluginContext 未设置');
+      logger.warn('PluginContext is not set', { pluginId: this.pluginId, tableCode });
       return null;
     }
 
