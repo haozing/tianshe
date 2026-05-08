@@ -22,6 +22,7 @@ import type { Dataset, ValidationRule } from './types';
 import { escapeSqlStringLiteral, quoteIdentifier, quoteQualifiedName } from './utils';
 import { runPrepared } from './statement-executor';
 import { getUnknownErrorMessage } from '../ipc-utils';
+import { createLogger } from '../../core/logger';
 import {
   doesComputeColumnDependOn,
   extractDependenciesFromComputeConfig,
@@ -29,6 +30,8 @@ import {
   rewriteColumnReferencesInSchema,
 } from '../../utils/computed-schema-helpers';
 import { assertDatasetColumnNamePolicy } from '../../utils/dataset-column-name-policy';
+
+const logger = createLogger('DatasetSchemaService');
 
 export class DatasetSchemaService {
   constructor(
@@ -123,7 +126,11 @@ export class DatasetSchemaService {
           throw new Error(`检测到循环依赖: ${cycleCheck.cycle?.join(' → ')}`);
         }
 
-        console.log(`✓ 依赖关系检查通过，依赖列: [${dependsOn.join(', ')}]`);
+        logger.info('Computed column dependency check passed', {
+          datasetId: safeDatasetId,
+          columnName,
+          dependsOn,
+        });
       }
 
       // ========== 第3步：确定 DuckDB 类型 ==========
@@ -161,9 +168,17 @@ export class DatasetSchemaService {
               columnName,
               rules: validationRules,
             });
-            console.log(`✓ 已应用 ${validationRules.length} 条验证规则`);
+            logger.info('Applied dataset column validation rules', {
+              datasetId: safeDatasetId,
+              columnName,
+              ruleCount: validationRules.length,
+            });
           } catch (error: unknown) {
-            console.error(`⚠ 验证规则应用失败:`, getUnknownErrorMessage(error));
+            logger.warn('Failed to apply dataset column validation rules', {
+              datasetId: safeDatasetId,
+              columnName,
+              errorMessage: getUnknownErrorMessage(error),
+            });
             // 不中断流程，只是警告
           }
         }
@@ -247,9 +262,18 @@ export class DatasetSchemaService {
             SET ${quotedTarget} = ${quotedSource}
           `);
 
-          console.log(`✓ 已从 "${copyDataFrom}" 复制数据到 "${columnName}"`);
+          logger.info('Copied dataset column data into new column', {
+            datasetId: safeDatasetId,
+            sourceColumn: copyDataFrom,
+            targetColumn: columnName,
+          });
         } catch (error: unknown) {
-          console.error(`⚠ 数据复制失败:`, getUnknownErrorMessage(error));
+          logger.warn('Failed to copy dataset column data into new column', {
+            datasetId: safeDatasetId,
+            sourceColumn: copyDataFrom,
+            targetColumn: columnName,
+            errorMessage: getUnknownErrorMessage(error),
+          });
           // 不中断流程，新列已创建
         } finally {
           // ✅ ATTACH 保持有效，供 VIEW 使用
@@ -258,9 +282,13 @@ export class DatasetSchemaService {
       }
 
       const columnType = storageMode === 'computed' ? '计算列' : '数据列';
-      console.log(
-        `✅ 成功添加${columnType}: ${columnName} (${fieldType}) 到数据集: ${safeDatasetId}`
-      );
+      logger.info('Added dataset column', {
+        datasetId: safeDatasetId,
+        columnName,
+        fieldType,
+        storageMode,
+        columnType,
+      });
     });
   }
 
@@ -429,7 +457,12 @@ export class DatasetSchemaService {
       await this.metadataService.updateDatasetSchema(safeDatasetId, updatedSchema);
       this.dependencyManager.rebuildFromSchema(updatedSchema);
 
-      console.log(`✅ 成功更新列: ${columnName} → ${targetName}`);
+      logger.info('Updated dataset column', {
+        datasetId: safeDatasetId,
+        columnName,
+        targetName,
+        renamed: isRenaming,
+      });
     });
   }
 
@@ -477,7 +510,10 @@ export class DatasetSchemaService {
         await this.conn.run(
           `ALTER TABLE ${quoteQualifiedName(`ds_${safeDatasetId}`, 'data')} DROP COLUMN ${quotedColumn}`
         );
-        console.log(`✅ Dropped column from dataset table: ${safeDatasetId}.data.${columnName}`);
+        logger.info('Dropped physical dataset column', {
+          datasetId: safeDatasetId,
+          columnName,
+        });
       }
 
       // 更新 schema 元数据
@@ -496,7 +532,12 @@ export class DatasetSchemaService {
         force && dependencies.length > 0
           ? `${columnName} 及其依赖的计算列: ${dependencies.join(', ')}`
           : columnName;
-      console.log(`✅ 成功删除列: ${deletedColumns} 从数据集: ${safeDatasetId}`);
+      logger.info('Deleted dataset column from schema', {
+        datasetId: safeDatasetId,
+        columnName,
+        force,
+        deletedColumns,
+      });
     });
   }
 
@@ -802,7 +843,9 @@ FROM base_data
       }
 
       default:
-        console.warn(`Unknown field type: ${fieldType}, defaulting to VARCHAR`);
+        logger.warn('Unknown dataset field type, defaulting to VARCHAR', {
+          fieldType,
+        });
         return 'VARCHAR';
     }
   }
@@ -831,7 +874,12 @@ FROM base_data
     await this.conn.run(
       `ALTER TABLE ${quoteQualifiedName(`ds_${safeDatasetId}`, 'data')} ADD COLUMN ${quotedColumn} ${duckdbType}${nullableClause}`
     );
-    console.log(`✅ Added column to dataset table: ${safeDatasetId}.data.${columnName}`);
+    logger.info('Added physical dataset column', {
+      datasetId: safeDatasetId,
+      columnName,
+      duckdbType,
+      nullable,
+    });
   }
 
   /**
@@ -866,9 +914,17 @@ FROM base_data
           await this.conn.run(
             `ALTER TABLE ${tableName} ALTER COLUMN ${quotedColumn} SET DEFAULT nextval('${escapeSqlStringLiteral(`${quoteIdentifier(schemaName)}.${quoteIdentifier(sequenceName)}`)}')`
           );
-          console.log(`✓ 创建自增序列: ${sequenceName}`);
+          logger.info('Created auto-increment sequence for dataset column', {
+            datasetId: safeDatasetId,
+            columnName,
+            sequenceName,
+          });
         } catch {
-          console.warn(`⚠ 序列可能已存在: ${sequenceName}`);
+          logger.warn('Auto-increment sequence may already exist', {
+            datasetId: safeDatasetId,
+            columnName,
+            sequenceName,
+          });
         }
         break;
       }
@@ -879,7 +935,10 @@ FROM base_data
           await this.conn.run(
             `ALTER TABLE ${tableName} ALTER COLUMN ${quotedColumn} SET DEFAULT gen_random_uuid()`
           );
-          console.log(`✓ 设置UUID默认值`);
+          logger.info('Set UUID default value for dataset column', {
+            datasetId: safeDatasetId,
+            columnName,
+          });
         }
         break;
 
@@ -889,7 +948,10 @@ FROM base_data
           await this.conn.run(
             `ALTER TABLE ${tableName} ALTER COLUMN ${quotedColumn} SET DEFAULT '{}'::JSON`
           );
-          console.log(`✓ 设置JSON默认值`);
+          logger.info('Set JSON default value for dataset column', {
+            datasetId: safeDatasetId,
+            columnName,
+          });
         }
         break;
 
@@ -928,6 +990,9 @@ FROM base_data
       `UPDATE ${quoteQualifiedName(`ds_${safeDatasetId}`, 'data')} SET ${quotedColumn} = ?`,
       [value]
     );
-    console.log(`✅ Filled default value for dataset table: ${safeDatasetId}.data.${columnName}`);
+    logger.info('Filled default value for dataset column', {
+      datasetId: safeDatasetId,
+      columnName,
+    });
   }
 }
