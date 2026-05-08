@@ -21,6 +21,14 @@ vi.mock('../ipc-utils', () => ({
   })),
 }));
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 import { QueryTemplateIPCHandler } from './query-template-handler';
 import type { DuckDBService } from '../duckdb/service';
 import { ipcRouteRegistry } from '../ipc-route-registry';

@@ -10,6 +10,33 @@ import { handleIPCError } from '../ipc-utils';
 import type { IpcRouteDefinition } from '../ipc-route-registry';
 import { ipcRouteRegistry } from '../ipc-route-registry';
 import { normalizeRuntimeSQL, shouldUseLiveQueryTemplate } from '../../utils/query-runtime';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('QueryTemplateIPCHandler');
+
+function normalizeQueryTemplateIpcError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+
+  return { raw: String(error) };
+}
+
+function logQueryTemplateIpcError(
+  channel: string,
+  error: unknown,
+  fields: Record<string, unknown> = {}
+): void {
+  logger.error('Query template IPC handler failed', {
+    channel,
+    ...fields,
+    error: normalizeQueryTemplateIpcError(error),
+  });
+}
 
 function buildPagedLiveQuerySQL(sql: string, offset: number, limit: number): string {
   return `SELECT * FROM (${sql}) AS __airpa_live_query_page LIMIT ${limit} OFFSET ${offset}`;
@@ -33,13 +60,20 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
         }
       ) => {
         try {
-          console.log(`[IPC] Creating query template: ${params.name}`);
+          logger.info('Creating query template', {
+            channel: 'query-template:create',
+            datasetId: params.datasetId,
+            name: params.name,
+          });
 
           const templateId = await duckdb.createQueryTemplate(params);
 
           return { success: true, templateId };
         } catch (error: unknown) {
-          console.error('[IPC] query-template:create error:', error);
+          logQueryTemplateIpcError('query-template:create', error, {
+            datasetId: params?.datasetId,
+            name: params?.name,
+          });
           return handleIPCError(error);
         }
       },
@@ -50,13 +84,16 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
       permission: 'trusted-renderer',
       handler: async (_event: IpcMainInvokeEvent, datasetId: string) => {
         try {
-          console.log(`[IPC] Listing query templates for dataset: ${datasetId}`);
+          logger.info('Listing query templates', {
+            channel: 'query-template:list',
+            datasetId,
+          });
 
           const templates = await duckdb.listQueryTemplates(datasetId);
 
           return { success: true, templates };
         } catch (error: unknown) {
-          console.error('[IPC] query-template:list error:', error);
+          logQueryTemplateIpcError('query-template:list', error, { datasetId });
           return handleIPCError(error);
         }
       },
@@ -67,7 +104,10 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
       permission: 'trusted-renderer',
       handler: async (_event: IpcMainInvokeEvent, templateId: string) => {
         try {
-          console.log(`[IPC] Getting query template: ${templateId}`);
+          logger.info('Getting query template', {
+            channel: 'query-template:get',
+            templateId,
+          });
 
           const template = await duckdb.getQueryTemplate(templateId);
 
@@ -77,7 +117,7 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
 
           return { success: true, template };
         } catch (error: unknown) {
-          console.error('[IPC] query-template:get error:', error);
+          logQueryTemplateIpcError('query-template:get', error, { templateId });
           return handleIPCError(error);
         }
       },
@@ -102,7 +142,10 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
             return { success: false, error: 'templateId is required' };
           }
 
-          console.log(`[IPC] Updating query template: ${params.templateId}`);
+          logger.info('Updating query template', {
+            channel: 'query-template:update',
+            templateId: params.templateId,
+          });
 
           await duckdb.updateQueryTemplate(params.templateId, {
             name: params.name,
@@ -114,7 +157,9 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
 
           return { success: true };
         } catch (error: unknown) {
-          console.error('[IPC] query-template:update error:', error);
+          logQueryTemplateIpcError('query-template:update', error, {
+            templateId: params?.templateId,
+          });
           return handleIPCError(error);
         }
       },
@@ -132,7 +177,9 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
           await duckdb.refreshQueryTemplateSnapshot(params.templateId);
           return { success: true };
         } catch (error: unknown) {
-          console.error('[IPC] query-template:refresh error:', error);
+          logQueryTemplateIpcError('query-template:refresh', error, {
+            templateId: params?.templateId,
+          });
           return handleIPCError(error);
         }
       },
@@ -143,13 +190,16 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
       permission: 'trusted-renderer',
       handler: async (_event: IpcMainInvokeEvent, templateId: string) => {
         try {
-          console.log(`[IPC] Deleting query template: ${templateId}`);
+          logger.info('Deleting query template', {
+            channel: 'query-template:delete',
+            templateId,
+          });
 
           await duckdb.deleteQueryTemplate(templateId);
 
           return { success: true };
         } catch (error: unknown) {
-          console.error('[IPC] query-template:delete error:', error);
+          logQueryTemplateIpcError('query-template:delete', error, { templateId });
           return handleIPCError(error);
         }
       },
@@ -170,13 +220,20 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
             return { success: false, error: 'templateIds is required' };
           }
 
-          console.log(`[IPC] Reordering query templates for dataset: ${params.datasetId}`);
+          logger.info('Reordering query templates', {
+            channel: 'query-template:reorder',
+            datasetId: params.datasetId,
+            templateCount: params.templateIds.length,
+          });
 
           await duckdb.reorderQueryTemplates(params.datasetId, params.templateIds);
 
           return { success: true };
         } catch (error: unknown) {
-          console.error('[IPC] query-template:reorder error:', error);
+          logQueryTemplateIpcError('query-template:reorder', error, {
+            datasetId: params?.datasetId,
+            templateCount: params?.templateIds?.length,
+          });
           return handleIPCError(error);
         }
       },
@@ -198,8 +255,12 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
             return { success: false, error: 'templateId is required' };
           }
 
-          console.log(`[IPC] ========== QUERY TEMPLATE ==========`);
-          console.log(`[IPC] Querying query template: ${params.templateId}`);
+          logger.info('Querying query template', {
+            channel: 'query-template:query',
+            templateId: params.templateId,
+            offset: params.offset,
+            limit: params.limit,
+          });
 
           // 1. 获取模板配置
           const template = await duckdb.getQueryTemplate(params.templateId);
@@ -246,7 +307,12 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
               `ds_${template.datasetId}`,
               template.snapshotTableName
             );
-            console.log(`[IPC] Querying snapshot table: ${fromTableRef}`);
+            logger.info('Querying query template snapshot table', {
+              channel: 'query-template:query',
+              templateId: params.templateId,
+              datasetId: template.datasetId,
+              fromTableRef,
+            });
 
             const countRows = await duckdb.executeSQLWithParams(
               `SELECT COUNT(*) as total FROM ${fromTableRef}`,
@@ -262,10 +328,13 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
             );
           }
 
-          console.log(
-            `[IPC] ✅ Query succeeded: ${pagedResult.rows?.length || 0} rows (total=${filteredTotalCount})`
-          );
-          console.log(`[IPC] ======================================`);
+          logger.info('Query template query succeeded', {
+            channel: 'query-template:query',
+            templateId: params.templateId,
+            datasetId: template.datasetId,
+            rowCount: pagedResult.rows?.length || 0,
+            filteredTotalCount,
+          });
 
           return {
             success: true,
@@ -277,8 +346,11 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
             },
           };
         } catch (error: unknown) {
-          console.error('[IPC] ❌ query-template:query error:', error);
-          console.log(`[IPC] ======================================`);
+          logQueryTemplateIpcError('query-template:query', error, {
+            templateId: params?.templateId,
+            offset: params?.offset,
+            limit: params?.limit,
+          });
           return handleIPCError(error);
         }
       },
@@ -289,13 +361,16 @@ export function createQueryTemplateRoutes(duckdb: DuckDBService): IpcRouteDefini
       permission: 'trusted-renderer',
       handler: async (_event: IpcMainInvokeEvent, datasetId: string) => {
         try {
-          console.log(`[IPC] Getting or creating default query template for dataset: ${datasetId}`);
+          logger.info('Getting or creating default query template', {
+            channel: 'query-template:get-or-create-default',
+            datasetId,
+          });
 
           const template = await duckdb.getOrCreateDefaultQueryTemplate(datasetId);
 
           return { success: true, template };
         } catch (error: unknown) {
-          console.error('[IPC] query-template:get-or-create-default error:', error);
+          logQueryTemplateIpcError('query-template:get-or-create-default', error, { datasetId });
           return handleIPCError(error);
         }
       },
