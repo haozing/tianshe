@@ -11,6 +11,9 @@ import { getUnknownErrorMessage } from '../ipc-utils';
 import { importCSV } from './import-worker-csv';
 import { importJSON, importXLSX } from './import-worker-structured-loaders';
 import { analyzeColumnTypes, getBasicSchema, optimizeTableStructure } from './import-worker-schema-analysis';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('ImportWorker');
 
 export { finishWriteStream, writeWithBackpressure } from './import-worker-csv';
 
@@ -140,7 +143,10 @@ async function importFile() {
       schema: analysisResult.finalSchema,
     });
   } catch (error: unknown) {
-    console.error('Import worker error:', error);
+    logger.error('Import worker failed', {
+      datasetId: task.datasetId,
+      errorMessage: getUnknownErrorMessage(error, 'Unknown error during import'),
+    });
     parentPort?.postMessage({
       type: 'error',
       error: getUnknownErrorMessage(error, 'Unknown error during import'),
@@ -156,14 +162,20 @@ async function importFile() {
       }
       if (tempFilePath) await cleanupTempFile(tempFilePath);
     } catch (closeError) {
-      console.error('Error closing resources:', closeError);
+      logger.error('Error closing import worker resources', {
+        datasetId: task.datasetId,
+        errorMessage: getUnknownErrorMessage(closeError, 'Unknown close error'),
+      });
     }
   }
 }
 
 if (workerData) {
   importFile().catch((error) => {
-    console.error('Unhandled error in import worker:', error);
+    logger.error('Unhandled error in import worker', {
+      datasetId: task.datasetId,
+      errorMessage: getUnknownErrorMessage(error, 'Unhandled error'),
+    });
     parentPort?.postMessage({
       type: 'error',
       error: getUnknownErrorMessage(error, 'Unhandled error'),

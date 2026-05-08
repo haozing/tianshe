@@ -4,6 +4,9 @@ import path from 'path';
 import { parentPort } from 'worker_threads';
 import { cleanupTempFile, getTempFilePath, parseRows } from './utils';
 import { getUnknownErrorMessage } from '../ipc-utils';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('ImportWorkerCSV');
 
 const TRANSCODE_SAMPLE_BYTES = 64 * 1024;
 const SYSTEM_COLUMNS = new Set(['_row_id', 'created_at', 'updated_at']);
@@ -80,7 +83,10 @@ export async function importCSV(conn: DuckDBConnection, filePath: string): Promi
         throw error;
       }
 
-      console.warn(`CSV parse failed with encoding ${encoding}, retrying with ignore_errors=true`);
+      logger.warn('CSV parse failed, retrying with ignore_errors=true', {
+        encoding,
+        errorMessage: getUnknownErrorMessage(error),
+      });
       try {
         await conn.run('DROP TABLE IF EXISTS data');
       } catch {
@@ -114,7 +120,7 @@ export async function importCSV(conn: DuckDBConnection, filePath: string): Promi
         }
       })();
       if (importResult.hasGarbledText) {
-        console.warn(`Encoding ${encoding} produced garbled text, trying next...`);
+        logger.warn('CSV encoding produced garbled text, trying next encoding', { encoding });
         parentPort?.postMessage({
           type: 'progress',
           progress: 20 + attemptIndex * 5,
@@ -128,7 +134,10 @@ export async function importCSV(conn: DuckDBConnection, filePath: string): Promi
       break;
     } catch (err) {
       lastError = err as Error;
-      console.warn(`Encoding ${encoding} import failed:`, (err as Error).message);
+      logger.warn('CSV encoding import failed', {
+        encoding,
+        errorMessage: getUnknownErrorMessage(err),
+      });
       try {
         await conn.run('DROP TABLE IF EXISTS data');
       } catch {
@@ -285,7 +294,7 @@ async function importCSVWithEncoding(
   if (rowCount === 0) {
     const hasDataLines = await hasMultipleNonEmptyLines(filePath);
     if (hasDataLines) {
-      console.warn('Empty import; treating as encoding/dialect mismatch.');
+      logger.warn('Empty CSV import detected, treating as encoding or dialect mismatch');
       await conn.run('DROP TABLE IF EXISTS data');
       return { hasGarbledText: true };
     }
@@ -349,7 +358,10 @@ async function detectDelimiterFromFile(filePath: string): Promise<string | null>
     const sample = await readFileSample(filePath, TRANSCODE_SAMPLE_BYTES);
     return guessDelimiterFromSample(sample);
   } catch (error) {
-    console.warn('Failed to detect CSV delimiter:', error);
+    logger.warn('Failed to detect CSV delimiter', {
+      filePath,
+      errorMessage: getUnknownErrorMessage(error),
+    });
     return null;
   }
 }
@@ -371,7 +383,10 @@ async function hasMultipleNonEmptyLines(filePath: string): Promise<boolean> {
     }
     return false;
   } catch (error) {
-    console.warn('Failed to inspect CSV lines:', error);
+    logger.warn('Failed to inspect CSV lines', {
+      filePath,
+      errorMessage: getUnknownErrorMessage(error),
+    });
     return false;
   }
 }
@@ -387,7 +402,10 @@ async function detectEncodingHint(filePath: string): Promise<string | null> {
     }
     return encoding;
   } catch (error) {
-    console.warn('Failed to detect CSV encoding hint:', error);
+    logger.warn('Failed to detect CSV encoding hint', {
+      filePath,
+      errorMessage: getUnknownErrorMessage(error),
+    });
     return null;
   }
 }
@@ -669,7 +687,10 @@ async function detectCsvSkipRows(filePath: string): Promise<number> {
     }
     return 0;
   } catch (error) {
-    console.warn('Failed to detect CSV preamble lines:', error);
+    logger.warn('Failed to detect CSV preamble lines', {
+      filePath,
+      errorMessage: getUnknownErrorMessage(error),
+    });
     return 0;
   }
 }

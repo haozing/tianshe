@@ -1,5 +1,9 @@
 import type { DuckDBConnection } from '@duckdb/node-api';
 import { parseRows } from './utils';
+import { createLogger } from '../../core/logger';
+import { getUnknownErrorMessage } from '../ipc-utils';
+
+const logger = createLogger('ImportWorkerSchemaAnalysis');
 
 /**
  * 获取基础 schema（只包含列名和 DuckDB 物理类型）
@@ -114,7 +118,10 @@ export async function analyzeColumnTypes(
       }
     } catch (error) {
       // 如果采样失败，保持原类型
-      console.warn(`Failed to analyze column "${columnName}":`, error);
+      logger.warn('Failed to analyze imported column, keeping original type', {
+        columnName,
+        errorMessage: getUnknownErrorMessage(error),
+      });
       finalSchema.push(column);
     }
   }
@@ -163,7 +170,11 @@ export async function optimizeTableStructure(
     // 重命名新表
     await conn.run(`ALTER TABLE data_optimized RENAME TO ${tableName}`);
   } catch (error) {
-    console.error('❌ Failed to optimize table structure:', error);
+    logger.error('Failed to optimize imported table structure', {
+      tableName,
+      conversionCount: conversions.length,
+      errorMessage: getUnknownErrorMessage(error),
+    });
 
     // 清理可能创建的临时表
     try {
