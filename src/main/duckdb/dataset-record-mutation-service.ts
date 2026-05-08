@@ -1,5 +1,6 @@
 import type { DuckDBConnection } from '@duckdb/node-api';
 import type { HookBus } from '../../core/hookbus';
+import { createLogger } from '../../core/logger';
 import {
   partitionRecordFieldsBySchema,
   stripSystemFields,
@@ -14,6 +15,8 @@ import {
   quoteIdentifier,
   runInDuckDbTransaction,
 } from './utils';
+
+const logger = createLogger('DatasetRecordMutationService');
 
 interface DatasetRecordMutationServiceOptions {
   conn: DuckDBConnection;
@@ -95,9 +98,11 @@ export class DatasetRecordMutationService {
       await this.ensureAttached(dataset);
       const tableName = this.getTableName(safeDatasetId);
 
-      console.warn(
-        `[DatasetService] PERMANENTLY deleting ${uniqueRowIds.length} rows from ${tableName}`
-      );
+      logger.warn('Permanently deleting dataset rows', {
+        datasetId: safeDatasetId,
+        tableName,
+        rowIdCount: uniqueRowIds.length,
+      });
 
       const BATCH_SIZE = 1000;
       let deletedCount = 0;
@@ -125,14 +130,18 @@ export class DatasetRecordMutationService {
         try {
           await this.metadataService.incrementRowCount(safeDatasetId, -deletedCount);
         } catch (countError) {
-          console.warn(
-            `[DatasetService] Failed to decrement row_count for ${safeDatasetId}:`,
-            countError
-          );
+          logger.warn('Failed to decrement dataset row_count after delete', {
+            datasetId: safeDatasetId,
+            deletedCount,
+            error: countError,
+          });
         }
       }
 
-      console.warn(`[DatasetService] PERMANENTLY deleted ${deletedCount} rows`);
+      logger.warn('Permanently deleted dataset rows', {
+        datasetId: safeDatasetId,
+        deletedCount,
+      });
       return deletedCount;
     });
   }
@@ -162,13 +171,13 @@ export class DatasetRecordMutationService {
       const setClause = setExpressions.join(', ');
       const sql = `UPDATE ${tableName} SET ${setClause} WHERE _row_id = ?`;
 
-      console.log(`🔍 Updating record with _row_id: ${rowId}`);
+      logger.info('Updating dataset record', { datasetId: safeDatasetId, rowId });
 
       await runInDuckDbTransaction(this.conn, async () => {
         await runPrepared(this.conn, sql, [...values, rowId]);
       });
 
-      console.log(`✅ Record updated: ${safeDatasetId}, _row_id ${rowId}`);
+      logger.info('Dataset record updated', { datasetId: safeDatasetId, rowId });
 
       this.hookBus?.emit('webhook:record.updated', {
         datasetId: safeDatasetId,
@@ -211,7 +220,10 @@ export class DatasetRecordMutationService {
           await runPrepared(this.conn, sql, [...values, rowId]);
         }
       });
-      console.log(`✅ Batch updated ${updates.length} records`);
+      logger.info('Dataset records batch updated', {
+        datasetId: safeDatasetId,
+        updateCount: updates.length,
+      });
     });
   }
 
@@ -223,7 +235,7 @@ export class DatasetRecordMutationService {
       if (!dataset) throw new Error('Dataset not found');
 
       await this.insertRecordInCurrentQueue(safeDatasetId, dataset, record);
-      console.log(`✅ Record inserted into ${safeDatasetId}`);
+      logger.info('Dataset record inserted', { datasetId: safeDatasetId });
     });
   }
 
@@ -252,10 +264,10 @@ export class DatasetRecordMutationService {
     try {
       await this.metadataService.incrementRowCount(safeDatasetId, 1);
     } catch (countError) {
-      console.warn(
-        `[DatasetService] Failed to increment row_count for ${safeDatasetId}:`,
-        countError
-      );
+      logger.warn('Failed to increment dataset row_count after insert', {
+        datasetId: safeDatasetId,
+        error: countError,
+      });
     }
 
     this.hookBus?.emit('webhook:record.created', {
@@ -320,13 +332,17 @@ export class DatasetRecordMutationService {
       try {
         await this.metadataService.incrementRowCount(safeDatasetId, cleanedRecords.length);
       } catch (countError) {
-        console.warn(
-          `[DatasetService] Failed to increment row_count for ${safeDatasetId}:`,
-          countError
-        );
+        logger.warn('Failed to increment dataset row_count after batch insert', {
+          datasetId: safeDatasetId,
+          recordCount: cleanedRecords.length,
+          error: countError,
+        });
       }
 
-      console.log(`✅ Batch inserted ${cleanedRecords.length} records into ${safeDatasetId}`);
+      logger.info('Dataset records batch inserted', {
+        datasetId: safeDatasetId,
+        recordCount: cleanedRecords.length,
+      });
     });
   }
 }
