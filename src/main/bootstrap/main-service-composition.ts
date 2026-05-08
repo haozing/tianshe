@@ -5,6 +5,7 @@ import { DEFAULT_OCR_POOL_CONFIG, normalizeOcrPoolConfig, type OCRPoolConfig } f
 import { initializeBrowserPool } from '../../core/browser-pool';
 import { HookBus } from '../../core/hookbus';
 import { JSPluginManager } from '../../core/js-plugin/manager';
+import { createLogger } from '../../core/logger';
 import { setSchedulerService } from '../../core/js-plugin/namespaces/scheduler';
 import { setOcrPoolConfig } from '../../core/system-automation/ocr';
 import type { TiansheEdition } from '../../edition';
@@ -30,6 +31,8 @@ import { WebContentsViewManager } from '../webcontentsview-manager';
 import { WindowManager } from '../window-manager';
 import type { AppRuntime } from '../app-runtime';
 
+const logger = createLogger('MainServiceComposition');
+
 export interface MainServiceCompositionOptions {
   app: App;
   appRuntime: AppRuntime;
@@ -51,30 +54,32 @@ async function createCoreServices(options: MainServiceCompositionOptions) {
   );
   store.set('ocrPoolConfig', ocrPoolConfig);
   await setOcrPoolConfig(ocrPoolConfig);
-  console.log(
-    `[OK] OCR pool config loaded (size=${ocrPoolConfig.size}, maxQueue=${ocrPoolConfig.maxQueue}, queueMode=${ocrPoolConfig.queueMode})`
-  );
+  logger.info('OCR pool config loaded', {
+    size: ocrPoolConfig.size,
+    maxQueue: ocrPoolConfig.maxQueue,
+    queueMode: ocrPoolConfig.queueMode,
+  });
 
   logStartup('Initializing HookBus...');
   appRuntime.hookBus = new HookBus();
   const hookBus = appRuntime.hookBus;
-  console.log('[OK] HookBus initialized');
+  logger.info('HookBus initialized');
   logStartup('HookBus initialized');
 
   appRuntime.webhookSender = new WebhookSender(hookBus);
   const webhookSender = appRuntime.webhookSender;
-  console.log('[OK] WebhookSender initialized');
+  logger.info('WebhookSender initialized');
 
   logStartup('Initializing DuckDB service...');
   appRuntime.duckdbService = new DuckDBService(hookBus);
   const duckdbService = appRuntime.duckdbService;
   await duckdbService.init();
-  console.log('[OK] DuckDB service initialized');
+  logger.info('DuckDB service initialized');
   logStartup('DuckDB service initialized');
 
   logStartup('Initializing LogStorageService...');
   appRuntime.logger = new LogStorageService(duckdbService);
-  console.log('[OK] Logger initialized');
+  logger.info('LogStorageService initialized');
   logStartup('LogStorageService initialized');
 
   logStartup('Initializing SchedulerService...');
@@ -83,7 +88,7 @@ async function createCoreServices(options: MainServiceCompositionOptions) {
   const schedulerService = appRuntime.schedulerService;
   setSchedulerService(schedulerService);
   await schedulerService.init();
-  console.log('[OK] SchedulerService initialized');
+  logger.info('SchedulerService initialized');
   logStartup('SchedulerService initialized');
 
   return {
@@ -101,19 +106,19 @@ function createWindowServices(options: MainServiceCompositionOptions) {
   logStartup('Initializing WindowManager...');
   appRuntime.windowManager = new WindowManager();
   const windowManager = appRuntime.windowManager;
-  console.log('[OK] WindowManager initialized');
+  logger.info('WindowManager initialized');
   logStartup('WindowManager initialized');
 
   logStartup('Initializing WebContentsViewManager...');
   appRuntime.viewManager = new WebContentsViewManager(windowManager, MAX_WEBCONTENTSVIEWS);
   const viewManager = appRuntime.viewManager;
-  console.log(`[OK] WebContentsViewManager initialized (max: ${MAX_WEBCONTENTSVIEWS} views)`);
+  logger.info('WebContentsViewManager initialized', { maxViews: MAX_WEBCONTENTSVIEWS });
   logStartup('WebContentsViewManager initialized');
 
   logStartup('Initializing DownloadManager...');
   appRuntime.downloadManager = new DownloadManager();
   const downloadManager = appRuntime.downloadManager;
-  console.log('[OK] DownloadManager initialized');
+  logger.info('DownloadManager initialized');
   logStartup('DownloadManager initialized');
 
   return {
@@ -138,7 +143,7 @@ async function registerMainIpcRoutes(
 
   logStartup('Registering Dataset Folder Handlers...');
   registerDatasetFolderHandlersFromModule(datasetFolderHandlerModule, duckdbService);
-  console.log('[OK] Dataset folder handlers registered');
+  logger.info('Dataset folder handlers registered');
   logStartup('Dataset Folder Handlers registered');
 
   logStartup('Registering Profile Handlers...');
@@ -152,7 +157,7 @@ async function registerMainIpcRoutes(
       senderGuard: assertPrimaryRendererSender,
     }
   );
-  console.log('[OK] Profile handlers registered');
+  logger.info('Profile handlers registered');
   logStartup('Profile Handlers registered');
 
   logStartup('Registering Account Handlers...');
@@ -169,7 +174,7 @@ async function registerMainIpcRoutes(
       },
     }
   );
-  console.log('[OK] Account handlers registered');
+  logger.info('Account handlers registered');
   logStartup('Account Handlers registered');
 
   logStartup('Registering Tag Handlers...');
@@ -178,7 +183,7 @@ async function registerMainIpcRoutes(
       tiansheEdition.cloudSnapshot.markAccountBundleDirty(true);
     },
   });
-  console.log('[OK] Tag handlers registered');
+  logger.info('Tag handlers registered');
   logStartup('Tag Handlers registered');
 
   logStartup('Registering Extension Packages Manager Handlers...');
@@ -191,13 +196,13 @@ async function registerMainIpcRoutes(
     fetchBrowserExtensionInstallPackage:
       tiansheEdition.cloudCatalog.fetchBrowserExtensionInstallPackage,
   });
-  console.log('[OK] Extension packages manager handlers registered');
+  logger.info('Extension packages manager handlers registered');
   logStartup('Extension Packages Manager Handlers registered');
 
   if (tiansheEdition.cloudAuth.enabled) {
     logStartup('Registering Cloud Auth Handlers...');
     await tiansheEdition.cloudAuth.registerMainHandlers();
-    console.log('[OK] Cloud auth handlers registered');
+    logger.info('Cloud auth handlers registered');
     logStartup('Cloud Auth Handlers registered');
   } else {
     logStartup('Cloud Auth Handlers skipped for open edition');
@@ -214,7 +219,7 @@ async function registerMainIpcRoutes(
       syncOutboxService: duckdbService.getSyncOutboxService(),
       extensionPackages,
     });
-    console.log('[OK] Cloud snapshot handlers registered');
+    logger.info('Cloud snapshot handlers registered');
     logStartup('Cloud Snapshot Handlers registered');
   } else {
     logStartup('Cloud Snapshot Handlers skipped for open edition');
@@ -223,7 +228,7 @@ async function registerMainIpcRoutes(
   if (tiansheEdition.cloudCatalog.enabled) {
     logStartup('Registering Cloud Catalog Handlers...');
     await tiansheEdition.cloudCatalog.registerMainHandlers();
-    console.log('[OK] Cloud catalog handlers registered');
+    logger.info('Cloud catalog handlers registered');
     logStartup('Cloud Catalog Handlers registered');
   } else {
     logStartup('Cloud Catalog Handlers skipped for open edition');
@@ -252,11 +257,11 @@ function createPluginRuntime(
     }
   );
   const jsPluginManager = appRuntime.jsPluginManager;
-  console.log('[OK] JSPluginManager created');
+  logger.info('JSPluginManager created');
   logStartup('JSPluginManager created');
 
   viewManager.setPluginManager(jsPluginManager);
-  console.log('[OK] ViewManager pluginManager reference set');
+  logger.info('ViewManager pluginManager reference set');
 
   return jsPluginManager;
 }
@@ -276,16 +281,21 @@ function configureViewLifecycle(
           profile.proxy.port
         ) {
           clearProxyCredentials(profile.proxy.host, profile.proxy.port);
-          console.log(
-            `[Profile] Proxy credentials cleared: ${profile.proxy.host}:${profile.proxy.port}`
-          );
+          logger.info('Profile proxy credentials cleared', {
+            profileId: metadata.profileId,
+            proxyHost: profile.proxy.host,
+            proxyPort: profile.proxy.port,
+          });
         }
       } catch (error) {
-        console.error(`[Profile] Failed to cleanup profile: ${metadata?.profileId}`, error);
+        logger.error('Failed to cleanup profile proxy credentials', {
+          profileId: metadata?.profileId,
+          error,
+        });
       }
     }
   });
-  console.log('[OK] ViewManager viewClosedCallback set (proxy cleanup)');
+  logger.info('ViewManager viewClosedCallback set for proxy cleanup');
 }
 
 function configureDownloadAndProxyRuntime(
@@ -328,11 +338,11 @@ function initializeBrowserPoolRuntime(
   )
     .then(() => {
       appRuntime.browserPoolReadiness.markReady();
-      console.log('[OK] BrowserPoolManager initialized');
+      logger.info('BrowserPoolManager initialized');
     })
     .catch((error) => {
       appRuntime.browserPoolReadiness.markFailed(error);
-      console.error('[WARN] BrowserPoolManager initialization failed:', error);
+      logger.error('BrowserPoolManager initialization failed', error);
     });
 }
 
@@ -341,7 +351,7 @@ export async function initializeMainServices(
 ): Promise<void> {
   const { appRuntime, logStartup, tiansheEdition } = options;
 
-  console.log('===> Initializing services...\n');
+  logger.info('Initializing main services');
   logStartup('initializeServices() started');
   logStartup(`Tianshe edition: ${tiansheEdition.name}`);
   appRuntime.readiness.mark('mainServices', 'initializing');
@@ -365,7 +375,7 @@ export async function initializeMainServices(
     initializeBrowserPoolRuntime(options, runtimeServices);
 
     appRuntime.readiness.mark('mainServices', 'ready');
-    console.log('\n[OK] All services initialized successfully\n');
+    logger.info('All main services initialized successfully');
   } catch (error) {
     appRuntime.readiness.mark('mainServices', 'failed', {
       error: error instanceof Error ? error.message : String(error),

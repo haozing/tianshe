@@ -203,7 +203,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/duckdb/type-analyzer.ts': 12,
   'src/main/duckdb/utils.ts': 25,
   'src/main/duckdb/validation-engine.ts': 8,
-  'src/main/bootstrap/main-service-composition.ts': 26,
   'src/main/file-storage.ts': 9,
   'src/main/index.ts': 51,
   'src/main/internal-browser-devtools.ts': 1,

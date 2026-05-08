@@ -454,9 +454,10 @@ rg -n "\bconsole\.(log|warn|error|info|debug)\s*\(" src/main src/core src/render
 - 已完成 file IPC 小批次：`src/main/ipc-handlers/file-handler.ts` 的 12 处直接 `console.*` 已迁移到 `createLogger('FileIPCHandler')`，并从 baseline 移除；同步更新既有单测断言到 logger mock。
 - 已完成 system IPC 小批次：`src/main/ipc-handlers/system-handler.ts` 的 43 处直接 `console.*` 已迁移到 `createLogger('SystemIPCHandler')`，覆盖 app info、device fingerprint、download-image 和 shell 路径日志，并从 baseline 移除。
 - 已完成 scheduler service 小批次：`src/main/scheduler/scheduler-service.ts` 的 27 处直接 `console.*` 已迁移到既有 `createLogger('SchedulerService')`，覆盖定时器、错过执行、重试、完成/失败和清理日志，并从 baseline 移除；同时修复一处损坏注释吞掉 interval `nextRunAt` 赋值的问题，资源租约和重试语义不变。
-- 截至本批，`src/main/ipc-handlers` 生产代码已无直接 `console.*`，`SchedulerService` 也已清零；后续重点转向 main bootstrap、duckdb dataset/query service、webcontentsview/window-manager 等非 IPC 热点。
+- 已完成 main service composition 小批次：`src/main/bootstrap/main-service-composition.ts` 的 26 处直接 `console.*` 已迁移到 `createLogger('MainServiceComposition')`，覆盖核心服务、窗口服务、IPC 路由、插件运行时、proxy cleanup 和 browser pool 初始化日志，并从 baseline 移除；本批不改变启动顺序和 readiness 标记。
+- 截至本批，`src/main/ipc-handlers` 生产代码已无直接 `console.*`，`SchedulerService` 与 main service composition 也已清零；后续重点转向 duckdb dataset/query service、webcontentsview/window-manager 等非 IPC 热点。
 - 本批只做日志出口替换和结构化字段补齐，不改变 CRUD、密码加解密、profile/group/tag/saved site 业务错误语义。
-- 阶段 5 仍保留为未完成：仓内还有 main bootstrap、duckdb dataset/query service、webcontentsview/window-manager 等高频热点，后续继续按模块递减，不做全仓一键替换。
+- 阶段 5 仍保留为未完成：仓内还有 duckdb dataset/query service、webcontentsview/window-manager 等高频热点，后续继续按模块递减，不做全仓一键替换。
 
 ## 9. 阶段 6：共享错误 envelope 与 IPC 稳定错误码
 
@@ -610,7 +611,7 @@ npm run test:architecture
 - [x] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步确认 `docs/plugin-helpers-reference.md`。
 - [x] 阶段 3：ProfileService 深拆到 900 行以下。
 - [x] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
-- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag、IPC wrapper、profile/browser IPC、dataset route、JS plugin route/handler、account IPC、query template IPC、tag/extension packages IPC、dataset folder IPC、registration-only IPC、file IPC、system IPC、scheduler service 小批次）
+- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag、IPC wrapper、profile/browser IPC、dataset route、JS plugin route/handler、account IPC、query template IPC、tag/extension packages IPC、dataset folder IPC、registration-only IPC、file IPC、system IPC、scheduler service、main service composition 小批次）
 - [ ] 阶段 6：建立共享 error envelope，统一 IPC 稳定错误码。（已完成 IPC 工具层基础设施、旧错误消息兼容推断、dataset route 基础 errorDetails、JS plugin route/handler 部分 P1 code，route 业务 code 待继续收敛）
 
 ## 13. 每轮完成后必须更新
