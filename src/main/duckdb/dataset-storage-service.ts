@@ -12,6 +12,7 @@
 
 import { DuckDBConnection } from '@duckdb/node-api';
 import fs from 'fs-extra';
+import { createLogger } from '../../core/logger';
 import { escapeSqlStringLiteral, parseRows, quoteIdentifier, quoteQualifiedName } from './utils';
 import { fileStorage } from '../file-storage';
 import { getUnknownErrorMessage } from '../ipc-utils';
@@ -23,6 +24,7 @@ import type { Dataset } from './types';
  * ⚠️ 只允许SQL安全字符，不需要转义
  */
 const MAX_DATASET_ID_LENGTH = 128;
+const logger = createLogger('DatasetStorageService');
 
 export function sanitizeDatasetId(datasetId: string): string {
   if (datasetId.length > MAX_DATASET_ID_LENGTH) {
@@ -68,9 +70,11 @@ export class DatasetStorageService {
     const nullCount = Number(parseRows(nullCountResult)[0]?.null_count ?? 0);
     if (!Number.isFinite(nullCount) || nullCount <= 0) return true;
 
-    console.warn(
-      `[Storage] ⚠️ Dataset ${attachKey} has ${nullCount} rows with NULL _row_id. Repairing...`
-    );
+    logger.warn('Dataset has rows with NULL _row_id; repairing', {
+      datasetId,
+      attachKey,
+      nullRowCount: nullCount,
+    });
 
     const maxIdResult = await this.conn.runAndReadAll(
       `SELECT COALESCE(MAX(_row_id), 0) AS max_id FROM ${tableName} WHERE _row_id IS NOT NULL`
@@ -103,20 +107,24 @@ export class DatasetStorageService {
         `ALTER TABLE ${tableName} ALTER COLUMN _row_id SET DEFAULT nextval('${sequenceRefLiteral}')`
       );
     } catch (error: unknown) {
-      console.warn(
-        `[Storage] Failed to set default for ${attachKey}.data._row_id: ${getUnknownErrorMessage(error)}`
-      );
+      logger.warn('Failed to set default for dataset _row_id', {
+        datasetId,
+        attachKey,
+        errorMessage: getUnknownErrorMessage(error),
+      });
     }
 
     try {
       await this.conn.run(`ALTER TABLE ${tableName} ALTER COLUMN _row_id SET NOT NULL`);
     } catch (error: unknown) {
-      console.warn(
-        `[Storage] Failed to set NOT NULL for ${attachKey}.data._row_id: ${getUnknownErrorMessage(error)}`
-      );
+      logger.warn('Failed to set NOT NULL for dataset _row_id', {
+        datasetId,
+        attachKey,
+        errorMessage: getUnknownErrorMessage(error),
+      });
     }
 
-    console.warn(`[Storage] ✅ Repaired NULL _row_id for dataset ${attachKey}`);
+    logger.info('Repaired NULL _row_id for dataset', { datasetId, attachKey });
     return true;
   }
 
@@ -232,14 +240,16 @@ export class DatasetStorageService {
             this.rowIdIntegrityChecked.add(datasetId);
           }
         } catch (error: unknown) {
-          console.warn(
-            `[Storage] _row_id integrity check failed for ${attachKey}: ${getUnknownErrorMessage(error)}`
-          );
+          logger.warn('Dataset _row_id integrity check failed', {
+            datasetId,
+            attachKey,
+            errorMessage: getUnknownErrorMessage(error),
+          });
         }
       }
-      console.log(`✅ Database attached: ${attachKey}`);
+      logger.info('Database attached', { datasetId, attachKey });
     } catch (error: unknown) {
-      console.error(`❌ Failed to attach database ${attachKey}:`, error);
+      logger.error('Failed to attach database', { datasetId, attachKey, error });
       throw error;
     }
   }
@@ -298,7 +308,10 @@ export class DatasetStorageService {
       if (isPluginTable) {
         // 插件表使用独立文件，需要先 DETACH 再删除文件
         onProgress?.('正在删除插件数据文件...', 60);
-        console.log(`🗑️  [Delete] Deleting plugin table file: ${dataset.filePath}`);
+        logger.info('Deleting plugin table file', {
+          datasetId: safeDatasetId,
+          filePath: dataset.filePath,
+        });
 
         const attachKey = `ds_${safeDatasetId}`;
 
@@ -314,44 +327,62 @@ export class DatasetStorageService {
 
             if (databases.length > 0) {
               await this.conn.run(`DETACH ${quoteIdentifier(attachKey)}`);
-              console.log(`🔓 [Delete] DETACH completed for ${attachKey}`);
+              logger.info('Detached plugin table database before delete', {
+                datasetId: safeDatasetId,
+                attachKey,
+              });
             } else {
-              console.log(`ℹ️  [Delete] Database ${attachKey} not attached, skip DETACH`);
+              logger.info('Plugin table database not attached, skipping DETACH', {
+                datasetId: safeDatasetId,
+                attachKey,
+              });
             }
           } catch (detachError: unknown) {
-            console.warn(
-              `⚠️  [Delete] DETACH failed (non-critical):`,
-              getUnknownErrorMessage(detachError)
-            );
+            logger.warn('Plugin table DETACH failed during delete', {
+              datasetId: safeDatasetId,
+              attachKey,
+              errorMessage: getUnknownErrorMessage(detachError),
+            });
           }
 
           // 2. Windows 等待文件锁释放
           if (process.platform === 'win32') {
-            console.log('⏱️  [Windows] Waiting for file lock release...');
+            logger.info('Waiting for plugin table file lock release on Windows', {
+              datasetId: safeDatasetId,
+              delayMs: 500,
+            });
             await new Promise((resolve) => setTimeout(resolve, 500));
           }
 
           // 3. 删除主数据库文件
           if (await fs.pathExists(dataset.filePath)) {
             await fs.remove(dataset.filePath);
-            console.log(`✅ [Delete] Deleted database file: ${dataset.filePath}`);
+            logger.info('Deleted plugin table database file', {
+              datasetId: safeDatasetId,
+              filePath: dataset.filePath,
+            });
           } else {
-            console.log(`ℹ️  [Delete] Database file not found: ${dataset.filePath}`);
+            logger.info('Plugin table database file not found', {
+              datasetId: safeDatasetId,
+              filePath: dataset.filePath,
+            });
           }
 
           // 4. 删除 WAL 文件
           const walPath = `${dataset.filePath}.wal`;
           if (await fs.pathExists(walPath)) {
             await fs.remove(walPath);
-            console.log(`✅ [Delete] Deleted WAL file: ${walPath}`);
+            logger.info('Deleted plugin table WAL file', { datasetId: safeDatasetId, walPath });
           }
 
-          console.log(`✅ [Delete] Plugin table files deleted successfully`);
+          logger.info('Plugin table files deleted successfully', { datasetId: safeDatasetId });
         } catch (error: unknown) {
-          console.error(`❌ [Delete] Failed to delete plugin files:`, getUnknownErrorMessage(error));
-          // 记录详细错误信息
-          console.error(`   File path: ${dataset.filePath}`);
-          console.error(`   Error details:`, error);
+          logger.error('Failed to delete plugin table files', {
+            datasetId: safeDatasetId,
+            filePath: dataset.filePath,
+            errorMessage: getUnknownErrorMessage(error),
+            error,
+          });
           // 不抛出错误，继续删除元数据
         }
       } else {
@@ -376,20 +407,24 @@ export class DatasetStorageService {
 
               const qualifiedName = quoteQualifiedName(`ds_${safeDatasetId}`, snapshotTableName);
               await this.conn.run(`DROP TABLE IF EXISTS ${qualifiedName}`);
-              console.log(`🗑️  Dropped snapshot table: ${template.snapshot_table_name}`);
+              logger.info('Dropped dataset snapshot table', {
+                datasetId: safeDatasetId,
+                snapshotTableName,
+              });
             } catch (viewError: unknown) {
-              console.warn(
-                `⚠️  Failed to drop snapshot table ${template.snapshot_table_name}:`,
-                getUnknownErrorMessage(viewError)
-              );
+              logger.warn('Failed to drop dataset snapshot table', {
+                datasetId: safeDatasetId,
+                snapshotTableName: template.snapshot_table_name,
+                errorMessage: getUnknownErrorMessage(viewError),
+              });
               // 继续删除其他快照
             }
           }
         } catch (error: unknown) {
-          console.warn(
-            `⚠️  Failed to query snapshot tables for dataset ${safeDatasetId}:`,
-            getUnknownErrorMessage(error)
-          );
+          logger.warn('Failed to query dataset snapshot tables during delete', {
+            datasetId: safeDatasetId,
+            errorMessage: getUnknownErrorMessage(error),
+          });
           // 即使查询失败也继续删除流程
         }
 
@@ -398,13 +433,19 @@ export class DatasetStorageService {
         // 步骤2: 执行 FORCE CHECKPOINT（修复语法 - DuckDB 官方正确语法）
         // 作用：对所有数据库强制同步 WAL，中止活动事务，释放 WAL 锁
         onProgress?.('正在同步数据库...', 10);
-        console.log(`🔄 [Delete] Starting FORCE CHECKPOINT for all databases...`);
+        logger.info('Starting FORCE CHECKPOINT before dataset delete', {
+          datasetId: safeDatasetId,
+        });
         try {
           await this.conn.run(`FORCE CHECKPOINT`);
-          console.log(`✅ [Delete] FORCE CHECKPOINT completed successfully`);
+          logger.info('FORCE CHECKPOINT completed before dataset delete', {
+            datasetId: safeDatasetId,
+          });
         } catch (checkpointError: unknown) {
-          console.error(`❌ [Delete] FORCE CHECKPOINT failed:`, checkpointError);
-          console.log(`⚠️  [Delete] Continuing deletion despite CHECKPOINT failure...`);
+          logger.error('FORCE CHECKPOINT failed before dataset delete; continuing', {
+            datasetId: safeDatasetId,
+            error: checkpointError,
+          });
           // 即使失败也继续，可能是因为没有活动事务或数据库未 ATTACH
         }
 
@@ -422,12 +463,22 @@ export class DatasetStorageService {
           if (databases.length > 0) {
             // 数据库已 attached，执行 DETACH
             await this.conn.run(`DETACH ${quoteIdentifier(attachKey)}`);
-            console.log(`🔓 [Delete] DETACH completed for ${attachKey}`);
+            logger.info('Detached dataset database during delete', {
+              datasetId: safeDatasetId,
+              attachKey,
+            });
           } else {
-            console.log(`ℹ️  [Delete] Database ${attachKey} not attached, skip DETACH`);
+            logger.info('Dataset database not attached, skipping DETACH', {
+              datasetId: safeDatasetId,
+              attachKey,
+            });
           }
         } catch (detachError: unknown) {
-          console.warn(`⚠️  [Delete] DETACH failed:`, getUnknownErrorMessage(detachError));
+          logger.warn('Dataset DETACH failed during delete', {
+            datasetId: safeDatasetId,
+            attachKey,
+            errorMessage: getUnknownErrorMessage(detachError),
+          });
         }
 
         // 🆕 步骤3.5: 验证 DETACH 是否成功
@@ -440,29 +491,48 @@ export class DatasetStorageService {
           const databases = parseRows(attachedDbs);
 
           if (databases.length > 0) {
-            console.error(`❌ [Delete] Database still attached after DETACH: ${attachKey}`);
-            console.warn(`⚠️  [Delete] Attempting forced DETACH...`);
+            logger.error('Dataset database still attached after DETACH', {
+              datasetId: safeDatasetId,
+              attachKey,
+            });
+            logger.warn('Attempting forced dataset DETACH', {
+              datasetId: safeDatasetId,
+              attachKey,
+            });
             // 再次尝试 DETACH（不使用 IF EXISTS，强制执行）
             try {
               await this.conn.run(`DETACH ${quoteIdentifier(attachKey)}`);
-              console.log(`✅ [Delete] Forced DETACH completed`);
+              logger.info('Forced dataset DETACH completed', {
+                datasetId: safeDatasetId,
+                attachKey,
+              });
             } catch {
-              console.error(`❌ [Delete] Forced DETACH also failed`);
+              logger.error('Forced dataset DETACH also failed', {
+                datasetId: safeDatasetId,
+                attachKey,
+              });
             }
           } else {
-            console.log(`✅ [Delete] Verified: Database successfully detached`);
+            logger.info('Verified dataset database is detached', {
+              datasetId: safeDatasetId,
+              attachKey,
+            });
           }
         } catch (verifyError: unknown) {
-          console.warn(
-            `⚠️  [Delete] Could not verify DETACH status:`,
-            getUnknownErrorMessage(verifyError)
-          );
+          logger.warn('Could not verify dataset DETACH status', {
+            datasetId: safeDatasetId,
+            attachKey,
+            errorMessage: getUnknownErrorMessage(verifyError),
+          });
           // 继续删除流程
         }
 
         // 步骤4: Windows 等待（延长至 3000ms，分段报告进度）
         if (process.platform === 'win32') {
-          console.log('⏱️  [Windows] Waiting 3000ms for file system to release lock...');
+          logger.info('Waiting for file system to release dataset lock on Windows', {
+            datasetId: safeDatasetId,
+            delayMs: 3000,
+          });
           onProgress?.('等待文件系统释放锁...', 30);
           await new Promise((resolve) => setTimeout(resolve, 1000));
           onProgress?.('等待文件系统释放锁...', 40);
@@ -478,12 +548,16 @@ export class DatasetStorageService {
         try {
           if (await fs.pathExists(walPath)) {
             await fs.remove(walPath);
-            console.log(`✅ [Delete] Deleted WAL file: ${walPath}`);
+            logger.info('Deleted dataset WAL file', { datasetId: safeDatasetId, walPath });
           } else {
-            console.log(`ℹ️  [Delete] No WAL file found: ${walPath}`);
+            logger.info('No dataset WAL file found', { datasetId: safeDatasetId, walPath });
           }
         } catch (walError: unknown) {
-          console.warn(`⚠️  [Delete] Failed to delete WAL file:`, getUnknownErrorMessage(walError));
+          logger.warn('Failed to delete dataset WAL file', {
+            datasetId: safeDatasetId,
+            walPath,
+            errorMessage: getUnknownErrorMessage(walError),
+          });
           // WAL 文件删除失败不应阻止主文件删除
         }
 
@@ -503,9 +577,11 @@ export class DatasetStorageService {
 
           try {
             await fs.remove(dataset.filePath);
-            console.log(
-              `✅ [Delete] Deleted dataset file: ${dataset.filePath}${retryCount > 0 ? ` (retry ${retryCount})` : ''}`
-            );
+            logger.info('Deleted dataset file', {
+              datasetId: safeDatasetId,
+              filePath: dataset.filePath,
+              retryCount,
+            });
             lastError = null;
             break; // 删除成功，跳出循环
           } catch (error: unknown) {
@@ -513,16 +589,22 @@ export class DatasetStorageService {
 
             if (retryCount < maxRetries) {
               retryCount++;
-              console.warn(
-                `⚠️  [Delete] Attempt ${attemptNumber} failed: ${lastError.message}. Retrying in ${retryInterval}ms...`
-              );
+              logger.warn('Dataset file delete attempt failed; retrying', {
+                datasetId: safeDatasetId,
+                filePath: dataset.filePath,
+                attemptNumber,
+                retryIntervalMs: retryInterval,
+                errorMessage: lastError.message,
+              });
               await new Promise((resolve) => setTimeout(resolve, retryInterval));
             } else {
               // 已达到最大重试次数
-              console.error(
-                `❌ [Delete] Failed to delete file after ${maxRetries + 1} attempts:`,
-                error
-              );
+              logger.error('Failed to delete dataset file after max attempts', {
+                datasetId: safeDatasetId,
+                filePath: dataset.filePath,
+                attempts: maxRetries + 1,
+                error,
+              });
               break;
             }
           }
@@ -557,13 +639,13 @@ export class DatasetStorageService {
       onProgress?.('正在删除附件文件...', 95);
       try {
         await fileStorage.deleteDatasetFiles(safeDatasetId);
-        console.log(`✅ [Delete] Deleted attachments for dataset: ${safeDatasetId}`);
+        logger.info('Deleted dataset attachments', { datasetId: safeDatasetId });
       } catch (error: unknown) {
         // 附件删除失败不应该阻止数据集删除
-        console.warn(
-          `⚠️  [Delete] Failed to delete attachments for dataset ${safeDatasetId}:`,
-          getUnknownErrorMessage(error)
-        );
+        logger.warn('Failed to delete dataset attachments', {
+          datasetId: safeDatasetId,
+          errorMessage: getUnknownErrorMessage(error),
+        });
       }
 
       // 步骤8: 删除元数据记录（由调用者提供的回调执行）
@@ -573,7 +655,7 @@ export class DatasetStorageService {
       }
 
       onProgress?.('删除完成', 100);
-      console.log(`✅ [Delete] Dataset deleted successfully: ${safeDatasetId}`);
+      logger.info('Dataset deleted successfully', { datasetId: safeDatasetId });
     });
   }
 }

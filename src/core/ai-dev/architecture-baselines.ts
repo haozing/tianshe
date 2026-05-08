@@ -186,7 +186,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/duckdb/dataset-record-mutation-service.ts': 10,
   'src/main/duckdb/dataset-schema-service.ts': 16,
   'src/main/duckdb/dataset-service.ts': 3,
-  'src/main/duckdb/dataset-storage-service.ts': 45,
   'src/main/duckdb/dependency-manager.ts': 1,
   'src/main/duckdb/duckdb-service-dataset-facade.ts': 6,
   'src/main/duckdb/duckdb-service-query-facade.ts': 5,
