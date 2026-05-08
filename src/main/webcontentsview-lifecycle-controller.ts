@@ -1,5 +1,6 @@
 import { WebContentsView, type WebContents } from 'electron';
 import { AIRPA_RUNTIME_CONFIG, isDevelopmentMode } from '../constants/runtime-config';
+import { createLogger } from '../core/logger';
 import { maybeOpenInternalBrowserDevTools } from './internal-browser-devtools';
 import { loadWebContentsURL } from './webcontents-navigation';
 import type { WebContentsViewSecurityController } from './webcontentsview-security-controller';
@@ -8,6 +9,8 @@ import type { WebContentsViewLayoutController } from './webcontentsview-layout-c
 import type { WebContentsViewPluginPageController } from './webcontentsview-plugin-page-controller';
 import type { WebContentsViewStateController } from './webcontentsview-state-controller';
 import type { ViewMetadata, ViewRegistration, WebContentsViewInfo } from './webcontentsview-manager';
+
+const logger = createLogger('WebContentsViewLifecycleController');
 
 interface WebContentsWithDestroy extends WebContents {
   destroy(): void;
@@ -90,7 +93,7 @@ export class WebContentsViewLifecycleController {
     const viewCreateStart = Date.now();
     const preloadPath = this.deps.resolveViewPreloadPath(registration.metadata);
     const securityPolicy = this.deps.securityController.resolvePolicy(registration.metadata);
-    console.log(`View preload script path: ${preloadPath || '(none)'}`);
+    logger.info('Resolved view preload script path', { viewId, preloadPath: preloadPath || null });
 
     const view = new WebContentsView({
       webPreferences: {
@@ -103,7 +106,10 @@ export class WebContentsViewLifecycleController {
         ...(preloadPath ? { preload: preloadPath } : {}),
       },
     });
-    console.log(`WebContentsView object created in ${Date.now() - viewCreateStart}ms`);
+    logger.info('WebContentsView object created', {
+      viewId,
+      durationMs: Date.now() - viewCreateStart,
+    });
 
     view.on('bounds-changed', () => {
       const info = this.deps.pool.get(viewId);
@@ -115,7 +121,8 @@ export class WebContentsViewLifecycleController {
         if (boundsAlmostEqual(actual, desired)) return;
 
         if (isDevelopmentMode()) {
-          console.warn(`[bounds-changed] View bounds overwritten, reapplying: ${viewId}`, {
+          logger.warn('View bounds overwritten, reapplying', {
+            viewId,
             desired,
             actual,
             attachedTo: info.attachedTo,
@@ -134,7 +141,7 @@ export class WebContentsViewLifecycleController {
         });
       } catch (error) {
         if (isDevelopmentMode()) {
-          console.warn(`[bounds-changed] Failed to verify/reapply bounds for ${viewId}:`, error);
+          logger.warn('Failed to verify or reapply view bounds', { viewId, error });
         }
       }
     });
@@ -144,12 +151,10 @@ export class WebContentsViewLifecycleController {
       const shouldDisableThrottling = source === 'pool' || source === 'mcp' || source === 'account';
       if (shouldDisableThrottling && hasBackgroundThrottling(view.webContents)) {
         view.webContents.setBackgroundThrottling(false);
-        console.log(`[Performance] Disabled background throttling for view: ${viewId} (source=${source})`);
+        logger.info('Disabled background throttling for view', { viewId, source });
       }
     } catch (error) {
-      console.warn(
-        `[Performance] Failed to set background throttling for view ${viewId}: ${getErrorMessage(error)}`
-      );
+      logger.warn('Failed to set background throttling for view', { viewId, error });
     }
 
     await this.deps.stealthController.applyToWebContents(
@@ -161,7 +166,7 @@ export class WebContentsViewLifecycleController {
 
     view.webContents.on('console-message', (_event, _level, message) => {
       if (message.includes('Preload script loaded')) {
-        console.log(`Preload script loaded successfully for view: ${viewId}`);
+        logger.info('Preload script loaded successfully for view', { viewId });
       }
     });
 
@@ -170,13 +175,13 @@ export class WebContentsViewLifecycleController {
         view.webContents
           .executeJavaScript('typeof window.electronAPI')
           .then((result) => {
-            console.log(`window.electronAPI type: ${result} (view: ${viewId})`);
+            logger.info('Checked window.electronAPI type', { viewId, result });
             if (result === 'undefined') {
-              console.error('window.electronAPI is undefined! Preload may have failed.');
+              logger.error('window.electronAPI is undefined; preload may have failed', { viewId });
             }
           })
           .catch((err) => {
-            console.error('Failed to check window.electronAPI:', err);
+            logger.error('Failed to check window.electronAPI', { viewId, error: err });
           });
       }
 
@@ -214,7 +219,7 @@ export class WebContentsViewLifecycleController {
     );
     const isPermissionAllowed = (permission: string) => allowedPermissions.has(permission);
     const logBlockedPermission = (permission: string) => {
-      console.log(`Blocked permission request for view: ${viewId} (${permission})`);
+      logger.info('Blocked permission request for view', { viewId, permission });
     };
     view.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
       const allowed = isPermissionAllowed(permission);
@@ -238,7 +243,7 @@ export class WebContentsViewLifecycleController {
         mode: 'detach',
       })
     ) {
-      console.log(`🛠️  DevTools opened for view: ${viewId}`);
+      logger.info('DevTools opened for view', { viewId });
     }
 
     // 4. 跳过初始 URL 加载（性能优化）
@@ -247,9 +252,7 @@ export class WebContentsViewLifecycleController {
     // if (registration.url) {
     //   await view.webContents.loadURL(registration.url);
     // }
-    console.log(
-      `🚀 WebContentsView created without initial URL load (will be loaded by workflow): ${viewId}`
-    );
+    logger.info('WebContentsView created without initial URL load', { viewId });
 
     // 5. 记录信息
     const viewInfo: WebContentsViewInfo = {
@@ -266,9 +269,12 @@ export class WebContentsViewLifecycleController {
     // 🆕 更新统计
     const totalCreated = this.deps.stateController.markCreated();
 
-    console.log(
-      `✅ WebContentsView created: ${viewId} (${this.deps.pool.size}/${this.deps.getMaxSize()}, total created: ${totalCreated})`
-    );
+    logger.info('WebContentsView created', {
+      viewId,
+      poolSize: this.deps.pool.size,
+      maxSize: this.deps.getMaxSize(),
+      totalCreated,
+    });
 
     // 🆕 通知前端标签栏更新
     this.deps.notifyViewCreated(viewId, registration);
@@ -289,12 +295,12 @@ export class WebContentsViewLifecycleController {
     await loadWebContentsURL(viewInfo.view.webContents, url, {
       waitUntil: 'domcontentloaded',
       onRecoverableAbort: (targetUrl) => {
-        console.log(`ℹ [navigateView] Ignoring recoverable ERR_ABORTED for ${targetUrl}`);
+        logger.info('Ignoring recoverable navigation abort', { viewId, targetUrl });
       },
     });
     viewInfo.lastAccessedAt = Date.now();
 
-    console.log(`✅ View navigated: ${viewId} -> ${url}`);
+    logger.info('View navigated', { viewId, url });
   }
 
   /**
@@ -304,7 +310,7 @@ export class WebContentsViewLifecycleController {
   async closeView(viewId: string): Promise<void> {
     const viewInfo = this.deps.pool.get(viewId);
     if (!viewInfo) {
-      console.warn(`closeView: View not found in pool: ${viewId}`);
+      logger.warn('View not found in pool while closing', { viewId });
       return;
     }
 
@@ -316,15 +322,16 @@ export class WebContentsViewLifecycleController {
     }
 
     if (removedDockPlugins.length > 0) {
-      console.log(
-        `[closeView] Removed dock layout mapping for plugin(s): ${removedDockPlugins.join(', ')}`
-      );
+      logger.info('Removed dock layout mapping for plugins while closing view', {
+        viewId,
+        pluginIds: removedDockPlugins,
+      });
     }
 
     // 🆕 保存 metadata 用于回调（因为后面会被清空）
     const metadata = viewInfo.metadata ? { ...viewInfo.metadata } : undefined;
 
-    console.log(`🧹 Starting cleanup for view: ${viewId}`);
+    logger.info('Starting cleanup for view', { viewId });
 
     try {
       // ============================================
@@ -332,7 +339,7 @@ export class WebContentsViewLifecycleController {
       // ============================================
       if (viewInfo.attachedTo) {
         this.deps.detachView(viewId);
-        console.log(`  ✓ View detached from window`);
+        logger.info('View detached from window during cleanup', { viewId });
       }
 
       // ============================================
@@ -346,9 +353,9 @@ export class WebContentsViewLifecycleController {
       if (!viewInfo.view.webContents.isDestroyed()) {
         try {
           viewInfo.view.webContents.stop();
-          console.log(`  ✓ Navigation stopped`);
+          logger.info('Navigation stopped during view cleanup', { viewId });
         } catch (error) {
-          console.warn(`  ⚠ Failed to stop navigation:`, error);
+          logger.warn('Failed to stop navigation during view cleanup', { viewId, error });
         }
       }
 
@@ -379,9 +386,12 @@ export class WebContentsViewLifecycleController {
       cleanupTarget.metadata = null;
 
       const totalDestroyed = this.deps.stateController.markDestroyed();
-      console.log(
-        `✅ View cleaned up: ${viewId} (destroyed: ${totalDestroyed}, pool: ${this.deps.pool.size}/${this.deps.getMaxSize()})`
-      );
+      logger.info('View cleaned up', {
+        viewId,
+        totalDestroyed,
+        poolSize: this.deps.pool.size,
+        maxSize: this.deps.getMaxSize(),
+      });
 
       // 🆕 通知前端标签栏更新
       this.deps.notifyViewClosed(viewId);
@@ -392,7 +402,7 @@ export class WebContentsViewLifecycleController {
         try {
           viewClosedCallback(viewId, metadata);
         } catch (callbackError) {
-          console.error(`  ⚠ viewClosedCallback error:`, callbackError);
+          logger.error('viewClosedCallback failed', { viewId, error: callbackError });
         }
       }
 
@@ -401,7 +411,7 @@ export class WebContentsViewLifecycleController {
       }
     } catch (error) {
       this.deps.stateController.markFailed();
-      console.error(`❌ Failed to cleanup view ${viewId}:`, error);
+      logger.error('Failed to cleanup view', { viewId, error });
       throw error;
     }
   }
@@ -416,18 +426,24 @@ export class WebContentsViewLifecycleController {
       this.deps.stealthController.cleanupBeforeDebuggerDetach(viewInfo.id, webContents);
 
       if (webContents.isDestroyed()) {
-        console.log(`  ⚠ WebContents already destroyed, skipping debugger detach`);
+        logger.info('WebContents already destroyed, skipping debugger detach', {
+          viewId: viewInfo.id,
+        });
         return;
       }
 
       if (webContents.debugger?.isAttached()) {
         webContents.debugger.detach();
-        console.log(`  ✓ Debugger detached`);
+        logger.info('Debugger detached', { viewId: viewInfo.id });
       }
     } catch (error: unknown) {
       const message = getErrorMessage(error);
       // debugger.detach() 可能抛出异常，但不应阻止清理流程
-      console.warn(`  ⚠ Failed to detach debugger (non-critical):`, message, error);
+      logger.warn('Failed to detach debugger; continuing cleanup', {
+        viewId: viewInfo.id,
+        message,
+        error,
+      });
     }
   }
 
@@ -442,7 +458,7 @@ export class WebContentsViewLifecycleController {
         const { webContents } = viewInfo.view;
 
         if (webContents.isDestroyed()) {
-          console.log(`  ℹ WebContents already destroyed`);
+          logger.info('WebContents already destroyed', { viewId: viewInfo.id });
           resolve();
           return;
         }
@@ -454,20 +470,26 @@ export class WebContentsViewLifecycleController {
           try {
             if (!webContents.isDestroyed() && hasDestroyMethod(webContents)) {
               webContents.destroy();
-              console.log(`  ✓ WebContents destroyed (delayed)`);
+              logger.info('WebContents destroyed after delay', { viewId: viewInfo.id });
             } else if (!webContents.isDestroyed()) {
-              console.warn(
-                `  ⚠ WebContents.destroy() method not available in this Electron version`
-              );
+              logger.warn('WebContents.destroy method is unavailable', { viewId: viewInfo.id });
             }
             resolve();
           } catch (error: unknown) {
-            console.warn(`  ⚠ Failed to destroy webContents:`, getErrorMessage(error), error);
+            logger.warn('Failed to destroy webContents', {
+              viewId: viewInfo.id,
+              message: getErrorMessage(error),
+              error,
+            });
             resolve(); // 继续执行，不抛出错误
           }
         });
       } catch (error: unknown) {
-        console.warn(`  ⚠ Error in safelyDestroyWebContents:`, getErrorMessage(error), error);
+        logger.warn('Error in safelyDestroyWebContents', {
+          viewId: viewInfo.id,
+          message: getErrorMessage(error),
+          error,
+        });
         resolve();
       }
     });
