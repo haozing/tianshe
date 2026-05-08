@@ -11,6 +11,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Loader2, Trash2 } from 'lucide-react';
+import { createRendererLogger } from '../../lib/logger';
 import { toast } from '../../lib/toast';
 import { DatasetSidebar } from './DatasetSidebar';
 import { DatasetToolbar } from './DatasetToolbar';
@@ -61,6 +62,7 @@ import type {
 } from '../../../../core/query-engine/types';
 
 const isInternalGroupHelperColumn = (columnName: string) => columnName.startsWith('__group_');
+const logger = createRendererLogger('DatasetsPage');
 
 export function DatasetsPage() {
   const electronAPI = useElectronAPI();
@@ -325,7 +327,12 @@ export function DatasetsPage() {
       await createGroupTabCopy(currentTable.datasetId, currentCategory?.id ?? null);
       toast.success('已创建新标签页副本');
     } catch (error) {
-      console.error('[DatasetsPage] Failed to create group tab copy:', error);
+      logger.error('Failed to create group tab copy', {
+        operation: 'dataset.groupTab.copy.create',
+        datasetId: currentTable.datasetId,
+        categoryId: currentCategory?.id ?? null,
+        error,
+      });
       toast.error('复制新标签页失败', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -349,7 +356,12 @@ export function DatasetsPage() {
       await renameGroupTab(datasetId, trimmedName, currentCategory?.id ?? null);
       toast.success('已重命名数据表');
     } catch (error) {
-      console.error('[DatasetsPage] Failed to rename group tab dataset:', error);
+      logger.error('Failed to rename group tab dataset', {
+        operation: 'dataset.groupTab.rename',
+        datasetId,
+        categoryId: currentCategory?.id ?? null,
+        error,
+      });
       toast.error('重命名数据表失败', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -386,7 +398,12 @@ export function DatasetsPage() {
       if (queryConfig.color) setShowColorPanel(false);
       if (queryConfig.rowHeight !== undefined) setShowRowHeightPanel(false);
     } catch (error) {
-      console.error('[DatasetsPage] Failed to create saved query template:', error);
+      logger.error('Failed to create saved query template', {
+        operation: 'dataset.queryTemplate.create',
+        datasetId: currentTable.datasetId,
+        queryConfigKeys: Object.keys(pendingQueryConfig || {}),
+        error,
+      });
       toast.error('保存查询模板失败', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -458,7 +475,13 @@ export function DatasetsPage() {
         await loadGroupTabs(currentTable.datasetId);
       }
     } catch (error) {
-      console.error('[DatasetsPage] Failed to delete group tab dataset:', error);
+      logger.error('Failed to delete group tab dataset', {
+        operation: 'dataset.groupTab.delete',
+        datasetId: tabDatasetId,
+        deletingSelected,
+        remainingTabCount: remainingTabs.length,
+        error,
+      });
       toast.error('删除数据表失败', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -468,7 +491,11 @@ export function DatasetsPage() {
     try {
       await reorderGroupTabs(tabDatasetIds);
     } catch (error) {
-      console.error('[DatasetsPage] Failed to reorder group tabs:', error);
+      logger.error('Failed to reorder group tabs', {
+        operation: 'dataset.groupTab.reorder',
+        tabCount: tabDatasetIds.length,
+        error,
+      });
       toast.error('调整 Tab 顺序失败', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -493,7 +520,11 @@ export function DatasetsPage() {
         setShowImportProgress(false);
       }
     } catch (error) {
-      console.error('[DatasetsPage] Failed to import dataset:', error);
+      logger.error('Failed to import dataset', {
+        operation: 'dataset.import.start',
+        folderId: options?.folderId ?? null,
+        error,
+      });
       setShowImportProgress(false);
       toast.error('导入失败', error instanceof Error ? error.message : '未知错误');
     }
@@ -508,7 +539,10 @@ export function DatasetsPage() {
     try {
       await createDataset();
     } catch (error) {
-      console.error('[DatasetsPage] Failed to create dataset:', error);
+      logger.error('Failed to create dataset', {
+        operation: 'dataset.create',
+        error,
+      });
       toast.error('创建数据表失败', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -521,7 +555,11 @@ export function DatasetsPage() {
 
       await createFolder(folderName);
     } catch (error) {
-      console.error('[DatasetsPage] Failed to create folder:', error);
+      logger.error('Failed to create folder', {
+        operation: 'dataset.folder.create',
+        folderCount: categories.filter((c) => c.isFolder).length,
+        error,
+      });
       toast.error('创建文件夹失败', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -536,7 +574,11 @@ export function DatasetsPage() {
     try {
       await createDataset(folderId);
     } catch (error) {
-      console.error('[DatasetsPage] Failed to create dataset in folder:', error);
+      logger.error('Failed to create dataset in folder', {
+        operation: 'dataset.folder.dataset.create',
+        folderId,
+        error,
+      });
       toast.error('创建数据表失败', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -549,7 +591,11 @@ export function DatasetsPage() {
 
       await createFolder(subfolderName, parentId);
     } catch (error) {
-      console.error('[DatasetsPage] Failed to create subfolder:', error);
+      logger.error('Failed to create subfolder', {
+        operation: 'dataset.folder.subfolder.create',
+        parentId,
+        error,
+      });
       toast.error('创建子文件夹失败', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -611,7 +657,13 @@ export function DatasetsPage() {
         }
       }
     } catch (error) {
-      console.error('[Delete] Failed:', error);
+      logger.error('Delete failed', {
+        operation: 'dataset.workspace.delete',
+        targetId: deleteTarget.id,
+        targetType: deleteTarget.type,
+        deleteFolderContents,
+        error,
+      });
       toast.error('删除失败', error instanceof Error ? error.message : '未知错误');
     } finally {
       setDeletingItemId(null);
@@ -681,7 +733,11 @@ export function DatasetsPage() {
       });
       setShowAggregatePanel(false);
     } catch (error) {
-      console.error('[AggregatePanel] Failed to apply aggregate config:', error);
+      logger.error('Failed to apply aggregate config', {
+        operation: 'dataset.aggregate.apply',
+        datasetId: currentTable.datasetId,
+        error,
+      });
       toast.error('应用聚合失败', error instanceof Error ? error.message : '未知错误');
       throw error;
     }
@@ -694,7 +750,11 @@ export function DatasetsPage() {
       await updateActiveQueryTemplate(currentTable.datasetId, { aggregate: undefined });
       setShowAggregatePanel(false);
     } catch (error) {
-      console.error('[AggregatePanel] Failed to clear aggregate config:', error);
+      logger.error('Failed to clear aggregate config', {
+        operation: 'dataset.aggregate.clear',
+        datasetId: currentTable.datasetId,
+        error,
+      });
       toast.error('清除聚合失败', error instanceof Error ? error.message : '未知错误');
       throw error;
     }
@@ -722,7 +782,12 @@ export function DatasetsPage() {
       await updateActiveQueryTemplate(currentTable.datasetId, { clean: cleanConfig });
       setShowCleanPanel(false);
     } catch (error) {
-      console.error('[CleanPanel] Failed to apply clean config:', error);
+      logger.error('Failed to apply clean config', {
+        operation: 'dataset.clean.apply',
+        datasetId: currentTable.datasetId,
+        fieldCount: cleanConfig.length,
+        error,
+      });
       toast.error('应用清洗失败', error instanceof Error ? error.message : '未知错误');
       throw error;
     }
@@ -735,7 +800,11 @@ export function DatasetsPage() {
     try {
       await updateActiveQueryTemplate(currentTable.datasetId, { clean: undefined });
     } catch (error) {
-      console.error('[CleanPanel] Failed to clear clean config:', error);
+      logger.error('Failed to clear clean config', {
+        operation: 'dataset.clean.clear',
+        datasetId: currentTable.datasetId,
+        error,
+      });
       toast.error('清除清洗失败', error instanceof Error ? error.message : '未知错误');
       throw error;
     }
@@ -755,7 +824,12 @@ export function DatasetsPage() {
       await updateActiveQueryTemplate(currentTable.datasetId, { lookup: config });
       setShowLookupPanel(false);
     } catch (error) {
-      console.error('[Lookup] Failed to apply lookup:', error);
+      logger.error('Failed to apply lookup', {
+        operation: 'dataset.lookup.apply',
+        datasetId: currentTable.datasetId,
+        lookupCount: config.length,
+        error,
+      });
       toast.error('关联错误', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -774,7 +848,12 @@ export function DatasetsPage() {
       await updateActiveQueryTemplate(currentTable.datasetId, config);
       setShowDedupePanel(false);
     } catch (error) {
-      console.error('[DedupePanel] Failed to apply config:', error);
+      logger.error('Failed to apply dedupe config', {
+        operation: 'dataset.dedupe.apply',
+        datasetId: currentTable.datasetId,
+        hasDedupeConfig: Boolean(config.dedupe),
+        error,
+      });
       toast.error('应用失败', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -785,7 +864,11 @@ export function DatasetsPage() {
     try {
       await updateActiveQueryTemplate(currentTable.datasetId, { dedupe: undefined });
     } catch (error) {
-      console.error('[DedupePanel] Failed to clear dedupe config:', error);
+      logger.error('Failed to clear dedupe config', {
+        operation: 'dataset.dedupe.clear',
+        datasetId: currentTable.datasetId,
+        error,
+      });
       toast.error('清除去重失败', error instanceof Error ? error.message : '未知错误');
       throw error;
     }
@@ -816,7 +899,12 @@ export function DatasetsPage() {
       await updateActiveQueryTemplate(currentTable.datasetId, { sample: config });
       setShowSamplePanel(false);
     } catch (error) {
-      console.error('[Sample] Failed to apply sample:', error);
+      logger.error('Failed to apply sample', {
+        operation: 'dataset.sample.apply',
+        datasetId: currentTable.datasetId,
+        sampleType: config.type,
+        error,
+      });
       toast.error('采样错误', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -829,7 +917,11 @@ export function DatasetsPage() {
       // ✅ 使用 updateActiveQueryTemplate 清除采样配置
       await updateActiveQueryTemplate(currentTable.datasetId, { sample: undefined });
     } catch (error) {
-      console.error('[Sample] Failed to clear sample:', error);
+      logger.error('Failed to clear sample', {
+        operation: 'dataset.sample.clear',
+        datasetId: currentTable.datasetId,
+        error,
+      });
       toast.error('清除采样失败', error instanceof Error ? error.message : '未知错误');
     }
   };
@@ -879,7 +971,13 @@ export function DatasetsPage() {
 
       toast.success(`已成功删除 ${deletedCount} 行数据`);
     } catch (error) {
-      console.error('[DeleteRows] Failed to delete rows:', error);
+      logger.error('Failed to delete rows', {
+        operation: 'dataset.rows.delete',
+        datasetId: currentTable.datasetId,
+        selectedRowCount: selectedRows.length,
+        rowIdCount: rowIds.length,
+        error,
+      });
       toast.error('删除失败', error instanceof Error ? error.message : String(error));
     }
   };
@@ -901,7 +999,12 @@ export function DatasetsPage() {
       });
       setShowGroupPanel(false);
     } catch (error) {
-      console.error('[GroupPanel] Failed to apply group config:', error);
+      logger.error('Failed to apply group config', {
+        operation: 'dataset.group.apply',
+        datasetId: currentTable.datasetId,
+        hasGroupConfig: Boolean(config),
+        error,
+      });
       toast.error('应用分组失败', error instanceof Error ? error.message : '未知错误');
       throw error;
     }
@@ -921,7 +1024,12 @@ export function DatasetsPage() {
       await updateActiveQueryTemplate(currentTable.datasetId, { color: config });
       setShowColorPanel(false);
     } catch (error) {
-      console.error('[ColorPanel] Failed to apply color config:', error);
+      logger.error('Failed to apply color config', {
+        operation: 'dataset.color.apply',
+        datasetId: currentTable.datasetId,
+        ruleCount: config.rules.length,
+        error,
+      });
       toast.error('应用条件填色失败', error instanceof Error ? error.message : '未知错误');
       throw error;
     }
@@ -934,7 +1042,11 @@ export function DatasetsPage() {
       await updateActiveQueryTemplate(currentTable.datasetId, { color: undefined });
       setShowColorPanel(false);
     } catch (error) {
-      console.error('[ColorPanel] Failed to clear color config:', error);
+      logger.error('Failed to clear color config', {
+        operation: 'dataset.color.clear',
+        datasetId: currentTable.datasetId,
+        error,
+      });
       toast.error('清除条件填色失败', error instanceof Error ? error.message : '未知错误');
       throw error;
     }
@@ -958,7 +1070,12 @@ export function DatasetsPage() {
       setCurrentRowHeight(config.rowHeight);
       setShowRowHeightPanel(false);
     } catch (error) {
-      console.error('[RowHeightPanel] Failed to apply row height:', error);
+      logger.error('Failed to apply row height', {
+        operation: 'dataset.rowHeight.apply',
+        datasetId: currentTable.datasetId,
+        rowHeight: config.rowHeight,
+        error,
+      });
       toast.error('应用行高失败', error instanceof Error ? error.message : '未知错误');
       throw error;
     }
@@ -1036,7 +1153,15 @@ export function DatasetsPage() {
         await refreshDatasetView(currentTable.datasetId);
       }
     } catch (error) {
-      console.error('[Export] Failed to export:', error);
+      logger.error('Failed to export dataset', {
+        operation: 'dataset.export.dialog.confirm',
+        datasetId: currentTable.datasetId,
+        format: options.format,
+        mode: options.mode,
+        postExportAction: options.postExportAction,
+        selectedRowCount: selectedRows.length,
+        error,
+      });
       toast.error('导出失败', error instanceof Error ? error.message : String(error));
     } finally {
       setTimeout(() => setExportProgress(null), 2000);

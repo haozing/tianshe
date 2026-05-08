@@ -8,6 +8,7 @@ import { X, Plus, HelpCircle, Loader2, CheckCircle, AlertTriangle } from 'lucide
 import { useDatasetFields } from '../../../hooks';
 import { selectActiveQueryConfig, useDatasetStore } from '../../../stores/datasetStore';
 import { AnchoredPanel } from '../../common/AnchoredPanel';
+import { createRendererLogger } from '../../../lib/logger';
 import { toast } from '../../../lib/toast';
 import { previewDatasetLookup } from '../../../services/datasets/datasetPanelService';
 import {
@@ -22,6 +23,8 @@ import type {
   LookupPreviewStep,
 } from '../../../../../core/query-engine/types';
 import { getUnknownErrorMessage } from '../../../../../utils/error-message';
+
+const logger = createRendererLogger('LookupPanel');
 
 interface LookupPanelProps {
   datasetId: string;
@@ -167,7 +170,12 @@ export function LookupPanel({ datasetId, onClose, onApply, anchorEl }: LookupPan
           setPreviewError(null);
         } catch (error: unknown) {
           if (requestId !== previewRequestIdRef.current) return;
-          console.error('[LookupPanel] Failed to preview lookup:', error);
+          logger.error('Failed to preview lookup', {
+            operation: 'dataset.lookup.preview',
+            datasetId,
+            lookupCount: configs.length,
+            error,
+          });
           setPreviewError(getUnknownErrorMessage(error, '预览失败'));
           setPreviewResult(null);
         } finally {

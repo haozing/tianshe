@@ -9,6 +9,7 @@ import { useDatasetFields } from '../../../hooks';
 import { selectActiveQueryConfig, useDatasetStore } from '../../../stores/datasetStore';
 import { AnchoredPanel } from '../../common/AnchoredPanel';
 import { PreviewWarning } from '../../common/OperationLoadingState';
+import { createRendererLogger } from '../../../lib/logger';
 import { toast } from '../../../lib/toast';
 import {
   deleteDatasetRowsByDictionaryFilter,
@@ -22,6 +23,8 @@ import type {
   DedupeOrderColumn,
   QueryConfig,
 } from '../../../../../core/query-engine/types';
+
+const logger = createRendererLogger('DedupePanel');
 
 interface DedupePanelProps {
   datasetId: string;
@@ -235,7 +238,12 @@ export function DedupePanel({
 
       setPreviewStats(result.stats);
     } catch (error) {
-      console.error('[DedupePanel] Preview error:', error);
+      logger.error('Failed to preview dedupe', {
+        operation: 'dataset.dedupe.preview',
+        datasetId,
+        partitionByCount: partitionByFields.length,
+        error,
+      });
       setPreviewError(error instanceof Error ? error.message : '预览失败');
     } finally {
       setPreviewLoading(false);
@@ -304,7 +312,12 @@ export function DedupePanel({
 
       onClose();
     } catch (error) {
-      console.error('[DedupePanel] Apply error:', error);
+      logger.error('Failed to apply dedupe', {
+        operation: 'dataset.dedupe.apply',
+        datasetId,
+        dictFilterEnabled,
+        error,
+      });
       toast.error('应用失败', error instanceof Error ? error.message : '未知错误');
     } finally {
       setApplying(false);
@@ -332,7 +345,11 @@ export function DedupePanel({
       await onClear();
       onClose();
     } catch (error) {
-      console.error('[DedupePanel] Clear error:', error);
+      logger.error('Failed to clear dedupe', {
+        operation: 'dataset.dedupe.clear',
+        datasetId,
+        error,
+      });
       toast.error('清除去重失败', error instanceof Error ? error.message : '未知错误');
     }
   };

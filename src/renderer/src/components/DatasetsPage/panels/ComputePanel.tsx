@@ -7,9 +7,12 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { X, Plus, RotateCcw, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 import { useDatasetFields } from '../../../hooks';
 import type { ComputeConfig, ComputeColumn } from '../../../../../core/query-engine/types';
+import { createRendererLogger } from '../../../lib/logger';
 import { toast } from '../../../lib/toast';
 import { validateDatasetComputeExpression } from '../../../services/datasets/datasetPanelService';
 import { getUnknownErrorMessage } from '../../../../../utils/error-message';
+
+const logger = createRendererLogger('ComputePanel');
 
 interface ComputePanelProps {
   datasetId: string;
@@ -549,7 +552,11 @@ function CustomFields({ column, datasetId, onUpdate }: CustomFieldsProps) {
 
           setValidation(result);
         } catch (error: unknown) {
-          console.error('[ComputePanel] Failed to validate expression:', error);
+          logger.error('Failed to validate compute expression', {
+            operation: 'dataset.compute.expression.validate',
+            datasetId,
+            error,
+          });
           setValidation({ valid: false, error: getUnknownErrorMessage(error, '验证失败') });
         } finally {
           setValidating(false);

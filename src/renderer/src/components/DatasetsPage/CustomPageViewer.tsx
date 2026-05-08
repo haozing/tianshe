@@ -7,8 +7,11 @@ import React, { useRef, useEffect, useState } from 'react';
 import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
 import type { CustomPageInfo } from '../../../../types/js-plugin';
 import { useEventSubscription } from '../../hooks/useElectronAPI';
+import { createRendererLogger } from '../../lib/logger';
 import { pluginFacade } from '../../services/datasets/pluginFacade';
 import { pluginEvents } from '../../services/datasets/pluginEvents';
+
+const logger = createRendererLogger('CustomPageViewer');
 
 interface CustomPageViewerProps {
   page: CustomPageInfo;
@@ -62,7 +65,13 @@ export function CustomPageViewer({ page, datasetId }: CustomPageViewerProps) {
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
-          console.error('[CustomPageViewer] Failed to handle page message:', err);
+          logger.error('Failed to handle page message', {
+            operation: 'customPage.message.handle',
+            pluginId: page.plugin_id,
+            pageId: page.page_id,
+            messageType: data.type,
+            error: err,
+          });
 
           // 发送错误响应
           if (iframeRef.current?.contentWindow) {
@@ -110,7 +119,13 @@ export function CustomPageViewer({ page, datasetId }: CustomPageViewerProps) {
           }
         }
       } catch (err) {
-        console.error('[CustomPageViewer] Failed to load page:', err);
+        logger.error('Failed to load custom page', {
+          operation: 'customPage.load',
+          pluginId: page.plugin_id,
+          pageId: page.page_id,
+          datasetId,
+          error: err,
+        });
         if (isComponentMounted) {
           const message = err instanceof Error ? err.message : 'Failed to load page';
           setError(message);

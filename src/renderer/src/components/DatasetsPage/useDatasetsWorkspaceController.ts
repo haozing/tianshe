@@ -1,5 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo } from 'react';
 import { toast } from '../../lib/toast';
+import { createRendererLogger } from '../../lib/logger';
 import { datasetFacade } from '../../services/datasets/datasetFacade';
 import { workspaceFacade } from '../../services/datasets/workspaceFacade';
 import { useElectronAPI } from '../../hooks/useElectronAPI';
@@ -18,6 +19,8 @@ import {
   type DatasetMeta,
   type WorkspaceSnapshot,
 } from '../../services/datasets/workspaceCategoryService';
+
+const logger = createRendererLogger('DatasetsWorkspaceController');
 
 export function useDatasetsWorkspaceController() {
   const electronAPI = useElectronAPI();
@@ -172,14 +175,23 @@ export function useDatasetsWorkspaceController() {
 
         const result = await datasetFacade.analyzeTypes(datasetId);
         if (!result.success || !result.schema || !result.sampleData) {
-          console.error('[Import] Type analysis failed:', result.error);
+          logger.error('Type analysis failed', {
+            operation: 'dataset.import.typeAnalysis',
+            datasetId,
+            error: result.error,
+          });
           toast.error('类型分析失败', result.error || '未知错误');
           return;
         }
 
         const applyResult = await datasetFacade.applySchema(datasetId, result.schema);
         if (!applyResult.success) {
-          console.error('[Import] Failed to apply schema:', applyResult.error);
+          logger.error('Failed to apply imported schema', {
+            operation: 'dataset.import.schema.apply',
+            datasetId,
+            fieldCount: result.schema.length,
+            error: applyResult.error,
+          });
           toast.error('应用字段类型失败', applyResult.error || '未知错误');
           return;
         }
@@ -187,7 +199,11 @@ export function useDatasetsWorkspaceController() {
         markImportAsProcessed(datasetId);
         useDatasetStore.getState().applyLocalDatasetSchema(datasetId, result.schema as any);
       } catch (error) {
-        console.error('[Import] Type analysis error:', error);
+        logger.error('Type analysis error', {
+          operation: 'dataset.import.typeAnalysis',
+          datasetId,
+          error,
+        });
         toast.error('类型分析错误', error instanceof Error ? error.message : '未知错误');
       } finally {
         setWorkspaceAnalyzingTypes(false);

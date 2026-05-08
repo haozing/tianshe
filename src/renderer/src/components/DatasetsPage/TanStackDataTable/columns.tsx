@@ -30,8 +30,10 @@ import {
   isSystemColumn,
   isWritableColumn,
 } from '../../../../../utils/dataset-column-capabilities';
+import { createRendererLogger } from '../../../lib/logger';
 
 export type TableRow = Record<string, unknown>;
+const logger = createRendererLogger('TanStackColumns');
 
 export interface ColumnMetadata {
   options?: string[];
@@ -961,7 +963,11 @@ function renderCellValue(
             dateValue = new Date(timestamp);
           }
         } catch (e) {
-          console.warn('[TanStackColumns] Failed to parse date value:', e);
+          logger.warn('Failed to parse date value', {
+            operation: 'dataset.table.date.parse',
+            columnName,
+            error: e,
+          });
         }
       }
     }

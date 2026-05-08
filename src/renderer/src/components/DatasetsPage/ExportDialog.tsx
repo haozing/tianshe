@@ -13,7 +13,10 @@ import { z } from 'zod';
 import { FileDown, AlertTriangle, Info } from 'lucide-react';
 import { DialogV2 } from '../ui/dialog-v2';
 import { Button } from '../ui/button';
+import { createRendererLogger } from '../../lib/logger';
 import type { ExportFormat, ExportOptions } from '@/types/electron';
+
+const logger = createRendererLogger('ExportDialog');
 
 const EXPORT_FORMAT_OPTIONS = [
   { value: 'csv', label: 'CSV', description: '通用格式' },
@@ -160,7 +163,12 @@ export function ExportDialog({
       });
       onClose();
     } catch (error) {
-      console.error('[ExportDialog] Export failed:', error);
+      logger.error('Export failed', {
+        operation: 'dataset.export.dialog.submit',
+        format: data.format,
+        mode: data.mode,
+        error,
+      });
     }
   });
 

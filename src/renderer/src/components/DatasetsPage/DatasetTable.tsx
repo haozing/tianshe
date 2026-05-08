@@ -17,6 +17,7 @@ import { TanStackDataTable } from './TanStackDataTable';
 import { createColumnsFromSchema } from './TanStackDataTable/columns';
 import type { ColumnSchema } from './TanStackDataTable/columns';
 import { buildDeletedSchema, buildRenamedSchema } from './schemaPatch';
+import { createRendererLogger } from '../../lib/logger';
 import { toast } from '../../lib/toast';
 import { isSystemField, isVirtualColumnFieldType, isWritableColumn } from '../../utils/field-utils';
 import {
@@ -28,6 +29,7 @@ import type { QueryConfig } from '../../../../core/query-engine/types';
 
 type DatasetRow = Record<string, unknown>;
 const isInternalGroupHelperColumn = (columnName: string) => columnName.startsWith('__group_');
+const logger = createRendererLogger('DatasetTable');
 
 type QueryAwareColumnSchema = ColumnSchema & {
   metadata?: ColumnSchema['metadata'] & {
@@ -245,23 +247,24 @@ export function DatasetTable({
       // 统计有多少列缺少 fieldType
       const missingFieldType = schema.filter((col) => !col.fieldType);
       if (missingFieldType.length > 0) {
-        console.warn(
-          `[DatasetTable] ${missingFieldType.length} columns missing fieldType:`,
-          missingFieldType.map((col) => col.name)
-        );
+        logger.warn('Columns missing fieldType', {
+          operation: 'dataset.table.schema.fieldType.missing',
+          datasetId: currentDataset.id,
+          missingColumnCount: missingFieldType.length,
+          columnNames: missingFieldType.map((col) => col.name),
+        });
       }
       setColumnSchema(schema);
       setLoading(false);
     } else {
       // ⚠️ 如果没有 schema，也要记录并显式设置
-      console.warn('[DatasetTable] currentDataset exists but schema is missing');
-      console.warn('[DatasetTable] Dataset:', {
-        id: currentDataset.id,
-        name: currentDataset.name,
+      logger.warn('Dataset schema is missing', {
+        operation: 'dataset.table.schema.resolve',
+        datasetId: currentDataset.id,
+        datasetName: currentDataset.name,
         rowCount: currentDataset.rowCount,
         columnCount: currentDataset.columnCount,
       });
-      console.warn('[DatasetTable] Setting columnSchema to empty array');
       setColumnSchema([]);
       setLoading(false);
     }
@@ -292,7 +295,6 @@ export function DatasetTable({
     const queryDisplayBySource = new Map(
       queryColumnRefs.map((columnRef) => [columnRef.sourceName, columnRef.displayName] as const)
     );
-    const querySourceColumnSet = new Set(queryColumnRefs.map((columnRef) => columnRef.sourceName));
     const hasRowIdentity =
       (Array.isArray(queryResult?.columns) ? queryResult.columns : []).includes('_row_id') ||
       rowData.some((row) => typeof row._row_id === 'number');
@@ -729,7 +731,14 @@ export function DatasetTable({
           await refreshDatasetRef.current(datasetId, { refreshSchema: false });
         }
       } catch (error) {
-        console.error('[DatasetTable] Failed to update record:', error);
+        logger.error('Failed to update record', {
+          operation: 'dataset.record.update',
+          datasetId,
+          rowId,
+          columnId,
+          sourceColumnId,
+          error,
+        });
         const message = error instanceof Error ? error.message : '未知错误';
         setCellErrors((prev) => {
           const newMap = new Map(prev);

@@ -9,6 +9,7 @@ import { useImmer } from 'use-immer';
 import { useDatasetFields, usePreviewState } from '../../../hooks';
 import { selectActiveQueryConfig, useDatasetStore } from '../../../stores/datasetStore';
 import { AnchoredPanel } from '../../common/AnchoredPanel';
+import { createRendererLogger } from '../../../lib/logger';
 import { toast } from '../../../lib/toast';
 import {
   materializeDatasetCleanColumns,
@@ -27,6 +28,8 @@ import type {
   CleanPreviewResult,
 } from '../../../../../core/query-engine/types';
 import { buildMaterializedCleanColumnSpecs } from '../../../../../utils/clean-materialization';
+
+const logger = createRendererLogger('CleanPanel');
 
 interface CleanPanelProps {
   datasetId: string;
@@ -295,7 +298,12 @@ export function CleanPanel({
       toast.success(`物化完成：写入 ${result.updatedColumns.length} 列`);
       onClose();
     } catch (error: unknown) {
-      console.error('[CleanPanel] Failed to materialize clean to new columns:', error);
+      logger.error('Failed to materialize clean to new columns', {
+        operation: 'dataset.clean.materialize',
+        datasetId,
+        fieldCount: cleanConfig.length,
+        error,
+      });
       const message = error instanceof Error ? error.message : String(error);
       setValidationError(message);
       toast.error('物化写入失败', message);

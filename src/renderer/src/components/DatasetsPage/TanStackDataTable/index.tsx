@@ -39,6 +39,7 @@ import {
   ArrowDown,
 } from 'lucide-react';
 import type { ColorRule } from '../../../../../core/query-engine/types';
+import { createRendererLogger } from '../../../lib/logger';
 import { applyColorRules } from './columns';
 import './styles/table.css';
 
@@ -88,6 +89,7 @@ export interface TanStackDataTableProps {
 }
 
 const LOAD_MORE_THRESHOLD_PX = 600;
+const logger = createRendererLogger('TanStackDataTable');
 
 export function TanStackDataTable({
   data,
@@ -641,7 +643,12 @@ export function TanStackDataTable({
         if (tableColumn) {
           tableColumn.toggleVisibility(currentVisible);
         }
-        console.error('[TanStackDataTable] Failed to toggle column visibility:', error);
+        logger.error('Failed to toggle column visibility', {
+          operation: 'dataset.table.columnVisibility.toggle',
+          columnId,
+          nextVisible,
+          error,
+        });
       }
     },
     [onToggleColumnVisibility, table]
@@ -662,7 +669,13 @@ export function TanStackDataTable({
       try {
         await onReorderColumns(nextOrder);
       } catch (error) {
-        console.error('[TanStackDataTable] Failed to reorder columns:', error);
+        logger.error('Failed to reorder columns', {
+          operation: 'dataset.table.columns.reorder',
+          columnId,
+          direction,
+          columnCount: nextOrder.length,
+          error,
+        });
       }
     },
     [getManageableColumns, onReorderColumns]
@@ -678,7 +691,12 @@ export function TanStackDataTable({
       try {
         await onRenameColumn(columnId, trimmed);
       } catch (error) {
-        console.error('[TanStackDataTable] Failed to rename column:', error);
+        logger.error('Failed to rename column', {
+          operation: 'dataset.table.column.rename',
+          columnId,
+          newName: trimmed,
+          error,
+        });
       }
     },
     [onRenameColumn]
@@ -690,7 +708,11 @@ export function TanStackDataTable({
       try {
         await onDeleteColumn(columnId);
       } catch (error) {
-        console.error('[TanStackDataTable] Failed to delete column:', error);
+        logger.error('Failed to delete column', {
+          operation: 'dataset.table.column.delete',
+          columnId,
+          error,
+        });
       }
     },
     [onDeleteColumn]

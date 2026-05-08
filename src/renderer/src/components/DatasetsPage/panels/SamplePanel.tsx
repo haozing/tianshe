@@ -11,8 +11,11 @@ import { AnchoredPanel } from '../../common/AnchoredPanel';
 import { OperationLoadingState, PreviewStats } from '../../common/OperationLoadingState';
 import { previewDatasetSample } from '../../../services/datasets/datasetPanelService';
 import type { SampleConfig } from '../../../../../core/query-engine/types';
+import { createRendererLogger } from '../../../lib/logger';
 import { toast } from '../../../lib/toast';
 import { getUnknownErrorMessage } from '../../../../../utils/error-message';
+
+const logger = createRendererLogger('SamplePanel');
 
 interface SamplePanelProps {
   datasetId: string;
@@ -120,7 +123,12 @@ export function SamplePanel({
           setPreviewResult(result);
           setPreviewError(null);
         } catch (error: unknown) {
-          console.error('[SamplePanel] Failed to preview sample:', error);
+          logger.error('Failed to preview sample', {
+            operation: 'dataset.sample.preview',
+            datasetId,
+            sampleType: type,
+            error,
+          });
           setPreviewError(getUnknownErrorMessage(error, '预览失败'));
           setPreviewResult(null);
         } finally {

@@ -8,6 +8,9 @@ import {
   getDatasetFieldNames,
   listDatasetSummaries,
 } from '../../../services/datasets/datasetPanelService';
+import { createRendererLogger } from '../../../lib/logger';
+
+const logger = createRendererLogger('DictionarySelector');
 
 interface DictionarySelectorProps {
   datasetId?: string; // 选中的数据集ID
@@ -41,7 +44,10 @@ const loadDatasets = async () => {
     try {
       setDatasets(await listDatasetSummaries());
     } catch (error) {
-      console.error('[DictionarySelector] Failed to load datasets:', error);
+      logger.error('Failed to load datasets', {
+        operation: 'dictionarySelector.datasets.load',
+        error,
+      });
     }
   };
 
@@ -56,7 +62,11 @@ const loadFields = async (id: string) => {
         onChange(id, columnNames[0]);
       }
     } catch (error) {
-      console.error('[DictionarySelector] Failed to load fields:', error);
+      logger.error('Failed to load fields', {
+        operation: 'dictionarySelector.fields.load',
+        datasetId: id,
+        error,
+      });
     } finally {
       setLoading(false);
     }
@@ -67,7 +77,11 @@ const loadFields = async (id: string) => {
       const dataset = datasets.find((ds) => ds.id === id);
       setDatasetInfo(dataset);
     } catch (error) {
-      console.error('[DictionarySelector] Failed to load dataset info:', error);
+      logger.error('Failed to load dataset info', {
+        operation: 'dictionarySelector.datasetInfo.load',
+        datasetId: id,
+        error,
+      });
     }
   };
 

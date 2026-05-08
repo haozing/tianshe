@@ -6,6 +6,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Paperclip, X, Upload, FileText, Film } from 'lucide-react';
 import { LazyImage } from '../../common/LazyImage';
+import { createRendererLogger } from '../../../lib/logger';
 import { toast } from '../../../lib/toast';
 import { fileFacade } from '../../../services/datasets/fileFacade';
 import { getNativePathForFile } from '../../../utils/electron-file-path';
@@ -17,6 +18,14 @@ interface UrlAttachment {
   isImage: boolean;
   isVideo: boolean;
 }
+
+const logger = createRendererLogger('AttachmentField');
+const isRemoteAttachmentUrl = (url: string) =>
+  url.startsWith('http://') || url.startsWith('https://');
+const describeAttachmentUrl = (url: string) => ({
+  isRemoteUrl: isRemoteAttachmentUrl(url),
+  urlLength: url.length,
+});
 
 export interface AttachmentFieldProps {
   value: string; // 纯文本URL字符串（逗号/分号分隔）
@@ -91,7 +100,7 @@ export function AttachmentField({
         if (newUrls[attachment.url] || newFailedImages.has(attachment.url)) continue;
 
         // 如果不是HTTP/HTTPS URL，认为是本地路径，需要加载Base64
-        if (!attachment.url.startsWith('http://') && !attachment.url.startsWith('https://')) {
+        if (!isRemoteAttachmentUrl(attachment.url)) {
           if (attachment.isImage) {
             try {
               const response = await fileFacade.getImageData(attachment.url);
@@ -103,9 +112,14 @@ export function AttachmentField({
                 newFailedImages.add(attachment.url);
                 hasNewFailures = true;
               }
-            } catch (_error) {
+            } catch (error) {
               // 🆕 静默处理错误，记录失败的图片
-              console.warn('[AttachmentField] Image file not found:', attachment.url);
+              logger.warn('Image file not found', {
+                operation: 'dataset.attachment.image.load',
+                datasetId,
+                ...describeAttachmentUrl(attachment.url),
+                error,
+              });
               newFailedImages.add(attachment.url);
               hasNewFailures = true;
             }
@@ -160,7 +174,13 @@ export function AttachmentField({
         toast.error('上传失败', response.error || '未知错误');
       }
     } catch (error: unknown) {
-      console.error('[AttachmentField] Upload error:', error);
+      logger.error('Upload failed', {
+        operation: 'dataset.attachment.upload',
+        datasetId,
+        fileSize: file.size,
+        fileType: file.type,
+        error,
+      });
       toast.error('上传失败', getUnknownErrorMessage(error));
     } finally {
       setIsUploading(false);
@@ -171,10 +191,15 @@ export function AttachmentField({
   const deleteUrl = async (urlToDelete: string) => {
     try {
       // 如果是本地文件路径，尝试删除物理文件
-      if (!urlToDelete.startsWith('http://') && !urlToDelete.startsWith('https://')) {
+      if (!isRemoteAttachmentUrl(urlToDelete)) {
         const response = await fileFacade.delete(urlToDelete);
         if (!response.success && response.error) {
-          console.warn('[AttachmentField] Failed to delete file:', response.error);
+          logger.warn('Failed to delete backing file', {
+            operation: 'dataset.attachment.file.delete',
+            datasetId,
+            ...describeAttachmentUrl(urlToDelete),
+            error: response.error,
+          });
         }
       }
 
@@ -184,7 +209,12 @@ export function AttachmentField({
       const newValue = urls.join(detectedSeparator);
       onChange(newValue);
     } catch (error: unknown) {
-      console.error('[AttachmentField] Delete error:', error);
+      logger.error('Delete failed', {
+        operation: 'dataset.attachment.delete',
+        datasetId,
+        ...describeAttachmentUrl(urlToDelete),
+        error,
+      });
       toast.error('删除失败', getUnknownErrorMessage(error));
     }
   };
@@ -192,12 +222,17 @@ export function AttachmentField({
   // 打开URL
   const openUrl = (url: string) => {
     // 对于HTTP(S) URL，在新标签页打开
-    if (url.startsWith('http://') || url.startsWith('https://')) {
+    if (isRemoteAttachmentUrl(url)) {
       window.open(url, '_blank', 'noopener,noreferrer');
     } else {
       // 对于本地文件路径，使用electron API打开
       fileFacade.open(url).catch((error: unknown) => {
-        console.error('[AttachmentField] Open error:', error);
+        logger.error('Open failed', {
+          operation: 'dataset.attachment.open',
+          datasetId,
+          ...describeAttachmentUrl(url),
+          error,
+        });
         toast.error('打开文件失败', getUnknownErrorMessage(error, '未知错误'));
       });
     }
@@ -290,7 +325,11 @@ export function AttachmentField({
                       threshold={0.1}
                       rootMargin="100px"
                       onError={(_e) => {
-                        console.warn('[AttachmentField] Image render error:', attachment.url);
+                        logger.warn('Image render failed', {
+                          operation: 'dataset.attachment.image.render',
+                          datasetId,
+                          ...describeAttachmentUrl(attachment.url),
+                        });
                       }}
                     />
                   ) : (
@@ -425,7 +464,11 @@ export function AttachmentField({
                       threshold={0.1}
                       rootMargin="100px"
                       onError={(_e) => {
-                        console.warn('[AttachmentField] Image render error:', attachment.url);
+                        logger.warn('Image render failed', {
+                          operation: 'dataset.attachment.image.render',
+                          datasetId,
+                          ...describeAttachmentUrl(attachment.url),
+                        });
                       }}
                     />
                   ) : (

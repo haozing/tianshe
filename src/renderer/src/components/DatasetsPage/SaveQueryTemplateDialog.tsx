@@ -10,7 +10,10 @@ import { z } from 'zod';
 import { Save, Loader } from 'lucide-react';
 import { DialogV2 } from '../ui/dialog-v2';
 import { Button } from '../ui/button';
+import { createRendererLogger } from '../../lib/logger';
 import type { TabInfo } from './DatasetTabs';
+
+const logger = createRendererLogger('SaveQueryTemplateDialog');
 
 const saveQueryTemplateSchema = z.object({
   name: z.string().min(1, '请输入模板名称').max(50, '模板名称不能超过50个字符').trim(),
@@ -76,7 +79,11 @@ export function SaveQueryTemplateDialog({
       reset();
       onClose();
     } catch (err) {
-      console.error('[SaveQueryTemplateDialog] Failed to save query template:', err);
+      logger.error('Failed to save query template', {
+        operation: 'dataset.queryTemplate.saveDialog.submit',
+        editingTemplateId: editingTemplate?.id,
+        error: err,
+      });
       setError('root', {
         type: 'manual',
         message: err instanceof Error ? err.message : '保存模板失败，请重试',

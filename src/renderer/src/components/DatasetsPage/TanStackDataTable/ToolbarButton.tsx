@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import type { ToolbarButton } from '../../../hooks/useJSPluginUIExtensions';
+import { createRendererLogger } from '../../../lib/logger';
 import { renderStringIcon } from '../../../lib/string-icon';
 import { toast } from '../../../lib/toast';
 import { cn } from '../../../lib/utils';
+
+const logger = createRendererLogger('DatasetToolbarButton');
 
 type DatasetRow = Record<string, unknown>;
 
@@ -46,7 +49,13 @@ export function JSPluginToolbarButton({
         }
       }
     } catch (error) {
-      console.error('[ToolbarButton] Toolbar button execution failed:', error);
+      logger.error('Toolbar button execution failed', {
+        operation: 'dataset.toolbarButton.execute',
+        pluginId: button.pluginId,
+        commandId: button.commandId,
+        selectedRowCount: selectedRows.length,
+        error,
+      });
       const message = error instanceof Error ? error.message : '执行失败';
       toast.error(message);
     } finally {
