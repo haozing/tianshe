@@ -21,8 +21,10 @@ import type {
   LibraryInfo,
 } from './types';
 import { getUnknownErrorMessage, toError } from '../../utils/error-message';
+import { createLogger } from '../logger';
 
 const SYSTEM_LIBS_ALLOWLIST = new Set(SYSTEM_LIBS_WHITELIST.map((lib) => lib.toLowerCase()));
+const logger = createLogger('FFIService');
 
 /**
  * FFI 服务
@@ -67,7 +69,7 @@ export class FFIService {
     this.maxCallbacks = config.maxCallbacks ?? 50;
     this.allowedPaths = config.allowedPaths ?? [];
 
-    console.log(`[FFI] Initialized for caller: ${this.callerId}`);
+    logger.info('FFI service initialized', { callerId: this.callerId });
   }
 
   /**
@@ -96,12 +98,18 @@ export class FFIService {
 
     // 检查是否已加载
     if (this.libraries.has(safePath)) {
-      console.log(`[FFI] Library already loaded: ${safePath}`);
+      logger.info('FFI library already loaded', {
+        callerId: this.callerId,
+        libraryPath: safePath,
+      });
       return this.libraries.get(safePath)!;
     }
 
     try {
-      console.log(`[FFI] Loading library: ${safePath}`);
+      logger.info('Loading FFI library', {
+        callerId: this.callerId,
+        libraryPath: safePath,
+      });
 
       // 使用 koffi 加载库
       const koffiLib = koffi.load(safePath);
@@ -112,11 +120,18 @@ export class FFIService {
       // 缓存
       this.libraries.set(safePath, library);
 
-      console.log(`[FFI] Library loaded successfully: ${safePath}`);
+      logger.info('FFI library loaded successfully', {
+        callerId: this.callerId,
+        libraryPath: safePath,
+      });
 
       return library;
     } catch (error: unknown) {
-      console.error(`[FFI] Failed to load library ${safePath}:`, error);
+      logger.error('Failed to load FFI library', {
+        callerId: this.callerId,
+        libraryPath: safePath,
+        errorMessage: getUnknownErrorMessage(error),
+      });
       throw new FFIError(
         `Failed to load library: ${getUnknownErrorMessage(error)}`,
         'LOAD_FAILED',
@@ -157,11 +172,14 @@ export class FFIService {
       const wrapper = new FFICallback(callback);
       this.callbacks.add(wrapper);
 
-      console.log(`[FFI] Callback created for caller: ${this.callerId}`);
+      logger.info('FFI callback created', { callerId: this.callerId });
 
       return wrapper;
     } catch (error: unknown) {
-      console.error(`[FFI] Failed to create callback:`, error);
+      logger.error('Failed to create FFI callback', {
+        callerId: this.callerId,
+        errorMessage: getUnknownErrorMessage(error),
+      });
       throw new FFIError(
         `Failed to create callback: ${getUnknownErrorMessage(error)}`,
         'CALLBACK_FAILED',
@@ -195,11 +213,18 @@ export class FFIService {
       // 使用 koffi 定义结构体
       const struct = koffi.struct(name, fields);
 
-      console.log(`[FFI] Struct '${name}' defined for caller: ${this.callerId}`);
+      logger.info('FFI struct defined', {
+        callerId: this.callerId,
+        structName: name,
+      });
 
       return struct;
     } catch (error: unknown) {
-      console.error(`[FFI] Failed to define struct:`, error);
+      logger.error('Failed to define FFI struct', {
+        callerId: this.callerId,
+        structName: name,
+        errorMessage: getUnknownErrorMessage(error),
+      });
       throw new FFIError(
         `Failed to define struct: ${getUnknownErrorMessage(error)}`,
         'STRUCT_FAILED',
@@ -249,7 +274,10 @@ export class FFIService {
     if (lib) {
       lib.unload();
       this.libraries.delete(normalizedPath);
-      console.log(`[FFI] Library unloaded: ${normalizedPath}`);
+      logger.info('FFI library unloaded', {
+        callerId: this.callerId,
+        libraryPath: normalizedPath,
+      });
     }
   }
 
@@ -259,14 +287,17 @@ export class FFIService {
    * 卸载所有库，释放所有回调
    */
   dispose(): void {
-    console.log(`[FFI] Disposing resources for caller: ${this.callerId}`);
+    logger.info('Disposing FFI resources', { callerId: this.callerId });
 
     // 释放所有回调
     for (const callback of this.callbacks) {
       try {
         callback.dispose();
       } catch (error) {
-        console.error(`[FFI] Error disposing callback:`, error);
+        logger.error('Failed to dispose FFI callback', {
+          callerId: this.callerId,
+          errorMessage: getUnknownErrorMessage(error),
+        });
       }
     }
     this.callbacks.clear();
@@ -276,12 +307,16 @@ export class FFIService {
       try {
         lib.unload();
       } catch (error) {
-        console.error(`[FFI] Error unloading library ${libPath}:`, error);
+        logger.error('Failed to unload FFI library during dispose', {
+          callerId: this.callerId,
+          libraryPath: libPath,
+          errorMessage: getUnknownErrorMessage(error),
+        });
       }
     }
     this.libraries.clear();
 
-    console.log(`[FFI] Resources disposed for caller: ${this.callerId}`);
+    logger.info('FFI resources disposed', { callerId: this.callerId });
   }
 
   /**

@@ -9,6 +9,9 @@ import { FFIError } from './errors';
 import { FFI_TYPE_MAP } from './types';
 import type { FunctionSignature } from './types';
 import { getUnknownErrorMessage, toError } from '../../utils/error-message';
+import { createLogger } from '../logger';
+
+const logger = createLogger('FFILibrary');
 
 /**
  * 动态链接库实例
@@ -69,7 +72,11 @@ export class Library {
         signature,
       });
 
-      console.log(`[FFI] Defined function: ${this.libPath}::${name}`);
+      logger.info('FFI function defined', {
+        callerId: this.callerId,
+        libraryPath: this.libPath,
+        functionName: name,
+      });
     } catch (error: unknown) {
       throw new FFIError(
         `Failed to define function '${name}': ${getUnknownErrorMessage(error)}`,
@@ -123,17 +130,31 @@ export class Library {
         );
       }
 
-      console.log(`[FFI] Calling ${this.libPath}::${name}`);
+      logger.info('Calling FFI function', {
+        callerId: this.callerId,
+        libraryPath: this.libPath,
+        functionName: name,
+      });
 
       // 调用函数
       const result = func(...args);
 
       const duration = Date.now() - startTime;
-      console.log(`[FFI] ${name} completed in ${duration}ms`);
+      logger.info('FFI function completed', {
+        callerId: this.callerId,
+        libraryPath: this.libPath,
+        functionName: name,
+        durationMs: duration,
+      });
 
       return result;
     } catch (error: unknown) {
-      console.error(`[FFI] Error calling ${this.libPath}::${name}:`, error);
+      logger.error('Failed to call FFI function', {
+        callerId: this.callerId,
+        libraryPath: this.libPath,
+        functionName: name,
+        errorMessage: getUnknownErrorMessage(error),
+      });
       if (error instanceof FFIError) throw error;
       throw new FFIError(
         `FFI call failed: ${getUnknownErrorMessage(error)}`,
@@ -205,7 +226,10 @@ export class Library {
    * 清理已定义的函数，释放资源
    */
   unload(): void {
-    console.log(`[FFI] Unloading library: ${this.libPath}`);
+    logger.info('Unloading FFI library', {
+      callerId: this.callerId,
+      libraryPath: this.libPath,
+    });
     this.functions.clear();
     // koffi 会自动处理库的卸载
   }
