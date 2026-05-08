@@ -7,6 +7,9 @@ import { SyncQueryBuilder } from '../interfaces/IQueryBuilder';
 import type { SQLContext, SampleConfig } from '../types';
 import { QueryErrorFactory } from '../errors';
 import { SQLUtils } from '../utils/sql-utils';
+import { createLogger } from '../../logger';
+
+const logger = createLogger('SampleBuilder');
 
 export class SampleBuilder extends SyncQueryBuilder<SampleConfig> {
   private static readonly HASH_BUCKETS = 1_000_000;
@@ -53,9 +56,10 @@ export class SampleBuilder extends SyncQueryBuilder<SampleConfig> {
         return `SELECT * FROM ${context.currentTable} ORDER BY hash(${escapedRowId}, ${seed}) LIMIT ${rows}`.trim();
       }
     } else if (seed !== undefined) {
-      console.warn(
-        '[SampleBuilder] Seeded sampling requires _row_id; falling back to non-deterministic sampling.'
-      );
+      logger.warn('Seeded sampling requires _row_id; falling back to non-deterministic sampling', {
+        sampleType: type,
+        seed,
+      });
     }
 
     let sampleClause = '';
@@ -96,8 +100,9 @@ export class SampleBuilder extends SyncQueryBuilder<SampleConfig> {
         : 'RANDOM()';
 
     if (seed !== undefined && !rowIdColumn) {
-      console.warn(
-        '[SampleBuilder] Seeded stratified sampling requires _row_id; falling back to non-deterministic ordering.'
+      logger.warn(
+        'Seeded stratified sampling requires _row_id; falling back to non-deterministic ordering',
+        { seed, stratifyBy }
       );
     }
 
@@ -167,10 +172,9 @@ export class SampleBuilder extends SyncQueryBuilder<SampleConfig> {
 
       // 🆕 性能警告
       if (value > WARN_SAMPLE_PERCENTAGE) {
-        console.warn(
-          `[SampleBuilder] 采样百分比较高(${value}%)，可能无法显著提升性能。` +
-            `建议：如需查看大部分数据，考虑直接查询全量。`
-        );
+        logger.warn('Sample percentage is high; performance gains may be limited', {
+          percentage: value,
+        });
       }
     } else if (type === 'rows') {
       if (value === undefined) {
@@ -193,10 +197,9 @@ export class SampleBuilder extends SyncQueryBuilder<SampleConfig> {
 
       // 🆕 合理性警告
       if (value > 1_000_000) {
-        console.warn(
-          `[SampleBuilder] 采样行数较大(${value.toLocaleString()})，可能影响性能和内存使用。` +
-            `建议：考虑降低采样数量或使用百分比采样。`
-        );
+        logger.warn('Sample row count is high and may affect performance or memory usage', {
+          rows: value,
+        });
       }
     } else if (type === 'stratified') {
       if (!stratifyBy || stratifyBy.length === 0) {
@@ -208,18 +211,16 @@ export class SampleBuilder extends SyncQueryBuilder<SampleConfig> {
 
       // 🆕 分层采样限制
       if (value !== undefined && value > 100_000) {
-        console.warn(
-          `[SampleBuilder] 分层采样每组行数较大(${value.toLocaleString()})，` +
-            `在高基数字段上可能导致内存问题。建议每组不超过10,000行。`
-        );
+        logger.warn('Stratified sample row limit is high and may affect memory usage', {
+          rowsPerGroup: value,
+        });
       }
 
       // 🆕 分层字段数量限制
       if (stratifyBy.length > 5) {
-        console.warn(
-          `[SampleBuilder] 分层字段过多(${stratifyBy.length}个)，` +
-            `会产生大量分组，可能影响性能。建议不超过3个字段。`
-        );
+        logger.warn('Too many stratified sample fields may create many groups', {
+          stratifyByCount: stratifyBy.length,
+        });
       }
     }
 

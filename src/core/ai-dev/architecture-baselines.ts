@@ -157,8 +157,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/core/js-plugin/namespaces/button.ts': 8,
   'src/core/js-plugin/namespaces/utils/interval.ts': 6,
   'src/core/js-plugin/namespaces/window.ts': 12,
-  'src/core/query-engine/builders/DedupeBuilder.ts': 1,
-  'src/core/query-engine/builders/SampleBuilder.ts': 6,
   'src/core/query-engine/services/data-writeback-service.ts': 11,
   'src/core/query-engine/services/dataset-merger.ts': 7,
   'src/core/query-engine/services/pivot-service.ts': 7,

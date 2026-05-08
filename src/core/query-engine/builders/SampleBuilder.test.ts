@@ -13,8 +13,18 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SampleBuilder } from './SampleBuilder';
 import type { SampleConfig, SQLContext } from '../types';
 
-// Mock console.warn 来验证警告
-const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+vi.mock('../../logger', () => ({
+  createLogger: vi.fn(() => mockLogger),
+}));
 
 describe('SampleBuilder', () => {
   let builder: SampleBuilder;
@@ -28,7 +38,7 @@ describe('SampleBuilder', () => {
       ctes: [],
       availableColumns: new Set(['_row_id', 'id', 'name', 'category', 'region', 'amount']),
     };
-    consoleWarnSpy.mockClear();
+    mockLogger.warn.mockClear();
   });
 
   // ========== 百分比采样 ==========
@@ -65,7 +75,7 @@ describe('SampleBuilder', () => {
         value: 0.0001, // 小于最小值 0.001%
       };
 
-      await expect(builder.build(context, config)).rejects.toThrow('太小');
+      expect(() => builder.build(context, config)).toThrow('太小');
     });
 
     it('百分比过大应该报错', async () => {
@@ -74,7 +84,7 @@ describe('SampleBuilder', () => {
         value: 100, // 超过最大值 99.9%
       };
 
-      await expect(builder.build(context, config)).rejects.toThrow('过高');
+      expect(() => builder.build(context, config)).toThrow('过高');
     });
 
     it('百分比超过80%应该警告', async () => {
@@ -85,7 +95,10 @@ describe('SampleBuilder', () => {
 
       await builder.build(context, config);
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('采样百分比较高'));
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        'Sample percentage is high; performance gains may be limited',
+        { percentage: 85 }
+      );
     });
 
     it('没有 value 时应该报错', async () => {
@@ -93,7 +106,7 @@ describe('SampleBuilder', () => {
         type: 'percentage',
       } as any;
 
-      await expect(builder.build(context, config)).rejects.toThrow('value');
+      expect(() => builder.build(context, config)).toThrow('value');
     });
   });
 
@@ -131,7 +144,7 @@ describe('SampleBuilder', () => {
         value: 0,
       };
 
-      await expect(builder.build(context, config)).rejects.toThrow('positive');
+      expect(() => builder.build(context, config)).toThrow('positive');
     });
 
     it('行数必须是整数', async () => {
@@ -140,7 +153,7 @@ describe('SampleBuilder', () => {
         value: 100.5,
       };
 
-      await expect(builder.build(context, config)).rejects.toThrow('integer');
+      expect(() => builder.build(context, config)).toThrow('integer');
     });
 
     it('行数超过上限应该报错', async () => {
@@ -149,7 +162,7 @@ describe('SampleBuilder', () => {
         value: 20_000_000, // 超过 10_000_000 上限
       };
 
-      await expect(builder.build(context, config)).rejects.toThrow('超过上限');
+      expect(() => builder.build(context, config)).toThrow('超过上限');
     });
 
     it('行数较大应该警告', async () => {
@@ -160,7 +173,10 @@ describe('SampleBuilder', () => {
 
       await builder.build(context, config);
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('采样行数较大'));
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        'Sample row count is high and may affect performance or memory usage',
+        { rows: 2_000_000 }
+      );
     });
   });
 
@@ -213,7 +229,7 @@ describe('SampleBuilder', () => {
         value: 100,
       } as any;
 
-      await expect(builder.build(context, config)).rejects.toThrow('stratifyBy');
+      expect(() => builder.build(context, config)).toThrow('stratifyBy');
     });
 
     it('stratifyBy 为空数组时应该报错', async () => {
@@ -223,7 +239,7 @@ describe('SampleBuilder', () => {
         value: 100,
       };
 
-      await expect(builder.build(context, config)).rejects.toThrow('stratifyBy');
+      expect(() => builder.build(context, config)).toThrow('stratifyBy');
     });
 
     it('分层字段不存在时应该报错', async () => {
@@ -233,7 +249,7 @@ describe('SampleBuilder', () => {
         value: 100,
       };
 
-      await expect(builder.build(context, config)).rejects.toThrow('missing_field');
+      expect(() => builder.build(context, config)).toThrow('missing_field');
     });
 
     it('value 为负数时应该报错', async () => {
@@ -243,7 +259,7 @@ describe('SampleBuilder', () => {
         value: -10,
       };
 
-      await expect(builder.build(context, config)).rejects.toThrow('positive');
+      expect(() => builder.build(context, config)).toThrow('positive');
     });
 
     it('每组行数较大应该警告', async () => {
@@ -255,7 +271,10 @@ describe('SampleBuilder', () => {
 
       await builder.build(context, config);
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('每组行数较大'));
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        'Stratified sample row limit is high and may affect memory usage',
+        { rowsPerGroup: 150_000 }
+      );
     });
 
     it('分层字段过多应该警告', async () => {
@@ -277,7 +296,10 @@ describe('SampleBuilder', () => {
 
       await builder.build(context, config);
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('分层字段过多'));
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        'Too many stratified sample fields may create many groups',
+        { stratifyByCount: 6 }
+      );
     });
 
     it('默认每组 100 行', async () => {
@@ -301,7 +323,7 @@ describe('SampleBuilder', () => {
         seed: -1,
       };
 
-      await expect(builder.build(context, config)).rejects.toThrow('non-negative');
+      expect(() => builder.build(context, config)).toThrow('non-negative');
     });
 
     it('seed 必须是整数', async () => {
@@ -311,7 +333,7 @@ describe('SampleBuilder', () => {
         seed: 1.5,
       };
 
-      await expect(builder.build(context, config)).rejects.toThrow('integer');
+      expect(() => builder.build(context, config)).toThrow('integer');
     });
   });
 
@@ -323,7 +345,7 @@ describe('SampleBuilder', () => {
         value: 10,
       };
 
-      await expect(builder.build(context, config)).rejects.toThrow('Invalid sample type');
+      expect(() => builder.build(context, config)).toThrow('Invalid sample type');
     });
   });
 

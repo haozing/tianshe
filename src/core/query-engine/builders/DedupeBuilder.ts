@@ -6,6 +6,9 @@
 
 import type { DedupeConfig, SQLContext } from '../types';
 import { SQLUtils } from '../utils/sql-utils';
+import { createLogger } from '../../logger';
+
+const logger = createLogger('DedupeBuilder');
 
 export class DedupeBuilder {
   /**
@@ -57,9 +60,7 @@ export class DedupeBuilder {
   private buildOrderByClause(_context: SQLContext, config: DedupeConfig): string {
     // 如果既没有业务排序，也没有 tieBreaker，打印警告
     if ((!config.orderBy || config.orderBy.length === 0) && !config.tieBreaker) {
-      console.warn(
-        '[DedupeBuilder] No orderBy specified. Deduplication results may be non-deterministic.'
-      );
+      logger.warn('No orderBy specified; deduplication results may be non-deterministic');
     }
 
     return SQLUtils.buildDedupeOrderByClause({
