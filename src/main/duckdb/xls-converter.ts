@@ -6,6 +6,7 @@
 import * as XLSX from 'xlsx';
 import fs from 'fs-extra';
 import { getTempFilePath } from './utils';
+import { getUnknownErrorMessage } from '../ipc-utils';
 
 export class XLSConverter {
   /**
@@ -38,8 +39,8 @@ export class XLSConverter {
       await fs.writeFile(tempCsvPath, csvData, 'utf-8');
 
       return tempCsvPath;
-    } catch (error: any) {
-      throw new Error(`Failed to convert to CSV: ${error.message}`);
+    } catch (error: unknown) {
+      throw new Error(`Failed to convert to CSV: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -50,8 +51,8 @@ export class XLSConverter {
     try {
       const workbook = XLSX.readFile(xlsPath);
       return workbook.SheetNames;
-    } catch (error: any) {
-      throw new Error(`Failed to read XLS file: ${error.message}`);
+    } catch (error: unknown) {
+      throw new Error(`Failed to read XLS file: ${getUnknownErrorMessage(error)}`);
     }
   }
 }

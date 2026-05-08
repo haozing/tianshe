@@ -9,6 +9,7 @@ import { useDatasetFields } from '../../../hooks';
 import type { ComputeConfig, ComputeColumn } from '../../../../../core/query-engine/types';
 import { toast } from '../../../lib/toast';
 import { validateDatasetComputeExpression } from '../../../services/datasets/datasetPanelService';
+import { getUnknownErrorMessage } from '../../../../../utils/error-message';
 
 interface ComputePanelProps {
   datasetId: string;
@@ -547,9 +548,9 @@ function CustomFields({ column, datasetId, onUpdate }: CustomFieldsProps) {
           });
 
           setValidation(result);
-        } catch (error: any) {
+        } catch (error: unknown) {
           console.error('[ComputePanel] Failed to validate expression:', error);
-          setValidation({ valid: false, error: error.message || '验证失败' });
+          setValidation({ valid: false, error: getUnknownErrorMessage(error, '验证失败') });
         } finally {
           setValidating(false);
         }

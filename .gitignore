@@ -67,3 +67,7 @@ desktop.ini
 chrome/
 firefox/
 *.gguf
+tianshe-review
+.claude
+.mcp.json
+skills-lock.json

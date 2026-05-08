@@ -15,12 +15,12 @@ vi.mock('../validators', () => ({
 }));
 
 import { StorageNamespace } from './storage';
-import type { DuckDBService } from '../../../main/duckdb/service';
+import type { IDuckDBService } from '../../../types/duckdb';
 import type { JSPluginManifest } from '../../../types/js-plugin';
 
 describe('StorageNamespace', () => {
   let storage: StorageNamespace;
-  let mockDuckDB: DuckDBService;
+  let mockDuckDB: IDuckDBService;
   let mockManifest: JSPluginManifest;
 
   beforeEach(() => {
@@ -30,7 +30,7 @@ describe('StorageNamespace', () => {
     mockDuckDB = {
       executeSQLWithParams: vi.fn(),
       executeWithParams: vi.fn(),
-    } as unknown as DuckDBService;
+    } as unknown as IDuckDBService;
 
     // 创建 mock manifest
     mockManifest = {

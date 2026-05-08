@@ -177,6 +177,8 @@ describe('DatasetsPage real tabs integration', () => {
       queryResult: null,
       importProgress: new Map(),
       processedImports: new Set(),
+      pendingLocalSchemaRefreshDatasets: new Set(),
+      localPatchTransaction: null,
       datasetInfoRequestId: 0,
       activeQuerySessionId: 0,
       activeQueryDatasetId: null,
@@ -285,7 +287,7 @@ describe('DatasetsPage real tabs integration', () => {
     (window as any).electronAPI = {
       getAppInfo: vi.fn(async () => ({
         success: true,
-        info: {        },
+        info: {},
       })),
       duckdb: {
         listDatasets,
@@ -476,7 +478,7 @@ describe('DatasetsPage real tabs integration', () => {
     (window as any).electronAPI = {
       getAppInfo: vi.fn(async () => ({
         success: true,
-        info: {        },
+        info: {},
       })),
       duckdb: {
         listDatasets,

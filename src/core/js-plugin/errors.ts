@@ -5,6 +5,7 @@
  */
 
 import { CoreError, type SerializedError } from '../errors/BaseError';
+import { toOptionalError } from '../../utils/error-message';
 
 /**
  * 插件错误基类
@@ -24,9 +25,9 @@ export class PluginError extends CoreError {
     details?: Record<string, any>,
 
     /** 原始错误 */
-    cause?: Error
+    cause?: unknown
   ) {
-    super(code, message, details, { component: 'Plugin' }, cause);
+    super(code, message, details, { component: 'Plugin' }, toOptionalError(cause));
     this.name = 'PluginError';
     Object.setPrototypeOf(this, PluginError.prototype);
   }
@@ -85,7 +86,7 @@ export class DatabaseError extends PluginError {
       operation?: string;
       [key: string]: any;
     },
-    cause?: Error
+    cause?: unknown
   ) {
     super('DATABASE_ERROR', message, details, cause);
     this.name = 'DatabaseError';
@@ -114,7 +115,7 @@ export class NetworkError extends PluginError {
       statusCode?: number;
       [key: string]: any;
     },
-    cause?: Error
+    cause?: unknown
   ) {
     super('NETWORK_ERROR', message, details, cause);
     this.name = 'NetworkError';
@@ -294,7 +295,7 @@ export class PluginLoadError extends PluginError {
       path?: string;
       [key: string]: any;
     },
-    cause?: Error
+    cause?: unknown
   ) {
     super('PLUGIN_LOAD_ERROR', message, details, cause);
     this.name = 'PluginLoadError';
@@ -346,7 +347,7 @@ export class OpenAIError extends PluginError {
       hint?: string;
       [key: string]: any;
     },
-    cause?: Error
+    cause?: unknown
   ) {
     super('OPENAI_ERROR', message, details, cause);
     this.name = 'OpenAIError';

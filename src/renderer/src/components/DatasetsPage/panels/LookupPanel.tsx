@@ -21,6 +21,7 @@ import type {
   LookupPreviewResult,
   LookupPreviewStep,
 } from '../../../../../core/query-engine/types';
+import { getUnknownErrorMessage } from '../../../../../utils/error-message';
 
 interface LookupPanelProps {
   datasetId: string;
@@ -164,10 +165,10 @@ export function LookupPanel({ datasetId, onClose, onApply, anchorEl }: LookupPan
 
           setPreviewResult(result);
           setPreviewError(null);
-        } catch (error: any) {
+        } catch (error: unknown) {
           if (requestId !== previewRequestIdRef.current) return;
           console.error('[LookupPanel] Failed to preview lookup:', error);
-          setPreviewError(error.message || '预览失败');
+          setPreviewError(getUnknownErrorMessage(error, '预览失败'));
           setPreviewResult(null);
         } finally {
           if (requestId === previewRequestIdRef.current) {

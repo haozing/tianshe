@@ -13,12 +13,14 @@ import {
   handleIPCError,
   IpcError,
 } from './utils';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 
 // Mock electron 模块
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn(),
     removeHandler: vi.fn(),
+    removeListener: vi.fn(),
   },
 }));
 
@@ -29,6 +31,7 @@ describe('IPC Handler 工具函数', () => {
   beforeEach(() => {
     console.error = vi.fn();
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
   });
 
   afterEach(() => {
@@ -126,7 +129,26 @@ describe('IPC Handler 工具函数', () => {
       // Assert
       expect(response).toEqual({
         success: false,
-        error: defaultMessage,
+        error: 'string error',
+      });
+    });
+
+    it('应该对普通 Error 消息脱敏', async () => {
+      // Arrange
+      const channel = 'test:redacted-error';
+      const handler = vi.fn().mockRejectedValue(new Error('request failed token=secret123'));
+
+      // Act
+      createIpcHandler(channel, handler, '操作失败');
+
+      const registeredHandler = (ipcMain.handle as any).mock.calls[0][1];
+      const mockEvent = {} as IpcMainInvokeEvent;
+      const response = await registeredHandler(mockEvent);
+
+      // Assert
+      expect(response).toEqual({
+        success: false,
+        error: 'request failed token=[REDACTED]',
       });
     });
 
@@ -442,7 +464,7 @@ describe('IPC Handler 工具函数', () => {
       // Assert
       expect(response).toEqual({
         success: false,
-        error: '默认错误',
+        error: 'not an error object',
       });
     });
 
@@ -469,7 +491,18 @@ describe('IPC Handler 工具函数', () => {
       // Assert
       expect(response).toEqual({
         success: false,
-        error: customDefault,
+        error: 'some error',
+      });
+    });
+
+    it('应该在 handleIPCError 中脱敏错误消息', () => {
+      // Act
+      const response = handleIPCError(new Error('Bearer abc.def.ghi failed'));
+
+      // Assert
+      expect(response).toEqual({
+        success: false,
+        error: 'Bearer [REDACTED] failed',
       });
     });
 

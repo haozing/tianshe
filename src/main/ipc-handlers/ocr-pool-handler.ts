@@ -3,9 +3,11 @@
  * Responsible for reading and updating global OCR pool configuration.
  */
 
-import { ipcMain, IpcMainInvokeEvent } from 'electron';
+import { IpcMainInvokeEvent } from 'electron';
 import type Store from 'electron-store';
 import { handleIPCError } from '../ipc-utils';
+import type { IpcRouteDefinition } from '../ipc-route-registry';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 import {
   DEFAULT_OCR_POOL_CONFIG,
   normalizeOcrPoolConfig,
@@ -13,37 +15,32 @@ import {
 } from '../../constants/ocr-pool';
 import { setOcrPoolConfig } from '../../core/system-automation/ocr';
 
-export class OCRPoolIPCHandler {
-  constructor(private store: Store) {}
-
-  register(): void {
-    this.registerGetConfig();
-    this.registerSetConfig();
-
-    console.log('  [OK] OCRPoolIPCHandler registered');
-  }
-
-  private registerGetConfig(): void {
-    ipcMain.handle('ocr-pool:get-config', async (_event: IpcMainInvokeEvent) => {
-      try {
-        const saved = this.store.get('ocrPoolConfig', DEFAULT_OCR_POOL_CONFIG) as OCRPoolConfig;
-        const config = normalizeOcrPoolConfig(saved);
-        return { success: true, config };
-      } catch (error: unknown) {
-        return handleIPCError(error);
-      }
-    });
-  }
-
-  private registerSetConfig(): void {
-    ipcMain.handle(
-      'ocr-pool:set-config',
-      async (_event: IpcMainInvokeEvent, config: OCRPoolConfig) => {
+export function createOcrPoolRoutes(store: Store): IpcRouteDefinition[] {
+  return [
+    {
+      channel: 'ocr-pool:get-config',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (_event: IpcMainInvokeEvent) => {
+        try {
+          const saved = store.get('ocrPoolConfig', DEFAULT_OCR_POOL_CONFIG) as OCRPoolConfig;
+          const config = normalizeOcrPoolConfig(saved);
+          return { success: true, config };
+        } catch (error: unknown) {
+          return handleIPCError(error);
+        }
+      },
+    },
+    {
+      channel: 'ocr-pool:set-config',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (_event: IpcMainInvokeEvent, config: OCRPoolConfig) => {
         try {
           const normalized = normalizeOcrPoolConfig(config);
-          const current = this.store.get('ocrPoolConfig', DEFAULT_OCR_POOL_CONFIG) as OCRPoolConfig;
+          const current = store.get('ocrPoolConfig', DEFAULT_OCR_POOL_CONFIG) as OCRPoolConfig;
 
-          this.store.set('ocrPoolConfig', normalized);
+          store.set('ocrPoolConfig', normalized);
 
           const changed =
             normalized.size !== current.size ||
@@ -56,7 +53,17 @@ export class OCRPoolIPCHandler {
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    },
+  ];
+}
+
+/** @deprecated 使用 createOcrPoolRoutes + ipcRouteRegistry.registerAll */
+export class OCRPoolIPCHandler {
+  constructor(private store: Store) {}
+
+  register(): void {
+    ipcRouteRegistry.registerAll(createOcrPoolRoutes(this.store));
+    console.log('  [OK] OCRPoolIPCHandler registered');
   }
 }

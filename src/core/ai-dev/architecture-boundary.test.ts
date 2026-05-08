@@ -125,6 +125,27 @@ const isMainLayerImport = (specifier: string): boolean => {
   return normalized.includes('/main/') || normalized.startsWith('../../main/');
 };
 
+/**
+ * 白名单：core→main 的 C 类类型导入（待逐步收敛到 0）
+ *
+ * 规则：
+ * - A 类运行时值导入：绝对禁止（已通过之前的修复清理完毕）
+ * - B 类动态导入：绝对禁止（已清理完毕）
+ * - C 类类型导入：允许在白名单中，新加入需说明理由并规划迁移路径
+ *
+ * 迁移路径：
+ * - DuckDBService / EnhancedColumnSchema → 提取到 types/duckdb.ts ✅
+ * - ProfileService / ProfileGroupService / AccountService / SavedSiteService → 提取到 types/service-interfaces.ts ✅
+ * - WebContentsViewManager / WindowManager → 提取到 core/browser-pool/ports.ts ✅
+ * - WebhookSender → 提取到 types/service-interfaces.ts ✅
+ * - SchedulerService → 提取到 types/scheduler.ts ✅
+ * - ExtensionControlRelay / ExtensionRelayClientState / ExtensionRelayEvent / RuyiFirefoxClient / RuyiFirefoxEvent
+ *   → 提取到 core/browser-automation/transport-types.ts ✅
+ */
+const CORE_MAIN_TYPE_IMPORT_WHITELIST: ReadonlySet<string> = new Set([
+  // ✅ 所有 C 类类型导入已清理完毕 — DuckDBService/EnhancedColumnSchema 提取到 types/duckdb.ts
+]);
+
 describe('AI-Dev layered boundary contracts', () => {
   it('capabilities 层禁止依赖 orchestration/mcp 层实现', () => {
     const files = collectTsFiles(CAPABILITIES_ROOT).filter((file) => !file.endsWith('.test.ts'));
@@ -263,5 +284,54 @@ describe('AI-Dev layered boundary contracts', () => {
     }
 
     expect(violations).toEqual([]);
+  });
+
+  it('core layer does not introduce new runtime dependencies on main layer', () => {
+    const CORE_ROOT = 'src/core';
+    const files = collectTsFiles(CORE_ROOT).filter(
+      (file) =>
+        !file.endsWith('.test.ts') &&
+        !file.replace(/\\/g, '/').includes('/__tests__/')
+    );
+    const runtimeViolations: string[] = [];
+    const whitelistMisses: string[] = [];
+
+    for (const file of files) {
+      const source = readFileSync(file, 'utf8');
+      const imports = extractImports(file);
+
+      for (let i = 0; i < imports.length; i++) {
+        const specifier = imports[i];
+        if (!isMainLayerImport(specifier)) {
+          continue;
+        }
+
+        // 判断是否为 import type：在 source 中定位该 import 语句的起始位置
+        const normalizedSpecifier = normalizeImport(specifier);
+        const specifierIndex = source.indexOf(normalizedSpecifier);
+        const sourceBeforeSpecifier =
+          specifierIndex >= 0 ? source.slice(0, specifierIndex) : source;
+        // 找到最近的 "import" 关键字
+        const lastImportIndex = sourceBeforeSpecifier.lastIndexOf('import');
+        const importStatementStart =
+          lastImportIndex >= 0 ? sourceBeforeSpecifier.slice(lastImportIndex) : '';
+        const isTypeOnly = /^import\s+type\b/.test(importStatementStart);
+
+        const violationKey = `${relative(process.cwd(), file).replace(/\\/g, '/')} -> ${normalizedSpecifier}`;
+
+        if (!isTypeOnly) {
+          // A 类或 B 类运行时导入：绝对禁止
+          runtimeViolations.push(violationKey);
+        } else if (!CORE_MAIN_TYPE_IMPORT_WHITELIST.has(violationKey)) {
+          // C 类类型导入：不在白名单中，禁止新增
+          whitelistMisses.push(violationKey);
+        }
+      }
+    }
+
+    // 先报告运行时违规（最严重）
+    expect(runtimeViolations).toEqual([]);
+    // 再报告未在白名单中的类型导入（防止 C 类无序膨胀）
+    expect(whitelistMisses).toEqual([]);
   });
 });

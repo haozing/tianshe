@@ -6,6 +6,7 @@
 
 import { DuckDBConnection } from '@duckdb/node-api';
 import { parseRows } from './utils';
+import { runPrepared, allPrepared } from './statement-executor';
 
 export class AutomationPersistenceService {
   constructor(private conn: DuckDBConnection) {}
@@ -45,7 +46,7 @@ export class AutomationPersistenceService {
     const name = automation.name;
     const description = automation.description || '';
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(this.conn, `
       INSERT INTO automations (id, name, description, enabled, config, created_at, updated_at, run_count)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (id) DO UPDATE SET
@@ -54,9 +55,7 @@ export class AutomationPersistenceService {
         enabled = excluded.enabled,
         config = excluded.config,
         updated_at = excluded.updated_at
-    `);
-
-    stmt.bind([
+    `, [
       automation.id,
       name,
       description,
@@ -66,20 +65,13 @@ export class AutomationPersistenceService {
       automation.updatedAt || now,
       automation.runCount || 0,
     ]);
-
-    await stmt.run();
-    stmt.destroySync();
   }
 
   /**
    * 加载自动化配置
    */
   async loadAutomation(automationId: string): Promise<any | null> {
-    const stmt = await this.conn.prepare('SELECT * FROM automations WHERE id = ?');
-    stmt.bind([automationId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
-
+    const result = await allPrepared(this.conn, 'SELECT * FROM automations WHERE id = ?', [automationId]);
     const rows = parseRows(result);
 
     if (rows.length === 0) return null;
@@ -118,10 +110,7 @@ export class AutomationPersistenceService {
    * 删除自动化
    */
   async deleteAutomation(automationId: string): Promise<void> {
-    const stmt = await this.conn.prepare('DELETE FROM automations WHERE id = ?');
-    stmt.bind([automationId]);
-    await stmt.run();
-    stmt.destroySync();
+    await runPrepared(this.conn, 'DELETE FROM automations WHERE id = ?', [automationId]);
   }
 
   /**
@@ -141,11 +130,7 @@ export class AutomationPersistenceService {
    * ```
    */
   async executeSQLWithParams(sql: string, params: any[]): Promise<any> {
-    const stmt = await this.conn.prepare(sql);
-    stmt.bind(params);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
-
+    const result = await allPrepared(this.conn, sql, params);
     return parseRows(result);
   }
 
@@ -156,9 +141,6 @@ export class AutomationPersistenceService {
    * @param params - 参数值数组
    */
   async executeWithParams(sql: string, params: any[]): Promise<void> {
-    const stmt = await this.conn.prepare(sql);
-    stmt.bind(params);
-    await stmt.run();
-    stmt.destroySync();
+    await runPrepared(this.conn, sql, params);
   }
 }

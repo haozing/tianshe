@@ -43,19 +43,24 @@ interface ExportPlan {
 }
 
 export class DatasetExportService {
-  private exportQuerySQLBuilder?: ExportQuerySQLBuilder;
+  private exportQuerySQLBuilder: ExportQuerySQLBuilder | null = null;
 
   constructor(
     private conn: DuckDBConnection,
     private metadataService: DatasetMetadataService,
-    private storageService: DatasetStorageService
-  ) {}
+    private storageService: DatasetStorageService,
+    exportQuerySQLBuilder?: ExportQuerySQLBuilder
+  ) {
+    this.exportQuerySQLBuilder = exportQuerySQLBuilder ?? null;
+  }
 
-  /**
-   * 设置导出查询 SQL 构造器。
-   */
-  setExportQuerySQLBuilder(exportQuerySQLBuilder: ExportQuerySQLBuilder): void {
-    this.exportQuerySQLBuilder = exportQuerySQLBuilder;
+  private requireExportQuerySQLBuilder(): ExportQuerySQLBuilder {
+    if (!this.exportQuerySQLBuilder) {
+      throw new Error(
+        'Export query SQL builder is required to rebuild export SQL from queryTemplate'
+      );
+    }
+    return this.exportQuerySQLBuilder;
   }
 
   /**
@@ -314,11 +319,11 @@ export class DatasetExportService {
     // 2. 查询模板导出：统一走 QueryEngine 视图，再在外层收敛系统列/选中行。
     if (queryTemplate) {
       if (!queryTemplate.queryConfig) {
-        throw new Error('activeQueryTemplate.queryConfig is required when exporting a query-backed view');
+        throw new Error(
+          'activeQueryTemplate.queryConfig is required when exporting a query-backed view'
+        );
       }
-      if (!this.exportQuerySQLBuilder) {
-        throw new Error('Export query SQL builder is required to rebuild export SQL from queryTemplate');
-      }
+      const exportQuerySQLBuilder = this.requireExportQuerySQLBuilder();
 
       const sourceQueryConfig = this.buildExportQueryConfig(queryTemplate.queryConfig, {
         respectHiddenColumns,
@@ -331,7 +336,7 @@ export class DatasetExportService {
       });
 
       console.log('[ExportService] Rebuilding SQL without pagination for export');
-      let sourceSQL = await this.exportQuerySQLBuilder.buildExportSQL(datasetId, sourceQueryConfig);
+      let sourceSQL = await exportQuerySQLBuilder.buildExportSQL(datasetId, sourceQueryConfig);
       if (normalizedSelectedRowIds.length > 0) {
         sourceSQL = this.filterSQLBySelectedRows(sourceSQL, normalizedSelectedRowIds);
       }
@@ -375,7 +380,9 @@ export class DatasetExportService {
         hiddenColumnsSet,
         respectHiddenColumns,
       }),
-      rowIdSQL: shouldDeleteRows ? this.buildBaseTableRowIdSQL(tableName, normalizedSelectedRowIds) : undefined,
+      rowIdSQL: shouldDeleteRows
+        ? this.buildBaseTableRowIdSQL(tableName, normalizedSelectedRowIds)
+        : undefined,
     };
   }
 
@@ -406,7 +413,8 @@ export class DatasetExportService {
       ? Array.from(new Set([...(queryConfig.columns?.hide ?? []), ...hiddenColumns]))
       : undefined;
     const baseColumns: ColumnConfig | undefined =
-      queryConfig.columns || (mergedHiddenColumns && mergedHiddenColumns.length > 0 ? {} : undefined);
+      queryConfig.columns ||
+      (mergedHiddenColumns && mergedHiddenColumns.length > 0 ? {} : undefined);
     const nextSelectedColumns =
       baseColumns?.select && baseColumns.select.length > 0
         ? Array.from(new Set([...(baseColumns.select ?? []), ...(requiredColumns ?? [])]))
@@ -686,9 +694,7 @@ export class DatasetExportService {
         .map((columnName) => quoteIdentifier(columnName))
         .join(', ');
       return (
-        sql.slice(0, insertionIndex) +
-        ` EXCLUDE (${excludeClause})` +
-        sql.slice(insertionIndex)
+        sql.slice(0, insertionIndex) + ` EXCLUDE (${excludeClause})` + sql.slice(insertionIndex)
       );
     }
 
@@ -701,10 +707,10 @@ export class DatasetExportService {
       orderBySplit.orderByTail.length > 0 &&
       !this.orderByTailReferencesExcludedColumns(orderBySplit.orderByTail, systemColumns);
     const innerSql = canHoistOrderBy ? orderBySplit.baseSql : sql;
-    const excludeClause = excludedSystemColumns.map((columnName) => quoteIdentifier(columnName)).join(', ');
-    const wrapped =
-      `SELECT * EXCLUDE (${excludeClause}) ` +
-      `FROM (${innerSql}) AS __export_base`;
+    const excludeClause = excludedSystemColumns
+      .map((columnName) => quoteIdentifier(columnName))
+      .join(', ');
+    const wrapped = `SELECT * EXCLUDE (${excludeClause}) ` + `FROM (${innerSql}) AS __export_base`;
 
     if (canHoistOrderBy) {
       return `${wrapped}\n${orderBySplit.orderByTail}`;

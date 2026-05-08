@@ -4,10 +4,12 @@
  * 提供命名空间化的 API 接口，用于插件开发
  */
 
-import type { DuckDBService } from '../../main/duckdb/service';
+import type { IDuckDBService } from '../../types/duckdb';
 import type { JSPluginManifest } from '../../types/js-plugin';
-import type { WebContentsViewManager } from '../../main/webcontentsview-manager';
-import type { WindowManager } from '../../main/window-manager';
+import type {
+  IWebContentsViewManager,
+  IWindowManager,
+} from '../browser-pool/ports';
 import { createLogger } from '../logger';
 
 const logger = createLogger('PluginHelpers');
@@ -78,7 +80,7 @@ import { NetworkNamespace } from './namespaces/network';
 import { UINamespace } from './namespaces/ui';
 import { StorageNamespace } from './namespaces/storage';
 import { UtilsNamespace } from './namespaces/utils';
-import { WindowNamespace } from './namespaces/window';
+import { WindowNamespace, type InternalDevToolsOpener } from './namespaces/window';
 import { PluginNamespace } from './namespaces/plugin';
 import { FFINamespace } from './namespaces/ffi';
 import { TaskQueueNamespace } from './namespaces/task-queue';
@@ -102,7 +104,7 @@ import { VectorIndexNamespace } from './namespaces/vector-index';
 import type { PluginContext } from './context';
 import type { PluginRuntimeRegistry } from './runtime-registry';
 import type { HookBus } from '../hookbus';
-import type { WebhookSender } from '../../main/webhook/sender';
+import type { IWebhookSender } from '../../types/service-interfaces';
 import { getBrowserPoolManager } from '../browser-pool';
 
 /**
@@ -479,14 +481,15 @@ export class PluginHelpers {
   private disposed = false;
 
   constructor(
-    private duckdb: DuckDBService,
+    private duckdb: IDuckDBService,
     private pluginId: string,
     private manifest: JSPluginManifest,
-    private viewManager: WebContentsViewManager,
-    private windowManager: WindowManager,
+    private viewManager: IWebContentsViewManager,
+    private windowManager: IWindowManager,
     private hookBus: HookBus,
-    private webhookSender: WebhookSender,
-    private runtimeRegistry?: PluginRuntimeRegistry
+    private webhookSender: IWebhookSender,
+    private runtimeRegistry?: PluginRuntimeRegistry,
+    private devToolsOpener?: InternalDevToolsOpener
   ) {
     // 初始化所有命名空间
     this.database = new DatabaseNamespace(duckdb, pluginId);
@@ -498,7 +501,8 @@ export class PluginHelpers {
       pluginId,
       windowManager,
       viewManager,
-      duckdb.getProfileService()
+      duckdb.getProfileService(),
+      devToolsOpener
     );
     this.ffi = new FFINamespace(pluginId, manifest);
     this.taskQueue = new TaskQueueNamespace(pluginId, runtimeRegistry);
@@ -520,7 +524,8 @@ export class PluginHelpers {
       duckdb.getProfileGroupService(),
       viewManager,
       windowManager,
-      (key: string) => this.storage.getConfig(key)
+      (key: string) => this.storage.getConfig(key),
+      devToolsOpener
     );
 
     // v2: 账号管理命名空间

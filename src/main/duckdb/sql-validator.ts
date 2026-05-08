@@ -5,6 +5,7 @@
 
 import type { DuckDBConnection } from '@duckdb/node-api';
 import { parseRows, quoteQualifiedName } from './utils';
+import { getUnknownErrorMessage } from '../ipc-utils';
 
 export interface ValidationResult {
   valid: boolean;
@@ -93,9 +94,9 @@ export class SQLValidator {
         referencedColumns,
         warnings,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       // 解析DuckDB错误信息，提供友好提示
-      const friendlyError = this.parseDuckDBError(error.message);
+      const friendlyError = this.parseDuckDBError(getUnknownErrorMessage(error));
       return {
         valid: false,
         error: friendlyError,

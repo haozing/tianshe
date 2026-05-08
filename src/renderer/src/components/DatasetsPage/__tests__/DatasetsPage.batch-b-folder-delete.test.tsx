@@ -119,14 +119,7 @@ vi.mock('../AddColumnDialog', () => ({
 }));
 
 vi.mock('../../ui/ConfirmDialog', () => ({
-  ConfirmDialog: ({
-    open,
-    title,
-    description,
-    confirmText,
-    children,
-    onConfirm,
-  }: any) =>
+  ConfirmDialog: ({ open, title, description, confirmText, children, onConfirm }: any) =>
     open ? (
       <div data-testid="confirm-dialog">
         <div>{title}</div>
@@ -188,6 +181,8 @@ const resetStoreState = () => {
     queryResult: null,
     importProgress: new Map(),
     processedImports: new Set(),
+    pendingLocalSchemaRefreshDatasets: new Set(),
+    localPatchTransaction: null,
     datasetInfoRequestId: 0,
     activeQuerySessionId: 0,
     activeQueryDatasetId: null,

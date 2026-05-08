@@ -17,12 +17,20 @@ import type {
   ImportProgress,
   QueryResult,
 } from './types';
-import { ensureDirectories, getMainDBPath, quoteQualifiedName } from './utils';
+import {
+  ensureDirectories,
+  getMainDBPath,
+  quoteQualifiedName,
+  runInDuckDbTransaction,
+} from './utils';
+import { SchemaMigrationEngine } from './migration-engine';
+import { PLUGIN_TABLE_SCHEMA_MIGRATIONS } from './schema-migrations';
 import fs from 'fs-extra';
 import path from 'path';
 import { QueryEngine } from '../../core/query-engine';
 import type { CleanConfig, QueryConfig, QueryExecutionResult } from '../../core/query-engine';
 import type { IDatasetResolver } from '../../core/query-engine/interfaces/IDatasetResolver';
+import { getUnknownErrorMessage } from '../ipc-utils';
 
 // 导入专门服务
 import { LogService } from './log-service';
@@ -122,14 +130,15 @@ export class DuckDBService implements IDatasetResolver {
       this.db = await DuckDBInstance.create(dbPath);
       this.conn = await DuckDBConnection.create(this.db);
       console.log(`[OK] DuckDB initialized at: ${dbPath}`);
-    } catch (initError: any) {
+    } catch (initError: unknown) {
+      const initErrorMessage = getUnknownErrorMessage(initError);
       // 检测 WAL replay 失败的特征错误
       if (
-        initError.message.includes('replaying WAL') ||
-        initError.message.includes('DatabaseManager::GetDefaultDatabase') ||
-        initError.message.includes('INTERNAL Error')
+        initErrorMessage.includes('replaying WAL') ||
+        initErrorMessage.includes('DatabaseManager::GetDefaultDatabase') ||
+        initErrorMessage.includes('INTERNAL Error')
       ) {
-        console.error('[ERROR] WAL replay failed:', initError.message);
+        console.error('[ERROR] WAL replay failed:', initErrorMessage);
         console.log('[RECOVERY] Removing incompatible WAL file...');
 
         // 清理部分打开的连接
@@ -171,12 +180,19 @@ export class DuckDBService implements IDatasetResolver {
     console.log(`[INFO] Database file location: ${dbPath}`);
     console.log(`   (Delete this file if you need to reset the database)`);
 
+    // 初始化 QueryEngine
+    this.queryEngine = new QueryEngine(this);
+
     // 初始化所有专门服务
     this.logService = new LogService(this.conn);
-    this.datasetService = new DatasetService(this.conn, this.hookBus); // ?? 传入 hookBus
+    this.datasetService = new DatasetService(this.conn, {
+      hookBus: this.hookBus,
+      queryEngine: this.queryEngine,
+      exportQuerySQLBuilder: this,
+    }); // ?? 传入 hookBus
     this.automationService = new AutomationPersistenceService(this.conn);
     this.taskService = new TaskPersistenceService(this.conn);
-    this.queryTemplateService = new QueryTemplateService(this.conn);
+    this.queryTemplateService = new QueryTemplateService(this.conn, this.queryEngine);
     this.folderService = new DatasetFolderService(this.conn);
     this.scheduledTaskService = new ScheduledTaskService(this.conn);
     this.profileService = new ProfileService(this.conn);
@@ -193,18 +209,6 @@ export class DuckDBService implements IDatasetResolver {
 
     // 初始化所有表（DuckDB 默认使用 WAL 模式）
     await this.initSystemTables();
-
-    // 初始化 QueryEngine
-    this.queryEngine = new QueryEngine(this);
-
-    // 将QueryEngine设置到DatasetService
-    this.datasetService.setQueryEngine(this.queryEngine);
-
-    // 将QueryEngine设置到QueryTemplateService
-    this.queryTemplateService.setQueryEngine(this.queryEngine);
-
-    // ?? 将DuckDBService设置到DatasetService（用于导出功能）
-    this.datasetService.setExportQuerySQLBuilder(this);
 
     console.log('[OK] All services initialized');
   }
@@ -271,13 +275,13 @@ export class DuckDBService implements IDatasetResolver {
     if (!this.conn) {
       throw new Error('Connection not initialized');
     }
+    const conn = this.conn;
 
     // ? 用事务包装表创建，减少 WAL 碎片
     try {
-      await this.conn.run('BEGIN TRANSACTION');
-
-      // 1. JSON插件存储表
-      await this.conn.run(`
+      await runInDuckDbTransaction(conn, async () => {
+        // 1. JSON插件存储表
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS json_plugins (
           id VARCHAR PRIMARY KEY,
           name VARCHAR NOT NULL,
@@ -288,8 +292,8 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      // 1.5. JS插件存储表 (新的简化插件系统)
-      await this.conn.run(`
+        // 1.5. JS插件存储表 (新的简化插件系统)
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS js_plugins (
           id VARCHAR PRIMARY KEY,
           name VARCHAR NOT NULL,
@@ -316,8 +320,8 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      // 2. 数据表-插件绑定表
-      await this.conn.run(`
+        // 2. 数据表-插件绑定表
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS dataset_plugin_bindings (
           id VARCHAR PRIMARY KEY,
           dataset_id VARCHAR NOT NULL,
@@ -333,8 +337,8 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      // 3. 操作列配置表
-      await this.conn.run(`
+        // 3. 操作列配置表
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS dataset_action_columns (
           id VARCHAR PRIMARY KEY,
           dataset_id VARCHAR NOT NULL,
@@ -348,8 +352,8 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      // 4. 数据集文件夹表
-      await this.conn.run(`
+        // 4. 数据集文件夹表
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS dataset_folders (
           id VARCHAR PRIMARY KEY,
           name VARCHAR NOT NULL,
@@ -363,8 +367,8 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      // 5. 查询模板表（快照方案：QueryConfig + DuckDB TABLE）
-      await this.conn.run(`
+        // 5. 查询模板表（快照方案：QueryConfig + DuckDB TABLE）
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS dataset_query_templates (
           id VARCHAR PRIMARY KEY,
           dataset_id VARCHAR NOT NULL,
@@ -382,7 +386,7 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS plugin_secure_data (
           plugin_id VARCHAR NOT NULL,
           key VARCHAR NOT NULL,
@@ -392,7 +396,7 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS js_plugin_action_columns (
           id VARCHAR PRIMARY KEY,
           plugin_id VARCHAR NOT NULL,
@@ -411,7 +415,7 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS js_plugin_toolbar_buttons (
           id VARCHAR PRIMARY KEY,
           plugin_id VARCHAR NOT NULL,
@@ -430,7 +434,7 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS js_plugin_commands (
           id VARCHAR PRIMARY KEY,
           plugin_id VARCHAR NOT NULL,
@@ -443,7 +447,7 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS plugin_configurations (
           plugin_id VARCHAR NOT NULL,
           key VARCHAR NOT NULL,
@@ -453,7 +457,7 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS plugin_data (
           plugin_id VARCHAR NOT NULL,
           key VARCHAR NOT NULL,
@@ -463,7 +467,7 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS js_plugin_custom_pages (
           id VARCHAR PRIMARY KEY,
           plugin_id VARCHAR NOT NULL,
@@ -485,7 +489,7 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS recordings (
           id VARCHAR PRIMARY KEY,
           name VARCHAR NOT NULL,
@@ -501,7 +505,7 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS pw_actions (
           id VARCHAR PRIMARY KEY,
           recording_id VARCHAR NOT NULL,
@@ -518,7 +522,7 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS pw_network_logs (
           id VARCHAR PRIMARY KEY,
           recording_id VARCHAR NOT NULL,
@@ -535,7 +539,7 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE TABLE IF NOT EXISTS pw_console_logs (
           id VARCHAR PRIMARY KEY,
           recording_id VARCHAR NOT NULL,
@@ -548,146 +552,96 @@ export class DuckDBService implements IDatasetResolver {
         )
       `);
 
-      await this.conn.run(`
-        ALTER TABLE datasets
-        ADD COLUMN IF NOT EXISTS created_by_plugin VARCHAR
-      `);
-      await this.conn.run(`
-        ALTER TABLE js_plugin_toolbar_buttons
-        ADD COLUMN IF NOT EXISTS applies_to JSON
-      `);
-      await this.conn.run(`
-        ALTER TABLE js_plugin_action_columns
-        ADD COLUMN IF NOT EXISTS applies_to JSON
-      `);
-      await this.conn.run(`
-        ALTER TABLE recordings
-        ADD COLUMN IF NOT EXISTS description VARCHAR
-      `);
-      await this.conn.run(`
-        ALTER TABLE recordings
-        ADD COLUMN IF NOT EXISTS start_url VARCHAR
-      `);
-      await this.conn.run(`
-        ALTER TABLE recordings
-        ADD COLUMN IF NOT EXISTS browser_type VARCHAR DEFAULT 'chromium'
-      `);
-      await this.conn.run(`
-        ALTER TABLE recordings
-        ADD COLUMN IF NOT EXISTS viewport JSON
-      `);
-      await this.conn.run(`
-        ALTER TABLE recordings
-        ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'recording'
-      `);
-      await this.conn.run(`
-        ALTER TABLE recordings
-        ADD COLUMN IF NOT EXISTS completed_at BIGINT
-      `);
-      await this.conn.run(`
-        ALTER TABLE recordings
-        ADD COLUMN IF NOT EXISTS duration BIGINT
-      `);
-      await this.conn.run(`
-        ALTER TABLE recordings
-        ADD COLUMN IF NOT EXISTS metadata JSON
-      `);
-
-      // Commit table creation transaction
-      await this.conn.run('COMMIT');
+        await new SchemaMigrationEngine(conn).migrate(PLUGIN_TABLE_SCHEMA_MIGRATIONS);
+      });
       console.log('[OK] Plugin tables created in transaction');
     } catch (error) {
-      await this.conn.run('ROLLBACK');
       console.error('[ERROR] Plugin tables creation failed:', error);
       throw error;
     }
 
     // ? 索引创建放在单独的事务中
     try {
-      await this.conn.run('BEGIN TRANSACTION');
-
-      // 创建索引优化查询性能
-      await this.conn.run(`
+      await runInDuckDbTransaction(conn, async () => {
+        // 创建索引优化查询性能
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_bindings_dataset
         ON dataset_plugin_bindings(dataset_id)
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_bindings_plugin
         ON dataset_plugin_bindings(plugin_id)
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_action_columns_dataset
         ON dataset_action_columns(dataset_id)
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_action_columns_plugin
         ON dataset_action_columns(plugin_id)
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_folders_parent
         ON dataset_folders(parent_id)
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_folders_plugin
         ON dataset_folders(plugin_id)
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_query_templates_dataset
         ON dataset_query_templates(dataset_id)
       `);
 
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_plugin_secure_data_plugin_id
         ON plugin_secure_data(plugin_id)
       `);
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_datasets_created_by_plugin
         ON datasets(created_by_plugin)
       `);
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_js_plugin_action_columns_plugin
         ON js_plugin_action_columns(plugin_id)
       `);
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_js_plugin_toolbar_buttons_plugin
         ON js_plugin_toolbar_buttons(plugin_id)
       `);
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_js_plugin_commands_plugin
         ON js_plugin_commands(plugin_id)
       `);
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_js_plugin_custom_pages_plugin
         ON js_plugin_custom_pages(plugin_id)
       `);
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_js_plugin_custom_pages_display_mode
         ON js_plugin_custom_pages(display_mode)
       `);
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_pw_actions_recording
         ON pw_actions(recording_id, sequence)
       `);
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_pw_network_recording
         ON pw_network_logs(recording_id)
       `);
-      await this.conn.run(`
+        await conn.run(`
         CREATE INDEX IF NOT EXISTS idx_pw_console_recording
         ON pw_console_logs(recording_id)
       `);
-
-      // Commit index creation transaction
-      await this.conn.run('COMMIT');
+      });
       console.log('[OK] Indexes created in transaction');
     } catch (error) {
-      await this.conn.run('ROLLBACK');
       console.warn('[WARN] Index creation failed (non-critical):', error);
     }
 

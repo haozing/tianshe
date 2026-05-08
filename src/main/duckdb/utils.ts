@@ -6,7 +6,18 @@ import path from 'path';
 import fs from 'fs-extra';
 import type { DuckDBResultReader } from '@duckdb/node-api';
 import * as crypto from 'crypto';
-import { resolveUserDataDir } from '../../constants/runtime-config';
+
+import {
+  getDuckDBDataDir,
+  getImportsDir,
+  getTempDir,
+  ensureDirectories,
+  getFileSize,
+} from '../../utils/data-paths';
+import { getUnknownErrorMessage } from '../ipc-utils';
+
+// 🔽 数据路径工具已下沉到 src/utils/data-paths.ts
+export { getDuckDBDataDir, getImportsDir, getTempDir, ensureDirectories, getFileSize };
 
 /**
  * SQL 字符串字面量转义（单引号）
@@ -31,56 +42,11 @@ export function quoteQualifiedName(schema: string, table: string): string {
   return `${quoteIdentifier(schema)}.${quoteIdentifier(table)}`;
 }
 
-function getUserDataDir(): string {
-  try {
-    const electron = require('electron') as { app?: { getPath?: (name: string) => string } };
-    const userData = resolveUserDataDir(String(electron.app?.getPath?.('userData') || ''));
-    if (userData && String(userData).trim()) return userData;
-  } catch {
-    // ignore: worker_threads 环境下可能没有 electron 模块
-  }
-
-  const fallback = resolveUserDataDir('');
-  if (fallback.trim()) return fallback;
-
-  throw new Error('Unable to resolve userData directory from runtime config.');
-}
-
-/**
- * 获取 DuckDB 数据目录
- */
-export function getDuckDBDataDir(): string {
-  return path.join(getUserDataDir(), 'duckdb');
-}
-
 /**
  * 获取主数据库路径
  */
 export function getMainDBPath(): string {
   return path.join(getDuckDBDataDir(), 'main.db');
-}
-
-/**
- * 获取导入数据库目录
- */
-export function getImportsDir(): string {
-  return path.join(getDuckDBDataDir(), 'imports');
-}
-
-/**
- * 获取临时文件目录
- */
-export function getTempDir(): string {
-  return path.join(getDuckDBDataDir(), 'temp');
-}
-
-/**
- * 确保所有必需的目录存在
- */
-export async function ensureDirectories(): Promise<void> {
-  await fs.ensureDir(getDuckDBDataDir());
-  await fs.ensureDir(getImportsDir());
-  await fs.ensureDir(getTempDir());
 }
 
 /**
@@ -118,18 +84,6 @@ export function desanitizeDatasetId(safeFilename: string): string {
 export function getDatasetPath(datasetId: string): string {
   const safeId = sanitizeDatasetId(datasetId);
   return path.join(getImportsDir(), `${safeId}.db`);
-}
-
-/**
- * 获取文件大小（字节）
- */
-export async function getFileSize(filePath: string): Promise<number> {
-  try {
-    const stats = await fs.stat(filePath);
-    return stats.size;
-  } catch {
-    return 0;
-  }
 }
 
 /**
@@ -655,11 +609,12 @@ export async function checkDatabaseIntegrity(dbPath: string): Promise<DatabaseIn
       try {
         await conn.runAndReadAll('SELECT 1');
         // 如果能成功执行查询，数据库基本可用
-      } catch (queryError: any) {
+      } catch (queryError: unknown) {
+        const queryErrorMessage = getUnknownErrorMessage(queryError);
         result.isValid = false;
-        result.errors.push(`Database query failed: ${queryError.message}`);
+        result.errors.push(`Database query failed: ${queryErrorMessage}`);
         result.canRepair =
-          queryError.message.includes('corrupted') || queryError.message.includes('damaged');
+          queryErrorMessage.includes('corrupted') || queryErrorMessage.includes('damaged');
       }
 
       // 检查是否有未完成的事务或 WAL 文件
@@ -667,15 +622,16 @@ export async function checkDatabaseIntegrity(dbPath: string): Promise<DatabaseIn
       if (await fs.pathExists(walPath)) {
         result.warnings.push('WAL file exists - database may have uncommitted transactions');
       }
-    } catch (openError: any) {
+    } catch (openError: unknown) {
+      const openErrorMessage = getUnknownErrorMessage(openError);
       result.isValid = false;
-      result.errors.push(`Failed to open database: ${openError.message}`);
+      result.errors.push(`Failed to open database: ${openErrorMessage}`);
 
       // 某些错误可能可以通过删除 WAL 等辅助文件修复
       result.canRepair =
-        openError.message.includes('locked') ||
-        openError.message.includes('busy') ||
-        openError.message.includes('wal');
+        openErrorMessage.includes('locked') ||
+        openErrorMessage.includes('busy') ||
+        openErrorMessage.includes('wal');
     } finally {
       try {
         if (conn) conn.closeSync();
@@ -684,9 +640,9 @@ export async function checkDatabaseIntegrity(dbPath: string): Promise<DatabaseIn
         console.warn('Failed to close database during integrity check:', closeError);
       }
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     result.isValid = false;
-    result.errors.push(`Integrity check failed: ${error.message}`);
+    result.errors.push(`Integrity check failed: ${getUnknownErrorMessage(error)}`);
     result.canRepair = false;
   }
 
@@ -746,5 +702,30 @@ export async function repairDatabase(dbPath: string): Promise<boolean> {
   } catch (error) {
     console.error(`Failed to repair database:`, error);
     return false;
+  }
+}
+
+import type { DuckDBConnection } from '@duckdb/node-api';
+
+/**
+ * 在 DuckDB 连接上执行事务包装的工作单元。
+ * 自动处理 BEGIN / COMMIT / ROLLBACK；ROLLBACK 失败时优先抛出原始错误。
+ */
+export async function runInDuckDbTransaction<T>(
+  conn: DuckDBConnection,
+  work: () => Promise<T>
+): Promise<T> {
+  await conn.run('BEGIN TRANSACTION');
+  try {
+    const result = await work();
+    await conn.run('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      await conn.run('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('[runInDuckDbTransaction] ROLLBACK failed:', rollbackError);
+    }
+    throw error;
   }
 }

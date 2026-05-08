@@ -5,7 +5,7 @@
  * 包括配置管理、持久化数据存储等
  */
 
-import type { DuckDBService } from '../../../main/duckdb/service';
+import type { IDuckDBService } from '../../../types/duckdb';
 import type { JSPluginManifest } from '../../../types/js-plugin';
 import { DatabaseError } from '../errors';
 import { ParamValidator } from '../validators';
@@ -25,7 +25,7 @@ import { ParamValidator } from '../validators';
  */
 export class StorageNamespace {
   constructor(
-    private duckdb: DuckDBService,
+    private duckdb: IDuckDBService,
     private pluginId: string,
     private manifest: JSPluginManifest
   ) {}
@@ -58,7 +58,7 @@ export class StorageNamespace {
       }
 
       return JSON.parse(result[0].value);
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new DatabaseError(
         `Failed to get configuration "${key}" for plugin "${this.pluginId}"`,
         {
@@ -99,7 +99,7 @@ export class StorageNamespace {
         JSON.stringify(value),
         Date.now(),
       ]);
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new DatabaseError(
         `Failed to set configuration "${key}" for plugin "${this.pluginId}"`,
         {
@@ -144,7 +144,7 @@ export class StorageNamespace {
       }
 
       return config;
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new DatabaseError(
         `Failed to get all configurations for plugin "${this.pluginId}"`,
         {
@@ -187,7 +187,7 @@ export class StorageNamespace {
         JSON.stringify(value),
         Date.now(),
       ]);
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new DatabaseError(
         `Failed to set data "${key}" for plugin "${this.pluginId}"`,
         {
@@ -228,7 +228,7 @@ export class StorageNamespace {
       }
 
       return JSON.parse(result[0].value);
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new DatabaseError(
         `Failed to get data "${key}" for plugin "${this.pluginId}"`,
         {
@@ -256,7 +256,7 @@ export class StorageNamespace {
     try {
       const sql = `DELETE FROM plugin_data WHERE plugin_id = ? AND key = ?`;
       await this.duckdb.executeWithParams(sql, [this.pluginId, key]);
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new DatabaseError(
         `Failed to delete data "${key}" for plugin "${this.pluginId}"`,
         {
@@ -292,7 +292,7 @@ export class StorageNamespace {
       }
 
       return data;
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new DatabaseError(
         `Failed to get all data for plugin "${this.pluginId}"`,
         {
@@ -314,7 +314,7 @@ export class StorageNamespace {
     try {
       const sql = `DELETE FROM plugin_data WHERE plugin_id = ?`;
       await this.duckdb.executeWithParams(sql, [this.pluginId]);
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new DatabaseError(
         `Failed to clear all data for plugin "${this.pluginId}"`,
         {

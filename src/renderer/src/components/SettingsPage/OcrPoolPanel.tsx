@@ -10,6 +10,7 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { toast } from '../../lib/toast';
+import { getUnknownErrorMessage } from '../../../../utils/error-message';
 import {
   DEFAULT_OCR_POOL_CONFIG,
   OCR_POOL_LIMITS,
@@ -41,8 +42,8 @@ export function OcrPoolPanel() {
       } else if (!result.success) {
         toast.error('加载配置失败', result.error || '未知错误');
       }
-    } catch (error: any) {
-      toast.error('加载配置失败', error.message);
+    } catch (error: unknown) {
+      toast.error('加载配置失败', getUnknownErrorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -59,8 +60,8 @@ export function OcrPoolPanel() {
       } else {
         toast.error('保存配置失败', result.error || '未知错误');
       }
-    } catch (error: any) {
-      toast.error('保存配置失败', error.message);
+    } catch (error: unknown) {
+      toast.error('保存配置失败', getUnknownErrorMessage(error));
     } finally {
       setSaving(false);
     }

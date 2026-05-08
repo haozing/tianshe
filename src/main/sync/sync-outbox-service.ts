@@ -1,5 +1,6 @@
 import { DuckDBConnection } from '@duckdb/node-api';
 import { v4 as uuidv4 } from 'uuid';
+import { allPrepared, runPrepared } from '../duckdb/statement-executor';
 import { parseRows } from '../duckdb/utils';
 import type {
   SyncDomain,
@@ -98,7 +99,9 @@ function normalizeListLimit(limit: number): number {
 }
 
 function normalizeStatus(raw: unknown): SyncOutboxStatus {
-  const value = String(raw ?? '').trim().toLowerCase();
+  const value = String(raw ?? '')
+    .trim()
+    .toLowerCase();
   if (value === 'processing') return 'processing';
   if (value === 'acked') return 'acked';
   if (value === 'failed') return 'failed';
@@ -106,7 +109,9 @@ function normalizeStatus(raw: unknown): SyncOutboxStatus {
 }
 
 function normalizeScopeKey(rawScopeKey: unknown): string {
-  const value = String(rawScopeKey || '').trim().toLowerCase();
+  const value = String(rawScopeKey || '')
+    .trim()
+    .toLowerCase();
   return value || DEFAULT_SCOPE_KEY;
 }
 
@@ -221,31 +226,30 @@ export class SyncOutboxService {
       return mergedPending;
     }
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       INSERT INTO ${TABLE_NAME} (
         event_id, scope_key, domain, entity_type, local_id, event_type, event_source,
         payload_json, idempotency_key, retry_count, status,
         created_at, updated_at, locked_at, next_retry_at, last_error
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?, NULL, ?, NULL)
-    `);
-
-    stmt.bind([
-      eventId,
-      scopeKey,
-      domain,
-      entityType,
-      localId,
-      eventType,
-      eventSource,
-      payloadJson,
-      idempotencyKey,
-      createdAt,
-      now,
-      nextRetryAt,
-    ]);
-
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [
+        eventId,
+        scopeKey,
+        domain,
+        entityType,
+        localId,
+        eventType,
+        eventSource,
+        payloadJson,
+        idempotencyKey,
+        createdAt,
+        now,
+        nextRetryAt,
+      ]
+    );
 
     const row = await this.get(eventId);
     if (!row) {
@@ -258,7 +262,9 @@ export class SyncOutboxService {
     await this.ensureInitialized();
 
     const normalizedEventId = normalizeNonEmpty(eventId, 'eventId');
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT
         event_id, scope_key, domain, entity_type, local_id, event_type, event_source,
         payload_json, idempotency_key, retry_count, status,
@@ -266,10 +272,9 @@ export class SyncOutboxService {
       FROM ${TABLE_NAME}
       WHERE event_id = ?
       LIMIT 1
-    `);
-    stmt.bind([normalizedEventId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [normalizedEventId]
+    );
 
     const rows = parseRows<SyncOutboxRow>(result);
     if (!rows.length) return null;
@@ -287,7 +292,9 @@ export class SyncOutboxService {
     const now = normalizeTimestamp(nowMs, Date.now());
     const scopeKey = normalizeScopeKey(options?.scopeKey);
 
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT
         event_id, scope_key, domain, entity_type, local_id, event_type, event_source,
         payload_json, idempotency_key, retry_count, status,
@@ -298,10 +305,9 @@ export class SyncOutboxService {
         AND next_retry_at <= ?
       ORDER BY created_at ASC
       LIMIT ?
-    `);
-    stmt.bind([scopeKey, now, normalizedLimit]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [scopeKey, now, normalizedLimit]
+    );
 
     return parseRows<SyncOutboxRow>(result).map((row) => this.mapRow(row));
   }
@@ -315,14 +321,15 @@ export class SyncOutboxService {
     }
 
     const now = Date.now();
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       UPDATE ${TABLE_NAME}
       SET status = 'processing', locked_at = ?, updated_at = ?, last_error = NULL
       WHERE event_id = ? AND status = 'pending'
-    `);
-    stmt.bind([now, now, current.eventId]);
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [now, now, current.eventId]
+    );
 
     return true;
   }
@@ -332,14 +339,15 @@ export class SyncOutboxService {
 
     const normalizedEventId = normalizeNonEmpty(eventId, 'eventId');
     const now = Date.now();
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       UPDATE ${TABLE_NAME}
       SET status = 'acked', updated_at = ?, locked_at = NULL, last_error = NULL
       WHERE event_id = ?
-    `);
-    stmt.bind([now, normalizedEventId]);
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [now, normalizedEventId]
+    );
   }
 
   async fail(eventId: string, error: string, retryDelayMs = 0): Promise<void> {
@@ -353,7 +361,9 @@ export class SyncOutboxService {
     const nextStatus: SyncOutboxStatus = shouldRetry ? 'pending' : 'failed';
     const nextRetryAt = shouldRetry ? now + Math.trunc(retryDelay) : now;
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       UPDATE ${TABLE_NAME}
       SET
         retry_count = retry_count + 1,
@@ -363,24 +373,24 @@ export class SyncOutboxService {
         next_retry_at = ?,
         last_error = ?
       WHERE event_id = ?
-    `);
-    stmt.bind([nextStatus, now, nextRetryAt, message, normalizedEventId]);
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [nextStatus, now, nextRetryAt, message, normalizedEventId]
+    );
   }
 
   async deleteAcked(beforeUpdatedAtMs: number): Promise<number> {
     await this.ensureInitialized();
 
     const cutoff = normalizeTimestamp(beforeUpdatedAtMs, Date.now());
-    const countStmt = await this.conn.prepare(`
+    const countResult = await allPrepared(
+      this.conn,
+      `
       SELECT COUNT(*) AS count
       FROM ${TABLE_NAME}
       WHERE status = 'acked' AND updated_at <= ?
-    `);
-    countStmt.bind([cutoff]);
-    const countResult = await countStmt.runAndReadAll();
-    countStmt.destroySync();
+    `,
+      [cutoff]
+    );
 
     const countRows = parseRows<{ count: number }>(countResult);
     const count = Number(countRows[0]?.count ?? 0);
@@ -389,13 +399,14 @@ export class SyncOutboxService {
       return 0;
     }
 
-    const deleteStmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       DELETE FROM ${TABLE_NAME}
       WHERE status = 'acked' AND updated_at <= ?
-    `);
-    deleteStmt.bind([cutoff]);
-    await deleteStmt.run();
-    deleteStmt.destroySync();
+    `,
+      [cutoff]
+    );
 
     return normalizedCount;
   }
@@ -429,7 +440,9 @@ export class SyncOutboxService {
     eventSource: SyncEventSource;
     payloadJson: string | null;
   }): Promise<SyncOutboxEvent | null> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT
         event_id, scope_key, domain, entity_type, local_id, event_type, event_source,
         payload_json, idempotency_key, retry_count, status,
@@ -441,10 +454,9 @@ export class SyncOutboxService {
         AND local_id = ?
         AND status = 'pending'
       ORDER BY created_at ASC, updated_at ASC
-    `);
-    stmt.bind([input.scopeKey, input.domain, input.entityType, input.localId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [input.scopeKey, input.domain, input.entityType, input.localId]
+    );
 
     const pendingRows = parseRows<SyncOutboxRow>(result).map((row) => this.mapRow(row));
     if (!pendingRows.length) return null;
@@ -453,7 +465,9 @@ export class SyncOutboxService {
     const now = Date.now();
     const idempotencyKey = String(primary.idempotencyKey || '').trim() || primary.eventId;
 
-    const updateStmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       UPDATE ${TABLE_NAME}
       SET
         event_type = ?,
@@ -466,29 +480,29 @@ export class SyncOutboxService {
         locked_at = NULL,
         last_error = NULL
       WHERE event_id = ? AND status = 'pending'
-    `);
-    updateStmt.bind([
-      input.eventType,
-      input.eventSource,
-      input.payloadJson,
-      idempotencyKey,
-      now,
-      now,
-      primary.eventId,
-    ]);
-    await updateStmt.run();
-    updateStmt.destroySync();
+    `,
+      [
+        input.eventType,
+        input.eventSource,
+        input.payloadJson,
+        idempotencyKey,
+        now,
+        now,
+        primary.eventId,
+      ]
+    );
 
     const redundantIds = pendingRows.slice(1).map((event) => event.eventId);
     if (redundantIds.length > 0) {
       const placeholders = redundantIds.map(() => '?').join(', ');
-      const deleteStmt = await this.conn.prepare(`
+      await runPrepared(
+        this.conn,
+        `
         DELETE FROM ${TABLE_NAME}
         WHERE event_id IN (${placeholders}) AND status = 'pending'
-      `);
-      deleteStmt.bind(redundantIds);
-      await deleteStmt.run();
-      deleteStmt.destroySync();
+      `,
+        redundantIds
+      );
     }
 
     return this.get(primary.eventId);
@@ -499,7 +513,9 @@ export class SyncOutboxService {
     const lastError = String(row.last_error || '').trim();
     const lockedAtNumber = Number(row.locked_at);
     const lockedAt =
-      Number.isFinite(lockedAtNumber) && lockedAtNumber > 0 ? Math.trunc(lockedAtNumber) : undefined;
+      Number.isFinite(lockedAtNumber) && lockedAtNumber > 0
+        ? Math.trunc(lockedAtNumber)
+        : undefined;
 
     return {
       eventId: String(row.event_id),

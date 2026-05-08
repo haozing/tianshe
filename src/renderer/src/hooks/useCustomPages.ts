@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { pluginFacade } from '../services/datasets/pluginFacade';
 import type { CustomPageInfo } from '../../../types/js-plugin';
+import { getUnknownErrorMessage } from '../../../utils/error-message';
 
 /**
  * 插件页面分组数据结构
@@ -58,7 +59,10 @@ export function useCustomPages(datasetId: string | null) {
             allPages.push(...embeddedPages);
           }
         } catch (err) {
-          console.warn(`[useCustomPages] Failed to load custom pages for plugin ${plugin.id}:`, err);
+          console.warn(
+            `[useCustomPages] Failed to load custom pages for plugin ${plugin.id}:`,
+            err
+          );
           // 继续加载其他插件的页面
         }
       }
@@ -67,9 +71,9 @@ export function useCustomPages(datasetId: string | null) {
       allPages.sort((a, b) => a.order_index - b.order_index);
 
       setCustomPages(allPages);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('[useCustomPages] Failed to load custom pages:', err);
-      setError(err.message || 'Unknown error');
+      setError(getUnknownErrorMessage(err));
       setCustomPages([]);
     } finally {
       setLoading(false);
@@ -148,9 +152,9 @@ export function usePluginPagesGrouped(options: { datasetId?: string | null; load
       }
 
       setPluginGroups(groups);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('[useCustomPages] Failed to load plugin pages:', err);
-      setError(err.message || 'Unknown error');
+      setError(getUnknownErrorMessage(err));
       setPluginGroups([]);
     } finally {
       setLoading(false);
@@ -213,9 +217,9 @@ export function usePopupPages() {
       allPages.sort((a, b) => a.order_index - b.order_index);
 
       setPopupPages(allPages);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('[useCustomPages] Failed to load popup pages:', err);
-      setError(err.message || 'Unknown error');
+      setError(getUnknownErrorMessage(err));
       setPopupPages([]);
     } finally {
       setLoading(false);

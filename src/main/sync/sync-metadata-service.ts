@@ -1,4 +1,5 @@
 import { DuckDBConnection } from '@duckdb/node-api';
+import { allPrepared, runPrepared } from '../duckdb/statement-executor';
 import { parseRows } from '../duckdb/utils';
 import type { SyncDomain, SyncEntityType } from '../../types/sync-contract';
 
@@ -128,7 +129,9 @@ function normalizeOffset(value: unknown): number {
 }
 
 function normalizeScopeKey(rawScopeKey: unknown): string {
-  const value = String(rawScopeKey || '').trim().toLowerCase();
+  const value = String(rawScopeKey || '')
+    .trim()
+    .toLowerCase();
   return value || DEFAULT_SCOPE_KEY;
 }
 
@@ -204,7 +207,9 @@ export class SyncMetadataService {
     const remoteUid = String(input.remoteUid || '').trim() || null;
     const contentHash = String(input.contentHash || '').trim() || null;
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       INSERT INTO ${MAPPINGS_TABLE} (
         scope_key, domain, entity_type, local_id, global_uid, remote_uid, version, content_hash, updated_at
       )
@@ -216,20 +221,9 @@ export class SyncMetadataService {
         version = EXCLUDED.version,
         content_hash = EXCLUDED.content_hash,
         updated_at = EXCLUDED.updated_at
-    `);
-    stmt.bind([
-      scopeKey,
-      domain,
-      entityType,
-      localId,
-      globalUid,
-      remoteUid,
-      version,
-      contentHash,
-      updatedAt,
-    ]);
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [scopeKey, domain, entityType, localId, globalUid, remoteUid, version, contentHash, updatedAt]
+    );
 
     const mapping = await this.getEntityMapping(domain, entityType, localId, { scopeKey });
     if (!mapping) {
@@ -253,16 +247,17 @@ export class SyncMetadataService {
     const normalizedEntityType = normalizeNonEmpty(entityType, 'entityType');
     const normalizedLocalId = normalizeNonEmpty(localId, 'localId');
 
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT
         scope_key, domain, entity_type, local_id, global_uid, remote_uid, version, content_hash, updated_at
       FROM ${MAPPINGS_TABLE}
       WHERE scope_key = ? AND domain = ? AND entity_type = ? AND local_id = ?
       LIMIT 1
-    `);
-    stmt.bind([scopeKey, normalizedDomain, normalizedEntityType, normalizedLocalId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [scopeKey, normalizedDomain, normalizedEntityType, normalizedLocalId]
+    );
 
     const rows = parseRows<SyncEntityMappingRow>(result);
     if (!rows.length) return null;
@@ -282,16 +277,17 @@ export class SyncMetadataService {
     const normalizedEntityType = normalizeNonEmpty(entityType, 'entityType');
     const normalizedGlobalUid = normalizeNonEmpty(globalUid, 'globalUid');
 
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT
         scope_key, domain, entity_type, local_id, global_uid, remote_uid, version, content_hash, updated_at
       FROM ${MAPPINGS_TABLE}
       WHERE scope_key = ? AND domain = ? AND entity_type = ? AND global_uid = ?
       LIMIT 1
-    `);
-    stmt.bind([scopeKey, normalizedDomain, normalizedEntityType, normalizedGlobalUid]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [scopeKey, normalizedDomain, normalizedEntityType, normalizedGlobalUid]
+    );
 
     const rows = parseRows<SyncEntityMappingRow>(result);
     if (!rows.length) return null;
@@ -311,16 +307,17 @@ export class SyncMetadataService {
     const normalizedEntityType = normalizeNonEmpty(entityType, 'entityType');
     const normalizedRemoteUid = normalizeNonEmpty(remoteUid, 'remoteUid');
 
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT
         scope_key, domain, entity_type, local_id, global_uid, remote_uid, version, content_hash, updated_at
       FROM ${MAPPINGS_TABLE}
       WHERE scope_key = ? AND domain = ? AND entity_type = ? AND remote_uid = ?
       LIMIT 1
-    `);
-    stmt.bind([scopeKey, normalizedDomain, normalizedEntityType, normalizedRemoteUid]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [scopeKey, normalizedDomain, normalizedEntityType, normalizedRemoteUid]
+    );
 
     const rows = parseRows<SyncEntityMappingRow>(result);
     if (!rows.length) return null;
@@ -338,17 +335,18 @@ export class SyncMetadataService {
     const normalizedEntityType = normalizeNonEmpty(entityType, 'entityType');
     const normalizedGlobalUid = normalizeNonEmpty(globalUid, 'globalUid');
 
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT
         scope_key, domain, entity_type, local_id, global_uid, remote_uid, version, content_hash, updated_at
       FROM ${MAPPINGS_TABLE}
       WHERE domain = ? AND entity_type = ? AND global_uid = ?
       ORDER BY updated_at DESC
       LIMIT 1
-    `);
-    stmt.bind([normalizedDomain, normalizedEntityType, normalizedGlobalUid]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [normalizedDomain, normalizedEntityType, normalizedGlobalUid]
+    );
 
     const rows = parseRows<SyncEntityMappingRow>(result);
     if (!rows.length) return null;
@@ -366,24 +364,27 @@ export class SyncMetadataService {
     const normalizedEntityType = normalizeNonEmpty(entityType, 'entityType');
     const normalizedRemoteUid = normalizeNonEmpty(remoteUid, 'remoteUid');
 
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT
         scope_key, domain, entity_type, local_id, global_uid, remote_uid, version, content_hash, updated_at
       FROM ${MAPPINGS_TABLE}
       WHERE domain = ? AND entity_type = ? AND remote_uid = ?
       ORDER BY updated_at DESC
       LIMIT 1
-    `);
-    stmt.bind([normalizedDomain, normalizedEntityType, normalizedRemoteUid]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [normalizedDomain, normalizedEntityType, normalizedRemoteUid]
+    );
 
     const rows = parseRows<SyncEntityMappingRow>(result);
     if (!rows.length) return null;
     return this.mapEntityMapping(rows[0]);
   }
 
-  async listEntityMappings(options: ListSyncEntityMappingsOptions = {}): Promise<SyncEntityMapping[]> {
+  async listEntityMappings(
+    options: ListSyncEntityMappingsOptions = {}
+  ): Promise<SyncEntityMapping[]> {
     await this.ensureInitialized();
 
     const scopeKey = normalizeScopeKey(options.scopeKey);
@@ -405,17 +406,18 @@ export class SyncMetadataService {
     const limit = normalizeLimit(options.limit, 200);
     const offset = normalizeOffset(options.offset);
 
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT
         scope_key, domain, entity_type, local_id, global_uid, remote_uid, version, content_hash, updated_at
       FROM ${MAPPINGS_TABLE}
       ${whereClause}
       ORDER BY updated_at DESC, domain ASC, entity_type ASC, local_id ASC
       LIMIT ? OFFSET ?
-    `);
-    stmt.bind([...params, limit, offset]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [...params, limit, offset]
+    );
 
     return parseRows<SyncEntityMappingRow>(result).map((row) => this.mapEntityMapping(row));
   }
@@ -433,16 +435,20 @@ export class SyncMetadataService {
     const normalizedEntityType = normalizeNonEmpty(entityType, 'entityType');
     const normalizedLocalId = normalizeNonEmpty(localId, 'localId');
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       DELETE FROM ${MAPPINGS_TABLE}
       WHERE scope_key = ? AND domain = ? AND entity_type = ? AND local_id = ?
-    `);
-    stmt.bind([scopeKey, normalizedDomain, normalizedEntityType, normalizedLocalId]);
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [scopeKey, normalizedDomain, normalizedEntityType, normalizedLocalId]
+    );
   }
 
-  async setDomainState(input: SetSyncDomainStateInput, context?: SyncScopeContext): Promise<SyncDomainState> {
+  async setDomainState(
+    input: SetSyncDomainStateInput,
+    context?: SyncScopeContext
+  ): Promise<SyncDomainState> {
     await this.ensureInitialized();
 
     const scopeKey = normalizeScopeKey(context?.scopeKey);
@@ -460,7 +466,9 @@ export class SyncMetadataService {
         : normalizeNullableTimestamp(input.lastPushedAt);
     const updatedAt = normalizeTimestamp(input.updatedAt, now);
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       INSERT INTO ${DOMAIN_STATE_TABLE} (
         scope_key, domain, domain_version, last_pulled_at, last_pushed_at, updated_at
       )
@@ -471,10 +479,9 @@ export class SyncMetadataService {
         last_pulled_at = EXCLUDED.last_pulled_at,
         last_pushed_at = EXCLUDED.last_pushed_at,
         updated_at = EXCLUDED.updated_at
-    `);
-    stmt.bind([scopeKey, domain, domainVersion, lastPulledAt, lastPushedAt, updatedAt]);
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [scopeKey, domain, domainVersion, lastPulledAt, lastPushedAt, updatedAt]
+    );
 
     const state = await this.getDomainState(domain, { scopeKey });
     if (!state) {
@@ -483,20 +490,24 @@ export class SyncMetadataService {
     return state;
   }
 
-  async getDomainState(domain: SyncDomain, context?: SyncScopeContext): Promise<SyncDomainState | null> {
+  async getDomainState(
+    domain: SyncDomain,
+    context?: SyncScopeContext
+  ): Promise<SyncDomainState | null> {
     await this.ensureInitialized();
 
     const scopeKey = normalizeScopeKey(context?.scopeKey);
     const normalizedDomain = normalizeNonEmpty(domain, 'domain');
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT scope_key, domain, domain_version, last_pulled_at, last_pushed_at, updated_at
       FROM ${DOMAIN_STATE_TABLE}
       WHERE scope_key = ? AND domain = ?
       LIMIT 1
-    `);
-    stmt.bind([scopeKey, normalizedDomain]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [scopeKey, normalizedDomain]
+    );
 
     const rows = parseRows<SyncDomainStateRow>(result);
     if (!rows.length) return null;
@@ -507,15 +518,16 @@ export class SyncMetadataService {
     await this.ensureInitialized();
 
     const scopeKey = normalizeScopeKey(context?.scopeKey);
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT scope_key, domain, domain_version, last_pulled_at, last_pushed_at, updated_at
       FROM ${DOMAIN_STATE_TABLE}
       WHERE scope_key = ?
       ORDER BY domain ASC
-    `);
-    stmt.bind([scopeKey]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [scopeKey]
+    );
     return parseRows<SyncDomainStateRow>(result).map((row) => this.mapDomainState(row));
   }
 
@@ -524,13 +536,14 @@ export class SyncMetadataService {
 
     const scopeKey = normalizeScopeKey(context?.scopeKey);
     const normalizedDomain = normalizeNonEmpty(domain, 'domain');
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       DELETE FROM ${DOMAIN_STATE_TABLE}
       WHERE scope_key = ? AND domain = ?
-    `);
-    stmt.bind([scopeKey, normalizedDomain]);
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [scopeKey, normalizedDomain]
+    );
   }
 
   private async ensureInitialized(): Promise<void> {

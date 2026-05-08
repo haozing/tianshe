@@ -15,8 +15,10 @@
 
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import type { DuckDBService } from '../../main/duckdb/service';
+import type { IDuckDBService } from '../../types/duckdb';
 import { createLogger } from '../logger';
+import { getUnknownErrorMessage } from '../../utils/error-message';
+
 
 const logger = createLogger('IntegrityChecker');
 
@@ -39,7 +41,7 @@ export interface IntegrityCheckResult {
 
 export class DataIntegrityChecker {
   constructor(
-    private duckdb: DuckDBService,
+    private duckdb: IDuckDBService,
     private importsDir: string
   ) {}
 
@@ -115,7 +117,7 @@ export class DataIntegrityChecker {
           autoRepairable: fileExists, // 文件存在时可尝试修复
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('[IntegrityChecker] Failed to check orphaned tables:', error);
     }
 
@@ -151,7 +153,7 @@ export class DataIntegrityChecker {
           });
         }
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('[IntegrityChecker] Failed to check missing files:', error);
     }
 
@@ -194,7 +196,7 @@ export class DataIntegrityChecker {
           });
         }
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('[IntegrityChecker] Failed to check orphaned files:', error);
     }
 
@@ -269,9 +271,9 @@ export class DataIntegrityChecker {
             break;
           }
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         failed++;
-        details.push(`✗ 修复失败 ${issue.datasetId}: ${error.message}`);
+        details.push(`✗ 修复失败 ${issue.datasetId}: ${getUnknownErrorMessage(error)}`);
         logger.error(`  ✗ Failed to repair ${issue.datasetId}:`, error);
       }
     }

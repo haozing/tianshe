@@ -6,6 +6,7 @@
 import type { FilterConfig, FilterCondition, SQLContext } from '../types';
 import { SQLUtils } from '../utils/sql-utils';
 import { QueryErrorFactory } from '../errors';
+import { getUnknownErrorMessage } from '../../../utils/error-message';
 
 export class FilterBuilder {
   /**
@@ -192,11 +193,11 @@ export class FilterBuilder {
     // 🆕 验证正则表达式安全性（防止 ReDoS 攻击）
     try {
       SQLUtils.validateRegexPattern(condition.value);
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw QueryErrorFactory.invalidParam(
         'regex pattern',
         condition.value,
-        `不安全的正则表达式: ${error.message}`
+        `不安全的正则表达式: ${getUnknownErrorMessage(error)}`
       );
     }
 

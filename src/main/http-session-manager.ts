@@ -20,6 +20,52 @@ export interface InvokeQueueState {
   closing?: boolean;
 }
 
+export const getMcpInvokeQueueState = (session: McpSessionInfo): InvokeQueueState => {
+  const queueState = {};
+  const define = <T>(
+    key: keyof InvokeQueueState,
+    getValue: () => T,
+    setValue: (value: T) => void
+  ) => {
+    Object.defineProperty(queueState, key, {
+      enumerable: true,
+      configurable: true,
+      get: getValue,
+      set: setValue,
+    });
+  };
+
+  define('invokeQueue', () => session.queue.invokeQueue, (value) => {
+    session.queue.invokeQueue = value;
+  });
+  define('pendingInvocations', () => session.queue.pendingInvocations, (value) => {
+    session.queue.pendingInvocations = value;
+  });
+  define('activeInvocations', () => session.queue.activeInvocations, (value) => {
+    session.queue.activeInvocations = value;
+  });
+  define('maxQueueSize', () => session.queue.maxQueueSize, (value) => {
+    session.queue.maxQueueSize = value;
+  });
+  define('lastActivity', () => session.lifecycle.lastActivity, (value) => {
+    session.lifecycle.lastActivity = value;
+  });
+  define('closeController', () => session.lifecycle.closeController, (value) => {
+    session.lifecycle.closeController = value;
+  });
+  define('closeReason', () => session.lifecycle.closeReason, (value) => {
+    session.lifecycle.closeReason = value;
+  });
+  define('activeInvocationController', () => session.queue.activeInvocationController, (value) => {
+    session.queue.activeInvocationController = value;
+  });
+  define('closing', () => session.lifecycle.closing, (value) => {
+    session.lifecycle.closing = value;
+  });
+
+  return queueState as InvokeQueueState;
+};
+
 export interface InvokeTaskContext {
   signal: AbortSignal;
 }
@@ -404,10 +450,11 @@ export const cleanupMcpSession = async (
   session: McpSessionInfo,
   logger: LoggerLike
 ): Promise<void> => {
-  abortSession(sessionId, session, createSessionClosingError(sessionId));
+  const queueState = getMcpInvokeQueueState(session);
+  abortSession(sessionId, queueState, createSessionClosingError(sessionId));
 
-  const server = session.server;
-  session.server = undefined;
+  const server = session.transport.server;
+  session.transport.server = undefined;
   if (server && typeof server.close === 'function') {
     try {
       await server.close();
@@ -417,23 +464,23 @@ export const cleanupMcpSession = async (
   }
 
   try {
-    session.transport.close();
+    session.transport.httpTransport.close();
   } catch (error) {
     logger.error(`Error closing session ${sessionId}:`, error);
   }
 
-  await waitForCleanupBudget(session.invokeQueue, CLEANUP_WAIT_TIMEOUT_MS, () => {
+  await waitForCleanupBudget(session.queue.invokeQueue, CLEANUP_WAIT_TIMEOUT_MS, () => {
     logger.debug(
       `Cleanup wait budget exhausted for MCP session ${sessionId}; continuing with forced teardown`
     );
   });
 
-  const pendingAcquire = session.browserAcquirePromise;
-  session.browserAcquirePromise = undefined;
+  const pendingAcquire = session.browser.browserAcquirePromise;
+  session.browser.browserAcquirePromise = undefined;
 
-  if (session.browserHandle) {
-    const handle = session.browserHandle;
-    session.browserHandle = undefined;
+  if (session.browser.browserHandle) {
+    const handle = session.browser.browserHandle;
+    session.browser.browserHandle = undefined;
     await releaseBrowserHandle(handle.release.bind(handle), logger, sessionId, {
       destroy: true,
     });
@@ -486,19 +533,24 @@ export const cleanupInactiveSessions = (params: {
   const now = Date.now();
 
   for (const [sessionId, session] of transports.entries()) {
-    const idleMs = now - session.lastActivity;
-    const hasBrowserLease = Boolean(session.browserHandle || session.browserAcquirePromise);
+    const idleMs = now - session.lifecycle.lastActivity;
+    const hasBrowserLease = Boolean(
+      session.browser.browserHandle || session.browser.browserAcquirePromise
+    );
     const idleTimeoutMs = hasBrowserLease
       ? timeoutMs
       : Math.min(timeoutMs, SESSION_CLEANUP_POLICY.idleWithoutBrowserTimeoutMs);
     const closingPastGrace =
-      session.closing === true &&
+      session.lifecycle.closing === true &&
       idleMs > SESSION_CLEANUP_POLICY.closingSessionGraceTimeoutMs;
 
     if (idleMs > idleTimeoutMs || closingPastGrace) {
-      if ((session.pendingInvocations > 0 || session.activeInvocations > 0) && !closingPastGrace) {
+      if (
+        (session.queue.pendingInvocations > 0 || session.queue.activeInvocations > 0) &&
+        !closingPastGrace
+      ) {
         logger.debug(
-          `Skip cleaning MCP session ${sessionId}: pending=${session.pendingInvocations}, active=${session.activeInvocations}`
+          `Skip cleaning MCP session ${sessionId}: pending=${session.queue.pendingInvocations}, active=${session.queue.activeInvocations}`
         );
         continue;
       }
@@ -542,8 +594,8 @@ export const buildRuntimeMetricsPayload = (params: {
   let mcpPending = 0;
   let mcpActive = 0;
   for (const session of transports.values()) {
-    mcpPending += session.pendingInvocations;
-    mcpActive += session.activeInvocations;
+    mcpPending += session.queue.pendingInvocations;
+    mcpActive += session.queue.activeInvocations;
   }
 
   let orchestrationPending = 0;
@@ -560,7 +612,7 @@ export const buildRuntimeMetricsPayload = (params: {
   let totalIdempotencyCacheEntries = 0;
 
   for (const session of transports.values()) {
-    if (now - session.lastActivity > timeoutMs) {
+    if (now - session.lifecycle.lastActivity > timeoutMs) {
       staleMcpSessions += 1;
     }
   }

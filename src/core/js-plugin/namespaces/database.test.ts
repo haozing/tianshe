@@ -10,8 +10,9 @@
  * - 参数验证和错误处理
  */
 
+import fs from 'fs-extra';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { DatabaseNamespace } from './database';
+import { DatabaseNamespace, normalizeDatabaseImportBase64 } from './database';
 
 // Mock logger
 vi.mock('../../logger', () => ({
@@ -77,6 +78,11 @@ vi.mock('../validators', () => ({
         throw new Error(`${name} must be an array`);
       }
     }),
+    validateEnum: vi.fn().mockImplementation((val: any, name: string, allowedValues: any[]) => {
+      if (!allowedValues.includes(val)) {
+        throw new Error(`${name} must be one of ${allowedValues.join(', ')}`);
+      }
+    }),
     validateNotNullOrUndefined: vi.fn().mockImplementation((val: any, name: string) => {
       if (val === null || val === undefined) {
         throw new Error(`${name} cannot be null or undefined`);
@@ -93,11 +99,14 @@ const createMockDuckDB = () => ({
   updateRecord: vi.fn().mockResolvedValue(undefined),
   batchUpdateRecords: vi.fn().mockResolvedValue(undefined),
   hardDeleteRows: vi.fn().mockResolvedValue(1),
-  withDatasetAttached: vi.fn().mockImplementation(async (_datasetId: string, fn: () => Promise<any>) => await fn()),
+  withDatasetAttached: vi
+    .fn()
+    .mockImplementation(async (_datasetId: string, fn: () => Promise<any>) => await fn()),
   execute: vi.fn().mockResolvedValue(undefined),
   executeWithParams: vi.fn().mockResolvedValue(undefined),
   executeSQLWithParams: vi.fn().mockResolvedValue([]),
   query: vi.fn().mockResolvedValue([]),
+  importRecordsFromFile: vi.fn().mockResolvedValue({ recordsInserted: 2 }),
   getDatasetInfo: vi.fn().mockResolvedValue({
     id: 'test-dataset',
     name: 'Test Dataset',
@@ -209,6 +218,58 @@ describe('DatabaseNamespace', () => {
       await database.batchInsert('dataset-123', records);
 
       expect(mockDuckDB.batchInsertRecords).toHaveBeenCalledWith('dataset-123', records);
+    });
+  });
+
+  describe('importRecordsFromBase64', () => {
+    it('writes normalized Base64 to a temp file and imports it', async () => {
+      const csv = 'name,price\nProduct,100\n';
+      const base64 = Buffer.from(csv, 'utf8').toString('base64');
+
+      mockDuckDB.importRecordsFromFile.mockImplementation(
+        async (_datasetId: string, filePath: string) => {
+          await expect(fs.readFile(filePath, 'utf8')).resolves.toBe(csv);
+          return { recordsInserted: 1 };
+        }
+      );
+
+      const result = await database.importRecordsFromBase64({
+        datasetId: 'dataset-123',
+        filename: 'records.csv',
+        base64: `data:text/csv;charset=utf-8;base64,${base64}`,
+      });
+
+      expect(result).toEqual({
+        total: 1,
+        inserted: 1,
+        skipped: 0,
+        failed: 0,
+        cleared: false,
+      });
+      expect(mockDuckDB.importRecordsFromFile).toHaveBeenCalledWith(
+        'dataset-123',
+        expect.stringMatching(/records_.*\.csv$/)
+      );
+    });
+
+    it('rejects invalid Base64 before creating the import file', async () => {
+      await expect(
+        database.importRecordsFromBase64({
+          datasetId: 'dataset-123',
+          filename: 'records.csv',
+          base64: '@@@@',
+        })
+      ).rejects.toThrow(/Base64 content is invalid/);
+
+      expect(mockDuckDB.importRecordsFromFile).not.toHaveBeenCalled();
+    });
+
+    it('rejects decoded Base64 payloads over the configured byte limit', () => {
+      const base64 = Buffer.from('hello', 'utf8').toString('base64');
+
+      expect(() => normalizeDatabaseImportBase64(base64, 4)).toThrow(
+        /Base64 import file is too large/
+      );
     });
   });
 

@@ -14,11 +14,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ipcMain, shell } from 'electron';
 import { FileIPCHandler } from './file-handler';
 import { fileStorage } from '../file-storage';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 
 // Mock electron 模块
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn(),
+    removeHandler: vi.fn(),
+    removeListener: vi.fn(),
   },
   shell: {
     openPath: vi.fn(),
@@ -29,6 +32,7 @@ vi.mock('electron', () => ({
 vi.mock('../file-storage', () => ({
   fileStorage: {
     saveFile: vi.fn(),
+    saveFileFromPath: vi.fn(),
     deleteFile: vi.fn(),
     getFilePath: vi.fn(),
     fileExists: vi.fn(),
@@ -62,6 +66,7 @@ describe('FileIPCHandler', () => {
     console.log = vi.fn();
     console.error = vi.fn();
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
     handler = new FileIPCHandler();
   });
 
@@ -76,8 +81,9 @@ describe('FileIPCHandler', () => {
       handler.register();
 
       // Assert: 验证所有 handler 都被注册
-      expect(ipcMain.handle).toHaveBeenCalledTimes(6);
+      expect(ipcMain.handle).toHaveBeenCalledTimes(7);
       expect(ipcMain.handle).toHaveBeenCalledWith('file:upload', expect.any(Function));
+      expect(ipcMain.handle).toHaveBeenCalledWith('file:upload-from-path', expect.any(Function));
       expect(ipcMain.handle).toHaveBeenCalledWith('file:delete', expect.any(Function));
       expect(ipcMain.handle).toHaveBeenCalledWith('file:open', expect.any(Function));
       expect(ipcMain.handle).toHaveBeenCalledWith('file:getUrl', expect.any(Function));
@@ -228,6 +234,39 @@ describe('FileIPCHandler', () => {
       const response = await uploadHandler(null, datasetId, fileData);
 
       // Assert
+      expect(response).toEqual({
+        success: true,
+        metadata: mockMetadata,
+      });
+    });
+  });
+
+  describe('file:upload-from-path', () => {
+    it('should upload an attachment by copying a local path in the main process', async () => {
+      const datasetId = 'dataset-123';
+      const fileData = {
+        filePath: 'C:\\Users\\test\\Desktop\\report.pdf',
+        filename: 'report.pdf',
+      };
+      const mockMetadata = {
+        id: 'file-from-path',
+        filename: 'report.pdf',
+        size: 2048,
+        createdAt: new Date().toISOString(),
+      };
+
+      vi.mocked(fileStorage.saveFileFromPath).mockResolvedValue(mockMetadata);
+
+      handler.register();
+      const uploadFromPathHandler = (ipcMain.handle as any).mock.calls[6][1];
+
+      const response = await uploadFromPathHandler(null, datasetId, fileData);
+
+      expect(fileStorage.saveFileFromPath).toHaveBeenCalledWith(
+        datasetId,
+        fileData.filePath,
+        fileData.filename
+      );
       expect(response).toEqual({
         success: true,
         metadata: mockMetadata,

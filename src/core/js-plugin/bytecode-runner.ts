@@ -9,6 +9,8 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as os from 'os';
 import { createLogger } from '../logger';
+import { getUnknownErrorMessage } from '../../utils/error-message';
+
 
 const logger = createLogger('BytecodeRunner');
 
@@ -59,11 +61,11 @@ export class BytecodeRunner {
       // 动态加载bytenode
       bytenode = require('bytenode');
       this.bytenodeInitialized = true;
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new Error(
         'Bytenode module not found. Please install it with: npm install bytenode\n' +
           'Error: ' +
-          error.message
+          getUnknownErrorMessage(error)
       );
     }
   }
@@ -125,13 +127,13 @@ export class BytecodeRunner {
       }
 
       return moduleExports;
-    } catch (error: any) {
+    } catch (error: unknown) {
       // 确保清理临时文件
       if (shouldCleanup && bytecodePath) {
         await this.cleanupFile(bytecodePath);
       }
 
-      throw new Error(`Failed to run bytecode: ${error.message}`);
+      throw new Error(`Failed to run bytecode: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -168,8 +170,8 @@ export class BytecodeRunner {
 
       // 清理临时JS文件
       await this.cleanupFile(tempJsPath);
-    } catch (error: any) {
-      throw new Error(`Failed to compile JavaScript to bytecode: ${error.message}`);
+    } catch (error: unknown) {
+      throw new Error(`Failed to compile JavaScript to bytecode: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -202,8 +204,8 @@ export class BytecodeRunner {
       });
 
       return outputPath;
-    } catch (error: any) {
-      throw new Error(`Failed to compile file to bytecode: ${error.message}`);
+    } catch (error: unknown) {
+      throw new Error(`Failed to compile file to bytecode: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -239,8 +241,8 @@ export class BytecodeRunner {
       }
 
       // 可以添加更多验证逻辑，如魔数检查等
-    } catch (error: any) {
-      throw new Error(`Bytecode validation failed: ${error.message}`);
+    } catch (error: unknown) {
+      throw new Error(`Bytecode validation failed: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -254,8 +256,8 @@ export class BytecodeRunner {
       const moduleExports = require(bytecodePath);
 
       return moduleExports;
-    } catch (error: any) {
-      throw new Error(`Bytecode execution failed: ${error.message}`);
+    } catch (error: unknown) {
+      throw new Error(`Bytecode execution failed: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -267,9 +269,9 @@ export class BytecodeRunner {
       if (await fs.pathExists(filePath)) {
         await fs.remove(filePath);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       // 清理失败不抛出错误，只记录警告
-      logger.warn('Failed to cleanup file ' + filePath + ': ' + error.message);
+      logger.warn('Failed to cleanup file ' + filePath + ': ' + getUnknownErrorMessage(error));
     }
   }
 
@@ -279,8 +281,8 @@ export class BytecodeRunner {
   async cleanupAll(): Promise<void> {
     try {
       await fs.emptyDir(this.tempDir);
-    } catch (error: any) {
-      logger.warn('Failed to cleanup temporary directory: ' + error.message);
+    } catch (error: unknown) {
+      logger.warn('Failed to cleanup temporary directory: ' + getUnknownErrorMessage(error));
     }
   }
 
@@ -353,8 +355,8 @@ export class BytecodeUtils {
             if (deleteSource) {
               await fs.remove(fullPath);
             }
-          } catch (error: any) {
-            logger.error('Failed to compile ' + fullPath + ': ' + error.message);
+          } catch (error: unknown) {
+            logger.error('Failed to compile ' + fullPath + ': ' + getUnknownErrorMessage(error));
           }
         }
       }

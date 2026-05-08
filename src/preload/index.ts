@@ -6,7 +6,7 @@
  * - 类型安全的 IPC 通信
  */
 
-import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, IpcRendererEvent, webUtils } from 'electron';
 import type { TiansheEditionName, TiansheEditionPublicInfo } from '../edition/types';
 import type { LogEntry } from '../main/log-storage-service';
 import type { DownloadInfo } from '../main/download';
@@ -105,6 +105,10 @@ function assertAllowedPreloadEventChannel(channel: string): asserts channel is P
  */
 const electronAPI = {
   edition: tiansheEdition,
+
+  files: {
+    getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  },
 
   // ========== 日志相关 ==========
 
@@ -1064,6 +1068,17 @@ const electronAPI = {
       error?: string;
     }> => {
       return ipcRenderer.invoke('file:upload', datasetId, fileData);
+    },
+
+    uploadFromPath: (
+      datasetId: string,
+      fileData: { filePath: string; filename?: string }
+    ): Promise<{
+      success: boolean;
+      metadata?: any;
+      error?: string;
+    }> => {
+      return ipcRenderer.invoke('file:upload-from-path', datasetId, fileData);
     },
 
     /**

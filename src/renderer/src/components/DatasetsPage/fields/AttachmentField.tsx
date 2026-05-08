@@ -8,6 +8,8 @@ import { Paperclip, X, Upload, FileText, Film } from 'lucide-react';
 import { LazyImage } from '../../common/LazyImage';
 import { toast } from '../../../lib/toast';
 import { fileFacade } from '../../../services/datasets/fileFacade';
+import { getNativePathForFile } from '../../../utils/electron-file-path';
+import { getUnknownErrorMessage } from '../../../../../utils/error-message';
 
 interface UrlAttachment {
   url: string;
@@ -130,13 +132,14 @@ export function AttachmentField({
     try {
       setIsUploading(true);
 
-      // 读取文件数据
-      const arrayBuffer = await file.arrayBuffer();
-      const buffer = Array.from(new Uint8Array(arrayBuffer));
+      const filePath = getNativePathForFile(file);
+      if (!filePath) {
+        throw new Error('Unable to read file path for attachment upload');
+      }
 
       // 调用API上传
-      const response = await fileFacade.upload(datasetId, {
-        buffer,
+      const response = await fileFacade.uploadFromPath(datasetId, {
+        filePath,
         filename: file.name,
       });
 
@@ -156,9 +159,9 @@ export function AttachmentField({
       } else {
         toast.error('上传失败', response.error || '未知错误');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[AttachmentField] Upload error:', error);
-      toast.error('上传失败', error.message);
+      toast.error('上传失败', getUnknownErrorMessage(error));
     } finally {
       setIsUploading(false);
     }
@@ -180,9 +183,9 @@ export function AttachmentField({
       const detectedSeparator = metadata?.separator || separator;
       const newValue = urls.join(detectedSeparator);
       onChange(newValue);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[AttachmentField] Delete error:', error);
-      toast.error('删除失败', error.message);
+      toast.error('删除失败', getUnknownErrorMessage(error));
     }
   };
 
@@ -193,9 +196,9 @@ export function AttachmentField({
       window.open(url, '_blank', 'noopener,noreferrer');
     } else {
       // 对于本地文件路径，使用electron API打开
-      fileFacade.open(url).catch((error: any) => {
+      fileFacade.open(url).catch((error: unknown) => {
         console.error('[AttachmentField] Open error:', error);
-        toast.error('打开文件失败', error.message || '未知错误');
+        toast.error('打开文件失败', getUnknownErrorMessage(error, '未知错误'));
       });
     }
   };

@@ -23,6 +23,7 @@ import { DependencyManager } from './dependency-manager';
 import { ValidationEngine } from './validation-engine';
 import fs from 'fs-extra';
 import { CleanBuilder } from '../../core/query-engine';
+import type { QueryEngine } from '../../core/query-engine/QueryEngine';
 import type { CleanConfig, SQLContext } from '../../core/query-engine/types';
 import {
   escapeSqlStringLiteral,
@@ -31,7 +32,9 @@ import {
   parseRows,
   quoteIdentifier,
   quoteQualifiedName,
+  runInDuckDbTransaction,
 } from './utils';
+import { allPrepared, runPrepared } from './statement-executor';
 import { generateId } from '../../utils/id-generator';
 import {
   isSystemField,
@@ -49,37 +52,15 @@ import type {
 import type { ExportOptions, ExportProgress } from '../../types/electron';
 
 /**
- * 验证列名是否安全（防止SQL注入）
+ * 引用 schema 中已经存在的列名。
+ * 新增/重命名列走 dataset column name policy；这里处理已有 metadata 列名，避免误伤导入文件中的特殊表头。
  */
-function validateColumnName(name: string): void {
+function safeQuoteColumn(name: string): string {
   if (!name || typeof name !== 'string') {
     throw new Error(`Invalid column name: ${name}`);
   }
 
-  // 检查危险字符和SQL关键字
-  // 注意：这里仅阻止明显的注入分隔符，以及“纯关键字列名”（避免误杀如 user_name 之类的合法列名）
-  const dangerousSequences = [';', '--', '/*', '*/'];
-  const dangerousKeywords = ['DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'EXEC'];
-  const upperName = name.toUpperCase();
-
-  for (const seq of dangerousSequences) {
-    if (name.includes(seq)) {
-      throw new Error(`Column name contains dangerous characters: ${name}`);
-    }
-  }
-
-  if (dangerousKeywords.includes(upperName)) {
-    throw new Error(`Column name is a reserved SQL keyword: ${name}`);
-  }
-}
-
-/**
- * 安全引用列名（转义双引号并验证）
- */
-function safeQuoteColumn(name: string): string {
-  validateColumnName(name);
-  // 转义双引号
-  return `"${name.replace(/"/g, '""')}"`;
+  return quoteIdentifier(name);
 }
 
 /**
@@ -123,7 +104,9 @@ function getWritableRecordForDataset(dataset: Dataset, record: DataRecord): Data
 }
 
 function hasDatasetColumn(dataset: Dataset, columnName: string): boolean {
-  return Array.isArray(dataset.schema) && dataset.schema.some((column) => column.name === columnName);
+  return (
+    Array.isArray(dataset.schema) && dataset.schema.some((column) => column.name === columnName)
+  );
 }
 
 export class DatasetService {
@@ -146,9 +129,13 @@ export class DatasetService {
 
   constructor(
     private conn: DuckDBConnection,
-    hookBus?: import('../../core/hookbus').HookBus // 🆕 可选参数
+    options: {
+      hookBus?: import('../../core/hookbus').HookBus;
+      queryEngine?: QueryEngine;
+      exportQuerySQLBuilder?: ExportQuerySQLBuilder;
+    } = {}
   ) {
-    this.hookBus = hookBus;
+    this.hookBus = options.hookBus;
     // ========== 依赖注入 - 按拓扑顺序初始化 ==========
 
     // 🔹 底层：存储和队列
@@ -175,30 +162,23 @@ export class DatasetService {
 
     // 🔹 功能层：导入、导出、查询
     this.importService = new DatasetImportService(conn, this.metadataService);
-    this.exportService = new DatasetExportService(conn, this.metadataService, this.storageService);
+    this.exportService = new DatasetExportService(
+      conn,
+      this.metadataService,
+      this.storageService,
+      options.exportQuerySQLBuilder
+    );
     this.queryService = new DatasetQueryService(
       conn,
       this.metadataService,
       this.schemaService,
-      this.storageService
+      this.storageService,
+      options.queryEngine
     );
 
     console.log('✅ DatasetService initialized with modular architecture');
   }
 
-  /**
-   * 设置 QueryEngine（延迟注入，避免循环依赖）
-   */
-  setQueryEngine(queryEngine: import('../../core/query-engine/QueryEngine').QueryEngine): void {
-    this.queryService.setQueryEngine(queryEngine);
-  }
-
-  /**
-   * 设置导出 SQL 构造器（延迟注入，避免直接耦合导出服务和完整 DuckDBService）。
-   */
-  setExportQuerySQLBuilder(exportQuerySQLBuilder: ExportQuerySQLBuilder): void {
-    this.exportService.setExportQuerySQLBuilder(exportQuerySQLBuilder);
-  }
 
   // ==================== 私有辅助方法 ====================
 
@@ -320,7 +300,11 @@ export class DatasetService {
 
   private getDescribeNullable(row: Record<string, any>): boolean {
     const nullableValue = row.null ?? row.nullable ?? Object.values(row)[2];
-    return String(nullableValue ?? 'YES').trim().toUpperCase() !== 'NO';
+    return (
+      String(nullableValue ?? 'YES')
+        .trim()
+        .toUpperCase() !== 'NO'
+    );
   }
 
   private async createCloneTargetTable(
@@ -481,21 +465,7 @@ export class DatasetService {
     expression: string,
     options?: any
   ): Promise<any> {
-    const sanitizedId = sanitizeDatasetId(datasetId);
-
-    return this.storageService.executeInQueue(sanitizedId, async () => {
-      const dataset = await this.metadataService.getDatasetInfo(sanitizedId);
-      if (!dataset) throw new Error(`Dataset not found: ${sanitizedId}`);
-
-      const escapedPath = dataset.filePath.replace(/\\/g, '\\\\').replace(/'/g, "''");
-      await this.storageService.smartAttach(sanitizedId, escapedPath);
-
-      return await this.queryService['queryEngine'].preview.validateComputeExpression(
-        sanitizedId,
-        expression,
-        options
-      );
-    });
+    return await this.queryService.validateComputeExpression(datasetId, expression, options);
   }
 
   // ==================== Schema API（代理） ====================
@@ -573,16 +543,12 @@ export class DatasetService {
       const BATCH_SIZE = 1000;
       let deletedCount = 0;
 
-      await this.conn.run('BEGIN TRANSACTION');
-      try {
+      await runInDuckDbTransaction(this.conn, async () => {
         for (let i = 0; i < uniqueRowIds.length; i += BATCH_SIZE) {
           const batch = uniqueRowIds.slice(i, i + BATCH_SIZE);
           const placeholders = batch.map(() => '?').join(', ');
           const countSql = `SELECT COUNT(*) AS cnt FROM ${tableName} WHERE _row_id IN (${placeholders})`;
-          const countStmt = await this.conn.prepare(countSql);
-          countStmt.bind(batch);
-          const countResult = await countStmt.runAndReadAll();
-          countStmt.destroySync();
+          const countResult = await allPrepared(this.conn, countSql, batch);
 
           const batchDeletedCount = Number(parseRows(countResult)[0]?.cnt ?? 0);
           if (!Number.isFinite(batchDeletedCount) || batchDeletedCount <= 0) {
@@ -590,19 +556,11 @@ export class DatasetService {
           }
 
           const deleteSql = `DELETE FROM ${tableName} WHERE _row_id IN (${placeholders})`;
-          const deleteStmt = await this.conn.prepare(deleteSql);
-          deleteStmt.bind(batch);
-          await deleteStmt.run();
-          deleteStmt.destroySync();
+          await runPrepared(this.conn, deleteSql, batch);
 
           deletedCount += batchDeletedCount;
         }
-
-        await this.conn.run('COMMIT');
-      } catch (error) {
-        await this.conn.run('ROLLBACK');
-        throw error;
-      }
+      });
 
       if (deletedCount > 0) {
         try {
@@ -669,25 +627,18 @@ export class DatasetService {
 
       console.log(`🔍 Updating record with _row_id: ${rowId}`);
 
-      await this.conn.run('BEGIN TRANSACTION');
-      try {
-        const stmt = await this.conn.prepare(sql);
-        stmt.bind([...values, rowId]);
-        await stmt.run();
-        stmt.destroySync();
-        await this.conn.run('COMMIT');
-        console.log(`✅ Record updated: ${safeDatasetId}, _row_id ${rowId}`);
+      await runInDuckDbTransaction(this.conn, async () => {
+        await runPrepared(this.conn, sql, [...values, rowId]);
+      });
 
-        // 触发 Webhook 回调事件（不阻塞数据库操作）
-        this.hookBus?.emit('webhook:record.updated', {
-          datasetId: safeDatasetId,
-          rowId,
-          updates: writableUpdates,
-        });
-      } catch (error) {
-        await this.conn.run('ROLLBACK');
-        throw error;
-      }
+      console.log(`✅ Record updated: ${safeDatasetId}, _row_id ${rowId}`);
+
+      // 触发 Webhook 回调事件（不阻塞数据库操作）
+      this.hookBus?.emit('webhook:record.updated', {
+        datasetId: safeDatasetId,
+        rowId,
+        updates: writableUpdates,
+      });
     });
   }
 
@@ -710,8 +661,7 @@ export class DatasetService {
       await this.ensureAttached(dataset);
       const tableName = this.getTableName(safeDatasetId);
 
-      await this.conn.run('BEGIN TRANSACTION');
-      try {
+      await runInDuckDbTransaction(this.conn, async () => {
         for (const update of updates) {
           const { rowId, updates: data } = update;
           const writableUpdates = getWritableRecordForDataset(dataset, data);
@@ -727,18 +677,10 @@ export class DatasetService {
           }
           const setClause = setExpressions.join(', ');
           const sql = `UPDATE ${tableName} SET ${setClause} WHERE _row_id = ?`;
-          const stmt = await this.conn.prepare(sql);
-          stmt.bind([...values, rowId]);
-          await stmt.run();
-          stmt.destroySync();
+          await runPrepared(this.conn, sql, [...values, rowId]);
         }
-
-        await this.conn.run('COMMIT');
-        console.log(`✅ Batch updated ${updates.length} records`);
-      } catch (error) {
-        await this.conn.run('ROLLBACK');
-        throw error;
-      }
+      });
+      console.log(`✅ Batch updated ${updates.length} records`);
     });
   }
 
@@ -878,46 +820,52 @@ WHERE t._row_id = cleaned._row_id
       const dataset = await this.metadataService.getDatasetInfo(safeDatasetId);
       if (!dataset) throw new Error('Dataset not found');
 
-      // ✅ 过滤掉系统字段（防御性编程：后端再次过滤）
-      const cleanedRecord = getWritableRecordForDataset(dataset, record);
-      const columns = Object.keys(cleanedRecord);
-      const values = Object.values(cleanedRecord);
-
-      if (columns.length === 0) {
-        throw new Error('Record must have at least one column');
-      }
-
-      // ✅ 使用安全的列名引用
-      const columnNames = columns.map((c) => safeQuoteColumn(c)).join(', ');
-      const placeholders = values.map(() => '?').join(', ');
-
-      // ✅ 使用辅助方法
-      await this.ensureAttached(dataset);
-      const tableName = this.getTableName(safeDatasetId);
-
-      const sql = `INSERT INTO ${tableName} (${columnNames}) VALUES (${placeholders})`;
-      const stmt = await this.conn.prepare(sql);
-      stmt.bind(values);
-      await stmt.run();
-      stmt.destroySync();
-
-      try {
-        await this.metadataService.incrementRowCount(safeDatasetId, 1);
-      } catch (countError) {
-        console.warn(
-          `[DatasetService] Failed to increment row_count for ${safeDatasetId}:`,
-          countError
-        );
-      }
-
+      await this.insertRecordInCurrentQueue(safeDatasetId, dataset, record);
       console.log(`✅ Record inserted into ${safeDatasetId}`);
-
-      // 触发 Webhook 回调事件（不阻塞数据库操作）
-      this.hookBus?.emit('webhook:record.created', {
-        datasetId: safeDatasetId,
-        record: cleanedRecord,
-      });
     });
+  }
+
+  private async insertRecordInCurrentQueue(
+    safeDatasetId: string,
+    dataset: Dataset,
+    record: DataRecord
+  ): Promise<DataRecord> {
+    // ✅ 过滤掉系统字段（防御性编程：后端再次过滤）
+    const cleanedRecord = getWritableRecordForDataset(dataset, record);
+    const columns = Object.keys(cleanedRecord);
+    const values = Object.values(cleanedRecord);
+
+    if (columns.length === 0) {
+      throw new Error('Record must have at least one column');
+    }
+
+    // ✅ 使用安全的列名引用
+    const columnNames = columns.map((c) => safeQuoteColumn(c)).join(', ');
+    const placeholders = values.map(() => '?').join(', ');
+
+    // ✅ 使用辅助方法
+    await this.ensureAttached(dataset);
+    const tableName = this.getTableName(safeDatasetId);
+
+    const sql = `INSERT INTO ${tableName} (${columnNames}) VALUES (${placeholders})`;
+    await runPrepared(this.conn, sql, values);
+
+    try {
+      await this.metadataService.incrementRowCount(safeDatasetId, 1);
+    } catch (countError) {
+      console.warn(
+        `[DatasetService] Failed to increment row_count for ${safeDatasetId}:`,
+        countError
+      );
+    }
+
+    // 触发 Webhook 回调事件（不阻塞数据库操作）
+    this.hookBus?.emit('webhook:record.created', {
+      datasetId: safeDatasetId,
+      record: cleanedRecord,
+    });
+
+    return cleanedRecord;
   }
 
   /**
@@ -936,43 +884,9 @@ WHERE t._row_id = cleaned._row_id
       const dataset = await this.metadataService.getDatasetInfo(safeDatasetId);
       if (!dataset) throw new Error('Dataset not found');
 
-      // 单条记录，使用现有方法
+      // 单条记录复用已在队列内的内部实现，避免嵌套队列死锁和逻辑漂移
       if (records.length === 1) {
-        // 避免嵌套队列导致死锁：batchInsertRecords 已在 executeInQueue 内部
-        const cleanedRecord = getWritableRecordForDataset(dataset, records[0]);
-        const columns = Object.keys(cleanedRecord);
-        const values = Object.values(cleanedRecord);
-
-        if (columns.length === 0) {
-          throw new Error('Record must have at least one column');
-        }
-
-        const columnNames = columns.map((c) => safeQuoteColumn(c)).join(', ');
-        const placeholders = values.map(() => '?').join(', ');
-
-        await this.ensureAttached(dataset);
-        const tableName = this.getTableName(safeDatasetId);
-
-        const sql = `INSERT INTO ${tableName} (${columnNames}) VALUES (${placeholders})`;
-        const stmt = await this.conn.prepare(sql);
-        stmt.bind(values);
-        await stmt.run();
-        stmt.destroySync();
-
-        try {
-          await this.metadataService.incrementRowCount(safeDatasetId, 1);
-        } catch (countError) {
-          console.warn(
-            `[DatasetService] Failed to increment row_count for ${safeDatasetId}:`,
-            countError
-          );
-        }
-
-        this.hookBus?.emit('webhook:record.created', {
-          datasetId: safeDatasetId,
-          record: cleanedRecord,
-        });
-
+        await this.insertRecordInCurrentQueue(safeDatasetId, dataset, records[0]);
         return;
       }
 
@@ -989,6 +903,10 @@ WHERE t._row_id = cleaned._row_id
       }
 
       const columns = Object.keys(cleanedRecords[0]);
+      if (columns.length === 0) {
+        throw new Error('Record must have at least one column');
+      }
+
       // ✅ 使用安全的列名引用
       const columnNames = columns.map((c) => safeQuoteColumn(c)).join(', ');
 
@@ -998,9 +916,7 @@ WHERE t._row_id = cleaned._row_id
 
       // 分批插入（每批100条，避免SQL过长）
       const BATCH_SIZE = 100;
-      await this.conn.run('BEGIN TRANSACTION');
-
-      try {
+      await runInDuckDbTransaction(this.conn, async () => {
         for (let i = 0; i < cleanedRecords.length; i += BATCH_SIZE) {
           const batch = cleanedRecords.slice(i, i + BATCH_SIZE);
 
@@ -1017,28 +933,20 @@ WHERE t._row_id = cleaned._row_id
 
           // 执行插入
           const sql = `INSERT INTO ${tableName} (${columnNames}) VALUES ${placeholders}`;
-          const stmt = await this.conn.prepare(sql);
-          stmt.bind(values);
-          await stmt.run();
-          stmt.destroySync();
+          await runPrepared(this.conn, sql, values);
         }
+      });
 
-        await this.conn.run('COMMIT');
-
-        try {
-          await this.metadataService.incrementRowCount(safeDatasetId, cleanedRecords.length);
-        } catch (countError) {
-          console.warn(
-            `[DatasetService] Failed to increment row_count for ${safeDatasetId}:`,
-            countError
-          );
-        }
-
-        console.log(`✅ Batch inserted ${cleanedRecords.length} records into ${safeDatasetId}`);
-      } catch (error) {
-        await this.conn.run('ROLLBACK');
-        throw error;
+      try {
+        await this.metadataService.incrementRowCount(safeDatasetId, cleanedRecords.length);
+      } catch (countError) {
+        console.warn(
+          `[DatasetService] Failed to increment row_count for ${safeDatasetId}:`,
+          countError
+        );
       }
+
+      console.log(`✅ Batch inserted ${cleanedRecords.length} records into ${safeDatasetId}`);
     });
   }
 
@@ -1096,7 +1004,10 @@ WHERE t._row_id = cleaned._row_id
       await this.conn.run(`ATTACH '${escapedTargetPath}' AS ${quoteIdentifier(targetAttachKey)}`);
 
       try {
-        const physicalColumnNames = await this.createCloneTargetTable(targetAttachKey, sourceTableName);
+        const physicalColumnNames = await this.createCloneTargetTable(
+          targetAttachKey,
+          sourceTableName
+        );
         await this.copyRowsToCloneTable(sourceTableName, targetTableName, physicalColumnNames);
 
         // Re-seed future inserts after copying the existing rows.

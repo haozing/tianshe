@@ -103,7 +103,7 @@ describe('QueryEngine', () => {
 
       const sql = await queryEngine.buildSQL('test', config);
       // 软删除配置会生成 WHERE "deleted_at" IS NULL 条件（字段名会被转义）
-      expect(sql).toContain('"deleted_at" IS NULL');
+      expect(sql).toContain('deleted_at IS NULL');
     });
 
     it('should build relative time filter', async () => {
@@ -392,6 +392,75 @@ describe('QueryEngine', () => {
       expect(sql).toContain('ROW_NUMBER()');
       expect(sql).toContain('PARTITION BY email');
       expect(sql).toContain('WHERE _rn = 1');
+    });
+  });
+
+  describe('Group Builder', () => {
+    it('should populate numeric stats fields by default', async () => {
+      const config: QueryConfig = {
+        group: {
+          field: 'name',
+          order: 'asc',
+        },
+      };
+
+      const sql = await queryEngine.buildSQL('test', config);
+
+      expect(sql).toContain('AS __group_sum_id');
+      expect(sql).toContain('AS __group_avg_id');
+      expect(sql).toContain('AS __group_sum_age');
+      expect(sql).toContain('AS __group_avg_age');
+      expect(sql).toContain('AS __group_sum_price');
+      expect(sql).toContain('AS __group_avg_price');
+      expect(sql).not.toContain('AS __group_sum_name');
+    });
+  });
+
+  describe('Aggregate Builder', () => {
+    it('should reject missing aggregate groupBy fields before execution', async () => {
+      const config: QueryConfig = {
+        aggregate: {
+          groupBy: ['missing_city'],
+          measures: [{ name: 'total_age', function: 'SUM', field: 'age' }],
+        },
+      };
+
+      await expect(queryEngine.buildSQL('test', config)).rejects.toMatchObject({
+        code: 'FIELD_NOT_FOUND',
+      });
+    });
+
+    it('should reject missing aggregate measure fields before execution', async () => {
+      const config: QueryConfig = {
+        aggregate: {
+          groupBy: ['name'],
+          measures: [{ name: 'total_missing', function: 'SUM', field: 'missing_amount' }],
+        },
+      };
+
+      await expect(queryEngine.buildSQL('test', config)).rejects.toMatchObject({
+        code: 'FIELD_NOT_FOUND',
+      });
+    });
+
+    it('should reject missing aggregate arg/order fields before execution', async () => {
+      const config: QueryConfig = {
+        aggregate: {
+          groupBy: ['name'],
+          measures: [
+            {
+              name: 'first_age',
+              function: 'FIRST',
+              field: 'age',
+              params: { orderBy: 'missing_order' },
+            },
+          ],
+        },
+      };
+
+      await expect(queryEngine.buildSQL('test', config)).rejects.toMatchObject({
+        code: 'FIELD_NOT_FOUND',
+      });
     });
   });
 

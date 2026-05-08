@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { Request, Response } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import { armPendingMcpSessionTerminationOnResponse } from './mcp-http-adapter';
-import type { McpSessionInfo } from './mcp-http-types';
+import { createMcpSessionInfo, type McpSessionInfo } from './mcp-http-types';
 import {
   extractSingleJsonRpcRequestId,
   normalizeMcpAcceptHeader,
@@ -13,17 +13,14 @@ import {
 class MockResponseLifecycle extends EventEmitter {}
 
 function createSession(sessionId = 'session-1'): McpSessionInfo {
-  return {
+  return createMcpSessionInfo({
     sessionId,
     transport: null as any,
     lastActivity: Date.now(),
-    invokeQueue: Promise.resolve(),
-    pendingInvocations: 0,
-    activeInvocations: 0,
     maxQueueSize: 64,
     visible: false,
     terminateAfterResponse: true,
-  };
+  });
 }
 
 async function waitForImmediateCleanup(): Promise<void> {
@@ -62,7 +59,7 @@ describe('armPendingMcpSessionTerminationOnResponse', () => {
     'cleans up a pending current-session termination on response %s',
     async (eventName) => {
       const session = createSession();
-      const transports = new Map([[session.sessionId as string, session]]);
+      const transports = new Map([[session.transport.sessionId as string, session]]);
       const cleanupSession = vi.fn().mockResolvedValue(undefined);
       const res = new MockResponseLifecycle();
 
@@ -74,16 +71,16 @@ describe('armPendingMcpSessionTerminationOnResponse', () => {
       res.emit(eventName, eventName === 'error' ? new Error('socket failure') : undefined);
       await waitForImmediateCleanup();
 
-      expect(session.terminateAfterResponse).toBe(false);
-      expect(transports.has(session.sessionId as string)).toBe(false);
+      expect(session.lifecycle.terminateAfterResponse).toBe(false);
+      expect(transports.has(session.transport.sessionId as string)).toBe(false);
       expect(cleanupSession).toHaveBeenCalledTimes(1);
-      expect(cleanupSession).toHaveBeenCalledWith(session.sessionId, session);
+      expect(cleanupSession).toHaveBeenCalledWith(session.transport.sessionId, session);
     }
   );
 
   it('runs cleanup only once when multiple response termination events fire', async () => {
     const session = createSession();
-    const transports = new Map([[session.sessionId as string, session]]);
+    const transports = new Map([[session.transport.sessionId as string, session]]);
     const cleanupSession = vi.fn().mockResolvedValue(undefined);
     const res = new MockResponseLifecycle();
 
@@ -97,7 +94,7 @@ describe('armPendingMcpSessionTerminationOnResponse', () => {
     await waitForImmediateCleanup();
 
     expect(cleanupSession).toHaveBeenCalledTimes(1);
-    expect(transports.has(session.sessionId as string)).toBe(false);
+    expect(transports.has(session.transport.sessionId as string)).toBe(false);
   });
 });
 

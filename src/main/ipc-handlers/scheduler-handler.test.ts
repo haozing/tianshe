@@ -11,6 +11,8 @@ import type { IpcMainInvokeEvent } from 'electron';
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn(),
+    removeHandler: vi.fn(),
+    removeListener: vi.fn(),
   },
 }));
 
@@ -26,6 +28,7 @@ vi.mock('../ipc-utils', () => ({
 
 import { ipcMain } from 'electron';
 import { handleIPCError } from '../ipc-utils';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 
 describe('SchedulerIPCHandler', () => {
   let handler: SchedulerIPCHandler;
@@ -35,6 +38,7 @@ describe('SchedulerIPCHandler', () => {
   beforeEach(() => {
     // 清除所有模拟
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
 
     // 创建 registeredHandlers 存储
     registeredHandlers = new Map();

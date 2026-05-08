@@ -7,7 +7,12 @@ import {
   shouldRecycleSessionBrowser,
 } from './mcp-http-session-runtime';
 import { BrowserAcquireTimeoutDiagnosticsError } from './http-browser-pool-adapter';
-import type { McpSessionInfo, McpSessionRuntimeOptions } from './mcp-http-types';
+import {
+  createMcpSessionInfo,
+  type CreateMcpSessionInfoOptions,
+  type McpSessionInfo,
+  type McpSessionRuntimeOptions,
+} from './mcp-http-types';
 
 function createBrowserHandle(options?: {
   browserId?: string;
@@ -24,18 +29,17 @@ function createBrowserHandle(options?: {
   } as unknown as BrowserHandle;
 }
 
-function createSession(overrides: Partial<McpSessionInfo> = {}): McpSessionInfo {
-  return {
+function createSession(
+  overrides: Partial<CreateMcpSessionInfoOptions> = {}
+): McpSessionInfo {
+  return createMcpSessionInfo({
     sessionId: 'session-1',
     transport: {} as never,
     lastActivity: Date.now(),
-    invokeQueue: Promise.resolve(),
-    pendingInvocations: 0,
-    activeInvocations: 0,
     maxQueueSize: 64,
     visible: false,
     ...overrides,
-  };
+  });
 }
 
 function createOptions(
@@ -131,7 +135,7 @@ describe('mcp session runtime', () => {
     expect((staleHandle.release as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith({ destroy: true });
     expect(acquireBrowserFromPool).toHaveBeenCalledTimes(1);
     expect(handle).toBe(freshHandle);
-    expect(session.browserHandle).toBe(freshHandle);
+    expect(session.browser.browserHandle).toBe(freshHandle);
   });
 
   it('ensureSessionBrowserHandle attaches hidden MCP sessions to a dedicated automation host', async () => {
@@ -203,10 +207,10 @@ describe('mcp session runtime', () => {
       expect.objectContaining({ width: expect.any(Number), height: expect.any(Number) })
     );
     expect(handle).toBe(freshHandle);
-    expect(session.hostWindowId).toBe(hiddenWindowId);
-    expect(session.viewportHealth).toBe('ready');
-    expect(session.interactionReady).toBe(true);
-    expect(session.offscreenDetected).toBe(false);
+    expect(session.browser.hostWindowId).toBe(hiddenWindowId);
+    expect(session.viewport.viewportHealth).toBe('ready');
+    expect(session.viewport.interactionReady).toBe(true);
+    expect(session.viewport.offscreenDetected).toBe(false);
 
     const gateway = createMcpSessionGateway(options, session);
     const sessions = await gateway.listSessions();
@@ -231,10 +235,10 @@ describe('mcp session runtime', () => {
 
     await ensureSessionBrowserHandle(options, session);
 
-    expect(session.browserHandle).toBe(handle);
-    expect(session.viewportHealth).toBe('unknown');
-    expect(session.viewportHealthReason).toBe('browser implementation manages visibility directly');
-    expect(session.interactionReady).toBe(true);
+    expect(session.browser.browserHandle).toBe(handle);
+    expect(session.viewport.viewportHealth).toBe('unknown');
+    expect(session.viewport.viewportHealthReason).toBe('browser implementation manages visibility directly');
+    expect(session.viewport.interactionReady).toBe(true);
 
     const gateway = createMcpSessionGateway(options, session);
     const interaction = await gateway.ensureCurrentSessionInteractionReady?.();
@@ -400,9 +404,9 @@ describe('mcp session runtime', () => {
       allowFurtherCallsOnSameTransport: false,
       terminationTiming: 'after_response_flush',
     });
-    expect(session.closing).toBe(true);
-    expect(session.terminateAfterResponse).toBe(true);
-    expect(session.closeReason).toMatchObject({
+    expect(session.lifecycle.closing).toBe(true);
+    expect(session.lifecycle.terminateAfterResponse).toBe(true);
+    expect(session.lifecycle.closeReason).toMatchObject({
       code: 'OPERATION_FAILED',
       context: expect.objectContaining({ reason: 'session_closing' }),
     });

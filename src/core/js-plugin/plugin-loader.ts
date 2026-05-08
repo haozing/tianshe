@@ -8,10 +8,12 @@
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import { app } from 'electron';
-import type { DuckDBService } from '../../main/duckdb/service';
+import type { IDuckDBService } from '../../types/duckdb';
 import type { JSPluginManifest, JSPluginInfo, JSPluginImportResult } from '../../types/js-plugin';
 import { readManifest, loadPluginModule, extractPlugin } from './loader';
 import { createLogger } from '../logger';
+import { getUnknownErrorMessage } from '../../utils/error-message';
+
 import {
   assertTrustedFirstPartyPluginImport,
   type TrustedFirstPartyImportOptions,
@@ -71,7 +73,7 @@ export class PluginLoader {
   /** 插件存储目录 */
   private readonly pluginsDir: string;
 
-  constructor(private duckdb: DuckDBService) {
+  constructor(private duckdb: IDuckDBService) {
     this.pluginsDir = path.join(app.getPath('userData'), 'js-plugins');
   }
 
@@ -197,11 +199,11 @@ export class PluginLoader {
             const { unpackPlugin } = await import('./loader');
             manifestSourceDir = await unpackPlugin(sourcePath, tempExtractDir);
             logger.info('Archive extracted to temporary directory', { manifestSourceDir });
-          } catch (extractError: any) {
+          } catch (extractError: unknown) {
             if (tempExtractDir) {
               await fs.remove(tempExtractDir).catch(() => {});
             }
-            throw new Error(`解压插件文件失败：${extractError.message}`);
+            throw new Error(`解压插件文件失败：${getUnknownErrorMessage(extractError)}`);
           }
         } else {
           throw new Error(`不支持的文件格式: ${ext}。请使用 .zip 或 .tsai 文件，或选择插件目录。`);
@@ -215,12 +217,12 @@ export class PluginLoader {
         manifest = await readManifest(manifestSourceDir);
         assertTrustedFirstPartyPluginImport(manifest, options);
         logger.info('Manifest read successfully');
-      } catch (manifestError: any) {
+      } catch (manifestError: unknown) {
         if (tempExtractDir) {
           await fs.remove(tempExtractDir).catch(() => {});
         }
         logger.error('Failed to read manifest', manifestError);
-        throw new Error(`无法读取插件配置文件：${manifestError.message}`);
+        throw new Error(`无法读取插件配置文件：${getUnknownErrorMessage(manifestError)}`);
       }
 
       logger.info('Plugin info parsed', {
@@ -235,9 +237,9 @@ export class PluginLoader {
       try {
         existing = callbacks ? await callbacks.getPluginInfo(manifest.id) : null;
         logger.info('Plugin existence check completed');
-      } catch (checkError: any) {
+      } catch (checkError: unknown) {
         logger.error('Failed to check plugin existence', checkError);
-        throw new Error(`Database query failed: ${checkError.message}`);
+        throw new Error(`Database query failed: ${getUnknownErrorMessage(checkError)}`);
       }
       if (existing) {
         throw new Error(`Plugin ${manifest.id} is already installed. Please uninstall it first.`);
@@ -282,9 +284,9 @@ export class PluginLoader {
             logger.info('Installing in production mode (file copy)');
             await extractPlugin(sourcePath, this.pluginsDir);
             logger.info('Production mode installation completed');
-          } catch (extractError: any) {
+          } catch (extractError: unknown) {
             logger.error('Extract plugin failed', extractError);
-            throw new Error(`插件文件复制失败：${extractError.message}`);
+            throw new Error(`插件文件复制失败：${getUnknownErrorMessage(extractError)}`);
           }
         }
       }
@@ -305,9 +307,9 @@ export class PluginLoader {
           lastPolicySyncAt: options?.lastPolicySyncAt,
         });
         logger.info('Plugin metadata saved successfully');
-      } catch (saveError: any) {
+      } catch (saveError: unknown) {
         logger.error('Failed to save plugin metadata', saveError);
-        throw new Error(`Failed to save plugin to database: ${saveError.message}`);
+        throw new Error(`Failed to save plugin to database: ${getUnknownErrorMessage(saveError)}`);
       }
 
       // 7-9. Create folder, tables, and UI contributions (via callbacks)
@@ -330,11 +332,11 @@ export class PluginLoader {
         pluginId: manifest.id,
         warnings: warnings.length > 0 ? warnings : undefined,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('Plugin import failed', error);
       return {
         success: false,
-        error: error.message,
+        error: getUnknownErrorMessage(error),
       };
     }
   }
@@ -471,7 +473,7 @@ export class PluginLoader {
     try {
       await this.duckdb.executeWithParams(sql, params);
       logger.debug('Successfully saved metadata', { pluginId: manifest.id });
-    } catch (dbError: any) {
+    } catch (dbError: unknown) {
       logger.error('DuckDB error while saving metadata', dbError);
       throw dbError;
     }
@@ -504,8 +506,8 @@ export class PluginLoader {
           if (process.platform === 'win32') {
             await new Promise((resolve) => setTimeout(resolve, 100));
           }
-        } catch (removeError: any) {
-          logger.error('Failed to remove existing target', { error: removeError.message });
+        } catch (removeError: unknown) {
+          logger.error('Failed to remove existing target', { error: getUnknownErrorMessage(removeError) });
           return false;
         }
       }
@@ -550,7 +552,7 @@ export class PluginLoader {
       }
 
       return true;
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('Failed to create symbolic link', error);
       logger.warn('Will fallback to copy mode');
       return false;
@@ -612,9 +614,9 @@ export class PluginLoader {
         }
       }
       logger.info('Production mode files moved from temp');
-    } catch (moveError: any) {
+    } catch (moveError: unknown) {
       logger.error('Move plugin failed', moveError);
-      throw new Error(`移动插件文件失败：${moveError.message}`);
+      throw new Error(`移动插件文件失败：${getUnknownErrorMessage(moveError)}`);
     }
   }
 
@@ -642,25 +644,25 @@ export class PluginLoader {
               '无法创建符号链接（可能是源目录和安装目录在不同驱动器），已自动降级为复制模式。\n' +
               '在此模式下，修改源代码后需要重新导入插件才能生效。',
           };
-        } catch (copyError: any) {
+        } catch (copyError: unknown) {
           throw new Error(
-            `开发模式安装失败：无法创建符号链接，且复制文件也失败。错误：${copyError.message}`
+            `开发模式安装失败：无法创建符号链接，且复制文件也失败。错误：${getUnknownErrorMessage(copyError)}`
           );
         }
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('Symbolic link creation failed with exception', error);
       try {
         await this.copyPlugin(sourcePath);
         return {
           linkCreated: false,
-          warning: `创建符号链接失败: ${error.message}，已降级为复制模式`,
+          warning: `创建符号链接失败: ${getUnknownErrorMessage(error)}，已降级为复制模式`,
         };
-      } catch (copyError: any) {
+      } catch (copyError: unknown) {
         throw new Error(
           `插件安装失败：开发模式下符号链接创建失败，降级复制也失败。\n` +
-            `符号链接错误：${error.message}\n` +
-            `复制错误：${copyError.message}`
+            `符号链接错误：${getUnknownErrorMessage(error)}\n` +
+            `复制错误：${getUnknownErrorMessage(copyError)}`
         );
       }
     }

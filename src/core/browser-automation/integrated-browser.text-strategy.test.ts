@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { IntegratedBrowser } from './integrated-browser';
 
-function createIntegratedBrowserForTest(): IntegratedBrowser {
+function createIntegratedBrowserForTest(options?: ConstructorParameters<typeof IntegratedBrowser>[2]): IntegratedBrowser {
   const rawSession = {
     on: vi.fn(),
     removeListener: vi.fn(),
@@ -24,7 +24,7 @@ function createIntegratedBrowserForTest(): IntegratedBrowser {
     },
   } as any;
 
-  return new IntegratedBrowser(fakeBrowser, {} as any);
+  return new IntegratedBrowser(fakeBrowser, {} as any, options);
 }
 
 describe('IntegratedBrowser text strategy', () => {
@@ -205,5 +205,48 @@ describe('IntegratedBrowser text strategy', () => {
     expect(browser.browser.evaluate).toHaveBeenCalledTimes(1);
     const [script] = browser.browser.evaluate.mock.calls[0];
     expect(script).toContain(';\n(function() { return { ok: true }; })()');
+  });
+
+  it('getViewportOCR should require an injected OCR provider factory', async () => {
+    const browser = createIntegratedBrowserForTest();
+
+    await expect(browser.getViewportOCR()).rejects.toThrow(
+      'OCR provider factory is not configured for IntegratedBrowser'
+    );
+  });
+
+  it('recognizeText should use the injected OCR provider factory without the global pool', async () => {
+    const provider = {
+      recognize: vi.fn(async () => [
+        {
+          text: 'Submit',
+          confidence: 99,
+          bounds: { x: 10, y: 20, width: 80, height: 24 },
+        },
+      ]),
+    };
+    const factory = {
+      create: vi.fn(async () => provider),
+    };
+    const browser = createIntegratedBrowserForTest({
+      ocrProviderFactory: factory,
+    }) as any;
+    browser.browser.capture = {
+      screenshot: vi.fn(async () => Buffer.from('image')),
+    };
+    browser.browser.cdp = {
+      viewportScreenshot: vi.fn(async () => Buffer.from('image').toString('base64')),
+    };
+
+    await expect(browser.recognizeText()).resolves.toEqual([
+      {
+        text: 'Submit',
+        confidence: 99,
+        bounds: { x: 10, y: 20, width: 80, height: 24 },
+      },
+    ]);
+
+    expect(factory.create).toHaveBeenCalledTimes(1);
+    expect(provider.recognize).toHaveBeenCalled();
   });
 });

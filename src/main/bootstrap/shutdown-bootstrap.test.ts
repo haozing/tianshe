@@ -10,6 +10,9 @@ function createOptions(overrides: Record<string, unknown> = {}) {
   const stopHttpServer = vi.fn(async () => {
     steps.push('stop-http-server');
   });
+  const disposeResourceMonitoring = vi.fn(() => {
+    steps.push('dispose-resource-monitoring');
+  });
   const disposeScheduler = vi.fn(async () => {
     steps.push('dispose-scheduler');
   });
@@ -48,6 +51,7 @@ function createOptions(overrides: Record<string, unknown> = {}) {
   return {
     steps,
     stopHttpServer,
+    disposeResourceMonitoring,
     disposeScheduler,
     cleanupUpdater,
     stopBrowserPool,
@@ -61,6 +65,7 @@ function createOptions(overrides: Record<string, unknown> = {}) {
     consoleRef,
     options: {
       stopHttpServer,
+      disposeResourceMonitoring,
       disposeScheduler,
       cleanupUpdater,
       stopBrowserPool,
@@ -93,10 +98,11 @@ describe('shutdown-bootstrap', () => {
 
     expect(steps).toEqual([
       'stop-http-server',
+      'dispose-resource-monitoring',
       'dispose-scheduler',
       'cleanup-updater',
-      'stop-browser-pool',
       'cleanup-view-manager',
+      'stop-browser-pool',
       'cleanup-window-manager',
       'close-duckdb',
       'exit-app:0',
@@ -107,6 +113,7 @@ describe('shutdown-bootstrap', () => {
   it('reuses the same cleanup promise and prevents duplicate exits', async () => {
     const {
       stopHttpServer,
+      disposeResourceMonitoring,
       disposeScheduler,
       cleanupUpdater,
       stopBrowserPool,
@@ -125,6 +132,7 @@ describe('shutdown-bootstrap', () => {
     await handlers.handleProcessSignal('SIGINT');
 
     expect(stopHttpServer).toHaveBeenCalledTimes(1);
+    expect(disposeResourceMonitoring).toHaveBeenCalledTimes(1);
     expect(disposeScheduler).toHaveBeenCalledTimes(1);
     expect(cleanupUpdater).toHaveBeenCalledTimes(1);
     expect(stopBrowserPool).toHaveBeenCalledTimes(1);
@@ -133,6 +141,52 @@ describe('shutdown-bootstrap', () => {
     expect(closeDuckDB).toHaveBeenCalledTimes(1);
     expect(exitApp).toHaveBeenCalledTimes(1);
     expect(exitProcess).not.toHaveBeenCalled();
+  });
+
+  it('continues cleanup when a step throws and exits with error code', async () => {
+    const { steps, exitApp, options } = createOptions({
+      cleanupViewManager: vi.fn(async () => {
+        steps.push('cleanup-view-manager');
+        throw new Error('view manager error');
+      }),
+    });
+    const handlers = createShutdownBootstrap(options);
+
+    await handlers.handleBeforeQuit({
+      preventDefault: vi.fn(),
+    });
+
+    expect(steps).toEqual([
+      'stop-http-server',
+      'dispose-resource-monitoring',
+      'dispose-scheduler',
+      'cleanup-updater',
+      'cleanup-view-manager',
+      'stop-browser-pool',
+      'cleanup-window-manager',
+      'close-duckdb',
+      'exit-app:1',
+    ]);
+    expect(exitApp).toHaveBeenCalledWith(1);
+  });
+
+  it('does not duplicate exit when shutdown is called multiple times', async () => {
+    const { steps, exitApp, exitProcess, options } = createOptions({
+      cleanupViewManager: vi.fn(async () => {
+        steps.push('cleanup-view-manager');
+        throw new Error('view manager error');
+      }),
+    });
+    const handlers = createShutdownBootstrap(options);
+
+    await handlers.handleBeforeQuit({
+      preventDefault: vi.fn(),
+    });
+    await handlers.handleProcessSignal('SIGINT');
+
+    expect(exitApp).toHaveBeenCalledTimes(1);
+    expect(exitProcess).not.toHaveBeenCalled();
+    expect(steps.filter((s) => s.startsWith('exit-'))).toEqual(['exit-app:1']);
   });
 
   it('registers app lifecycle and process signal handlers', () => {

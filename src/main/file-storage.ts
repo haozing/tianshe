@@ -7,6 +7,10 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import { app } from 'electron';
 import type { AttachmentMetadata } from './duckdb/types';
+import { getUnknownErrorMessage } from './ipc-utils';
+
+export const MAX_ATTACHMENT_BASE64_PREVIEW_BYTES = 10 * 1024 * 1024;
+export const MAX_ATTACHMENT_UPLOAD_BYTES = 500 * 1024 * 1024;
 
 export class FileStorage {
   private basePath: string;
@@ -124,9 +128,16 @@ export class FileStorage {
   async saveFile(
     datasetId: string,
     fileBuffer: Buffer,
-    originalFilename: string
+    originalFilename: string,
+    maxBytes = MAX_ATTACHMENT_UPLOAD_BYTES
   ): Promise<AttachmentMetadata> {
     try {
+      if (fileBuffer.length > maxBytes) {
+        throw new Error(
+          `File is too large to upload: ${fileBuffer.length} bytes (max ${maxBytes} bytes)`
+        );
+      }
+
       const safeDatasetId = this.sanitizeDatasetId(datasetId);
 
       // 确保目录存在
@@ -154,9 +165,48 @@ export class FileStorage {
       };
 
       return metadata;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[FileStorage] Failed to save file:', error);
-      throw new Error(`保存文件失败: ${error.message}`);
+      throw new Error(`保存文件失败: ${getUnknownErrorMessage(error)}`);
+    }
+  }
+
+  async saveFileFromPath(
+    datasetId: string,
+    sourcePath: string,
+    originalFilename = path.basename(sourcePath),
+    maxBytes = MAX_ATTACHMENT_UPLOAD_BYTES
+  ): Promise<AttachmentMetadata> {
+    try {
+      const stats = await fs.stat(sourcePath);
+      if (!stats.isFile()) {
+        throw new Error('Path is not a file');
+      }
+      if (stats.size > maxBytes) {
+        throw new Error(`File is too large to upload: ${stats.size} bytes (max ${maxBytes} bytes)`);
+      }
+
+      const safeDatasetId = this.sanitizeDatasetId(datasetId);
+      this.ensureDatasetDir(safeDatasetId);
+
+      const uniqueFilename = this.generateUniqueFilename(originalFilename);
+      const datasetDir = this.getDatasetDir(safeDatasetId);
+      const fullPath = path.join(datasetDir, uniqueFilename);
+
+      await fs.copy(sourcePath, fullPath, { overwrite: false, errorOnExist: true });
+
+      const relativePath = path.join(safeDatasetId, uniqueFilename);
+      return {
+        id: `${safeDatasetId}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+        filename: originalFilename,
+        size: stats.size,
+        uploadTime: Date.now(),
+        path: relativePath,
+        mimeType: this.getMimeType(originalFilename),
+      };
+    } catch (error: unknown) {
+      console.error('[FileStorage] Failed to save file from path:', error);
+      throw new Error(`保存文件失败: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -174,9 +224,9 @@ export class FileStorage {
       } else {
         console.warn('[FileStorage] File not found:', relativePath);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[FileStorage] Failed to delete file:', error);
-      throw new Error(`删除文件失败: ${error.message}`);
+      throw new Error(`删除文件失败: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -216,12 +266,25 @@ export class FileStorage {
    * @param relativePath 相对路径
    * @returns Base64 data URL
    */
-  async getFileAsBase64(relativePath: string): Promise<string> {
+  async getFileAsBase64(
+    relativePath: string,
+    maxBytes = MAX_ATTACHMENT_BASE64_PREVIEW_BYTES
+  ): Promise<string> {
     try {
       const fullPath = this.getFilePath(relativePath);
 
       if (!fs.existsSync(fullPath)) {
         throw new Error('文件不存在');
+      }
+
+      const stats = await fs.stat(fullPath);
+      if (!stats.isFile()) {
+        throw new Error('Path is not a file');
+      }
+      if (stats.size > maxBytes) {
+        throw new Error(
+          `File is too large to preview as Base64: ${stats.size} bytes (max ${maxBytes} bytes)`
+        );
       }
 
       // 读取文件
@@ -234,9 +297,9 @@ export class FileStorage {
       // 转换为 Base64 data URL
       const base64 = fileBuffer.toString('base64');
       return `data:${mimeType};base64,${base64}`;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[FileStorage] Failed to read file as Base64:', error);
-      throw new Error(`读取文件失败: ${error.message}`);
+      throw new Error(`读取文件失败: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -252,9 +315,9 @@ export class FileStorage {
         await fs.remove(datasetDir);
         console.log('[FileStorage] Dataset files deleted:', datasetId);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[FileStorage] Failed to delete dataset files:', error);
-      throw new Error(`删除数据集文件失败: ${error.message}`);
+      throw new Error(`删除数据集文件失败: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -283,7 +346,7 @@ export class FileStorage {
       }
 
       return totalSize;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[FileStorage] Failed to get dataset files size:', error);
       return 0;
     }
@@ -304,6 +367,9 @@ function ensureFileStorage(): FileStorage {
 export const fileStorage = {
   saveFile(...args: Parameters<FileStorage['saveFile']>) {
     return ensureFileStorage().saveFile(...args);
+  },
+  saveFileFromPath(...args: Parameters<FileStorage['saveFileFromPath']>) {
+    return ensureFileStorage().saveFileFromPath(...args);
   },
   deleteFile(...args: Parameters<FileStorage['deleteFile']>) {
     return ensureFileStorage().deleteFile(...args);

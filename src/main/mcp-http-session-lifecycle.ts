@@ -18,12 +18,12 @@ const finalizePendingMcpSessionTermination = (
   session: McpSessionInfo | undefined,
   trigger: PendingMcpSessionTerminationEvent = 'finish'
 ): void => {
-  const sessionId = asTrimmedText(session?.sessionId);
-  if (!session || !session.terminateAfterResponse || !sessionId) {
+  const sessionId = asTrimmedText(session?.transport.sessionId);
+  if (!session || !session.lifecycle.terminateAfterResponse || !sessionId) {
     return;
   }
 
-  session.terminateAfterResponse = false;
+  session.lifecycle.terminateAfterResponse = false;
 
   let cleanupStarted = false;
   const runCleanup = () => {

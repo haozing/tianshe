@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 
 const { mockIpcMainHandle } = vi.hoisted(() => ({
   mockIpcMainHandle: vi.fn(),
@@ -7,6 +8,8 @@ const { mockIpcMainHandle } = vi.hoisted(() => ({
 vi.mock('electron', () => ({
   ipcMain: {
     handle: mockIpcMainHandle,
+    removeHandler: vi.fn(),
+    removeListener: vi.fn(),
   },
 }));
 
@@ -33,6 +36,7 @@ describe('HttpApiIPCHandler', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
     handlers = new Map();
     storedConfig = { ...DEFAULT_HTTP_API_CONFIG };
     mockFetch = vi.fn();
@@ -73,6 +77,7 @@ describe('HttpApiIPCHandler', () => {
   it('rejects guarded HTTP config calls from unauthorized senders', async () => {
     handlers.clear();
     mockIpcMainHandle.mockClear();
+    ipcRouteRegistry.unregisterAll();
     const senderGuard = vi.fn(() => {
       throw new Error('Unauthorized sender');
     });

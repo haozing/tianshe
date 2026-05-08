@@ -5,6 +5,8 @@
 
 import type { SQLContext } from '../types';
 
+export type MaybePromise<T> = T | Promise<T>;
+
 /**
  * 查询构建器接口
  *
@@ -21,7 +23,7 @@ export interface IQueryBuilder<TConfig = any> {
    * @example
    * const sql = await filterBuilder.build(context, filterConfig);
    */
-  build(context: SQLContext, config: TConfig): Promise<string>;
+  build(context: SQLContext, config: TConfig): MaybePromise<string>;
 
   /**
    * 获取Builder执行后的列名列表
@@ -34,7 +36,7 @@ export interface IQueryBuilder<TConfig = any> {
    * @example
    * const columns = await filterBuilder.getResultColumns(context, filterConfig);
    */
-  getResultColumns(context: SQLContext, config: TConfig): Promise<Set<string>>;
+  getResultColumns(context: SQLContext, config: TConfig): MaybePromise<Set<string>>;
 }
 
 /**
@@ -45,14 +47,14 @@ export abstract class SyncQueryBuilder<TConfig> implements IQueryBuilder<TConfig
   /**
    * 实现异步接口（内部调用同步方法）
    */
-  async build(context: SQLContext, config: TConfig): Promise<string> {
+  build(context: SQLContext, config: TConfig): string {
     return this.buildSync(context, config);
   }
 
   /**
    * 实现异步接口（内部调用同步方法）
    */
-  async getResultColumns(context: SQLContext, config: TConfig): Promise<Set<string>> {
+  getResultColumns(context: SQLContext, config: TConfig): Set<string> {
     return this.getResultColumnsSync(context, config);
   }
 

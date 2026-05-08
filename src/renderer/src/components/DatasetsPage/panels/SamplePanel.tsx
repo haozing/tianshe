@@ -12,6 +12,7 @@ import { OperationLoadingState, PreviewStats } from '../../common/OperationLoadi
 import { previewDatasetSample } from '../../../services/datasets/datasetPanelService';
 import type { SampleConfig } from '../../../../../core/query-engine/types';
 import { toast } from '../../../lib/toast';
+import { getUnknownErrorMessage } from '../../../../../utils/error-message';
 
 interface SamplePanelProps {
   datasetId: string;
@@ -114,17 +115,13 @@ export function SamplePanel({
               }
             : undefined;
 
-          const result = await previewDatasetSample(
-            datasetId,
-            config,
-            previewQueryConfig
-          );
+          const result = await previewDatasetSample(datasetId, config, previewQueryConfig);
 
           setPreviewResult(result);
           setPreviewError(null);
-        } catch (error: any) {
+        } catch (error: unknown) {
           console.error('[SamplePanel] Failed to preview sample:', error);
-          setPreviewError(error.message || '预览失败');
+          setPreviewError(getUnknownErrorMessage(error, '预览失败'));
           setPreviewResult(null);
         } finally {
           setPreviewLoading(false);
@@ -352,7 +349,8 @@ export function SamplePanel({
                     </>
                   ) : (
                     <>
-                      <strong>分层采样</strong>：在每个分组内随机采样指定行数，优先保证各组都有样本。
+                      <strong>分层采样</strong>
+                      ：在每个分组内随机采样指定行数，优先保证各组都有样本。
                     </>
                   )}
                 </div>

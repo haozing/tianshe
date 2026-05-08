@@ -7,9 +7,12 @@
 
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import type { DuckDBService } from '../../main/duckdb/service';
-import type { WebContentsViewManager } from '../../main/webcontentsview-manager';
-import type { WindowManager } from '../../main/window-manager';
+import type { IDuckDBService } from '../../types/duckdb';
+import type {
+  IWebContentsViewManager,
+  IWindowManager,
+} from '../browser-pool/ports';
+import type { IWebhookSender } from '../../types/service-interfaces';
 import type {
   LoadedJSPlugin,
   JSPluginInfo,
@@ -34,9 +37,12 @@ const logger = createLogger('JSPluginManager');
 import { PluginLoader } from './plugin-loader';
 import type { PluginImportOptions } from './plugin-loader';
 import { PluginLifecycleManager } from './plugin-lifecycle';
+import type { InternalDevToolsOpener } from './namespaces/window';
 import { PluginInstaller } from './plugin-installer';
 import { UIExtensionManager } from './ui-extension-manager';
 import { PluginRuntimeRegistry } from './runtime-registry';
+import { getUnknownErrorMessage } from '../../utils/error-message';
+
 
 export interface CommandExecutionGuardContext {
   pluginId: string;
@@ -96,11 +102,12 @@ export class JSPluginManager {
   private commandExecutionGuards: CommandExecutionGuard[] = [];
 
   constructor(
-    private duckdb: DuckDBService,
-    private viewManager: WebContentsViewManager,
-    private windowManager: WindowManager,
+    private duckdb: IDuckDBService,
+    private viewManager: IWebContentsViewManager,
+    private windowManager: IWindowManager,
     private hookBus: import('../hookbus').HookBus,
-    private webhookSender: import('../../main/webhook/sender').WebhookSender
+    private webhookSender: IWebhookSender,
+    private devToolsOpener?: InternalDevToolsOpener
   ) {
     this.loader = new PluginLoader(duckdb);
     this.runtimeRegistry = new PluginRuntimeRegistry();
@@ -110,7 +117,8 @@ export class JSPluginManager {
       windowManager,
       hookBus,
       webhookSender,
-      this.runtimeRegistry
+      this.runtimeRegistry,
+      devToolsOpener
     );
     this.installer = new PluginInstaller(duckdb);
     this.uiExtManager = new UIExtensionManager({ duckdb, viewManager });
@@ -122,20 +130,20 @@ export class JSPluginManager {
   async init(): Promise<void> {
     try {
       await this.loader.ensurePluginsDir();
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('[INIT] Failed to ensure plugins directory, plugins disabled:', error);
       return;
     }
 
     try {
       await this.loadInstalledPlugins();
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('[INIT] Failed to load installed plugins, continuing without plugins:', error);
     }
 
     try {
       await this.importExternalPluginSources();
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('[INIT] Failed to import external plugins, continuing:', error);
     }
 
@@ -143,7 +151,7 @@ export class JSPluginManager {
     try {
       logger.info('[IntegrityCheck] Running data integrity check...');
       const { DataIntegrityChecker } = await import('./data-integrity-checker');
-      const { getImportsDir } = await import('../../main/duckdb/utils');
+      const { getImportsDir } = await import('../../utils/data-paths');
       const checker = new DataIntegrityChecker(this.duckdb, getImportsDir());
       const { checkResult, repairResult } = await checker.checkAndRepair();
 
@@ -157,7 +165,7 @@ export class JSPluginManager {
       } else {
         logger.info('[IntegrityCheck] No data integrity issues found');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('[IntegrityCheck] Failed to run integrity check:', error);
     }
 
@@ -282,16 +290,16 @@ export class JSPluginManager {
             devMode: importOptions.devMode === true,
           },
         });
-        if (error instanceof Error && error.message === 'Plugin install failed') {
+        if (error instanceof Error && getUnknownErrorMessage(error) === 'Plugin install failed') {
           return {
             success: false,
-            error: error.message,
+            error: getUnknownErrorMessage(error),
           };
         }
-        if (error instanceof Error && String(error.message || '').trim()) {
+        if (error instanceof Error && String(getUnknownErrorMessage(error) || '').trim()) {
           return {
             success: false,
-            error: error.message,
+            error: getUnknownErrorMessage(error),
           };
         }
         return {
@@ -405,7 +413,7 @@ export class JSPluginManager {
             },
           });
           return result;
-        } catch (error: any) {
+        } catch (error: unknown) {
           const artifact = await attachErrorContextArtifact({
             span,
             component: 'plugin-manager',
@@ -426,15 +434,15 @@ export class JSPluginManager {
           });
           return {
             success: false,
-            error: error?.message || String(error),
+            error: getUnknownErrorMessage(error) || String(error),
           };
         }
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('[CloudPlugin] install/update failed', error);
       return {
         success: false,
-        error: error?.message || String(error),
+        error: getUnknownErrorMessage(error) || String(error),
       };
     } finally {
       if (tempRoot && (await fs.pathExists(tempRoot))) {
@@ -527,10 +535,10 @@ export class JSPluginManager {
         pluginId: existing.id,
         operation: 'updated',
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('[CloudPlugin] failed to replace installed plugin', {
         pluginId: existing.id,
-        error: error?.message || String(error),
+        error: getUnknownErrorMessage(error) || String(error),
       });
 
       if (await fs.pathExists(installPath)) {
@@ -554,7 +562,7 @@ export class JSPluginManager {
 
       return {
         success: false,
-        error: error?.message || String(error),
+        error: getUnknownErrorMessage(error) || String(error),
       };
     }
   }
@@ -642,10 +650,10 @@ export class JSPluginManager {
         operation: 'updated',
         warnings: installResult.warnings.length > 0 ? installResult.warnings : undefined,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('[LocalPlugin] failed to replace installed plugin', {
         pluginId: existing.id,
-        error: error?.message || String(error),
+        error: getUnknownErrorMessage(error) || String(error),
       });
 
       if (stagedTempRoot && (await fs.pathExists(stagedTempRoot))) {
@@ -672,7 +680,7 @@ export class JSPluginManager {
 
       return {
         success: false,
-        error: error?.message || String(error),
+        error: getUnknownErrorMessage(error) || String(error),
       };
     }
   }
@@ -985,9 +993,9 @@ export class JSPluginManager {
 
       try {
         await this.loadWithDependencies(depId, loading);
-      } catch (error: any) {
+      } catch (error: unknown) {
         logger.warn(`[LOAD] Failed to load dependency plugin: ${pluginId} -> ${depId}`, {
-          error: error?.message || String(error),
+          error: getUnknownErrorMessage(error) || String(error),
         });
       }
     }
@@ -1464,7 +1472,7 @@ export class JSPluginManager {
         });
 
         return result;
-      } catch (error: any) {
+      } catch (error: unknown) {
         endTimer?.();
         pluginLogger?.command(commandId, 'error', error);
         const runtimeStatus = await this.getRuntimeStatus(pluginId).catch(() => null);
@@ -1769,8 +1777,8 @@ export class JSPluginManager {
           continue;
         }
         await this.load(plugin.id);
-      } catch (error: any) {
-        logger.error(`[ERROR] Failed to load plugin ${plugin.id}:`, error.message);
+      } catch (error: unknown) {
+        logger.error(`[ERROR] Failed to load plugin ${plugin.id}:`, getUnknownErrorMessage(error));
       }
     }
 
@@ -1813,10 +1821,10 @@ export class JSPluginManager {
             `[ExternalPlugins] Failed to auto import ${sourcePath}: ${result.error || 'unknown error'}`
           );
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         logger.error(
           `[ExternalPlugins] Failed to inspect external plugin source: ${sourcePath}`,
-          error?.message || String(error)
+          getUnknownErrorMessage(error) || String(error)
         );
       } finally {
         if (prepared) {

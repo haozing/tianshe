@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addDatasetColumn,
   deleteDatasetColumn,
+  deleteDatasetColumnRaw,
   updateDatasetRecord,
   validateDatasetColumnName,
 } from './datasetMutationService';
@@ -64,7 +65,7 @@ describe('datasetMutationService', () => {
     ).resolves.toEqual({ success: true });
   });
 
-  it('keeps deleteColumn as a raw result for force-delete flows', async () => {
+  it('throws when deleteColumn returns an unsuccessful response', async () => {
     (window as any).electronAPI.duckdb.deleteColumn.mockResolvedValue({
       success: false,
       error: 'has dependencies',
@@ -72,6 +73,21 @@ describe('datasetMutationService', () => {
 
     await expect(
       deleteDatasetColumn({
+        datasetId: 'ds1',
+        columnName: 'status',
+        force: false,
+      })
+    ).rejects.toThrow('has dependencies');
+  });
+
+  it('keeps deleteColumnRaw as a raw result for force-delete flows', async () => {
+    (window as any).electronAPI.duckdb.deleteColumn.mockResolvedValue({
+      success: false,
+      error: 'has dependencies',
+    });
+
+    await expect(
+      deleteDatasetColumnRaw({
         datasetId: 'ds1',
         columnName: 'status',
         force: false,

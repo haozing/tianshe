@@ -71,31 +71,36 @@ export class DatasetImportService {
 
   private resolveImportWorkerPath(): string {
     const devPath = path.join(__dirname, 'import-worker.js');
+    const candidates: string[] = [];
 
     // Packaged app: worker_threads 入口脚本在 app.asar 内部可能无法被正确加载，
     // 优先使用 app.asar.unpacked 中的脚本。
     if (typeof process.resourcesPath === 'string' && process.resourcesPath.length > 0) {
-      const unpackedPath = path.join(
-        process.resourcesPath,
-        'app.asar.unpacked',
-        'dist',
-        'main',
-        'duckdb',
-        'import-worker.js'
+      candidates.push(
+        path.join(
+          process.resourcesPath,
+          'app.asar.unpacked',
+          'dist',
+          'main',
+          'duckdb',
+          'import-worker.js'
+        ),
+        path.join(process.resourcesPath, 'app.asar', 'dist', 'main', 'duckdb', 'import-worker.js')
       );
-      if (fs.pathExistsSync(unpackedPath)) return unpackedPath;
-
-      const asarPath = path.join(
-        process.resourcesPath,
-        'app.asar',
-        'dist',
-        'main',
-        'duckdb',
-        'import-worker.js'
-      );
-      if (fs.pathExistsSync(asarPath)) return asarPath;
     }
 
+    candidates.push(devPath);
+
+    const existingPath = candidates.find((candidate) => fs.pathExistsSync(candidate));
+    if (existingPath) {
+      return existingPath;
+    }
+
+    console.warn(
+      `[Import] import-worker.js was not found in expected locations; falling back to ${devPath}. Checked: ${candidates.join(
+        ', '
+      )}`
+    );
     return devPath;
   }
 
@@ -168,7 +173,7 @@ export class DatasetImportService {
 
       try {
         worker = new Worker(workerPath, { workerData: task });
-      } catch (error: any) {
+      } catch (error: unknown) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         console.error(`[Import] Failed to start worker: ${workerPath}`, error);
         onProgress?.({
@@ -218,7 +223,7 @@ export class DatasetImportService {
             settled = true;
             this.clearImportTracking(datasetId);
             resolve(datasetId);
-          } catch (error: any) {
+          } catch (error: unknown) {
             await rejectWithCleanup(error instanceof Error ? error : new Error(String(error)));
           }
         } else if (message.type === 'error') {
@@ -412,7 +417,7 @@ export class DatasetImportService {
 
       try {
         worker = new Worker(workerPath, { workerData: task });
-      } catch (error: any) {
+      } catch (error: unknown) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         console.error(`[ImportRecords] Failed to start worker: ${workerPath}`, error);
         reject(new Error(errorMsg));

@@ -73,16 +73,13 @@ export const datasetFacade = {
   ) => getDuckdbApi().batchInsertRecords(datasetId, records),
   importRecordsFromFile: (datasetId: string, filePath: string) =>
     getDuckdbApi().importRecordsFromFile(datasetId, filePath),
-  importRecordsFromBase64: (datasetId: string, base64: string, filename: string) =>
-    getDuckdbApi().importRecordsFromBase64(datasetId, base64, filename),
   updateColumnMetadata: (
     datasetId: string,
     columnName: string,
     metadata: Parameters<DuckdbAPI['updateColumnMetadata']>[2]
   ) => getDuckdbApi().updateColumnMetadata(datasetId, columnName, metadata),
-  updateColumnDisplayConfig: (
-    params: Parameters<DuckdbAPI['updateColumnDisplayConfig']>[0]
-  ) => getDuckdbApi().updateColumnDisplayConfig(params),
+  updateColumnDisplayConfig: (params: Parameters<DuckdbAPI['updateColumnDisplayConfig']>[0]) =>
+    getDuckdbApi().updateColumnDisplayConfig(params),
   validateColumnName: (
     datasetId: string,
     columnName: Parameters<DuckdbAPI['validateColumnName']>[1]

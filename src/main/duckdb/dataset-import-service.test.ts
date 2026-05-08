@@ -115,4 +115,23 @@ describe('dataset-import-service failure cleanup', () => {
     expect(metadataService.deleteMetadata).toHaveBeenCalledWith('dataset_rollback_case');
     expect(mockFs.remove).toHaveBeenCalledWith(expect.stringContaining('dataset_rollback_case'));
   });
+
+  it('logs checked worker path candidates when import worker is missing', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockFs.pathExistsSync.mockReturnValue(false);
+    const metadataService = {
+      saveMetadata: vi.fn(),
+      deleteMetadata: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const service = new DatasetImportService({} as any, metadataService as any);
+    const importPromise = service.importDatasetFile('D:\\imports\\contacts.csv', 'contacts');
+    const worker = await waitForWorker();
+
+    await worker.emit('exit', 1);
+
+    await expect(importPromise).rejects.toThrow('Worker exited unexpectedly with code 1');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('import-worker.js was not found'));
+    warnSpy.mockRestore();
+  });
 });

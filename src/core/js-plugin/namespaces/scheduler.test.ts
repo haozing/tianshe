@@ -21,12 +21,11 @@ import {
   getSchedulerService,
   type CreateTaskOptions,
 } from './scheduler';
-import type { SchedulerService } from '../../../main/scheduler';
-import type { ScheduledTask, TaskExecution } from '../../../types/scheduler';
+import type { ISchedulerService, ScheduledTask, TaskExecution } from '../../../types/scheduler';
 
 describe('SchedulerNamespace', () => {
   let scheduler: SchedulerNamespace;
-  let mockSchedulerService: SchedulerService;
+  let mockSchedulerService: ISchedulerService;
 
   const createMockTask = (overrides = {}): ScheduledTask => ({
     id: 'task-123',

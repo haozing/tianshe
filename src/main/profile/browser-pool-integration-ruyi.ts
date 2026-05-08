@@ -1,5 +1,6 @@
 import { RuyiBrowser } from '../../core/browser-ruyi';
 import type { BrowserFactory } from '../../core/browser-pool/global-pool';
+import { getOcrPool } from '../../core/system-automation/ocr';
 import { RuyiFirefoxClient } from './ruyi-firefox-client';
 import { prepareRuyiFirefoxLaunch } from './ruyi-runtime-shared';
 
@@ -12,6 +13,9 @@ export function createRuyiBrowserFactory(): BrowserFactory {
       client,
       closeInternal: async () => {
         await client.close();
+      },
+      ocrProviderFactory: {
+        create: async () => getOcrPool(),
       },
     });
 

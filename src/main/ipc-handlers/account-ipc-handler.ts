@@ -1,11 +1,11 @@
-﻿/**
+/**
  * Account IPC Handler
  * 处理账号和常用网站相关的 IPC 请求
  *
  * 使用工厂函数简化 CRUD 操作的重复代码
  */
 
-import { ipcMain } from 'electron';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 import type { AccountService } from '../duckdb/account-service';
 import type { SavedSiteService } from '../duckdb/saved-site-service';
 import type { ProfileService } from '../duckdb/profile-service';
@@ -22,12 +22,14 @@ import {
   showBrowserViewInPopup,
   type BrowserHandle,
 } from '../../core/browser-pool';
+import { maybeOpenInternalBrowserDevTools } from '../internal-browser-devtools';
 import {
   acquireProfileLiveSessionLease,
   attachProfileLiveSessionLease,
 } from '../../core/browser-pool/profile-live-session-lease';
 import { createIpcHandler, createIpcVoidHandler } from './utils';
 import type { IpcSenderGuard } from './utils';
+import { handleIPCError } from '../ipc-utils';
 import type { WebContentsViewManager } from '../webcontentsview-manager';
 import type { WindowManager } from '../window-manager';
 
@@ -156,193 +158,208 @@ export function registerAccountHandlers(
    * - 自动导航到登录 URL
    * - 支持弹窗显示（默认开启）
    */
-  ipcMain.handle('account:login', async (event, accountId: string, options?: LoginOptions) => {
-    let acquiredHandle: BrowserHandle | null = null;
-    let popupOwnsHandle = false;
+  ipcRouteRegistry.register({
+    channel: 'account:login',
+    kind: 'handle',
+    permission: 'trusted-renderer',
+    handler: async (event, accountId: string, options?: LoginOptions) => {
+      let acquiredHandle: BrowserHandle | null = null;
+      let popupOwnsHandle = false;
 
-    const safeReleaseHandle = async (): Promise<void> => {
-      if (!acquiredHandle || popupOwnsHandle) return;
-      try {
-        await acquiredHandle.release();
-      } catch (releaseError) {
-        console.warn('[Account:Login] Failed to release browser after login error:', releaseError);
-      }
-    };
-
-    try {
-      handlerOptions.senderGuard?.(event, 'account:login');
-      // 解析选项（默认显示弹窗）
-      const showPopup = options?.showPopup !== false;
-
-      // 获取账号信息
-      const account = await accountService.get(accountId);
-      if (!account) {
-        return { success: false, error: `Account not found: ${accountId}` };
-      }
-
-      if (!account.platformId) {
-        return {
-          success: false,
-          error: '账号未关联平台，请先在账号管理中选择平台',
-        };
-      }
-
-      // 仅按 platformId 解析所属平台（开发阶段不兼容历史字段回退）
-      const platform = await savedSiteService.get(account.platformId);
-      if (!platform) {
-        return {
-          success: false,
-          error: '账号所属平台不存在，请先在账号管理中重新选择平台',
-        };
-      }
-
-      const accountProfileIdRaw = String(account.profileId || '').trim();
-      const accountProfileId =
-        accountProfileIdRaw.length > 0 && accountProfileIdRaw !== UNBOUND_PROFILE_ID
-          ? accountProfileIdRaw
-          : '';
-
-      const effectiveProfileId = accountProfileId;
-      if (!effectiveProfileId) {
-        return {
-          success: false,
-          error: '当前账号未绑定浏览器环境，请先在账号管理中为该账号绑定浏览器环境',
-        };
-      }
-
-      // 获取关联的 Profile
-      const profile = await profileService.get(effectiveProfileId);
-      if (!profile) {
-        return {
-          success: false,
-          error: '绑定的浏览器环境已不存在，请先在账号管理中为该账号重绑浏览器环境',
-        };
-      }
-
-      // 通过浏览器池获取浏览器（使用关联的 Profile）
-      const poolManager = getBrowserPoolManager();
-      const profileLease = await acquireProfileLiveSessionLease(effectiveProfileId, {
-        timeoutMs: 30000,
-      });
-      let handle: BrowserHandle;
-      try {
-        handle = attachProfileLiveSessionLease(
-          await poolManager.acquire(
-            effectiveProfileId,
-            { strategy: 'any', timeout: 30000, priority: 'normal' },
-            'ipc' // 标记来源为 IPC（UI 通过 IPC 调用）
-          ),
-          profileLease
-        );
-        acquiredHandle = handle;
-      } catch (error) {
-        await profileLease?.release().catch(() => undefined);
-        throw error;
-      }
-
-      // 导航到登录 URL（优先账号自定义标签页 URL，回退平台 URL）
-      const targetUrl = account.loginUrl || platform.url || '';
-      try {
-        if (targetUrl) {
-          await handle.browser.goto(targetUrl);
-        }
-      } catch (navError) {
-        console.warn('[Account:Login] Navigation warning:', navError);
-        // 导航失败不阻止登录流程，用户可以手动输入 URL
-      }
-
-      // 更新账号最后登录时间
-      await accountService.updateLastLogin(accountId);
-
-      // 获取浏览器关联的 viewId
-      const pooledBrowser = poolManager.listBrowsers().find((b) => b.id === handle.browserId);
-      const viewId = pooledBrowser?.viewId || handle.browserId;
-
-      // 持久化引擎没有 WebContentsView，尝试前置原生窗口
-      if (showPopup && handle.engine !== 'electron' && typeof handle.browser.show === 'function') {
+      const safeReleaseHandle = async (): Promise<void> => {
+        if (!acquiredHandle || popupOwnsHandle) return;
         try {
-          await handle.browser.show();
-        } catch (showError) {
-          console.warn('[Account:Login] Failed to show persistent browser window:', showError);
+          await acquiredHandle.release();
+        } catch (releaseError) {
+          console.warn(
+            '[Account:Login] Failed to release browser after login error:',
+            releaseError
+          );
         }
-      }
+      };
 
-      // 如果需要弹窗显示（仅 Electron 引擎）
-      let popupId: string | null = null;
-      const canShowPopup = showPopup && handle.engine === 'electron' && Boolean(viewId);
-      const accountLabel = account.displayName || account.name;
-      if (canShowPopup && viewId) {
-        // 提取域名用于弹窗标题
-        let domain = targetUrl;
-        try {
-          domain = new URL(targetUrl).hostname;
-        } catch {
-          // 如果 URL 解析失败，使用原始 URL
+      try {
+        handlerOptions.senderGuard?.(event, 'account:login');
+        // 解析选项（默认显示弹窗）
+        const showPopup = options?.showPopup !== false;
+
+        // 获取账号信息
+        const account = await accountService.get(accountId);
+        if (!account) {
+          return { success: false, error: `Account not found: ${accountId}` };
         }
 
-        popupId = showBrowserViewInPopup(viewId, viewManager, windowManager, {
-          title: `登录 - ${accountLabel} (${domain})`,
-          width: options?.popupWidth || 1200,
-          height: options?.popupHeight || 800,
-          openDevTools: options?.openDevTools,
-          onClose: () => {
-            console.log(`[Account:Login] Popup closed for account: ${accountId}`);
-            // 弹窗关闭时释放浏览器；Profile 状态由浏览器池统一维护
-            void (async () => {
-              try {
-                await handle.release();
-              } catch (err) {
-                console.warn(`[Account:Login] Failed to release browser on popup close:`, err);
-              }
-            })();
-          },
-        });
-
-        if (!popupId) {
-          await safeReleaseHandle();
+        if (!account.platformId) {
           return {
             success: false,
-            error: '登录窗口打开失败，请重试',
+            error: '账号未关联平台，请先在账号管理中选择平台',
           };
         }
 
-        popupOwnsHandle = true;
-        console.log(`[Account:Login] Browser shown in popup: ${popupId}`);
-      }
+        // 仅按 platformId 解析所属平台（开发阶段不兼容历史字段回退）
+        const platform = await savedSiteService.get(account.platformId);
+        if (!platform) {
+          return {
+            success: false,
+            error: '账号所属平台不存在，请先在账号管理中重新选择平台',
+          };
+        }
 
-      // 没有弹窗接管句柄时，立即释放避免浏览器锁泄漏
-      if (!popupOwnsHandle) {
+        const accountProfileIdRaw = String(account.profileId || '').trim();
+        const accountProfileId =
+          accountProfileIdRaw.length > 0 && accountProfileIdRaw !== UNBOUND_PROFILE_ID
+            ? accountProfileIdRaw
+            : '';
+
+        const effectiveProfileId = accountProfileId;
+        if (!effectiveProfileId) {
+          return {
+            success: false,
+            error: '当前账号未绑定浏览器环境，请先在账号管理中为该账号绑定浏览器环境',
+          };
+        }
+
+        // 获取关联的 Profile
+        const profile = await profileService.get(effectiveProfileId);
+        if (!profile) {
+          return {
+            success: false,
+            error: '绑定的浏览器环境已不存在，请先在账号管理中为该账号重绑浏览器环境',
+          };
+        }
+
+        // 通过浏览器池获取浏览器（使用关联的 Profile）
+        const poolManager = getBrowserPoolManager();
+        const profileLease = await acquireProfileLiveSessionLease(effectiveProfileId, {
+          timeoutMs: 30000,
+        });
+        let handle: BrowserHandle;
+        try {
+          handle = attachProfileLiveSessionLease(
+            await poolManager.acquire(
+              effectiveProfileId,
+              { strategy: 'any', timeout: 30000, priority: 'normal' },
+              'ipc' // 标记来源为 IPC（UI 通过 IPC 调用）
+            ),
+            profileLease
+          );
+          acquiredHandle = handle;
+        } catch (error) {
+          await profileLease?.release().catch(() => undefined);
+          throw error;
+        }
+
+        // 导航到登录 URL（优先账号自定义标签页 URL，回退平台 URL）
+        const targetUrl = account.loginUrl || platform.url || '';
+        try {
+          if (targetUrl) {
+            await handle.browser.goto(targetUrl);
+          }
+        } catch (navError) {
+          console.warn('[Account:Login] Navigation warning:', navError);
+          // 导航失败不阻止登录流程，用户可以手动输入 URL
+        }
+
+        // 更新账号最后登录时间
+        await accountService.updateLastLogin(accountId);
+
+        // 获取浏览器关联的 viewId
+        const pooledBrowser = poolManager.listBrowsers().find((b) => b.id === handle.browserId);
+        const viewId = pooledBrowser?.viewId || handle.browserId;
+
+        // 持久化引擎没有 WebContentsView，尝试前置原生窗口
+        if (
+          showPopup &&
+          handle.engine !== 'electron' &&
+          typeof handle.browser.show === 'function'
+        ) {
+          try {
+            await handle.browser.show();
+          } catch (showError) {
+            console.warn('[Account:Login] Failed to show persistent browser window:', showError);
+          }
+        }
+
+        // 如果需要弹窗显示（仅 Electron 引擎）
+        let popupId: string | null = null;
+        const canShowPopup = showPopup && handle.engine === 'electron' && Boolean(viewId);
+        const accountLabel = account.displayName || account.name;
+        if (canShowPopup && viewId) {
+          // 提取域名用于弹窗标题
+          let domain = targetUrl;
+          try {
+            domain = new URL(targetUrl).hostname;
+          } catch {
+            // 如果 URL 解析失败，使用原始 URL
+          }
+
+          popupId = showBrowserViewInPopup(viewId, viewManager, windowManager, {
+            title: `登录 - ${accountLabel} (${domain})`,
+            width: options?.popupWidth || 1200,
+            height: options?.popupHeight || 800,
+            openDevTools: options?.openDevTools,
+            onViewReady: (view) => {
+              maybeOpenInternalBrowserDevTools(view.webContents, {
+                override: options?.openDevTools,
+                mode: 'detach',
+              });
+            },
+            onClose: () => {
+              console.log(`[Account:Login] Popup closed for account: ${accountId}`);
+              // 弹窗关闭时释放浏览器；Profile 状态由浏览器池统一维护
+              void (async () => {
+                try {
+                  await handle.release();
+                } catch (err) {
+                  console.warn(`[Account:Login] Failed to release browser on popup close:`, err);
+                }
+              })();
+            },
+          });
+
+          if (!popupId) {
+            await safeReleaseHandle();
+            return {
+              success: false,
+              error: '登录窗口打开失败，请重试',
+            };
+          }
+
+          popupOwnsHandle = true;
+          console.log(`[Account:Login] Browser shown in popup: ${popupId}`);
+        }
+
+        // 没有弹窗接管句柄时，立即释放避免浏览器锁泄漏
+        if (!popupOwnsHandle) {
+          await safeReleaseHandle();
+        }
+
+        console.log(
+          `[Account:Login] Browser acquired via pool: ${handle.browserId} for account: ${accountId}`
+        );
+
+        return {
+          success: true,
+          data: {
+            viewId,
+            browserId: handle.browserId,
+            sessionId: handle.sessionId,
+            accountId,
+            accountName: accountLabel,
+            profileId: effectiveProfileId,
+            profileName: profile.name,
+            loginUrl: targetUrl,
+            platformId: platform.id,
+            platformName: platform.name,
+            popupId, // 返回弹窗 ID（用于手动关闭）
+          },
+        };
+      } catch (error) {
         await safeReleaseHandle();
+        console.error('[IPC] account:login error:', error);
+        return handleIPCError(error);
       }
-
-      console.log(
-        `[Account:Login] Browser acquired via pool: ${handle.browserId} for account: ${accountId}`
-      );
-
-      return {
-        success: true,
-        data: {
-          viewId,
-          browserId: handle.browserId,
-          sessionId: handle.sessionId,
-          accountId,
-          accountName: accountLabel,
-          profileId: effectiveProfileId,
-          profileName: profile.name,
-          loginUrl: targetUrl,
-          platformId: platform.id,
-          platformName: platform.name,
-          popupId, // 返回弹窗 ID（用于手动关闭）
-        },
-      };
-    } catch (error) {
-      await safeReleaseHandle();
-      console.error('[IPC] account:login error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : '启动浏览器失败',
-      };
-    }
+    },
   });
 
   // =====================================================
@@ -409,19 +426,21 @@ export function registerAccountHandlers(
   /**
    * 关闭弹窗窗口
    */
-  ipcMain.handle('popup:close', async (event, popupId: string) => {
-    try {
-      handlerOptions.senderGuard?.(event, 'popup:close');
-      // v3 API: 使用统一的 closeWindowById
-      windowManager.closeWindowById(`popup-${popupId}`);
-      return { success: true };
-    } catch (error) {
-      console.error('[IPC] popup:close error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : '关闭弹窗失败',
-      };
-    }
+  ipcRouteRegistry.register({
+    channel: 'popup:close',
+    kind: 'handle',
+    permission: 'trusted-renderer',
+    handler: async (event, popupId: string) => {
+      try {
+        handlerOptions.senderGuard?.(event, 'popup:close');
+        // v3 API: 使用统一的 closeWindowById
+        windowManager.closeWindowById(`popup-${popupId}`);
+        return { success: true };
+      } catch (error) {
+        console.error('[IPC] popup:close error:', error);
+        return handleIPCError(error);
+      }
+    },
   });
 
   console.log('[AccountIPC] Account and SavedSite handlers registered');

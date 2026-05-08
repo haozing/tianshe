@@ -16,7 +16,11 @@ import {
   type JsonRpcRequestId,
 } from './mcp-http-transport-utils';
 import { armPendingMcpSessionTerminationOnResponse } from './mcp-http-session-lifecycle';
-import type { McpSessionInfo, RegisterMcpRouteHandlersOptions } from './mcp-http-types';
+import {
+  createMcpSessionInfo,
+  type McpSessionInfo,
+  type RegisterMcpRouteHandlersOptions,
+} from './mcp-http-types';
 
 const logger = createLogger('MCP-HTTP');
 
@@ -50,8 +54,7 @@ const rejectUnsupportedTransportInput = (
       reason: 'unsupported_transport_input',
       input: inputName,
       value: asTrimmedText(Array.isArray(inputValue) ? inputValue[0] : inputValue),
-      hint:
-        'Remove transport-level profile, engine, tool-surface, and scope controls. Use session_prepare to configure the current MCP session.',
+      hint: 'Remove transport-level profile, engine, tool-surface, and scope controls. Use session_prepare to configure the current MCP session.',
     },
     requestId
   );
@@ -101,13 +104,17 @@ const validateInitializeRequestId = (
     'Initialize requests must include a valid JSON-RPC id',
     {
       reason: 'missing_initialize_request_id',
-      hint:
-        'Use a standard MCP SDK or send a JSON-RPC initialize request with a string or integer id.',
+      hint: 'Use a standard MCP SDK or send a JSON-RPC initialize request with a string or integer id.',
     },
     requestId
   );
   return false;
 };
+
+const createPendingTerminationOptions = (options: RegisterMcpRouteHandlersOptions) => ({
+  transports: options.routeContext.transports,
+  cleanupSession: options.sessionLifecycle.cleanupSession,
+});
 
 const handleExistingSessionRequest = async (
   options: RegisterMcpRouteHandlersOptions,
@@ -117,21 +124,28 @@ const handleExistingSessionRequest = async (
   requestId: JsonRpcRequestId | null,
   sessionId: string
 ): Promise<void> => {
-  const session = options.transports.get(sessionId);
+  const session = options.routeContext.transports.get(sessionId);
   if (!session) {
-    writeJsonRpcError(res, 404, -32000, 'Session not found', {
-      reason: 'session_not_found_or_closed',
-      sessionId,
-      hint: 'Create a new MCP session before sending more requests.',
-    }, requestId);
+    writeJsonRpcError(
+      res,
+      404,
+      -32000,
+      'Session not found',
+      {
+        reason: 'session_not_found_or_closed',
+        sessionId,
+        hint: 'Create a new MCP session before sending more requests.',
+      },
+      requestId
+    );
     return;
   }
 
-  session.lastActivity = Date.now();
+  session.lifecycle.lastActivity = Date.now();
   logger.debug(`Reusing transport for session: ${sessionId}`);
 
-  armPendingMcpSessionTerminationOnResponse(options, res, session);
-  await session.transport.handleRequest(req, res, requestBody);
+  armPendingMcpSessionTerminationOnResponse(createPendingTerminationOptions(options), res, session);
+  await session.transport.httpTransport.handleRequest(req, res, requestBody);
 };
 
 const handleInitializeRequest = async (
@@ -148,17 +162,13 @@ const handleInitializeRequest = async (
   let mcpServer: Server | undefined;
   let sessionRegistered = false;
   let initializedSessionId = '';
-  const sessionInfo: McpSessionInfo = {
-    server: undefined,
+  const sessionInfo: McpSessionInfo = createMcpSessionInfo({
     transport: null as unknown as StreamableHTTPServerTransport,
     lastActivity: Date.now(),
-    invokeQueue: Promise.resolve(),
-    pendingInvocations: 0,
-    activeInvocations: 0,
     maxQueueSize: HTTP_SERVER_DEFAULTS.MCP_MAX_QUEUE_SIZE,
     visible: false,
     authScopes: [],
-  };
+  });
 
   try {
     transport = new StreamableHTTPServerTransport({
@@ -166,27 +176,31 @@ const handleInitializeRequest = async (
       enableJsonResponse: true,
       onsessioninitialized: (newSessionId: string) => {
         logger.info(`Session initialized: ${newSessionId}`);
-        sessionInfo.sessionId = newSessionId;
-        sessionInfo.transport = transport;
-        options.transports.set(newSessionId, sessionInfo);
+        sessionInfo.transport.sessionId = newSessionId;
+        sessionInfo.transport.httpTransport = transport;
+        options.routeContext.transports.set(newSessionId, sessionInfo);
         initializedSessionId = newSessionId;
         sessionRegistered = true;
       },
     });
 
     mcpServer = options.createMcpServer(sessionInfo);
-    sessionInfo.server = mcpServer;
+    sessionInfo.transport.server = mcpServer;
     await mcpServer.connect(transport);
 
-    armPendingMcpSessionTerminationOnResponse(options, res, sessionInfo);
+    armPendingMcpSessionTerminationOnResponse(
+      createPendingTerminationOptions(options),
+      res,
+      sessionInfo
+    );
     await transport.handleRequest(req, res, requestBody);
   } catch (initError) {
     if (sessionRegistered && initializedSessionId) {
-      const session = options.transports.get(initializedSessionId);
+      const session = options.routeContext.transports.get(initializedSessionId);
       if (session) {
-        options.transports.delete(initializedSessionId);
+        options.routeContext.transports.delete(initializedSessionId);
         try {
-          await options.cleanupSession(initializedSessionId, session);
+          await options.sessionLifecycle.cleanupSession(initializedSessionId, session);
         } catch (cleanupError) {
           logger.error('Failed to cleanup partially initialized session:', cleanupError);
         }
@@ -204,7 +218,7 @@ const handleInitializeRequest = async (
 
 const createMcpGetHandler =
   (options: RegisterMcpRouteHandlersOptions) => async (req: Request, res: Response) => {
-    const allowedOrigins = options.restApiConfig?.mcpAllowedOrigins;
+    const allowedOrigins = options.routeContext.restApiConfig?.mcpAllowedOrigins;
 
     try {
       if (!validateMcpOrigin(req, res, allowedOrigins)) {
@@ -224,7 +238,7 @@ const createMcpGetHandler =
         return;
       }
 
-      const session = options.transports.get(sessionId);
+      const session = options.routeContext.transports.get(sessionId);
       if (!session) {
         writeJsonRpcError(res, 404, -32000, 'Session not found', {
           reason: 'session_not_found_or_closed',
@@ -234,8 +248,8 @@ const createMcpGetHandler =
         return;
       }
 
-      session.lastActivity = Date.now();
-      await session.transport.handleRequest(createMcpTransportRequest(req), res);
+      session.lifecycle.lastActivity = Date.now();
+      await session.transport.httpTransport.handleRequest(createMcpTransportRequest(req), res);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error('Error handling MCP GET request:', error);
@@ -249,7 +263,7 @@ const createMcpGetHandler =
 
 const createMcpDeleteHandler =
   (options: RegisterMcpRouteHandlersOptions) => async (req: Request, res: Response) => {
-    const allowedOrigins = options.restApiConfig?.mcpAllowedOrigins;
+    const allowedOrigins = options.routeContext.restApiConfig?.mcpAllowedOrigins;
 
     try {
       const requestId = extractSingleJsonRpcRequestId(req.body);
@@ -270,7 +284,7 @@ const createMcpDeleteHandler =
         return;
       }
 
-      const session = options.transports.get(sessionId);
+      const session = options.routeContext.transports.get(sessionId);
       if (!session) {
         writeJsonRpcError(res, 404, -32000, 'Session not found', {
           reason: 'session_not_found_or_closed',
@@ -281,8 +295,8 @@ const createMcpDeleteHandler =
       }
 
       logger.info(`Terminating MCP session via DELETE: ${sessionId}`);
-      options.transports.delete(sessionId);
-      await options.cleanupSession(sessionId, session);
+      options.routeContext.transports.delete(sessionId);
+      await options.sessionLifecycle.cleanupSession(sessionId, session);
       res.status(204).end();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -296,7 +310,7 @@ const createMcpDeleteHandler =
 
 const createMcpPostHandler =
   (options: RegisterMcpRouteHandlersOptions) => async (req: Request, res: Response) => {
-    const allowedOrigins = options.restApiConfig?.mcpAllowedOrigins;
+    const allowedOrigins = options.routeContext.restApiConfig?.mcpAllowedOrigins;
     logger.debug('Received MCP request');
 
     try {
@@ -322,7 +336,7 @@ const createMcpPostHandler =
       const sessionId = asTrimmedText(req.headers['mcp-session-id']);
       const initializeRequest = findInitializeRequest(mcpBody);
 
-      if (sessionId && options.transports.has(sessionId)) {
+      if (sessionId && options.routeContext.transports.has(sessionId)) {
         await handleExistingSessionRequest(
           options,
           transportRequest,
@@ -348,29 +362,50 @@ const createMcpPostHandler =
 
       if (sessionId) {
         logger.warn(`Invalid MCP request for missing or closed session: ${sessionId}`);
-        writeJsonRpcError(res, 404, -32000, 'Session not found', {
-          sessionId,
-          reason: 'session_not_found_or_closed',
-          hint: 'Create a new MCP session before sending more requests.',
-        }, requestId);
+        writeJsonRpcError(
+          res,
+          404,
+          -32000,
+          'Session not found',
+          {
+            sessionId,
+            reason: 'session_not_found_or_closed',
+            hint: 'Create a new MCP session before sending more requests.',
+          },
+          requestId
+        );
         return;
       }
 
       logger.warn('Invalid request: no session ID or not initialization');
-      writeJsonRpcError(res, 400, -32000, 'Bad Request: No valid session ID provided', undefined, requestId);
+      writeJsonRpcError(
+        res,
+        400,
+        -32000,
+        'Bad Request: No valid session ID provided',
+        undefined,
+        requestId
+      );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error('Error handling MCP request:', error);
       if (!res.headersSent) {
-        writeJsonRpcError(res, 500, -32603, `Internal error: ${errorMessage}`, {
-          reason: 'mcp_post_failed',
-        }, extractSingleJsonRpcRequestId(req.body));
+        writeJsonRpcError(
+          res,
+          500,
+          -32603,
+          `Internal error: ${errorMessage}`,
+          {
+            reason: 'mcp_post_failed',
+          },
+          extractSingleJsonRpcRequestId(req.body)
+        );
       }
     }
   };
 
 export const registerMcpRouteHandlers = (options: RegisterMcpRouteHandlersOptions): void => {
-  options.app.get('/mcp', createMcpGetHandler(options));
-  options.app.delete('/mcp', createMcpDeleteHandler(options));
-  options.app.post('/mcp', createMcpPostHandler(options));
+  options.routeContext.app.get('/mcp', createMcpGetHandler(options));
+  options.routeContext.app.delete('/mcp', createMcpDeleteHandler(options));
+  options.routeContext.app.post('/mcp', createMcpPostHandler(options));
 };

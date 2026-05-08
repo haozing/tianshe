@@ -37,6 +37,7 @@ function createTransactionalConn(statements: PreparedStatementMock[]) {
         }
         return next;
       }),
+      runAndReadAll: vi.fn().mockResolvedValue(createReader([])),
     },
   };
 }
@@ -207,7 +208,7 @@ describe('ExtensionPackagesService', () => {
     });
   });
 
-  it('repairs a legacy extension_packages table to the latest schema without migrations', async () => {
+  it('repairs a legacy extension_packages table through schema migrations', async () => {
     const db = await DuckDBInstance.create(':memory:');
     const conn = await DuckDBConnection.create(db);
     try {
@@ -250,6 +251,10 @@ describe('ExtensionPackagesService', () => {
         await conn.runAndReadAll(`PRAGMA table_info('extension_packages')`)
       );
       expect(tableInfo.some((row) => String(row.name) === 'source_type')).toBe(true);
+      const migrations = parseRows(
+        await conn.runAndReadAll(`SELECT id FROM schema_migrations ORDER BY id`)
+      ).map((row) => String(row.id));
+      expect(migrations).toContain('extension-packages-001-package-metadata');
     } finally {
       conn.closeSync();
       db.closeSync();

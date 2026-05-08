@@ -137,10 +137,10 @@ const createBrowserAcquireStructuredError = (
               'Inspect plugin and profile runtime state before retrying.',
             ],
         context: {
-          sessionId: asTrimmedText(mcpSession.sessionId) || undefined,
+          sessionId: asTrimmedText(mcpSession.transport.sessionId) || undefined,
           profileId: readiness.profileId,
-          engine: asTrimmedText(mcpSession.engine) || undefined,
-          visible: mcpSession.visible,
+          engine: asTrimmedText(mcpSession.browser.engine) || undefined,
+          visible: mcpSession.browser.visible,
           stage: error.stage,
           acquireReadiness: readiness,
         },
@@ -153,7 +153,7 @@ const createBrowserAcquireStructuredError = (
     return null;
   }
 
-  const profileId = asTrimmedText(mcpSession.partition) || undefined;
+  const profileId = asTrimmedText(mcpSession.browser.partition) || undefined;
   const readiness = inspectSessionProfileAcquireReadiness(options, profileId);
   const busy = readiness?.busy === true;
   const busyPreview = formatBusyBrowserPreview(readiness);
@@ -193,10 +193,10 @@ const createBrowserAcquireStructuredError = (
             'Inspect plugin and profile runtime state before retrying.',
           ],
       context: {
-        sessionId: asTrimmedText(mcpSession.sessionId) || undefined,
+        sessionId: asTrimmedText(mcpSession.transport.sessionId) || undefined,
         profileId,
-        engine: asTrimmedText(mcpSession.engine) || undefined,
-        visible: mcpSession.visible,
+        engine: asTrimmedText(mcpSession.browser.engine) || undefined,
+        visible: mcpSession.browser.visible,
         ...(readiness ? { acquireReadiness: readiness } : {}),
       },
     }
@@ -286,11 +286,11 @@ const createStaleBrowserHandleReason = (sessionId: string | undefined): Structur
   });
 
 const clearSessionViewportState = (mcpSession: McpSessionInfo): void => {
-  mcpSession.hostWindowId = undefined;
-  mcpSession.viewportHealth = 'unknown';
-  mcpSession.viewportHealthReason = undefined;
-  mcpSession.interactionReady = false;
-  mcpSession.offscreenDetected = false;
+  mcpSession.browser.hostWindowId = undefined;
+  mcpSession.viewport.viewportHealth = 'unknown';
+  mcpSession.viewport.viewportHealthReason = undefined;
+  mcpSession.viewport.interactionReady = false;
+  mcpSession.viewport.offscreenDetected = false;
 };
 
 const updateSessionViewportState = (
@@ -303,20 +303,20 @@ const updateSessionViewportState = (
     offscreenDetected: boolean;
   }
 ): void => {
-  mcpSession.hostWindowId = asTrimmedText(state.hostWindowId) || undefined;
-  mcpSession.viewportHealth = state.viewportHealth;
-  mcpSession.viewportHealthReason = asTrimmedText(state.viewportHealthReason) || undefined;
-  mcpSession.interactionReady = state.interactionReady;
-  mcpSession.offscreenDetected = state.offscreenDetected;
+  mcpSession.browser.hostWindowId = asTrimmedText(state.hostWindowId) || undefined;
+  mcpSession.viewport.viewportHealth = state.viewportHealth;
+  mcpSession.viewport.viewportHealthReason = asTrimmedText(state.viewportHealthReason) || undefined;
+  mcpSession.viewport.interactionReady = state.interactionReady;
+  mcpSession.viewport.offscreenDetected = state.offscreenDetected;
 };
 
 const markSessionClosingAfterResponse = (
   session: McpSessionInfo,
   sessionId: string
 ): void => {
-  session.lastActivity = Date.now();
-  session.closing = true;
-  session.closeReason = createStructuredError(
+  session.lifecycle.lastActivity = Date.now();
+  session.lifecycle.closing = true;
+  session.lifecycle.closeReason = createStructuredError(
     ErrorCode.OPERATION_FAILED,
     `Session is closing: ${sessionId}`,
     {
@@ -330,21 +330,21 @@ const markSessionClosingAfterResponse = (
       },
     }
   );
-  session.terminateAfterResponse = true;
+  session.lifecycle.terminateAfterResponse = true;
 };
 
 const resolveSessionHostWindowId = (mcpSession: McpSessionInfo): string => {
-  if (mcpSession.visible) {
+  if (mcpSession.browser.visible) {
     return 'main';
   }
-  return getHiddenAutomationHostWindowId(asTrimmedText(mcpSession.sessionId) || 'pending');
+  return getHiddenAutomationHostWindowId(asTrimmedText(mcpSession.transport.sessionId) || 'pending');
 };
 
 const ensureHiddenAutomationHost = (
   dependencies: RestApiDependencies | undefined,
   mcpSession: McpSessionInfo
 ): string | undefined => {
-  const sessionId = asTrimmedText(mcpSession.sessionId);
+  const sessionId = asTrimmedText(mcpSession.transport.sessionId);
   const windowManager = dependencies?.windowManager;
   if (!sessionId || !windowManager) {
     return undefined;
@@ -373,10 +373,10 @@ const collectSessionViewportState = (
   interactionReady: boolean;
   offscreenDetected: boolean;
 } => {
-  const handle = browserHandle || mcpSession.browserHandle;
+  const handle = browserHandle || mcpSession.browser.browserHandle;
   if (!handle) {
     return {
-      hostWindowId: mcpSession.hostWindowId,
+      hostWindowId: mcpSession.browser.hostWindowId,
       viewportHealth: 'unknown',
       viewportHealthReason: 'browser is not acquired',
       interactionReady: false,
@@ -386,13 +386,13 @@ const collectSessionViewportState = (
 
   if (!handle.viewId) {
     return {
-      hostWindowId: mcpSession.hostWindowId,
-      viewportHealth: mcpSession.viewportHealth ?? 'unknown',
+      hostWindowId: mcpSession.browser.hostWindowId,
+      viewportHealth: mcpSession.viewport.viewportHealth ?? 'unknown',
       viewportHealthReason:
-        asTrimmedText(mcpSession.viewportHealthReason) ||
+        asTrimmedText(mcpSession.viewport.viewportHealthReason) ||
         'browser implementation manages visibility directly',
       interactionReady:
-        mcpSession.interactionReady === true || isMcpBrowserHandleUsable(handle),
+        mcpSession.viewport.interactionReady === true || isMcpBrowserHandleUsable(handle),
       offscreenDetected: false,
     };
   }
@@ -400,7 +400,7 @@ const collectSessionViewportState = (
   const viewManager = options.dependencies?.viewManager;
   const windowManager = options.dependencies?.windowManager;
   const viewInfo = viewManager?.getView?.(handle.viewId);
-  const hostWindowId = asTrimmedText(viewInfo?.attachedTo) || asTrimmedText(mcpSession.hostWindowId);
+  const hostWindowId = asTrimmedText(viewInfo?.attachedTo) || asTrimmedText(mcpSession.browser.hostWindowId);
   const hostWindow = hostWindowId ? windowManager?.getWindowById?.(hostWindowId) : undefined;
 
   if (!viewInfo) {
@@ -451,7 +451,7 @@ const collectSessionViewportState = (
     return {
       hostWindowId,
       viewportHealth: 'ready',
-      viewportHealthReason: mcpSession.visible
+      viewportHealthReason: mcpSession.browser.visible
         ? 'browser view is attached to the main window with stable bounds'
         : 'browser view is attached to the hidden automation host with stable bounds',
       interactionReady: true,
@@ -484,12 +484,12 @@ export const recycleSessionBrowserHandle = async (
   mcpSession: McpSessionInfo,
   reason: StructuredError
 ): Promise<void> => {
-  const handle = mcpSession.browserHandle;
+  const handle = mcpSession.browser.browserHandle;
   if (!handle) {
     return;
   }
 
-  mcpSession.browserHandle = undefined;
+  mcpSession.browser.browserHandle = undefined;
   clearSessionViewportState(mcpSession);
   try {
     await handle.release({ destroy: true });
@@ -505,9 +505,9 @@ export const createMcpSessionGateway = (
   options: McpSessionRuntimeOptions,
   mcpSession: McpSessionInfo
 ): NonNullable<OrchestrationDependencies['mcpSessionGateway']> => ({
-  getCurrentSessionId: () => asTrimmedText(mcpSession.sessionId) || undefined,
+  getCurrentSessionId: () => asTrimmedText(mcpSession.transport.sessionId) || undefined,
   listSessions: async () => {
-    const currentSessionId = asTrimmedText(mcpSession.sessionId);
+    const currentSessionId = asTrimmedText(mcpSession.transport.sessionId);
     return Array.from(options.transports.entries()).map(([sessionId, session]) => {
       const isCurrentSession = currentSessionId === sessionId;
       const viewportState = collectSessionViewportState(options, session);
@@ -515,18 +515,18 @@ export const createMcpSessionGateway = (
       return {
         ...buildOrchestrationMcpSessionInfo(session, {
           sessionId,
-          lastActivityAt: new Date(session.lastActivity).toISOString(),
+          lastActivityAt: new Date(session.lifecycle.lastActivity).toISOString(),
           pendingInvocations: isCurrentSession
-            ? Math.max(0, session.pendingInvocations - 1)
-            : session.pendingInvocations,
+            ? Math.max(0, session.queue.pendingInvocations - 1)
+            : session.queue.pendingInvocations,
           activeInvocations: isCurrentSession
-            ? Math.max(0, session.activeInvocations - 1)
-            : session.activeInvocations,
-          maxQueueSize: session.maxQueueSize,
+            ? Math.max(0, session.queue.activeInvocations - 1)
+            : session.queue.activeInvocations,
+          maxQueueSize: session.queue.maxQueueSize,
         }),
         acquireReadiness: inspectSessionProfileAcquireReadiness(
           options,
-          asTrimmedText(session.partition) || undefined
+          asTrimmedText(session.browser.partition) || undefined
         ),
       };
     });
@@ -534,16 +534,16 @@ export const createMcpSessionGateway = (
   ensureCurrentSessionInteractionReady: async () =>
     ensureCurrentSessionInteractionReady(options, mcpSession),
   prepareCurrentSession: async (prepareOptions) => {
-    const sessionId = asTrimmedText(mcpSession.sessionId);
+    const sessionId = asTrimmedText(mcpSession.transport.sessionId);
     if (!sessionId) {
       return {
         sessionId: '',
         prepared: false,
         idempotent: false,
-        engine: asTrimmedText(mcpSession.engine) || undefined,
-        visible: mcpSession.visible,
-        effectiveScopes: normalizeScopes(mcpSession.authScopes),
-        browserAcquired: Boolean(mcpSession.browserHandle || mcpSession.browserAcquirePromise),
+        engine: asTrimmedText(mcpSession.browser.engine) || undefined,
+        visible: mcpSession.browser.visible,
+        effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
+        browserAcquired: Boolean(mcpSession.browser.browserHandle || mcpSession.browser.browserAcquirePromise),
         changed: [],
         acquireReadiness: null,
         reason: 'current_session_unavailable' as const,
@@ -551,17 +551,17 @@ export const createMcpSessionGateway = (
       };
     }
 
-    if (mcpSession.browserHandle && !isMcpBrowserHandleUsable(mcpSession.browserHandle)) {
+    if (mcpSession.browser.browserHandle && !isMcpBrowserHandleUsable(mcpSession.browser.browserHandle)) {
       await recycleSessionBrowserHandle(
         mcpSession,
-        createStaleBrowserHandleReason(mcpSession.sessionId)
+        createStaleBrowserHandleReason(mcpSession.transport.sessionId)
       );
     }
 
-    const currentProfileId = asTrimmedText(mcpSession.partition) || undefined;
-    const currentEngine = asTrimmedText(mcpSession.engine) || undefined;
-    const currentVisible = mcpSession.visible;
-    const browserAcquired = Boolean(mcpSession.browserHandle || mcpSession.browserAcquirePromise);
+    const currentProfileId = asTrimmedText(mcpSession.browser.partition) || undefined;
+    const currentEngine = asTrimmedText(mcpSession.browser.engine) || undefined;
+    const currentVisible = mcpSession.browser.visible;
+    const browserAcquired = Boolean(mcpSession.browser.browserHandle || mcpSession.browser.browserAcquirePromise);
     const changed: Array<'profile' | 'engine' | 'visible' | 'scopes'> = [];
     const requestedProfileId = asTrimmedText(prepareOptions.profileId) || undefined;
     const requestedEngine = prepareOptions.engine
@@ -575,16 +575,16 @@ export const createMcpSessionGateway = (
       profileId: currentProfileId,
       engine: currentEngine,
       visible: currentVisible,
-      effectiveScopes: normalizeScopes(mcpSession.authScopes),
-      browserAcquired: Boolean(mcpSession.browserHandle),
-      browserAcquireInProgress: Boolean(mcpSession.browserAcquirePromise),
-      closing: mcpSession.closing === true,
-      terminateAfterResponse: mcpSession.terminateAfterResponse === true,
+      effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
+      browserAcquired: Boolean(mcpSession.browser.browserHandle),
+      browserAcquireInProgress: Boolean(mcpSession.browser.browserAcquirePromise),
+      closing: mcpSession.lifecycle.closing === true,
+      terminateAfterResponse: mcpSession.lifecycle.terminateAfterResponse === true,
     });
     const currentAcquireReadiness = () =>
       inspectSessionProfileAcquireReadiness(
         options,
-        asTrimmedText(mcpSession.partition) || undefined
+        asTrimmedText(mcpSession.browser.partition) || undefined
       );
 
     if (currentState.bindingLocked) {
@@ -596,7 +596,7 @@ export const createMcpSessionGateway = (
           profileId: currentProfileId,
           engine: currentEngine,
           visible: currentVisible,
-          effectiveScopes: normalizeScopes(mcpSession.authScopes),
+          effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
           browserAcquired: true,
           changed,
           acquireReadiness: currentAcquireReadiness(),
@@ -616,7 +616,7 @@ export const createMcpSessionGateway = (
           profileId: currentProfileId,
           engine: currentEngine,
           visible: currentVisible,
-          effectiveScopes: normalizeScopes(mcpSession.authScopes),
+          effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
           browserAcquired: true,
           changed,
           acquireReadiness: currentAcquireReadiness(),
@@ -636,7 +636,7 @@ export const createMcpSessionGateway = (
           profileId: currentProfileId,
           engine: currentEngine,
           visible: currentVisible,
-          effectiveScopes: normalizeScopes(mcpSession.authScopes),
+          effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
           browserAcquired: true,
           changed,
           acquireReadiness: currentAcquireReadiness(),
@@ -650,12 +650,12 @@ export const createMcpSessionGateway = (
     }
 
     if (!currentState.bindingLocked && requestedProfileId && requestedProfileId !== currentProfileId) {
-      mcpSession.partition = requestedProfileId;
+      mcpSession.browser.partition = requestedProfileId;
       changed.push('profile');
     }
 
     if (!currentState.bindingLocked && requestedEngine && requestedEngine !== currentEngine) {
-      mcpSession.engine = requestedEngine;
+      mcpSession.browser.engine = requestedEngine;
       changed.push('engine');
     }
 
@@ -664,12 +664,12 @@ export const createMcpSessionGateway = (
       typeof requestedVisible === 'boolean' &&
       requestedVisible !== currentVisible
     ) {
-      mcpSession.visible = requestedVisible;
+      mcpSession.browser.visible = requestedVisible;
       changed.push('visible');
     }
 
-    if (requestedScopes && !scopesEqual(mcpSession.authScopes, requestedScopes)) {
-      mcpSession.authScopes = requestedScopes;
+    if (requestedScopes && !scopesEqual(mcpSession.auth.authScopes, requestedScopes)) {
+      mcpSession.auth.authScopes = requestedScopes;
       changed.push('scopes');
     }
 
@@ -677,26 +677,26 @@ export const createMcpSessionGateway = (
       sessionId,
       prepared: true,
       idempotent: changed.length === 0,
-      profileId: asTrimmedText(mcpSession.partition) || undefined,
-      engine: asTrimmedText(mcpSession.engine) || undefined,
-      visible: mcpSession.visible,
-      effectiveScopes: normalizeScopes(mcpSession.authScopes),
+      profileId: asTrimmedText(mcpSession.browser.partition) || undefined,
+      engine: asTrimmedText(mcpSession.browser.engine) || undefined,
+      visible: mcpSession.browser.visible,
+      effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
       browserAcquired,
       changed,
       acquireReadiness: currentAcquireReadiness(),
-      currentProfileId: asTrimmedText(mcpSession.partition) || undefined,
-      currentEngine: asTrimmedText(mcpSession.engine) || undefined,
-      currentVisible: mcpSession.visible,
+      currentProfileId: asTrimmedText(mcpSession.browser.partition) || undefined,
+      currentEngine: asTrimmedText(mcpSession.browser.engine) || undefined,
+      currentVisible: mcpSession.browser.visible,
       ...buildMcpSessionStateSnapshot({
         sessionId,
-        profileId: asTrimmedText(mcpSession.partition) || undefined,
-        engine: asTrimmedText(mcpSession.engine) || undefined,
-        visible: mcpSession.visible,
-        effectiveScopes: normalizeScopes(mcpSession.authScopes),
-        browserAcquired: Boolean(mcpSession.browserHandle),
-        browserAcquireInProgress: Boolean(mcpSession.browserAcquirePromise),
-        closing: mcpSession.closing === true,
-        terminateAfterResponse: mcpSession.terminateAfterResponse === true,
+        profileId: asTrimmedText(mcpSession.browser.partition) || undefined,
+        engine: asTrimmedText(mcpSession.browser.engine) || undefined,
+        visible: mcpSession.browser.visible,
+        effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
+        browserAcquired: Boolean(mcpSession.browser.browserHandle),
+        browserAcquireInProgress: Boolean(mcpSession.browser.browserAcquirePromise),
+        closing: mcpSession.lifecycle.closing === true,
+        terminateAfterResponse: mcpSession.lifecycle.terminateAfterResponse === true,
       }),
     };
   },
@@ -704,7 +704,7 @@ export const createMcpSessionGateway = (
     const targetSessionId = asTrimmedText(sessionId);
     if (!targetSessionId) return { closed: false, reason: 'not_found' as const };
 
-    const currentSessionId = asTrimmedText(mcpSession.sessionId);
+    const currentSessionId = asTrimmedText(mcpSession.transport.sessionId);
     const allowCurrent = closeOptions?.allowCurrent === true;
     const target = options.transports.get(targetSessionId);
     if (!target) {
@@ -763,7 +763,7 @@ const applySessionBrowserVisibility = async (
         const viewportState = collectSessionViewportState(options, mcpSession, browserHandle);
         updateSessionViewportState(mcpSession, viewportState);
         logger.info(
-          `Browser view attached to ${targetWindowId} for session ${asTrimmedText(mcpSession.sessionId) || 'pending'}: ${browserHandle.viewId}`
+          `Browser view attached to ${targetWindowId} for session ${asTrimmedText(mcpSession.transport.sessionId) || 'pending'}: ${browserHandle.viewId}`
         );
       } else {
         updateSessionViewportState(mcpSession, {
@@ -804,13 +804,13 @@ const applySessionBrowserVisibility = async (
 };
 
 const getMcpSessionAbortError = (mcpSession: McpSessionInfo): StructuredError | undefined => {
-  if (mcpSession.closeReason) {
-    return mcpSession.closeReason;
+  if (mcpSession.lifecycle.closeReason) {
+    return mcpSession.lifecycle.closeReason;
   }
 
   const abortReason =
-    mcpSession.activeInvocationController?.signal.reason ??
-    mcpSession.closeController?.signal.reason;
+    mcpSession.queue.activeInvocationController?.signal.reason ??
+    mcpSession.lifecycle.closeController?.signal.reason;
   if (
     typeof abortReason === 'object' &&
     abortReason !== null &&
@@ -820,13 +820,13 @@ const getMcpSessionAbortError = (mcpSession: McpSessionInfo): StructuredError | 
     return abortReason as StructuredError;
   }
 
-  if (mcpSession.closing) {
+  if (mcpSession.lifecycle.closing) {
     return {
       code: ErrorCode.OPERATION_FAILED,
-      message: `Session is closing: ${asTrimmedText(mcpSession.sessionId) || 'mcp-session'}`,
+      message: `Session is closing: ${asTrimmedText(mcpSession.transport.sessionId) || 'mcp-session'}`,
       details: 'The MCP session is terminating while acquiring a browser handle.',
       context: {
-        sessionId: asTrimmedText(mcpSession.sessionId) || undefined,
+        sessionId: asTrimmedText(mcpSession.transport.sessionId) || undefined,
         reason: 'session_closing',
       },
     };
@@ -836,7 +836,7 @@ const getMcpSessionAbortError = (mcpSession: McpSessionInfo): StructuredError | 
 };
 
 const getMcpSessionAbortSignal = (mcpSession: McpSessionInfo): AbortSignal | undefined => {
-  return mcpSession.activeInvocationController?.signal || mcpSession.closeController?.signal;
+  return mcpSession.queue.activeInvocationController?.signal || mcpSession.lifecycle.closeController?.signal;
 };
 
 const awaitAbortableMcpPromise = async <T>(
@@ -897,7 +897,7 @@ const ensureSessionBrowserRuntimeReady = async (
     options.dependencies?.viewManager &&
     options.dependencies?.windowManager
   ) {
-    await applySessionBrowserVisibility(options, mcpSession, browserHandle, mcpSession.visible);
+    await applySessionBrowserVisibility(options, mcpSession, browserHandle, mcpSession.browser.visible);
     const repairedState = collectSessionViewportState(options, mcpSession, browserHandle);
     updateSessionViewportState(mcpSession, repairedState);
     if (repairedState.interactionReady) {
@@ -927,10 +927,10 @@ const ensureSessionBrowserRuntimeReady = async (
       suggestion:
         'Retry the action after the session reacquires a browser, or inspect session_get_current for host and viewport health.',
       context: {
-        sessionId: asTrimmedText(mcpSession.sessionId) || undefined,
+        sessionId: asTrimmedText(mcpSession.transport.sessionId) || undefined,
         viewId: browserHandle.viewId,
         hostWindowId: viewportState.hostWindowId || null,
-        visible: mcpSession.visible,
+        visible: mcpSession.browser.visible,
         viewportHealth: viewportState.viewportHealth,
         offscreenDetected: viewportState.offscreenDetected,
       },
@@ -943,18 +943,18 @@ const buildCurrentSessionInteractionContext = (
   mcpSession: McpSessionInfo,
   repaired: boolean
 ) => {
-  const viewportState = collectSessionViewportState(options, mcpSession, mcpSession.browserHandle);
+  const viewportState = collectSessionViewportState(options, mcpSession, mcpSession.browser.browserHandle);
   updateSessionViewportState(mcpSession, viewportState);
   return {
-    sessionId: asTrimmedText(mcpSession.sessionId) || undefined,
-    visible: mcpSession.visible,
+    sessionId: asTrimmedText(mcpSession.transport.sessionId) || undefined,
+    visible: mcpSession.browser.visible,
     hostWindowId: viewportState.hostWindowId,
     viewportHealth: viewportState.viewportHealth,
     viewportHealthReason: viewportState.viewportHealthReason,
     interactionReady: viewportState.interactionReady,
     offscreenDetected: viewportState.offscreenDetected,
     repaired,
-    browserAcquired: Boolean(mcpSession.browserHandle),
+    browserAcquired: Boolean(mcpSession.browser.browserHandle),
   };
 };
 
@@ -983,13 +983,13 @@ const ensureCurrentSessionInteractionReady = async (
             'Current MCP session is not ready for interaction',
             {
               context: {
-                sessionId: asTrimmedText(mcpSession.sessionId) || undefined,
+                sessionId: asTrimmedText(mcpSession.transport.sessionId) || undefined,
               },
             }
           );
 
     repaired = true;
-    if (mcpSession.browserHandle) {
+    if (mcpSession.browser.browserHandle) {
       await recycleSessionBrowserHandle(mcpSession, structured);
     }
     return attemptEnsure();
@@ -1005,10 +1005,10 @@ export const ensureSessionBrowserHandle = async (
     getMcpSessionAbortError(mcpSession) ||
     ({
       code: ErrorCode.OPERATION_FAILED,
-      message: `Session is closing: ${asTrimmedText(mcpSession.sessionId) || 'mcp-session'}`,
+      message: `Session is closing: ${asTrimmedText(mcpSession.transport.sessionId) || 'mcp-session'}`,
       details: 'The MCP session was aborted while acquiring a browser handle.',
       context: {
-        sessionId: asTrimmedText(mcpSession.sessionId) || undefined,
+        sessionId: asTrimmedText(mcpSession.transport.sessionId) || undefined,
         reason: 'session_closing',
       },
     } as StructuredError);
@@ -1017,28 +1017,28 @@ export const ensureSessionBrowserHandle = async (
     throw abortError;
   }
 
-  if (mcpSession.browserHandle && !isMcpBrowserHandleUsable(mcpSession.browserHandle)) {
+  if (mcpSession.browser.browserHandle && !isMcpBrowserHandleUsable(mcpSession.browser.browserHandle)) {
     await recycleSessionBrowserHandle(
       mcpSession,
-      createStaleBrowserHandleReason(mcpSession.sessionId)
+      createStaleBrowserHandleReason(mcpSession.transport.sessionId)
     );
   }
 
-  if (mcpSession.browserHandle) {
-    await ensureSessionBrowserRuntimeReady(options, mcpSession, mcpSession.browserHandle);
-    return mcpSession.browserHandle;
+  if (mcpSession.browser.browserHandle) {
+    await ensureSessionBrowserRuntimeReady(options, mcpSession, mcpSession.browser.browserHandle);
+    return mcpSession.browser.browserHandle;
   }
 
-  if (mcpSession.browserAcquirePromise) {
-    return awaitAbortableMcpPromise(mcpSession.browserAcquirePromise, abortSignal, () => abortError);
+  if (mcpSession.browser.browserAcquirePromise) {
+    return awaitAbortableMcpPromise(mcpSession.browser.browserAcquirePromise, abortSignal, () => abortError);
   }
 
   const rawAcquirePromise = (async () => {
     let browserHandle: BrowserHandle;
     try {
       browserHandle = await options.acquireBrowserFromPool(
-        mcpSession.partition,
-        mcpSession.engine,
+        mcpSession.browser.partition,
+        mcpSession.browser.engine,
         'mcp'
       );
     } catch (error) {
@@ -1050,17 +1050,17 @@ export const ensureSessionBrowserHandle = async (
     }
 
     try {
-      if (getMcpSessionAbortSignal(mcpSession)?.aborted || mcpSession.closing) {
+      if (getMcpSessionAbortSignal(mcpSession)?.aborted || mcpSession.lifecycle.closing) {
         throw abortError;
       }
 
-      await applySessionBrowserVisibility(options, mcpSession, browserHandle, mcpSession.visible);
+      await applySessionBrowserVisibility(options, mcpSession, browserHandle, mcpSession.browser.visible);
       await ensureSessionBrowserRuntimeReady(options, mcpSession, browserHandle);
-      if (getMcpSessionAbortSignal(mcpSession)?.aborted || mcpSession.closing) {
+      if (getMcpSessionAbortSignal(mcpSession)?.aborted || mcpSession.lifecycle.closing) {
         throw abortError;
       }
 
-      mcpSession.browserHandle = browserHandle;
+      mcpSession.browser.browserHandle = browserHandle;
       return browserHandle;
     } catch (error) {
       try {
@@ -1073,12 +1073,12 @@ export const ensureSessionBrowserHandle = async (
   })();
 
   const acquirePromise = awaitAbortableMcpPromise(rawAcquirePromise, abortSignal, () => abortError);
-  mcpSession.browserAcquirePromise = acquirePromise;
+  mcpSession.browser.browserAcquirePromise = acquirePromise;
   try {
     return await acquirePromise;
   } finally {
-    if (mcpSession.browserAcquirePromise === acquirePromise) {
-      mcpSession.browserAcquirePromise = undefined;
+    if (mcpSession.browser.browserAcquirePromise === acquirePromise) {
+      mcpSession.browser.browserAcquirePromise = undefined;
     }
   }
 };

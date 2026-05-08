@@ -15,6 +15,8 @@ const { mockIpcMainHandle, mockShowOpenDialog, mockShowSaveDialog } = vi.hoisted
 vi.mock('electron', () => ({
   ipcMain: {
     handle: mockIpcMainHandle,
+    removeHandler: vi.fn(),
+    removeListener: vi.fn(),
   },
   dialog: {
     showOpenDialog: mockShowOpenDialog,
@@ -34,7 +36,8 @@ vi.mock('../ipc-utils', () => ({
   })),
 }));
 
-import { DatasetIPCHandler } from './dataset-handler';
+import { DatasetIPCHandler, normalizeImportRecordsBase64Payload } from './dataset-handler';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 import type { DuckDBService } from '../duckdb/service';
 
 describe('DatasetIPCHandler', () => {
@@ -44,6 +47,7 @@ describe('DatasetIPCHandler', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
     handlers = new Map();
 
     // 捕获注册的处理器
@@ -151,6 +155,7 @@ describe('DatasetIPCHandler', () => {
         'duckdb:preview-group',
         'duckdb:select-export-path',
         'duckdb:export-dataset',
+        'duckdb:import-records-from-base64',
         'duckdb:import-records-from-file',
       ];
 
@@ -674,6 +679,36 @@ describe('DatasetIPCHandler', () => {
       expect(result.message).toBe('列名已存在');
     });
 
+    it('应该使用统一列名策略拒绝非法列名', async () => {
+      const h = handlers.get('duckdb:validate-column-name')!;
+      const mockEvent = createMockEvent();
+      (mockDuckDB.getDatasetInfo as any).mockResolvedValue({
+        id: 'ds1',
+        schema: [{ name: 'existing_col' }],
+      });
+
+      const result = await h(mockEvent, 'ds1', 'bad-name');
+
+      expect(result.success).toBe(true);
+      expect(result.valid).toBe(false);
+      expect(result.message).toBe('列名只能包含中文、字母、数字和下划线');
+    });
+
+    it('应该在重复检查前规范化列名', async () => {
+      const h = handlers.get('duckdb:validate-column-name')!;
+      const mockEvent = createMockEvent();
+      (mockDuckDB.getDatasetInfo as any).mockResolvedValue({
+        id: 'ds1',
+        schema: [{ name: 'existing_col' }],
+      });
+
+      const result = await h(mockEvent, 'ds1', ' existing_col ');
+
+      expect(result.success).toBe(true);
+      expect(result.valid).toBe(false);
+      expect(result.message).toBe('列名已存在');
+    });
+
     it('应该处理数据集不存在', async () => {
       const h = handlers.get('duckdb:validate-column-name')!;
       const mockEvent = createMockEvent();
@@ -885,6 +920,86 @@ describe('DatasetIPCHandler', () => {
   });
 
   // ========== 文件导入记录测试 ==========
+
+  describe('normalizeImportRecordsBase64Payload', () => {
+    it('应该规范化 data URL 并计算解码后大小', () => {
+      const result = normalizeImportRecordsBase64Payload('data:text/csv;base64,YTpi', {
+        filename: 'records.csv',
+      });
+
+      expect(result.payload).toBe('YTpi');
+      expect(result.decodedBytes).toBe(3);
+      expect(result.extension).toBe('.csv');
+      expect(result.resolvedName).toBe('records.csv');
+    });
+
+    it('应该拒绝非法 Base64 内容', () => {
+      expect(() => normalizeImportRecordsBase64Payload('not base64 !')).toThrow(
+        'Base64 content is invalid'
+      );
+    });
+
+    it('应该拒绝超过大小限制的 Base64 内容', () => {
+      expect(() =>
+        normalizeImportRecordsBase64Payload('YWJj', {
+          filename: 'records.csv',
+          maxBytes: 2,
+        })
+      ).toThrow('Base64 content is too large');
+    });
+
+    it('应该拒绝不支持的导入扩展名', () => {
+      expect(() =>
+        normalizeImportRecordsBase64Payload('YQ==', {
+          filename: 'records.exe',
+        })
+      ).toThrow('Unsupported import file extension');
+    });
+
+    it('应该拒绝不支持的 data URL MIME 类型', () => {
+      expect(() =>
+        normalizeImportRecordsBase64Payload('data:image/png;base64,YQ==', {
+          filename: 'records.csv',
+        })
+      ).toThrow('Unsupported import content type');
+    });
+  });
+
+  describe('duckdb:import-records-from-base64', () => {
+    it('应该从 Base64 临时文件导入记录', async () => {
+      const h = handlers.get('duckdb:import-records-from-base64')!;
+      const mockEvent = createMockEvent();
+      (mockDuckDB.importRecordsFromFile as any).mockResolvedValue({
+        recordsInserted: 3,
+      });
+
+      const result = await h(
+        mockEvent,
+        'ds1',
+        Buffer.from('name\nAlice\nBob\n').toString('base64'),
+        'records.csv'
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.recordsInserted).toBe(3);
+      expect(mockDuckDB.importRecordsFromFile).toHaveBeenCalledWith(
+        'ds1',
+        expect.stringMatching(/records_.*\.csv$/),
+        expect.any(Function)
+      );
+    });
+
+    it('应该在 Base64 非法时拒绝导入且不调用 DuckDB', async () => {
+      const h = handlers.get('duckdb:import-records-from-base64')!;
+      const mockEvent = createMockEvent();
+
+      const result = await h(mockEvent, 'ds1', 'not base64 !', 'records.csv');
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Base64 content is invalid');
+      expect(mockDuckDB.importRecordsFromFile).not.toHaveBeenCalled();
+    });
+  });
 
   describe('duckdb:import-records-from-file', () => {
     it('应该从文件导入记录', async () => {

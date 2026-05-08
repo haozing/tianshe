@@ -33,7 +33,7 @@
  * await helpers.account.delete(account.id);
  */
 
-import type { AccountService } from '../../../main/duckdb/account-service';
+import type { IAccountService } from '../../../types/service-interfaces';
 import type { Account, CreateAccountParams, UpdateAccountParams } from '../../../types/profile';
 
 /**
@@ -42,7 +42,7 @@ import type { Account, CreateAccountParams, UpdateAccountParams } from '../../..
 export class AccountNamespace {
   constructor(
     private pluginId: string,
-    private accountService: AccountService
+    private accountService: IAccountService
   ) {}
 
   /**

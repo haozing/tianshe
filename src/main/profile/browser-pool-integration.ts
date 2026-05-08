@@ -12,6 +12,7 @@ import type { SessionConfig } from '../../core/browser-pool/types';
 import { SimpleBrowser } from '../../core/browser-core';
 import { IntegratedBrowser } from '../../core/browser-automation';
 import type { BrowserFactory, BrowserDestroyer } from '../../core/browser-pool/global-pool';
+import { getOcrPool } from '../../core/system-automation/ocr';
 import { buildStealthConfigFromFingerprint } from '../../core/fingerprint/fingerprint-projections';
 import { getDefaultFingerprint } from './presets';
 import { mergeFingerprintConfig } from '../../constants/fingerprint-defaults';
@@ -105,7 +106,11 @@ export function createBrowserFactory(
     const simpleBrowser = new SimpleBrowser(viewId, viewInfo.view.webContents, viewManager);
 
     // 包装为 IntegratedBrowser，提供完整功能
-    const browser = new IntegratedBrowser(simpleBrowser, viewManager);
+    const browser = new IntegratedBrowser(simpleBrowser, viewManager, {
+      ocrProviderFactory: {
+        create: async () => getOcrPool(),
+      },
+    });
 
     console.log(`[BrowserPool] Browser created: ${viewId}`);
 

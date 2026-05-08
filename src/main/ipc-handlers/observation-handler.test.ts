@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { ipcMain } from 'electron';
 import { registerObservationHandlers } from './observation-handler';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn(),
+    removeHandler: vi.fn(),
+    removeListener: vi.fn(),
   },
 }));
 
@@ -28,11 +31,14 @@ describe('registerObservationHandlers', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
     registeredHandlers.clear();
 
-    (ipcMain.handle as Mock).mockImplementation((channel: string, fn: (...args: unknown[]) => unknown) => {
-      registeredHandlers.set(channel, fn as (...args: unknown[]) => Promise<unknown>);
-    });
+    (ipcMain.handle as Mock).mockImplementation(
+      (channel: string, fn: (...args: unknown[]) => unknown) => {
+        registeredHandlers.set(channel, fn as (...args: unknown[]) => Promise<unknown>);
+      }
+    );
 
     registerObservationHandlers(duckdbService as never);
   });

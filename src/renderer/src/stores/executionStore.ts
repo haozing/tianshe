@@ -4,6 +4,7 @@
  */
 
 import { create } from 'zustand';
+import { getUnknownErrorMessage } from '../../../utils/error-message';
 
 interface ExecutionInfo {
   executionId: string;
@@ -88,8 +89,8 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
         set({ error: response.error || 'Failed to stop execution', loading: false });
         return false;
       }
-    } catch (error: any) {
-      set({ error: error.message, loading: false });
+    } catch (error: unknown) {
+      set({ error: getUnknownErrorMessage(error), loading: false });
       return false;
     }
   },
@@ -111,8 +112,8 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
 
       // 清空活跃执行列表
       set({ activeExecutions: new Map(), loading: false });
-    } catch (error: any) {
-      set({ error: error.message, loading: false });
+    } catch (error: unknown) {
+      set({ error: getUnknownErrorMessage(error), loading: false });
     }
   },
 
@@ -132,7 +133,7 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
         }
         set({ activeExecutions: newMap });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[ExecutionStore] Failed to sync active executions:', error);
     }
   },

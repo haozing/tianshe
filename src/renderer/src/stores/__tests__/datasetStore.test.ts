@@ -33,6 +33,8 @@ const resetStoreState = () => {
     queryResult: null,
     importProgress: new Map(),
     processedImports: new Set(),
+    pendingLocalSchemaRefreshDatasets: new Set(),
+    localPatchTransaction: null,
     datasetInfoRequestId: 0,
     activeQuerySessionId: 0,
     activeQueryDatasetId: null,
@@ -1061,8 +1063,48 @@ describe('datasetStore query/template behavior', () => {
     ]);
     expect(state.datasets.find((dataset) => dataset.id === 'ds1')?.columnCount).toBe(3);
     expect(state.groupTabs[0]?.columnCount).toBe(3);
+    expect(state.pendingLocalSchemaRefreshDatasets.has('ds1')).toBe(true);
     expect(useDatasetStore.getState().consumePendingLocalSchemaRefresh('ds1')).toBe(true);
     expect(useDatasetStore.getState().consumePendingLocalSchemaRefresh('ds1')).toBe(false);
+  });
+
+  it('local patch transaction should rollback dataset store state', () => {
+    useDatasetStore.setState({
+      datasets: [
+        {
+          id: 'ds1',
+          name: 'Dataset 1',
+          rowCount: 1,
+          columnCount: 1,
+          sizeBytes: 0,
+          createdAt: Date.now(),
+        },
+      ],
+      currentDataset: {
+        id: 'ds1',
+        name: 'Dataset 1',
+        rowCount: 1,
+        columnCount: 1,
+        sizeBytes: 0,
+        createdAt: Date.now(),
+      },
+      activeQueryDatasetId: 'ds1',
+      queryResult: {
+        columns: ['name'],
+        rows: [{ _row_id: 1, name: 'row-1' }],
+        rowCount: 1,
+      },
+      currentOffset: 1,
+      hasMore: false,
+    });
+
+    const patchId = useDatasetStore.getState().beginLocalPatch();
+    useDatasetStore.getState().applyLocalRecordInsert('ds1', { name: 'row-2' });
+
+    expect(useDatasetStore.getState().queryResult?.rows).toHaveLength(2);
+    expect(useDatasetStore.getState().rollbackLocalPatch(patchId)).toBe(true);
+    expect(useDatasetStore.getState().queryResult?.rows).toEqual([{ _row_id: 1, name: 'row-1' }]);
+    expect(useDatasetStore.getState().datasets[0].rowCount).toBe(1);
   });
 
   it('deleteDataset should clear active dataset view state when deleting the current dataset', async () => {

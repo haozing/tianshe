@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { getSelectAllKeyModifiers } from './native-keyboard-utils';
 import {
+  createViewportOCRService,
   performSelectorClickAction,
   performSelectorSelectAction,
   performSelectorTypeAction,
@@ -90,5 +91,49 @@ describe('browser-facade-shared selector helpers', () => {
         selectValue: vi.fn(async () => false),
       })
     ).rejects.toThrow('Failed to select value for selector: #country');
+  });
+
+  it('createViewportOCRService uses the injected OCR provider factory', async () => {
+    const results = [
+      {
+        text: 'Submit',
+        confidence: 98,
+        bounds: { x: 10, y: 20, width: 80, height: 24 },
+      },
+    ];
+    const provider = {
+      recognize: vi.fn(async () => results),
+      terminate: vi.fn(async () => undefined),
+    };
+    const factory = {
+      create: vi.fn(async () => provider),
+    };
+    const captureViewportScreenshot = vi.fn(async () => Buffer.from('image'));
+    const ocr = createViewportOCRService(captureViewportScreenshot, factory);
+
+    await expect(ocr.recognize()).resolves.toEqual(results);
+    await ocr.terminate();
+
+    expect(factory.create).toHaveBeenCalledTimes(1);
+    expect(provider.recognize).toHaveBeenCalledWith(
+      Buffer.from('image'),
+      {
+        language: 'eng+chi_sim',
+        minConfidence: undefined,
+      },
+      {
+        timeoutMs: undefined,
+        signal: undefined,
+      }
+    );
+    expect(provider.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it('createViewportOCRService fails clearly when no OCR provider factory is configured', async () => {
+    const ocr = createViewportOCRService(vi.fn(async () => Buffer.from('image')));
+
+    await expect(ocr.recognize()).rejects.toThrow(
+      'OCR provider factory is not configured for this browser'
+    );
   });
 });

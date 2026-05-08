@@ -11,12 +11,14 @@
 
 import * as path from 'path';
 import * as fs from 'fs-extra';
-import type { DuckDBService } from '../../main/duckdb/service';
-import type { WebContentsViewManager } from '../../main/webcontentsview-manager';
+import type { IDuckDBService } from '../../types/duckdb';
+import type { IWebContentsViewManager } from '../browser-pool/ports';
 import type { JSPluginManifest } from '../../types/js-plugin';
 import type { PluginContext } from './context';
 import type { PluginHelpers } from './helpers';
 import { createLogger } from '../logger';
+import { getUnknownErrorMessage } from '../../utils/error-message';
+
 
 const logger = createLogger('UIExtensionManager');
 
@@ -24,8 +26,8 @@ const logger = createLogger('UIExtensionManager');
  * UI 扩展管理器配置
  */
 export interface UIExtensionManagerConfig {
-  duckdb: DuckDBService;
-  viewManager: WebContentsViewManager;
+  duckdb: IDuckDBService;
+  viewManager: IWebContentsViewManager;
 }
 
 /**
@@ -41,8 +43,8 @@ export interface AppliesToConfig {
  * UI 扩展管理器
  */
 export class UIExtensionManager {
-  private duckdb: DuckDBService;
-  private viewManager: WebContentsViewManager;
+  private duckdb: IDuckDBService;
+  private viewManager: IWebContentsViewManager;
 
   constructor(config: UIExtensionManagerConfig) {
     this.duckdb = config.duckdb;
@@ -82,8 +84,8 @@ export class UIExtensionManager {
         `DELETE FROM js_plugin_custom_pages WHERE plugin_id = ?`,
         [pluginId]
       );
-    } catch (error: any) {
-      logger.warn(`[WARN] Failed to clean UI contributions for ${pluginId}:`, error.message);
+    } catch (error: unknown) {
+      logger.warn(`[WARN] Failed to clean UI contributions for ${pluginId}:`, getUnknownErrorMessage(error));
     }
   }
 
@@ -716,7 +718,7 @@ export class UIExtensionManager {
               // 显示错误提示
               document.body.insertAdjacentHTML('afterbegin', \`
                 <div style="position: fixed; top: 0; left: 0; right: 0; background: #f44336; color: white; padding: 12px; text-align: center; z-index: 9999;">
-                  <strong>插件 API 初始化失败</strong>: \${error.message}
+                  <strong>插件 API 初始化失败</strong>: \${error && error.message ? error.message : String(error)}
                 </div>
               \`);
             }

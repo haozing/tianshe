@@ -20,6 +20,7 @@ import type {
   LoadLibraryOptions,
   LibraryInfo,
 } from './types';
+import { getUnknownErrorMessage, toError } from '../../utils/error-message';
 
 const SYSTEM_LIBS_ALLOWLIST = new Set(SYSTEM_LIBS_WHITELIST.map((lib) => lib.toLowerCase()));
 
@@ -114,9 +115,13 @@ export class FFIService {
       console.log(`[FFI] Library loaded successfully: ${safePath}`);
 
       return library;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`[FFI] Failed to load library ${safePath}:`, error);
-      throw new FFIError(`Failed to load library: ${error.message}`, 'LOAD_FAILED', error);
+      throw new FFIError(
+        `Failed to load library: ${getUnknownErrorMessage(error)}`,
+        'LOAD_FAILED',
+        toError(error)
+      );
     }
   }
 
@@ -155,9 +160,13 @@ export class FFIService {
       console.log(`[FFI] Callback created for caller: ${this.callerId}`);
 
       return wrapper;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`[FFI] Failed to create callback:`, error);
-      throw new FFIError(`Failed to create callback: ${error.message}`, 'CALLBACK_FAILED', error);
+      throw new FFIError(
+        `Failed to create callback: ${getUnknownErrorMessage(error)}`,
+        'CALLBACK_FAILED',
+        toError(error)
+      );
     }
   }
 
@@ -189,9 +198,13 @@ export class FFIService {
       console.log(`[FFI] Struct '${name}' defined for caller: ${this.callerId}`);
 
       return struct;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`[FFI] Failed to define struct:`, error);
-      throw new FFIError(`Failed to define struct: ${error.message}`, 'STRUCT_FAILED', error);
+      throw new FFIError(
+        `Failed to define struct: ${getUnknownErrorMessage(error)}`,
+        'STRUCT_FAILED',
+        toError(error)
+      );
     }
   }
 

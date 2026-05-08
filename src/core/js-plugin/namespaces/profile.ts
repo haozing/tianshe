@@ -41,10 +41,15 @@ import type {
   UpdateProfileParams,
   FingerprintConfig,
 } from '../../../types/profile';
-import type { ProfileService } from '../../../main/duckdb/profile-service';
-import type { ProfileGroupService } from '../../../main/duckdb/profile-group-service';
-import type { WebContentsViewManager } from '../../../main/webcontentsview-manager';
-import type { WindowManager } from '../../../main/window-manager';
+import type {
+  IProfileService,
+  IProfileGroupService,
+} from '../../../types/service-interfaces';
+import type {
+  IWebContentsViewManager,
+  IWindowManager,
+} from '../../browser-pool/ports';
+import type { InternalDevToolsOpener } from './window';
 import type { BrowserInterface } from '../../../types/browser-interface';
 import type { BrowserRuntimeDescriptor } from '../../../types/browser-interface';
 import {
@@ -69,7 +74,10 @@ import {
   buildProfileResourceKey,
   resourceCoordinator,
 } from '../../resource-coordinator';
-import { generateVariant, applyPreset as applyPresetConfig } from '../../../main/profile/presets';
+import {
+  generateVariant,
+  applyPreset as applyPresetConfig,
+} from '../../../constants/fingerprint-defaults';
 import { fingerprintManager } from '../../stealth';
 import { validateFingerprintConfig } from '../../fingerprint/fingerprint-validation';
 import {
@@ -444,11 +452,12 @@ export class ProfileNamespace {
 
   constructor(
     private pluginId: string,
-    private profileService: ProfileService,
-    private groupService: ProfileGroupService,
-    private viewManager: WebContentsViewManager,
-    private windowManager: WindowManager,
-    private getPluginConfig?: (key: string) => Promise<any>
+    private profileService: IProfileService,
+    private groupService: IProfileGroupService,
+    private viewManager: IWebContentsViewManager,
+    private windowManager: IWindowManager,
+    private getPluginConfig?: (key: string) => Promise<any>,
+    private devToolsOpener?: InternalDevToolsOpener
   ) {}
 
   describeEngineRuntime(engine: AutomationEngine = 'electron'): BrowserRuntimeDescriptor {
@@ -1319,6 +1328,12 @@ export class ProfileNamespace {
         width: options?.width || 1200,
         height: options?.height || 800,
         openDevTools: options?.openDevTools,
+        onViewReady: (view) => {
+          this.devToolsOpener?.(view.webContents, {
+            override: options?.openDevTools,
+            mode: 'detach',
+          });
+        },
         onClose: options?.onClose,
       });
 
@@ -1438,6 +1453,12 @@ export class ProfileNamespace {
         width: options?.width || 1200,
         height: options?.height || 800,
         openDevTools: options?.openDevTools,
+        onViewReady: (view) => {
+          this.devToolsOpener?.(view.webContents, {
+            override: options?.openDevTools,
+            mode: 'detach',
+          });
+        },
         onClose: options?.onClose,
       });
 

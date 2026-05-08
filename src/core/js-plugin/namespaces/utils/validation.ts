@@ -6,6 +6,8 @@
 
 import Ajv from 'ajv';
 import { ValidationError } from '../../errors';
+import { getUnknownErrorMessage } from '../../../../utils/error-message';
+
 
 /**
  * 验证工具类
@@ -51,11 +53,11 @@ export class ValidationUtils {
       }
 
       return { valid: true };
-    } catch (error: any) {
-      throw new ValidationError(`Failed to validate parameters: ${error.message}`, {
+    } catch (error: unknown) {
+      throw new ValidationError(`Failed to validate parameters: ${getUnknownErrorMessage(error)}`, {
         schema,
         data,
-        originalError: error.message,
+        originalError: getUnknownErrorMessage(error),
       });
     }
   }

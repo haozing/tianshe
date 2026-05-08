@@ -4,7 +4,7 @@
  * 为插件提供访问和管理 saved_sites 的能力。
  */
 
-import type { SavedSiteService } from '../../../main/duckdb/saved-site-service';
+import type { ISavedSiteService } from '../../../types/service-interfaces';
 import type {
   CreateSavedSiteParams,
   SavedSite,
@@ -37,7 +37,7 @@ const DEFAULT_DOUDIAN_SAVED_SITE: Required<
 export class SavedSiteNamespace {
   constructor(
     private pluginId: string,
-    private savedSiteService: SavedSiteService
+    private savedSiteService: ISavedSiteService
   ) {}
 
   /**

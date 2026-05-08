@@ -6,6 +6,7 @@
 
 import { DuckDBConnection } from '@duckdb/node-api';
 import { parseRows } from './utils';
+import { runPrepared, allPrepared } from './statement-executor';
 
 export class TaskPersistenceService {
   constructor(private conn: DuckDBConnection) {}
@@ -42,7 +43,7 @@ export class TaskPersistenceService {
     const workflow = JSON.stringify(task.workflow);
     const result = task.result ? JSON.stringify(task.result) : null;
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(this.conn, `
       INSERT INTO tasks (id, workflow, partition, priority, status, start_time, end_time, result, error, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (id) DO UPDATE SET
@@ -52,9 +53,7 @@ export class TaskPersistenceService {
         result = excluded.result,
         error = excluded.error,
         updated_at = excluded.updated_at
-    `);
-
-    stmt.bind([
+    `, [
       task.id,
       workflow,
       task.partition,
@@ -67,9 +66,6 @@ export class TaskPersistenceService {
       task.createdAt || now,
       now,
     ]);
-
-    await stmt.run();
-    stmt.destroySync();
   }
 
   /**
@@ -99,10 +95,7 @@ export class TaskPersistenceService {
 
     values.push(taskId);
 
-    const stmt = await this.conn.prepare(`UPDATE tasks SET ${setFields.join(', ')} WHERE id = ?`);
-    stmt.bind(values);
-    await stmt.run();
-    stmt.destroySync();
+    await runPrepared(this.conn, `UPDATE tasks SET ${setFields.join(', ')} WHERE id = ?`, values);
   }
 
   /**
@@ -131,10 +124,7 @@ export class TaskPersistenceService {
    * 删除任务
    */
   async deleteTask(taskId: string): Promise<void> {
-    const stmt = await this.conn.prepare('DELETE FROM tasks WHERE id = ?');
-    stmt.bind([taskId]);
-    await stmt.run();
-    stmt.destroySync();
+    await runPrepared(this.conn, 'DELETE FROM tasks WHERE id = ?', [taskId]);
   }
 
   /**
@@ -143,22 +133,17 @@ export class TaskPersistenceService {
   async cleanupOldTasks(daysToKeep: number = 7): Promise<number> {
     const cutoff = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
 
-    const countStmt = await this.conn.prepare(
-      `SELECT COUNT(*) as count FROM tasks WHERE status IN ('completed', 'failed') AND end_time < ?`
+    const countResult = await allPrepared(this.conn,
+      `SELECT COUNT(*) as count FROM tasks WHERE status IN ('completed', 'failed') AND end_time < ?`,
+      [cutoff]
     );
-    countStmt.bind([cutoff]);
-    const countResult = await countStmt.runAndReadAll();
-    countStmt.destroySync();
-
     const rows = parseRows(countResult);
     const count = Number(rows[0]?.count || 0);
 
-    const deleteStmt = await this.conn.prepare(
-      `DELETE FROM tasks WHERE status IN ('completed', 'failed') AND end_time < ?`
+    await runPrepared(this.conn,
+      `DELETE FROM tasks WHERE status IN ('completed', 'failed') AND end_time < ?`,
+      [cutoff]
     );
-    deleteStmt.bind([cutoff]);
-    await deleteStmt.run();
-    deleteStmt.destroySync();
 
     return count;
   }

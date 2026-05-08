@@ -6,6 +6,7 @@
 import type { DuckDBConnection } from '@duckdb/node-api';
 import type { QueryConfig } from '../../core/query-engine/types';
 import { parseRows, quoteIdentifier, quoteQualifiedName } from './utils';
+import { allPrepared } from './statement-executor';
 import { generateId } from '../../utils/id-generator';
 import type { QueryEngine } from '../../core/query-engine';
 import {
@@ -41,7 +42,12 @@ export interface CreateQueryTemplateParams {
 export class QueryTemplateService {
   private queryEngine: QueryEngine | null = null;
 
-  constructor(private conn: DuckDBConnection) {}
+  constructor(
+    private conn: DuckDBConnection,
+    queryEngine?: QueryEngine
+  ) {
+    this.queryEngine = queryEngine ?? null;
+  }
 
   private async dropSnapshotTable(datasetId: string, snapshotTableName?: string | null): Promise<void> {
     if (!snapshotTableName) return;
@@ -164,12 +170,6 @@ export class QueryTemplateService {
     );
   }
 
-  /**
-   * 设置 QueryEngine（延迟注入，避免循环依赖）
-   */
-  setQueryEngine(queryEngine: QueryEngine): void {
-    this.queryEngine = queryEngine;
-  }
 
   /**
    * 创建查询模板（元数据 + 快照表）
@@ -242,7 +242,7 @@ export class QueryTemplateService {
   async listQueryTemplates(datasetId: string): Promise<QueryTemplateConfig[]> {
     console.log(`[QueryTemplateService] Listing query templates for dataset: ${datasetId}`);
 
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT
         id, dataset_id, name, description, icon,
         query_config, snapshot_table_name, is_default, template_order,
@@ -250,11 +250,7 @@ export class QueryTemplateService {
       FROM dataset_query_templates
       WHERE dataset_id = ?
       ORDER BY template_order ASC, created_at ASC
-    `);
-
-    stmt.bind([datasetId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [datasetId]);
     const rows = parseRows(result);
 
     return rows.map((row: any) => ({
@@ -297,18 +293,14 @@ export class QueryTemplateService {
       // 继续执行，不因统计失败而中断
     }
 
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT
         id, dataset_id, name, description, icon,
         query_config, snapshot_table_name, is_default, template_order,
         created_at, updated_at, last_accessed_at, access_count
       FROM dataset_query_templates
       WHERE id = ?
-    `);
-
-    stmt.bind([templateId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [templateId]);
     const rows = parseRows(result);
 
     if (rows.length === 0) {
@@ -553,12 +545,11 @@ export class QueryTemplateService {
    * 获取下一个查询模板顺序号
    */
   private async getNextTemplateOrder(datasetId: string): Promise<number> {
-    const stmt = await this.conn.prepare(
-      `SELECT MAX(template_order) as max_order FROM dataset_query_templates WHERE dataset_id = ?`
+    const result = await allPrepared(
+      this.conn,
+      `SELECT MAX(template_order) as max_order FROM dataset_query_templates WHERE dataset_id = ?`,
+      [datasetId]
     );
-    stmt.bind([datasetId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
     const rows = parseRows(result);
 
     const row: any = rows[0];
@@ -578,7 +569,7 @@ export class QueryTemplateService {
     console.log(`[QueryTemplateService] Getting or creating default query template for dataset: ${datasetId}`);
 
     // 1. 按 is_default 查找默认模板（唯一来源）
-    const defaultStmt = await this.conn.prepare(`
+    const defaultResult = await allPrepared(this.conn, `
       SELECT
         id, dataset_id, name, description, icon,
         query_config, snapshot_table_name, is_default, template_order,
@@ -586,11 +577,7 @@ export class QueryTemplateService {
       FROM dataset_query_templates
       WHERE dataset_id = ? AND is_default = TRUE
       ORDER BY template_order ASC, created_at ASC
-    `);
-
-    defaultStmt.bind([datasetId]);
-    const defaultResult = await defaultStmt.runAndReadAll();
-    defaultStmt.destroySync();
+    `, [datasetId]);
     const defaultRows = parseRows(defaultResult);
     let row: any | null = defaultRows.length > 0 ? (defaultRows[0] as any) : null;
 

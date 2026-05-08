@@ -6,8 +6,8 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import type { SchedulerService } from '../../main/scheduler';
 import type {
+  ISchedulerService,
   ScheduledTask,
   TaskExecution,
   ScheduleType,
@@ -38,7 +38,7 @@ export interface SchedulerTaskContext {
  */
 export interface SchedulerConfig {
   /** 调度服务实例 */
-  schedulerService: SchedulerService | null;
+  schedulerService: ISchedulerService | null;
   /** 调用者标识 */
   callerId: string;
 }
@@ -128,13 +128,13 @@ export interface ExecutionInfo {
 }
 
 // 全局 SchedulerService 引用
-let globalSchedulerService: SchedulerService | null = null;
+let globalSchedulerService: ISchedulerService | null = null;
 
 /**
  * 设置全局 SchedulerService 引用
  * @internal
  */
-export function setSchedulerService(service: SchedulerService): void {
+export function setSchedulerService(service: ISchedulerService): void {
   globalSchedulerService = service;
 }
 
@@ -142,7 +142,7 @@ export function setSchedulerService(service: SchedulerService): void {
  * 获取全局 SchedulerService 引用
  * @internal
  */
-export function getSchedulerService(): SchedulerService | null {
+export function getSchedulerService(): ISchedulerService | null {
   return globalSchedulerService;
 }
 
@@ -164,7 +164,7 @@ export function getSchedulerService(): SchedulerService | null {
  */
 export class Scheduler {
   private handlers: Map<string, (ctx: SchedulerTaskContext) => Promise<any>> = new Map();
-  private schedulerService: SchedulerService | null;
+  private schedulerService: ISchedulerService | null;
   private callerId: string;
 
   constructor(config: SchedulerConfig) {
@@ -356,7 +356,7 @@ export class Scheduler {
   /**
    * 确保服务已初始化
    */
-  private ensureService(): SchedulerService {
+  private ensureService(): ISchedulerService {
     if (!this.schedulerService) {
       throw new SchedulerError('SchedulerService not initialized');
     }

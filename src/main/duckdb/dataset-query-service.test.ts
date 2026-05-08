@@ -8,7 +8,7 @@ describe('DatasetQueryService', () => {
     lastExecutedSql = null;
   });
 
-  const createService = () => {
+  const createService = (queryEngine?: any) => {
     const conn = {
       runAndReadAll: vi.fn(async (sql: string) => {
         lastExecutedSql = sql;
@@ -39,7 +39,13 @@ describe('DatasetQueryService', () => {
       smartAttach: vi.fn(async () => undefined),
     } as any;
 
-    const service = new DatasetQueryService(conn, metadataService, schemaService, storageService);
+    const service = new DatasetQueryService(
+      conn,
+      metadataService,
+      schemaService,
+      storageService,
+      queryEngine
+    );
     return { service, storageService };
   };
 
@@ -47,7 +53,10 @@ describe('DatasetQueryService', () => {
     const { service } = createService();
 
     await expect(
-      service.queryDataset('plugin__doudian_combo__products', 'DELETE FROM data WHERE "task_id" = 1')
+      service.queryDataset(
+        'plugin__doudian_combo__products',
+        'DELETE FROM data WHERE "task_id" = 1'
+      )
     ).rejects.toThrow(/read-only|DELETE/i);
 
     expect(lastExecutedSql).toBeNull();
@@ -126,21 +135,68 @@ describe('DatasetQueryService', () => {
         service.previewSample('dataset-1', { type: 'rows', value: 10 }),
     ],
     [
+      'previewLookup',
+      (service: DatasetQueryService) =>
+        service.previewLookup('dataset-1', { type: 'map', lookupKey: 'status' }),
+    ],
+    [
       'previewGroup',
       (service: DatasetQueryService) =>
         service.previewGroup('dataset-1', { field: 'status', order: 'asc' }),
     ],
-  ])('auto-attaches dataset before %s', async (_name, invoke) => {
+    [
+      'validateComputeExpression',
+      (service: DatasetQueryService) =>
+        service.validateComputeExpression('dataset-1', 'price * quantity'),
+    ],
+  ])('throws a clear initialization error before %s touches storage', async (_name, invoke) => {
     const { service, storageService } = createService();
-    service.setQueryEngine({
+
+    await expect(invoke(service)).rejects.toThrow(
+      'QueryEngine not initialized for DatasetQueryService preview operation'
+    );
+
+    expect(storageService.executeInQueue).not.toHaveBeenCalled();
+    expect(storageService.executeInQueues).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'previewFilterCount',
+      (service: DatasetQueryService) => service.previewFilterCount('dataset-1', { conditions: [] }),
+    ],
+    [
+      'previewAggregate',
+      (service: DatasetQueryService) =>
+        service.previewAggregate('dataset-1', { groupBy: ['status'], measures: [] }),
+    ],
+    [
+      'previewSample',
+      (service: DatasetQueryService) =>
+        service.previewSample('dataset-1', { type: 'rows', value: 10 }),
+    ],
+    [
+      'previewGroup',
+      (service: DatasetQueryService) =>
+        service.previewGroup('dataset-1', { field: 'status', order: 'asc' }),
+    ],
+    [
+      'validateComputeExpression',
+      (service: DatasetQueryService) =>
+        service.validateComputeExpression('dataset-1', 'price * quantity'),
+    ],
+  ])('auto-attaches dataset before %s', async (_name, invoke) => {
+    const queryEngine = {
       previewFilterCount: vi.fn(async () => ({ matchedRows: 0 })),
       preview: {
         previewAggregate: vi.fn(async () => ({ stats: {} })),
         previewSample: vi.fn(async () => ({ stats: {} })),
         previewLookup: vi.fn(async () => ({ stats: {} })),
         previewGroup: vi.fn(async () => ({ stats: {} })),
+        validateComputeExpression: vi.fn(async () => ({ valid: true })),
       },
-    } as any);
+    } as any;
+    const { service, storageService } = createService(queryEngine);
 
     await invoke(service);
 
@@ -148,13 +204,13 @@ describe('DatasetQueryService', () => {
   });
 
   it('previewLookup acquires all dataset queues in one stable pass and forwards lookup arrays', async () => {
-    const { service, storageService } = createService();
     const previewLookup = vi.fn(async () => ({ stats: {} }));
-    service.setQueryEngine({
+    const queryEngine = {
       preview: {
         previewLookup,
       },
-    } as any);
+    } as any;
+    const { service, storageService } = createService(queryEngine);
 
     await service.previewLookup(
       'dataset-main',

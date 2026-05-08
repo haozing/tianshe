@@ -89,9 +89,13 @@ import {
 
 // OCR
 import { ViewportOCRService, type ViewportOCROptions } from './viewport-ocr';
-import { getOcrPool } from '../system-automation/ocr';
+import type { OCRProviderFactory } from '../system-automation/types';
 import { TextNotFoundError } from '../system-automation/types';
-import { waitForSelectorByPolling } from './browser-facade-shared';
+import {
+  createBrowserObservationContext,
+  observeBrowserOperation as observeSharedBrowserOperation,
+  waitForSelectorByPolling,
+} from './browser-facade-shared';
 import { getSelectAllKeyModifiers } from './native-keyboard-utils';
 import {
   clickSelectorElementInDom,
@@ -106,16 +110,13 @@ import {
 } from './selector-engine-facade';
 import { summarizeNetworkEntries } from './network-utils';
 import { waitForCapturedResponse } from './response-wait-runtime';
+import {
+  getMimeTypeForScreenshotFormat,
+  normalizeScreenshotCaptureMode,
+  normalizeScreenshotFormat,
+} from './screenshot-utils';
 import { filterBrowserCookies } from '../browser-core/cookie-filter-utils';
-import {
-  createChildTraceContext,
-  withTraceContext,
-} from '../observability/observation-context';
-import {
-  observationService,
-  summarizeForObservation,
-} from '../observability/observation-service';
-import { attachBrowserFailureBundle } from '../observability/browser-failure-bundle';
+import { summarizeForObservation } from '../observability/observation-service';
 import type { TraceContext } from '../observability/types';
 import {
   browserRuntimeSupports,
@@ -143,27 +144,6 @@ function isRecoverableCaptureError(error: unknown): boolean {
   ].some((token) => message.includes(token));
 }
 
-function normalizeScreenshotFormat(
-  options?: BrowserScreenshotOptions
-): 'png' | 'jpeg' {
-  return options?.format === 'jpeg' ? 'jpeg' : 'png';
-}
-
-function normalizeScreenshotCaptureMode(
-  options?: BrowserScreenshotOptions
-): 'viewport' | 'full_page' {
-  if (options?.captureMode === 'full_page' || options?.fullPage === true) {
-    return 'full_page';
-  }
-  return 'viewport';
-}
-
-function getMimeTypeForScreenshotFormat(
-  format: 'png' | 'jpeg'
-): 'image/png' | 'image/jpeg' {
-  return format === 'jpeg' ? 'image/jpeg' : 'image/png';
-}
-
 const INTEGRATED_BROWSER_RUNTIME = Object.freeze(getStaticEngineRuntimeDescriptor('electron'));
 
 /**
@@ -185,6 +165,7 @@ export class IntegratedBrowser implements BrowserInterface {
   // OCR 服务（懒加载）
   private viewportOCR: ViewportOCRService | null = null;
 
+  private readonly ocrProviderFactory?: OCRProviderFactory;
   private readonly defaultUserAgent: string;
   private readonly defaultLocale = Intl.DateTimeFormat().resolvedOptions().locale || 'en-US';
   private readonly defaultTimezoneId = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -199,8 +180,10 @@ export class IntegratedBrowser implements BrowserInterface {
 
   constructor(
     private browser: SimpleBrowser,
-    private viewManager: ViewManager
+    private viewManager: ViewManager,
+    options?: { ocrProviderFactory?: OCRProviderFactory }
   ) {
+    this.ocrProviderFactory = options?.ocrProviderFactory;
     // 初始化拦截器服务
     this.interceptorService = new BrowserInterceptorService({
       getSession: () => this.browser.getSession(),
@@ -213,8 +196,8 @@ export class IntegratedBrowser implements BrowserInterface {
       getWebContents: () => this.browser.getWebContents(),
       getUrl: () => this.browser.url(),
       getTitle: () => this.browser.title(),
-      networkManager: undefined, // 捕获管理器懒加载
-      consoleManager: undefined,
+      getNetworkManager: () => this.networkManager,
+      getConsoleManager: () => this.consoleManager,
       waitForSelector: (selector, options) =>
         this.waitForSelector(selector, { timeout: options.timeout }),
     });
@@ -280,10 +263,10 @@ export class IntegratedBrowser implements BrowserInterface {
   }
 
   private createObservationContext(partial: Partial<TraceContext> = {}): TraceContext {
-    return createChildTraceContext({
+    return createBrowserObservationContext({
       browserEngine: 'electron',
       browserId: this.getViewId(),
-      ...partial,
+      partial,
     });
   }
 
@@ -294,39 +277,10 @@ export class IntegratedBrowser implements BrowserInterface {
     failureLabel: string;
     operation: () => Promise<T>;
   }): Promise<T> {
-    const context = options.context ?? this.createObservationContext();
-    const baseAttrs = {
-      engine: 'electron',
+    return observeSharedBrowserOperation(this, {
+      ...options,
+      browserEngine: 'electron',
       browserId: this.getViewId(),
-      ...(options.attrs || {}),
-    };
-
-    return await withTraceContext(context, async () => {
-      const span = await observationService.startSpan({
-        context,
-        component: 'browser',
-        event: options.event,
-        attrs: baseAttrs,
-      });
-
-      try {
-        const result = await options.operation();
-        await span.succeed({
-          attrs: baseAttrs,
-        });
-        return result;
-      } catch (error) {
-        const artifacts = await attachBrowserFailureBundle(this, {
-          context,
-          component: 'browser',
-          labelPrefix: options.failureLabel,
-        });
-        await span.fail(error, {
-          attrs: baseAttrs,
-          artifactRefs: artifacts.map((artifact) => artifact.artifactId),
-        });
-        throw error;
-      }
     });
   }
 
@@ -1722,12 +1676,11 @@ export class IntegratedBrowser implements BrowserInterface {
    */
   async getViewportOCR(): Promise<ViewportOCRService> {
     if (!this.viewportOCR) {
-      this.viewportOCR = new ViewportOCRService(this.browser.capture, {
-        recognize: async (image, options) => {
-          const pool = await getOcrPool();
-          return pool.recognize(image, options);
-        },
-      });
+      if (!this.ocrProviderFactory) {
+        throw new Error('OCR provider factory is not configured for IntegratedBrowser');
+      }
+      const ocrProvider = await this.ocrProviderFactory.create();
+      this.viewportOCR = new ViewportOCRService(this.browser.capture, ocrProvider);
 
       // 注入 CDP 截图函数，用于 offscreen 模式 fallback
       // 使用 viewportScreenshot 而非 fullPageScreenshot，确保坐标与视口一致

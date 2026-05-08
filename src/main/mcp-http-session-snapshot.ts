@@ -67,47 +67,47 @@ export const buildMcpSessionSnapshot = (
   mcpSession: McpSessionInfo,
   overrides: McpSessionSnapshotOverrides = {}
 ): McpSessionSnapshot => {
-  const engine = asTrimmedText(mcpSession.engine) || null;
-  const browserAcquired = isMcpBrowserHandleUsable(mcpSession.browserHandle);
+  const engine = asTrimmedText(mcpSession.browser.engine) || null;
+  const browserAcquired = isMcpBrowserHandleUsable(mcpSession.browser.browserHandle);
   const engineRuntimeDescriptor =
     isAutomationEngine(engine)
       ? getStaticEngineRuntimeDescriptor(engine)
       : null;
   const browserRuntimeDescriptor =
     browserAcquired &&
-    mcpSession.browserHandle?.browser &&
-    typeof mcpSession.browserHandle.browser.describeRuntime === 'function'
-      ? mcpSession.browserHandle.browser.describeRuntime()
+    mcpSession.browser.browserHandle?.browser &&
+    typeof mcpSession.browser.browserHandle.browser.describeRuntime === 'function'
+      ? mcpSession.browser.browserHandle.browser.describeRuntime()
       : null;
   const resolvedRuntimeDescriptor = browserRuntimeDescriptor || engineRuntimeDescriptor;
 
   return {
     ...buildMcpSessionStateSnapshot({
-      sessionId: overrides.sessionId ?? mcpSession.sessionId,
-      profileId: mcpSession.partition,
-      engine: mcpSession.engine,
-      visible: mcpSession.visible,
-      effectiveScopes: mcpSession.authScopes || [],
+      sessionId: overrides.sessionId ?? mcpSession.transport.sessionId,
+      profileId: mcpSession.browser.partition,
+      engine: mcpSession.browser.engine,
+      visible: mcpSession.browser.visible,
+      effectiveScopes: mcpSession.auth.authScopes || [],
       browserAcquired,
-      browserAcquireInProgress: Boolean(mcpSession.browserAcquirePromise),
-      closing: mcpSession.closing === true,
-      terminateAfterResponse: mcpSession.terminateAfterResponse === true,
+      browserAcquireInProgress: Boolean(mcpSession.browser.browserAcquirePromise),
+      closing: mcpSession.lifecycle.closing === true,
+      terminateAfterResponse: mcpSession.lifecycle.terminateAfterResponse === true,
     }),
-    sessionId: asTrimmedText(overrides.sessionId ?? mcpSession.sessionId) || null,
-    profileId: asTrimmedText(mcpSession.partition) || null,
+    sessionId: asTrimmedText(overrides.sessionId ?? mcpSession.transport.sessionId) || null,
+    profileId: asTrimmedText(mcpSession.browser.partition) || null,
     engine,
-    visible: mcpSession.visible,
+    visible: mcpSession.browser.visible,
     browserAcquired,
-    browserAcquireInProgress: Boolean(mcpSession.browserAcquirePromise),
-    effectiveScopes: [...(mcpSession.authScopes || [])],
-    closing: mcpSession.closing === true,
-    terminateAfterResponse: mcpSession.terminateAfterResponse === true,
-    hostWindowId: asTrimmedText(overrides.hostWindowId ?? mcpSession.hostWindowId) || null,
-    viewportHealth: overrides.viewportHealth ?? mcpSession.viewportHealth ?? 'unknown',
+    browserAcquireInProgress: Boolean(mcpSession.browser.browserAcquirePromise),
+    effectiveScopes: [...(mcpSession.auth.authScopes || [])],
+    closing: mcpSession.lifecycle.closing === true,
+    terminateAfterResponse: mcpSession.lifecycle.terminateAfterResponse === true,
+    hostWindowId: asTrimmedText(overrides.hostWindowId ?? mcpSession.browser.hostWindowId) || null,
+    viewportHealth: overrides.viewportHealth ?? mcpSession.viewport.viewportHealth ?? 'unknown',
     viewportHealthReason:
-      asTrimmedText(overrides.viewportHealthReason ?? mcpSession.viewportHealthReason) || null,
-    interactionReady: overrides.interactionReady ?? (mcpSession.interactionReady === true),
-    offscreenDetected: overrides.offscreenDetected ?? (mcpSession.offscreenDetected === true),
+      asTrimmedText(overrides.viewportHealthReason ?? mcpSession.viewport.viewportHealthReason) || null,
+    interactionReady: overrides.interactionReady ?? (mcpSession.viewport.interactionReady === true),
+    offscreenDetected: overrides.offscreenDetected ?? (mcpSession.viewport.offscreenDetected === true),
     engineRuntimeDescriptor,
     browserRuntimeDescriptor,
     resolvedRuntimeDescriptor,

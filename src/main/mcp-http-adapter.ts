@@ -12,10 +12,9 @@ import {
   type OrchestrationCapabilityDefinition,
   listCanonicalPublicCapabilities,
 } from '../core/ai-dev/orchestration';
+import type { OrchestrationBrowserSessionContext } from '../core/ai-dev/orchestration/types';
 import { createStructuredError, ErrorCode } from '../types/error-codes';
-import {
-  asTrimmedText,
-} from './mcp-http-transport-utils';
+import { asTrimmedText } from './mcp-http-transport-utils';
 import { registerMcpCatalogHandlers } from './mcp-http-catalog';
 import { buildMcpInitializeInstructions } from './mcp-initialize-instructions';
 import { createSdkInitializeShim } from './mcp-sdk-initialize-shim';
@@ -28,7 +27,11 @@ import {
   shouldRecycleSessionBrowser,
 } from './mcp-http-session-runtime';
 import { registerMcpRouteHandlers } from './mcp-http-route-handlers';
-import type { McpSessionInfo, RegisterMcpRoutesOptions } from './mcp-http-types';
+import type {
+  McpSessionInfo,
+  McpSessionRuntimeOptions,
+  RegisterMcpRoutesOptions,
+} from './mcp-http-types';
 export type { McpServerInfo, McpSessionInfo, RegisterMcpRoutesOptions } from './mcp-http-types';
 
 const logger = createLogger('MCP-HTTP');
@@ -48,23 +51,100 @@ const toMcpToolResult = (result: ExecutorCallResult): CallToolResult => ({
   ...(result._meta ? { _meta: result._meta } : {}),
 });
 
-const createMcpServer = (
-  options: RegisterMcpRoutesOptions,
+const createMcpSessionContextAdapter = (
   mcpSession: McpSessionInfo
-): Server => {
+): OrchestrationBrowserSessionContext => {
+  const context = {};
+  const define = <T>(
+    key: keyof OrchestrationBrowserSessionContext,
+    getValue: () => T,
+    setValue: (value: T) => void
+  ) => {
+    Object.defineProperty(context, key, {
+      enumerable: true,
+      configurable: true,
+      get: getValue,
+      set: setValue,
+    });
+  };
+
+  define(
+    'sessionId',
+    () => mcpSession.transport.sessionId,
+    (value) => {
+      mcpSession.transport.sessionId = value;
+    }
+  );
+  define(
+    'visible',
+    () => mcpSession.browser.visible,
+    (value) => {
+      mcpSession.browser.visible = value === true;
+    }
+  );
+  define(
+    'hostWindowId',
+    () => mcpSession.browser.hostWindowId,
+    (value) => {
+      mcpSession.browser.hostWindowId = value;
+    }
+  );
+  define(
+    'viewportHealth',
+    () => mcpSession.viewport.viewportHealth,
+    (value) => {
+      mcpSession.viewport.viewportHealth = value;
+    }
+  );
+  define(
+    'viewportHealthReason',
+    () => mcpSession.viewport.viewportHealthReason,
+    (value) => {
+      mcpSession.viewport.viewportHealthReason = value;
+    }
+  );
+  define(
+    'interactionReady',
+    () => mcpSession.viewport.interactionReady,
+    (value) => {
+      mcpSession.viewport.interactionReady = value === true;
+    }
+  );
+  define(
+    'offscreenDetected',
+    () => mcpSession.viewport.offscreenDetected,
+    (value) => {
+      mcpSession.viewport.offscreenDetected = value === true;
+    }
+  );
+
+  return context as OrchestrationBrowserSessionContext;
+};
+
+const createSessionRuntimeOptions = (
+  options: RegisterMcpRoutesOptions
+): McpSessionRuntimeOptions => ({
+  transports: options.routeContext.transports,
+  dependencies: options.routeContext.dependencies,
+  parseRequestedEngine: options.browserBinding.parseRequestedEngine,
+  acquireBrowserFromPool: options.browserBinding.acquireBrowserFromPool,
+  getBrowserPoolManager: options.browserBinding.getBrowserPoolManager,
+  cleanupSession: options.sessionLifecycle.cleanupSession,
+});
+
+const createMcpServer = (options: RegisterMcpRoutesOptions, mcpSession: McpSessionInfo): Server => {
   const ensureBrowser = async () => {
-    const handle = await ensureSessionBrowserHandle(options, mcpSession);
+    const handle = await ensureSessionBrowserHandle(
+      createSessionRuntimeOptions(options),
+      mcpSession
+    );
     return handle.browser;
   };
 
   const browserFactory = async (factoryOptions: { partition?: string; visible?: boolean }) => {
     const requestedPartition = asTrimmedText(factoryOptions.partition);
-    const currentPartition = asTrimmedText(mcpSession.partition);
-    if (
-      requestedPartition &&
-      currentPartition &&
-      requestedPartition !== currentPartition
-    ) {
+    const currentPartition = asTrimmedText(mcpSession.browser.partition);
+    if (requestedPartition && currentPartition && requestedPartition !== currentPartition) {
       logger.warn(
         `Requested partition ${requestedPartition} differs from session partition ${currentPartition}, reusing session browser`
       );
@@ -72,40 +152,40 @@ const createMcpServer = (
     if (
       requestedPartition &&
       !currentPartition &&
-      !mcpSession.browserHandle &&
-      !mcpSession.browserAcquirePromise
+      !mcpSession.browser.browserHandle &&
+      !mcpSession.browser.browserAcquirePromise
     ) {
-      mcpSession.partition = requestedPartition;
+      mcpSession.browser.partition = requestedPartition;
     }
     if (typeof factoryOptions.visible === 'boolean') {
-      mcpSession.visible = factoryOptions.visible;
+      mcpSession.browser.visible = factoryOptions.visible;
     }
     return ensureBrowser();
   };
 
   const deps: OrchestrationDependencies = {
     browserFactory,
-    ...(options.dependencies?.systemGateway
-      ? { systemGateway: options.dependencies.systemGateway }
+    ...(options.routeContext.dependencies?.systemGateway
+      ? { systemGateway: options.routeContext.dependencies.systemGateway }
       : {}),
-    ...(options.dependencies?.datasetGateway
-      ? { datasetGateway: options.dependencies.datasetGateway }
+    ...(options.routeContext.dependencies?.datasetGateway
+      ? { datasetGateway: options.routeContext.dependencies.datasetGateway }
       : {}),
-    ...(options.dependencies?.crossPluginGateway
-      ? { crossPluginGateway: options.dependencies.crossPluginGateway }
+    ...(options.routeContext.dependencies?.crossPluginGateway
+      ? { crossPluginGateway: options.routeContext.dependencies.crossPluginGateway }
       : {}),
-    ...(options.dependencies?.pluginGateway
-      ? { pluginGateway: options.dependencies.pluginGateway }
+    ...(options.routeContext.dependencies?.pluginGateway
+      ? { pluginGateway: options.routeContext.dependencies.pluginGateway }
       : {}),
-    ...(options.dependencies?.profileGateway
-      ? { profileGateway: options.dependencies.profileGateway }
+    ...(options.routeContext.dependencies?.profileGateway
+      ? { profileGateway: options.routeContext.dependencies.profileGateway }
       : {}),
-    ...(options.dependencies?.observationGateway
-      ? { observationGateway: options.dependencies.observationGateway }
+    ...(options.routeContext.dependencies?.observationGateway
+      ? { observationGateway: options.routeContext.dependencies.observationGateway }
       : {}),
-    mcpSessionGateway: createMcpSessionGateway(options, mcpSession),
-    mcpSessionContext: mcpSession,
-    enforceScopes: options.restApiConfig?.enforceOrchestrationScopes ?? false,
+    mcpSessionGateway: createMcpSessionGateway(createSessionRuntimeOptions(options), mcpSession),
+    mcpSessionContext: createMcpSessionContextAdapter(mcpSession),
+    enforceScopes: options.routeContext.restApiConfig?.enforceOrchestrationScopes ?? false,
   };
   const executor = createOrchestrationExecutor(deps);
   const listPublicCapabilities = (): OrchestrationCapabilityDefinition[] =>
@@ -126,8 +206,8 @@ const createMcpServer = (
 
   const server = new Server(
     {
-      name: options.serverInfo.name,
-      version: options.serverInfo.version,
+      name: options.routeContext.serverInfo.name,
+      version: options.routeContext.serverInfo.version,
     },
     {
       capabilities: serverCapabilities,
@@ -136,7 +216,7 @@ const createMcpServer = (
 
   const initializeInstructions = buildMcpInitializeInstructions();
   const initializeShim = createSdkInitializeShim(server, {
-    serverInfo: options.serverInfo,
+    serverInfo: options.routeContext.serverInfo,
     capabilities: serverCapabilities,
     instructions: initializeInstructions,
   });
@@ -144,9 +224,9 @@ const createMcpServer = (
   const listCapabilities = (): OrchestrationCapabilityDefinition[] => listPublicCapabilities();
   registerMcpCatalogHandlers({
     server,
-    serverInfo: options.serverInfo,
+    serverInfo: options.routeContext.serverInfo,
     listCapabilities,
-    dependencies: options.dependencies,
+    dependencies: options.routeContext.dependencies,
     mcpSession,
   });
 
@@ -166,20 +246,18 @@ const createMcpServer = (
     const { name, arguments: args } = request.params;
 
     try {
-      const result = await options.enqueueInvokeTask<CallToolResult>(
-        mcpSession.sessionId || 'mcp-pending-session',
+      const result = await options.invokeQueue.enqueueInvokeTask<CallToolResult>(
+        mcpSession.transport.sessionId || 'mcp-pending-session',
         mcpSession,
         async (_context): Promise<CallToolResult> => {
           const definition = getCapabilityDefinition(asTrimmedText(name));
           if (!definition) {
             throw createStructuredError(ErrorCode.NOT_FOUND, `Capability not found: ${name}`, {
-              suggestion:
-                'Call tools/list and use one of the canonical MCP tools exposed on /mcp.',
+              suggestion: 'Call tools/list and use one of the canonical MCP tools exposed on /mcp.',
             });
           }
           const requires = definition?.requires ?? [];
-          const needsBrowser =
-            requires.includes('browser') || requires.includes('sessionBrowser');
+          const needsBrowser = requires.includes('browser') || requires.includes('sessionBrowser');
           if (needsBrowser) {
             deps.browser = await ensureBrowser();
           } else {
@@ -190,7 +268,7 @@ const createMcpServer = (
               name,
               arguments: args || {},
               auth: {
-                scopes: mcpSession.authScopes || [],
+                scopes: mcpSession.auth.authScopes || [],
                 source: 'mcp',
               },
             },
@@ -205,7 +283,7 @@ const createMcpServer = (
 
       return result;
     } catch (error) {
-      const structured = options.normalizeStructuredError(error);
+      const structured = options.authContext.normalizeStructuredError(error);
       logger.error(`Tool ${name} error:`, error);
       if (shouldRecycleSessionBrowser(structured)) {
         await recycleSessionBrowserHandle(mcpSession, structured);
@@ -219,8 +297,8 @@ const createMcpServer = (
 
 export const registerMcpRoutes = (options: RegisterMcpRoutesOptions): void => {
   const cleanupSession = async (sessionId: string, session: McpSessionInfo): Promise<void> => {
-    await options.cleanupSession(sessionId, session);
-    const windowManager = options.dependencies?.windowManager;
+    await options.sessionLifecycle.cleanupSession(sessionId, session);
+    const windowManager = options.routeContext.dependencies?.windowManager;
     try {
       windowManager?.closeHiddenAutomationHost?.(sessionId);
     } catch (error) {
@@ -229,19 +307,16 @@ export const registerMcpRoutes = (options: RegisterMcpRoutesOptions): void => {
   };
   const runtimeOptions: RegisterMcpRoutesOptions = {
     ...options,
-    cleanupSession,
+    sessionLifecycle: {
+      cleanupSession,
+    },
   };
 
   registerMcpRouteHandlers({
-    app: options.app,
-    transports: options.transports,
-    serverInfo: options.serverInfo,
-    restApiConfig: options.restApiConfig,
-    dependencies: options.dependencies,
-    parseScopesHeader: options.parseScopesHeader,
-    parseRequestedEngine: options.parseRequestedEngine,
-    cleanupSession,
-    normalizeStructuredError: options.normalizeStructuredError,
+    routeContext: options.routeContext,
+    sessionLifecycle: {
+      cleanupSession,
+    },
     createMcpServer: (mcpSession) => createMcpServer(runtimeOptions, mcpSession),
   });
 };

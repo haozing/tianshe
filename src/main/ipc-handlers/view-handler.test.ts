@@ -25,17 +25,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ipcMain } from 'electron';
 
-const { mockGetPersistedCloudAuthSession, mockInvalidateCloudAuthSession, mockIsCloudAuthSessionExpired } =
-  vi.hoisted(() => ({
-    mockGetPersistedCloudAuthSession: vi.fn(),
-    mockInvalidateCloudAuthSession: vi.fn(),
-    mockIsCloudAuthSessionExpired: vi.fn(),
-  }));
+const {
+  mockGetPersistedCloudAuthSession,
+  mockInvalidateCloudAuthSession,
+  mockIsCloudAuthSessionExpired,
+} = vi.hoisted(() => ({
+  mockGetPersistedCloudAuthSession: vi.fn(),
+  mockInvalidateCloudAuthSession: vi.fn(),
+  mockIsCloudAuthSessionExpired: vi.fn(),
+}));
 
 // Mock electron 模块
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn(),
+    removeHandler: vi.fn(),
+    removeListener: vi.fn(),
   },
 }));
 
@@ -72,6 +77,7 @@ vi.mock('../ipc-utils', () => ({
 }));
 
 import { ViewIPCHandler } from './view-handler';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 
 /**
  * 创建 Mock ViewManager
@@ -127,6 +133,7 @@ describe('ViewIPCHandler', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
     mockGetPersistedCloudAuthSession.mockReset();
     mockInvalidateCloudAuthSession.mockReset();
     mockIsCloudAuthSessionExpired.mockReset();
@@ -149,10 +156,7 @@ describe('ViewIPCHandler', () => {
       expect(ipcMain.handle).toHaveBeenCalledWith('view:attach', expect.any(Function));
       expect(ipcMain.handle).toHaveBeenCalledWith('view:update-bounds', expect.any(Function));
       expect(ipcMain.handle).toHaveBeenCalledWith('view:navigate', expect.any(Function));
-      expect(ipcMain.handle).toHaveBeenCalledWith(
-        'view:sync-cloud-auth',
-        expect.any(Function)
-      );
+      expect(ipcMain.handle).toHaveBeenCalledWith('view:sync-cloud-auth', expect.any(Function));
       expect(ipcMain.handle).toHaveBeenCalledWith('view:switch', expect.any(Function));
       expect(ipcMain.handle).toHaveBeenCalledWith('view:detach', expect.any(Function));
       expect(ipcMain.handle).toHaveBeenCalledWith('view:detach-all', expect.any(Function));

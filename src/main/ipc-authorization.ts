@@ -30,3 +30,16 @@ export function assertMainWindowIpcSender(
     throw new UnauthorizedIpcSenderError(channel);
   }
 }
+
+export function createMainWindowIpcSenderGuard(
+  getMainWindow: () => BrowserWindow | null | undefined
+): (event: IpcMainInvokeEvent, channel: string) => void {
+  return (event, channel) => {
+    const mainWindow = getMainWindow();
+    if (!mainWindow) {
+      throw new Error('Main window not created');
+    }
+
+    assertMainWindowIpcSender(event, mainWindow, channel);
+  };
+}

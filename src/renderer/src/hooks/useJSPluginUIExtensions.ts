@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useEventSubscription } from './useElectronAPI';
 import { pluginFacade } from '../services/datasets/pluginFacade';
 import { pluginEvents } from '../services/datasets/pluginEvents';
+import { getUnknownErrorMessage } from '../../../utils/error-message';
 
 export interface ToolbarButton {
   id: string;
@@ -51,9 +52,9 @@ export function useToolbarButtons(datasetId: string | null) {
           setError(result.error || 'Failed to load toolbar buttons');
           setToolbarButtons([]);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('[ToolbarButtons] Failed to load toolbar buttons:', err);
-        setError(err.message || 'Unknown error');
+        setError(getUnknownErrorMessage(err));
         setToolbarButtons([]);
       } finally {
         setLoading(false);
@@ -64,9 +65,9 @@ export function useToolbarButtons(datasetId: string | null) {
   }, [datasetId, refreshTrigger]); // 🆕 添加 refreshTrigger 依赖
 
   useEventSubscription(pluginEvents.subscribeToPluginStateChanged, () => {
-      // 触发重新加载
-      setRefreshTrigger((prev) => prev + 1);
-    });
+    // 触发重新加载
+    setRefreshTrigger((prev) => prev + 1);
+  });
 
   /**
    * 执行工具栏按钮命令
@@ -110,11 +111,11 @@ export function useToolbarButtons(datasetId: string | null) {
         );
 
         return result;
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('[ToolbarButtons] Failed to execute toolbar button:', err);
         return {
           success: false,
-          error: err.message || 'Unknown error',
+          error: getUnknownErrorMessage(err),
         };
       }
     },

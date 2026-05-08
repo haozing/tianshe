@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import { toast } from '../lib/toast';
+import { getUnknownErrorMessage } from '../../../utils/error-message';
 
 // JS插件信息
 export interface JSPlugin {
@@ -129,10 +130,10 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
       } else {
         throw new Error(result.error || 'Failed to load plugins');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       set({
         pluginsLoading: false,
-        error: `加载插件列表失败：${error.message}`,
+        error: `加载插件列表失败：${getUnknownErrorMessage(error)}`,
       });
     }
   },
@@ -168,8 +169,8 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
         throw new Error(result.error);
       }
       // 如果用户取消选择，不显示任何消息
-    } catch (error: any) {
-      const errorMsg = `插件安装失败: ${error.message}`;
+    } catch (error: unknown) {
+      const errorMsg = `插件安装失败: ${getUnknownErrorMessage(error)}`;
       set({ error: errorMsg });
       toast.error('操作失败', errorMsg);
     }
@@ -187,8 +188,8 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
       } else {
         throw new Error(result.error || 'Failed to uninstall plugin');
       }
-    } catch (error: any) {
-      const errorMsg = `卸载失败: ${error.message}`;
+    } catch (error: unknown) {
+      const errorMsg = `卸载失败: ${getUnknownErrorMessage(error)}`;
       set({ error: errorMsg });
       toast.error('操作失败', errorMsg);
       throw error; // 重新抛出错误，让调用方知道失败了
@@ -209,8 +210,8 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
       } else {
         throw new Error(result.error || 'Failed to enable plugin');
       }
-    } catch (error: any) {
-      const errorMsg = `启用失败: ${error.message}`;
+    } catch (error: unknown) {
+      const errorMsg = `启用失败: ${getUnknownErrorMessage(error)}`;
       set({ error: errorMsg });
       toast.error('操作失败', errorMsg);
     }
@@ -230,8 +231,8 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
       } else {
         throw new Error(result.error || 'Failed to disable plugin');
       }
-    } catch (error: any) {
-      const errorMsg = `禁用失败: ${error.message}`;
+    } catch (error: unknown) {
+      const errorMsg = `禁用失败: ${getUnknownErrorMessage(error)}`;
       set({ error: errorMsg });
       toast.error('操作失败', errorMsg);
     }
@@ -250,8 +251,8 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
       } else {
         throw new Error(result.error || 'Failed to reload plugin');
       }
-    } catch (error: any) {
-      const errorMsg = `重载失败: ${error.message}`;
+    } catch (error: unknown) {
+      const errorMsg = `重载失败: ${getUnknownErrorMessage(error)}`;
       set({ error: errorMsg });
       toast.error('操作失败', errorMsg);
     }
@@ -274,8 +275,8 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
       } else {
         throw new Error('Failed to repair plugin');
       }
-    } catch (error: any) {
-      const errorMsg = `修复失败: ${error.message}`;
+    } catch (error: unknown) {
+      const errorMsg = `修复失败: ${getUnknownErrorMessage(error)}`;
       set({ error: errorMsg });
       toast.error('操作失败', errorMsg);
     }
@@ -291,8 +292,8 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
       if (errorMsg) {
         throw new Error(errorMsg);
       }
-    } catch (error: any) {
-      const errorMsg = `打开目录失败: ${error.message}`;
+    } catch (error: unknown) {
+      const errorMsg = `打开目录失败: ${getUnknownErrorMessage(error)}`;
       set({ error: errorMsg });
       toast.error('操作失败', errorMsg);
     }
@@ -330,8 +331,8 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
 
       // 重新加载插件列表以获取最新状态
       await get().loadPlugins();
-    } catch (error: any) {
-      const errorMsg = `热重载操作失败: ${error.message}`;
+    } catch (error: unknown) {
+      const errorMsg = `热重载操作失败: ${getUnknownErrorMessage(error)}`;
       set({ error: errorMsg });
       toast.error('操作失败', errorMsg);
     }

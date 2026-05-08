@@ -1,14 +1,15 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { ipcMain } from 'electron';
 import { getBrowserPoolManager } from '../../core/browser-pool';
-import {
-  registerExtensionPackagesManagerHandlers,
-} from './extension-packages-ipc-handler';
+import { registerExtensionPackagesManagerHandlers } from './extension-packages-ipc-handler';
 import { emitSyncOutboxDelete, emitSyncOutboxUpsert } from '../sync/sync-outbox-emitter';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn(),
+    removeHandler: vi.fn(),
+    removeListener: vi.fn(),
   },
   BrowserWindow: {
     getFocusedWindow: vi.fn(),
@@ -55,11 +56,14 @@ describe('registerExtensionPackagesManagerHandlers', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
     registeredHandlers.clear();
 
-    (ipcMain.handle as Mock).mockImplementation((channel: string, handler: (...args: unknown[]) => unknown) => {
-      registeredHandlers.set(channel, handler as (...args: unknown[]) => Promise<unknown>);
-    });
+    (ipcMain.handle as Mock).mockImplementation(
+      (channel: string, handler: (...args: unknown[]) => unknown) => {
+        registeredHandlers.set(channel, handler as (...args: unknown[]) => Promise<unknown>);
+      }
+    );
 
     (getBrowserPoolManager as Mock).mockReturnValue({
       destroyProfileBrowsers: vi.fn().mockResolvedValue(0),
@@ -225,4 +229,3 @@ describe('registerExtensionPackagesManagerHandlers', () => {
     expect(emitSyncOutboxUpsert).not.toHaveBeenCalled();
   });
 });
-

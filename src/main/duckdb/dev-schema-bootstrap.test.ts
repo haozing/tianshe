@@ -206,5 +206,37 @@ describe('DuckDB dev schema bootstrap', () => {
     expect(accountRows[0]?.tags).toBe('[]');
     expect(accountRows[0]?.sync_permission).toBe('mine/edit');
     expect(accountRows[0]?.sync_managed).toBe(false);
+
+    const appliedMigrations = parseRows(
+      await conn.runAndReadAll(`
+        SELECT id
+        FROM schema_migrations
+        ORDER BY id
+      `)
+    ).map((row) => String(row.id));
+    expect(appliedMigrations).toEqual(
+      expect.arrayContaining([
+        'accounts-001-profile-fields',
+        'accounts-002-sync-fields',
+        'browser-profiles-001-runtime-pool-fields',
+        'browser-profiles-002-fingerprint-split',
+        'saved-sites-001-sync-fields',
+        'tags-001-sync-fields',
+      ])
+    );
+
+    await profileService.initTable();
+    await savedSiteService.initTable();
+    await tagService.initTable();
+    await accountService.initTable();
+
+    const afterSecondRun = parseRows(
+      await conn.runAndReadAll(`
+        SELECT id
+        FROM schema_migrations
+        ORDER BY id
+      `)
+    ).map((row) => String(row.id));
+    expect(afterSecondRun).toEqual(appliedMigrations);
   });
 });

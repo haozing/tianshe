@@ -5,6 +5,16 @@ import { RuyiBrowser } from '../browser-ruyi';
 import { IntegratedBrowser } from './integrated-browser';
 import type { RuyiFirefoxEvent } from '../../main/profile/ruyi-firefox-client';
 import { getStaticEngineRuntimeDescriptor } from '../browser-pool/engine-capability-registry';
+import {
+  assertBrowserPdfCapability,
+  assertBrowserTextOcrCapability,
+  hasBrowserDialogCapability,
+  hasBrowserInterceptCapability,
+  hasBrowserNetworkCaptureCapability,
+  hasBrowserPdfCapability,
+  hasBrowserStorageCapability,
+  hasBrowserTextOcrCapability,
+} from '../../types/browser-interface';
 
 function createIntegratedBrowserFixture() {
   const rawSession = {
@@ -129,6 +139,23 @@ function createNetworkEntry(overrides?: Partial<NetworkEntry>): NetworkEntry {
 }
 
 describe('browser capability truth', () => {
+  it('capability helpers reflect implemented method groups without changing legacy BrowserInterface', () => {
+    const integrated = createIntegratedBrowser();
+    const extension = createExtensionBrowserFixture().browser;
+    const ruyi = createRuyiBrowserFixture().browser;
+
+    expect(hasBrowserNetworkCaptureCapability(integrated)).toBe(true);
+    expect(hasBrowserPdfCapability(integrated)).toBe(true);
+    expect(hasBrowserTextOcrCapability(integrated)).toBe(true);
+    expect(hasBrowserDialogCapability(integrated)).toBe(false);
+    assertBrowserPdfCapability(integrated);
+    assertBrowserTextOcrCapability(integrated);
+
+    expect(hasBrowserInterceptCapability(extension)).toBe(true);
+    expect(hasBrowserStorageCapability(extension)).toBe(false);
+    expect(hasBrowserStorageCapability(ruyi)).toBe(true);
+  });
+
   it('IntegratedBrowser truthfully reports response-body capture as unsupported', () => {
     const browser = createIntegratedBrowser();
 

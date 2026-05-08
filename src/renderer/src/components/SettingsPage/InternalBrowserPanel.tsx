@@ -6,6 +6,7 @@ import { Label } from '../ui/label';
 import { Switch } from '../ui/switch';
 import { toast } from '../../lib/toast';
 import type { InternalBrowserDevToolsConfig } from '../../../../types/internal-browser';
+import { getUnknownErrorMessage } from '../../../../utils/error-message';
 
 const DEFAULT_CONFIG: InternalBrowserDevToolsConfig = {
   autoOpenDevTools: false,
@@ -32,8 +33,8 @@ export function InternalBrowserPanel() {
 
       setStoredConfig(result.config);
       setDraftConfig(result.config);
-    } catch (error: any) {
-      toast.error('加载内置浏览器配置失败', error?.message || '未知错误');
+    } catch (error: unknown) {
+      toast.error('加载内置浏览器配置失败', getUnknownErrorMessage(error, '未知错误'));
     } finally {
       setLoading(false);
     }
@@ -51,8 +52,8 @@ export function InternalBrowserPanel() {
       setStoredConfig(result.config);
       setDraftConfig(result.config);
       toast.success('内置浏览器配置已保存');
-    } catch (error: any) {
-      toast.error('保存内置浏览器配置失败', error?.message || '未知错误');
+    } catch (error: unknown) {
+      toast.error('保存内置浏览器配置失败', getUnknownErrorMessage(error, '未知错误'));
     } finally {
       setSaving(false);
     }
@@ -94,8 +95,8 @@ export function InternalBrowserPanel() {
             <div className="space-y-1">
               <Label className="text-base font-semibold">自动打开 Developer Tools</Label>
               <div className="text-sm text-muted-foreground">
-                新创建的内置浏览器页面、`WebContentsView`、插件模态窗口、弹窗壳窗口和隐藏
-                automation host 会按此开关自动打开 detached DevTools。
+                新创建的内置浏览器页面、`WebContentsView`、插件模态窗口、弹窗壳窗口和隐藏 automation
+                host 会按此开关自动打开 detached DevTools。
               </div>
             </div>
             <Switch
@@ -115,7 +116,11 @@ export function InternalBrowserPanel() {
           </div>
 
           <div className="flex justify-end gap-3">
-            <Button variant="outline" onClick={() => void loadConfig()} disabled={loading || saving}>
+            <Button
+              variant="outline"
+              onClick={() => void loadConfig()}
+              disabled={loading || saving}
+            >
               <RefreshCw className="mr-2 h-4 w-4" />
               刷新
             </Button>

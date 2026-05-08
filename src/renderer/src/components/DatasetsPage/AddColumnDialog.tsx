@@ -21,6 +21,11 @@ import {
   buildButtonMetadataForPersistence,
   type ButtonVariant,
 } from '../../../../utils/button-metadata';
+import {
+  DATASET_COLUMN_NAME_ALLOWED_PATTERN,
+  DATASET_COLUMN_NAME_MAX_LENGTH,
+  DATASET_COLUMN_NAME_MESSAGES,
+} from '../../../../utils/dataset-column-name-policy';
 
 type FieldType =
   | 'text'
@@ -146,9 +151,10 @@ const createAddColumnSchema = (existingColumns: string[]) =>
     .object({
       columnName: z
         .string()
-        .min(1, '列名不能为空')
-        .max(50, '列名不能超过50个字符')
-        .regex(/^[\u4e00-\u9fa5a-zA-Z0-9_]+$/, '列名只能包含中文、字母、数字和下划线')
+        .trim()
+        .min(1, DATASET_COLUMN_NAME_MESSAGES.empty)
+        .max(DATASET_COLUMN_NAME_MAX_LENGTH, DATASET_COLUMN_NAME_MESSAGES.tooLong)
+        .regex(DATASET_COLUMN_NAME_ALLOWED_PATTERN, DATASET_COLUMN_NAME_MESSAGES.invalidCharacters)
         .refine((name) => !existingColumns.includes(name), '列名已存在'),
       // 🆕 使用 z.enum 提供类型安全的字段类型选择
       selectedType: z.enum(

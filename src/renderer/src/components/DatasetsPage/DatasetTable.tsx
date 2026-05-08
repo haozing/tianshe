@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 
 import { selectActiveQueryConfig, useDatasetStore } from '../../stores/datasetStore';
 import {
-  deleteDatasetColumn,
+  deleteDatasetColumnRaw,
   reorderDatasetColumns,
   updateDatasetColumn,
   updateDatasetColumnDisplayConfig,
@@ -134,8 +134,7 @@ export function DatasetTable({
     () =>
       (Array.isArray(queryResult?.columns) ? queryResult.columns : [])
         .filter(
-          (columnName) =>
-            !isSystemField(columnName) && !isInternalGroupHelperColumn(columnName)
+          (columnName) => !isSystemField(columnName) && !isInternalGroupHelperColumn(columnName)
         )
         .map((displayName) => ({
           displayName,
@@ -392,7 +391,15 @@ export function DatasetTable({
     }
 
     return derivedSchema.length > 0 ? derivedSchema : columnSchema;
-  }, [activeQueryConfig, columnSchema, hiddenColumnsSet, queryColumnRefs, queryResult?.columns, rowData, schemaColumnMap]);
+  }, [
+    activeQueryConfig,
+    columnSchema,
+    hiddenColumnsSet,
+    queryColumnRefs,
+    queryResult?.columns,
+    rowData,
+    schemaColumnMap,
+  ]);
   const displayColumnMap = useMemo(
     () => new Map(displaySchema.map((column) => [column.name, column] as const)),
     [displaySchema]
@@ -481,7 +488,8 @@ export function DatasetTable({
                 (hasExplicitSelectProjection &&
                   isDefaultHidden &&
                   querySelectedColumnsSet.has(column.name))),
-            isViewExcludedByProjection: hasExplicitSelectProjection && !querySelectedColumnsSet.has(column.name),
+            isViewExcludedByProjection:
+              hasExplicitSelectProjection && !querySelectedColumnsSet.has(column.name),
           };
         }),
     [
@@ -541,7 +549,11 @@ export function DatasetTable({
       if (hasExplicitSelectProjection) {
         const nextQuerySelectedColumns = new Set(querySelectedColumnsSet);
 
-        if (!nextVisible && querySelectedColumnsSet.has(columnId) && querySelectedColumnsSet.size <= 1) {
+        if (
+          !nextVisible &&
+          querySelectedColumnsSet.has(columnId) &&
+          querySelectedColumnsSet.size <= 1
+        ) {
           toast.warning('当前视图至少保留 1 列');
           return false;
         }
@@ -736,7 +748,14 @@ export function DatasetTable({
         });
       }
     },
-    [applyLocalRecordUpdate, datasetId, displayColumnMap, readOnly, resolveQuerySourceName, schemaColumnMap]
+    [
+      applyLocalRecordUpdate,
+      datasetId,
+      displayColumnMap,
+      readOnly,
+      resolveQuerySourceName,
+      schemaColumnMap,
+    ]
   );
 
   const handleRenameColumn = useCallback(
@@ -848,7 +867,7 @@ export function DatasetTable({
 
       try {
         let forceDeleted = false;
-        const result = await deleteDatasetColumn({
+        const result = await deleteDatasetColumnRaw({
           datasetId,
           columnName,
           force: false,
@@ -860,7 +879,7 @@ export function DatasetTable({
           );
           if (!shouldForce) return;
 
-          const forced = await deleteDatasetColumn({
+          const forced = await deleteDatasetColumnRaw({
             datasetId,
             columnName,
             force: true,
@@ -931,10 +950,7 @@ export function DatasetTable({
       const normalizedNonSystemOrder =
         normalizedVisibleOrder.length === nonSystemSchemaOrder.length
           ? normalizedVisibleOrder
-          : [
-              ...normalizedVisibleOrder,
-              ...nonSystemSchemaOrder.filter((name) => !seen.has(name)),
-            ];
+          : [...normalizedVisibleOrder, ...nonSystemSchemaOrder.filter((name) => !seen.has(name))];
 
       // 保持系统字段在原位置，仅重排业务列
       let nonSystemIndex = 0;

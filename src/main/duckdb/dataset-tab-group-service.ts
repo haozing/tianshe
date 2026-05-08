@@ -1,7 +1,8 @@
 import { DuckDBConnection } from '@duckdb/node-api';
 import { generateId } from '../../utils/id-generator';
 import { sanitizeDatasetId } from './dataset-storage-service';
-import { parseRows } from './utils';
+import { parseRows, runInDuckDbTransaction } from './utils';
+import { allPrepared, runPrepared } from './statement-executor';
 
 export interface GroupTabDataset {
   datasetId: string;
@@ -22,13 +23,14 @@ export class DatasetTabGroupService {
     const now = Date.now();
     const name = (groupName && groupName.trim()) || '数据表分组';
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       INSERT INTO dataset_tab_groups (id, name, root_dataset_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?)
-    `);
-    stmt.bind([groupId, name, safeDatasetId, now, now]);
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [groupId, name, safeDatasetId, now, now]
+    );
 
     return groupId;
   }
@@ -41,25 +43,27 @@ export class DatasetTabGroupService {
   ): Promise<void> {
     const safeDatasetId = sanitizeDatasetId(datasetId);
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       UPDATE datasets
       SET tab_group_id = ?, tab_order = ?, is_group_default = ?
       WHERE id = ?
-    `);
-    stmt.bind([tabGroupId, tabOrder, isGroupDefault, safeDatasetId]);
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [tabGroupId, tabOrder, isGroupDefault, safeDatasetId]
+    );
   }
 
   async getNextTabOrder(tabGroupId: string): Promise<number> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT COALESCE(MAX(tab_order), -1) AS max_order
       FROM datasets
       WHERE tab_group_id = ?
-    `);
-    stmt.bind([tabGroupId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [tabGroupId]
+    );
 
     const rows = parseRows(result);
     const maxOrder = Number(rows?.[0]?.max_order ?? -1);
@@ -68,14 +72,15 @@ export class DatasetTabGroupService {
 
   async ensureGroupForDataset(datasetId: string): Promise<string> {
     const safeDatasetId = sanitizeDatasetId(datasetId);
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT id, name, tab_group_id
       FROM datasets
       WHERE id = ?
-    `);
-    stmt.bind([safeDatasetId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [safeDatasetId]
+    );
 
     const rows = parseRows(result);
     if (rows.length === 0) {
@@ -88,13 +93,18 @@ export class DatasetTabGroupService {
       return existingGroupId;
     }
 
-    const groupId = await this.createGroupForDataset(safeDatasetId, String(row.name || '数据表分组'));
+    const groupId = await this.createGroupForDataset(
+      safeDatasetId,
+      String(row.name || '数据表分组')
+    );
     await this.bindDatasetToGroup(safeDatasetId, groupId, 0, true);
     return groupId;
   }
 
   async listTabs(tabGroupId: string): Promise<GroupTabDataset[]> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT
         id AS dataset_id,
         tab_group_id,
@@ -106,10 +116,9 @@ export class DatasetTabGroupService {
       FROM datasets
       WHERE tab_group_id = ?
       ORDER BY tab_order ASC, created_at ASC
-    `);
-    stmt.bind([tabGroupId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [tabGroupId]
+    );
 
     const rows = parseRows(result);
     return rows.map((row: any) => ({
@@ -138,14 +147,15 @@ export class DatasetTabGroupService {
       throw new Error('Invalid tab order: duplicated dataset ids');
     }
 
-    const totalStmt = await this.conn.prepare(`
+    const totalResult = await allPrepared(
+      this.conn,
+      `
       SELECT COUNT(*) AS cnt
       FROM datasets
       WHERE tab_group_id = ?
-    `);
-    totalStmt.bind([tabGroupId]);
-    const totalResult = await totalStmt.runAndReadAll();
-    totalStmt.destroySync();
+    `,
+      [tabGroupId]
+    );
     const totalCount = Number(parseRows(totalResult)[0]?.cnt ?? 0);
 
     if (totalCount !== safeDatasetIds.length) {
@@ -155,39 +165,34 @@ export class DatasetTabGroupService {
     }
 
     const placeholders = safeDatasetIds.map(() => '?').join(', ');
-    const checkStmt = await this.conn.prepare(`
+    const checkResult = await allPrepared(
+      this.conn,
+      `
       SELECT COUNT(*) AS cnt
       FROM datasets
       WHERE tab_group_id = ?
         AND id IN (${placeholders})
-    `);
-    checkStmt.bind([tabGroupId, ...safeDatasetIds]);
-    const checkResult = await checkStmt.runAndReadAll();
-    checkStmt.destroySync();
+    `,
+      [tabGroupId, ...safeDatasetIds]
+    );
     const matchedCount = Number(parseRows(checkResult)[0]?.cnt ?? 0);
 
     if (matchedCount !== safeDatasetIds.length) {
       throw new Error('Invalid tab order payload: one or more dataset ids are not in this group');
     }
 
-    await this.conn.run('BEGIN TRANSACTION');
-    try {
+    await runInDuckDbTransaction(this.conn, async () => {
       for (let i = 0; i < safeDatasetIds.length; i++) {
-        const updateStmt = await this.conn.prepare(`
+        await runPrepared(
+          this.conn,
+          `
           UPDATE datasets
           SET tab_order = ?
           WHERE id = ? AND tab_group_id = ?
-        `);
-        updateStmt.bind([i, safeDatasetIds[i], tabGroupId]);
-        await updateStmt.run();
-        updateStmt.destroySync();
+        `,
+          [i, safeDatasetIds[i], tabGroupId]
+        );
       }
-
-      await this.conn.run('COMMIT');
-    } catch (error) {
-      await this.conn.run('ROLLBACK');
-      throw error;
-    }
+    });
   }
 }
-

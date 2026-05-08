@@ -25,7 +25,7 @@ import { ProfileNamespace } from './profile';
 import { buildProfileResourceKey, resourceCoordinator } from '../../resource-coordinator';
 
 describe('ProfileNamespace.launch visibility behavior', () => {
-  function createNamespace() {
+  function createNamespace(devToolsOpener = vi.fn()) {
     const profileService = {
       list: vi.fn(),
       get: vi.fn(),
@@ -47,7 +47,8 @@ describe('ProfileNamespace.launch visibility behavior', () => {
       groupService,
       {} as any,
       {} as any,
-      vi.fn().mockResolvedValue(undefined)
+      vi.fn().mockResolvedValue(undefined),
+      devToolsOpener
     );
   }
 
@@ -249,6 +250,7 @@ describe('ProfileNamespace.launch visibility behavior', () => {
   });
 
   it('launchPopup uses the handle viewId for electron popups', async () => {
+    const devToolsOpener = vi.fn();
     const browser = {
       goto: vi.fn(),
       show: vi.fn().mockResolvedValue(undefined),
@@ -270,12 +272,13 @@ describe('ProfileNamespace.launch visibility behavior', () => {
       renew: vi.fn(),
     });
 
-    const ns = createNamespace();
+    const ns = createNamespace(devToolsOpener);
     const handle = await ns.launchPopup('p5', {
       url: 'https://example.com/login',
       title: 'Login Example',
       width: 900,
       height: 700,
+      openDevTools: true,
     });
 
     expect(browser.goto).toHaveBeenCalledWith('https://example.com/login');
@@ -287,8 +290,17 @@ describe('ProfileNamespace.launch visibility behavior', () => {
         title: 'Login Example',
         width: 900,
         height: 700,
+        openDevTools: true,
+        onViewReady: expect.any(Function),
       })
     );
+    const popupConfig = mockShowBrowserViewInPopup.mock.calls[0][3];
+    const view = { webContents: { id: 10 } };
+    popupConfig.onViewReady(view);
+    expect(devToolsOpener).toHaveBeenCalledWith(view.webContents, {
+      override: true,
+      mode: 'detach',
+    });
     expect(handle.popupId).toBe('popup-1');
 
     handle.closePopup();
@@ -296,6 +308,7 @@ describe('ProfileNamespace.launch visibility behavior', () => {
   });
 
   it('launchPopup adopts an existing same-plugin browser when acquire times out', async () => {
+    const devToolsOpener = vi.fn();
     const browser = {
       goto: vi.fn(),
       show: vi.fn().mockResolvedValue(undefined),
@@ -317,15 +330,23 @@ describe('ProfileNamespace.launch visibility behavior', () => {
       renew: vi.fn(),
     });
 
-    const ns = createNamespace();
+    const ns = createNamespace(devToolsOpener);
     const handle = await ns.launchPopup('p7', {
       url: 'https://example.com/reuse',
       title: 'Reuse Existing Browser',
+      openDevTools: true,
     });
 
     expect(mockPoolManager.acquire).toHaveBeenCalledTimes(1);
     expect(mockPoolManager.adoptSamePluginLockedBrowser).toHaveBeenCalledTimes(1);
     expect(browser.goto).toHaveBeenCalledWith('https://example.com/reuse');
+    const popupConfig = mockShowBrowserViewInPopup.mock.calls[0][3];
+    const view = { webContents: { id: 11 } };
+    popupConfig.onViewReady(view);
+    expect(devToolsOpener).toHaveBeenCalledWith(view.webContents, {
+      override: true,
+      mode: 'detach',
+    });
     expect(handle.browserId).toBe('browser-reused');
     expect(handle.popupId).toBe('popup-reused');
   });

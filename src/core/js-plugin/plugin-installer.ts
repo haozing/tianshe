@@ -7,13 +7,15 @@
 
 import * as path from 'path';
 import * as fs from 'fs-extra';
-import type { DuckDBService } from '../../main/duckdb/service';
+import type { IDuckDBService } from '../../types/duckdb';
 import type { JSPluginManifest, DataTableDefinition } from '../../types/js-plugin';
-import type { EnhancedColumnSchema } from '../../main/duckdb/types';
-import { getFileSize, getImportsDir } from '../../main/duckdb/utils';
+import type { EnhancedColumnSchema } from '../../types/duckdb';
+import { getFileSize, getImportsDir } from '../../utils/data-paths';
 import type { PluginLogger } from '../../utils/PluginLogger';
 import { createLogger } from '../logger';
 import { SQLUtils } from '../query-engine/utils/sql-utils';
+import { getUnknownErrorMessage } from '../../utils/error-message';
+
 
 const logger = createLogger('PluginInstaller');
 const SYSTEM_COLUMN_NAMES = new Set(['_row_id', 'deleted_at', 'created_at', 'updated_at']);
@@ -27,7 +29,7 @@ function isSystemColumnName(name: string): boolean {
  * 处理插件的卸载和数据表管理
  */
 export class PluginInstaller {
-  constructor(private duckdb: DuckDBService) {}
+  constructor(private duckdb: IDuckDBService) {}
 
   // ========== 数据表管理 ==========
 
@@ -59,10 +61,10 @@ export class PluginInstaller {
           { skipCheckpoint: true, logger: pluginLogger }
         );
         tableNameToDatasetId.set(tableDefinition.name, datasetId);
-      } catch (error: any) {
+      } catch (error: unknown) {
         pluginLogger?.error(
           `[ERROR] Failed to create table "${tableDefinition.name}":`,
-          error.message
+          getUnknownErrorMessage(error)
         );
         throw error;
       }
@@ -76,8 +78,8 @@ export class PluginInstaller {
       pluginLogger?.info(
         `[OK] CHECKPOINT completed for all ${manifest.dataTables.length} plugin tables`
       );
-    } catch (checkpointError: any) {
-      pluginLogger?.warn(`[WARN] Final CHECKPOINT failed (non-critical):`, checkpointError.message);
+    } catch (checkpointError: unknown) {
+      pluginLogger?.warn(`[WARN] Final CHECKPOINT failed (non-critical):`, getUnknownErrorMessage(checkpointError));
     }
 
     return tableNameToDatasetId;
@@ -222,8 +224,8 @@ export class PluginInstaller {
           await fs.remove(walPath);
         }
         pluginLogger?.info(`  [OK] Cleaned up orphaned files`);
-      } catch (cleanupError: any) {
-        pluginLogger?.warn(`  [WARN] Failed to cleanup files: ${cleanupError.message}`);
+      } catch (cleanupError: unknown) {
+        pluginLogger?.warn(`  [WARN] Failed to cleanup files: ${getUnknownErrorMessage(cleanupError)}`);
       }
     }
 
@@ -370,8 +372,8 @@ export class PluginInstaller {
       try {
         await this.duckdb.executeWithParams('CHECKPOINT', []);
         pluginLogger?.info(`  ✓ CHECKPOINT completed for table: ${tableName}`);
-      } catch (checkpointError: any) {
-        pluginLogger?.warn(`  [WARN] CHECKPOINT failed (non-critical):`, checkpointError.message);
+      } catch (checkpointError: unknown) {
+        pluginLogger?.warn(`  [WARN] CHECKPOINT failed (non-critical):`, getUnknownErrorMessage(checkpointError));
       }
     }
 
@@ -399,8 +401,8 @@ export class PluginInstaller {
           logger.info(`  [DELETE] Deleting table: ${table.name} (${table.id})`);
           await this.duckdb.deleteDataset(table.id);
           logger.info(`  [OK] Deleted table: ${table.name}`);
-        } catch (error: any) {
-          logger.error(`  [ERROR] Failed to delete table ${table.id}:`, error.message);
+        } catch (error: unknown) {
+          logger.error(`  [ERROR] Failed to delete table ${table.id}:`, getUnknownErrorMessage(error));
         }
       }
 
@@ -414,8 +416,8 @@ export class PluginInstaller {
         pluginId,
       ]);
       logger.info(`  [OK] Plugin folder deleted`);
-    } catch (error: any) {
-      logger.error(`  [WARN] Failed to delete plugin folder:`, error.message);
+    } catch (error: unknown) {
+      logger.error(`  [WARN] Failed to delete plugin folder:`, getUnknownErrorMessage(error));
     }
   }
 
@@ -459,8 +461,8 @@ export class PluginInstaller {
       }
 
       logger.info(`[OK] Tables successfully orphaned`);
-    } catch (error: any) {
-      logger.error(`[ERROR] Failed to orphan tables:`, error.message);
+    } catch (error: unknown) {
+      logger.error(`[ERROR] Failed to orphan tables:`, getUnknownErrorMessage(error));
     }
   }
 

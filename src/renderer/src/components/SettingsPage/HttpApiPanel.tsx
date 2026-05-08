@@ -12,6 +12,7 @@ import { Switch } from '../ui/switch';
 import { Badge } from '../ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { toast } from '../../lib/toast';
+import { getUnknownErrorMessage } from '../../../../utils/error-message';
 import {
   DEFAULT_HTTP_API_CONFIG,
   HTTP_SERVER_DEFAULTS,
@@ -72,9 +73,10 @@ function configSignature(config: HttpApiConfig): string {
   });
 }
 
-function getRuntimeBadge(
-  runtime: HttpApiRuntimeStatus | null
-): { variant: 'default' | 'secondary' | 'destructive'; label: string } {
+function getRuntimeBadge(runtime: HttpApiRuntimeStatus | null): {
+  variant: 'default' | 'secondary' | 'destructive';
+  label: string;
+} {
   if (runtime?.running) {
     return { variant: 'default', label: '运行中' };
   }
@@ -93,9 +95,10 @@ function getRuntimeBadge(
   return { variant: 'secondary', label: '未运行' };
 }
 
-function getDiagnosisTone(
-  diagnosis?: RuntimeDiagnosis
-): { containerClassName: string; badgeVariant: 'secondary' | 'destructive' | 'default' } {
+function getDiagnosisTone(diagnosis?: RuntimeDiagnosis): {
+  containerClassName: string;
+  badgeVariant: 'secondary' | 'destructive' | 'default';
+} {
   if (diagnosis?.severity === 'critical') {
     return {
       containerClassName: 'border-destructive/40 bg-destructive/5',
@@ -111,7 +114,8 @@ function getDiagnosisTone(
   }
 
   return {
-    containerClassName: 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/20',
+    containerClassName:
+      'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/20',
     badgeVariant: 'default',
   };
 }
@@ -174,7 +178,9 @@ export function HttpApiPanel() {
         return;
       }
 
-      const nextStoredConfig = normalizeHttpApiConfig(result.storedConfig as Partial<HttpApiConfig>);
+      const nextStoredConfig = normalizeHttpApiConfig(
+        result.storedConfig as Partial<HttpApiConfig>
+      );
       const nextEffectiveConfig = normalizeHttpApiConfig(
         result.effectiveConfig as Partial<HttpApiConfig>
       );
@@ -183,8 +189,8 @@ export function HttpApiPanel() {
       setEffectiveConfig(nextEffectiveConfig);
       setDraftConfig(nextStoredConfig);
       setRuntimeOverrides(result.runtimeOverrides || { enabled: false, enableMcp: false });
-    } catch (error: any) {
-      toast.error('加载配置失败', error.message);
+    } catch (error: unknown) {
+      toast.error('加载配置失败', getUnknownErrorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -217,11 +223,11 @@ export function HttpApiPanel() {
           error: result.error || '获取运行时状态失败',
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       setRuntime({
         running: false,
         runtimeAlerts: [],
-        error: error?.message || '获取运行时状态失败',
+        error: getUnknownErrorMessage(error, '获取运行时状态失败'),
       });
     } finally {
       setRuntimeLoading(false);
@@ -253,8 +259,8 @@ export function HttpApiPanel() {
       await loadConfig();
       await loadRuntimeStatus();
       toast.success('配置已保存');
-    } catch (error: any) {
-      toast.error('保存配置失败', error.message);
+    } catch (error: unknown) {
+      toast.error('保存配置失败', getUnknownErrorMessage(error));
     } finally {
       setSaving(false);
     }
@@ -283,8 +289,8 @@ export function HttpApiPanel() {
       } else {
         toast.error('修复失败', result.error || '未知错误');
       }
-    } catch (error: any) {
-      toast.error('修复失败', error?.message || '未知错误');
+    } catch (error: unknown) {
+      toast.error('修复失败', getUnknownErrorMessage(error, '未知错误'));
     } finally {
       setRepairing(false);
     }
@@ -448,7 +454,9 @@ export function HttpApiPanel() {
                 value={draftConfig.token || ''}
                 onChange={(e) => updateDraftConfig({ token: e.target.value })}
               />
-              <div className="text-xs text-muted-foreground">使用方式：Authorization: Bearer YOUR_TOKEN</div>
+              <div className="text-xs text-muted-foreground">
+                使用方式：Authorization: Bearer YOUR_TOKEN
+              </div>
             </div>
           )}
 
@@ -488,7 +496,8 @@ export function HttpApiPanel() {
               value={draftConfig.orchestrationIdempotencyStore}
               onValueChange={(value) =>
                 updateDraftConfig({
-                  orchestrationIdempotencyStore: value as HttpApiConfig['orchestrationIdempotencyStore'],
+                  orchestrationIdempotencyStore:
+                    value as HttpApiConfig['orchestrationIdempotencyStore'],
                 })
               }
             >
@@ -564,7 +573,8 @@ export function HttpApiPanel() {
 
           {!effectiveConfig.enabled && (
             <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-              当前生效配置中 HTTP 服务为关闭状态。若已保存配置与生效配置不一致，请检查启动参数覆盖提示。
+              当前生效配置中 HTTP
+              服务为关闭状态。若已保存配置与生效配置不一致，请检查启动参数覆盖提示。
             </div>
           )}
 
@@ -588,15 +598,22 @@ export function HttpApiPanel() {
             <div className="text-sm font-semibold">接入方式</div>
             <div className="mt-2 space-y-1 text-xs text-muted-foreground">
               <div>MCP URL: {mcpBaseUrl}</div>
-              <div>建议：先用 `session_prepare` 绑定 profile / engine / visible / scopes，再进入 `browser_*` 工具。</div>
-              <div>当前生效：auth={String(effectiveConfig.enableAuth)} / mcp={String(effectiveConfig.enableMcp)}</div>
+              <div>
+                建议：先用 `session_prepare` 绑定 profile / engine / visible / scopes，再进入
+                `browser_*` 工具。
+              </div>
+              <div>
+                当前生效：auth={String(effectiveConfig.enableAuth)} / mcp=
+                {String(effectiveConfig.enableMcp)}
+              </div>
             </div>
           </div>
 
           <div className="rounded-lg border p-4">
             <div className="text-sm font-semibold">修复建议</div>
             <div className="mt-2 text-xs text-muted-foreground">
-              {runtime?.diagnosis?.suggestedAction || '若当前服务无响应，可先刷新状态，再尝试自动修复。'}
+              {runtime?.diagnosis?.suggestedAction ||
+                '若当前服务无响应，可先刷新状态，再尝试自动修复。'}
             </div>
           </div>
 
@@ -611,7 +628,9 @@ export function HttpApiPanel() {
                       className="flex items-center justify-between rounded-md border p-2"
                     >
                       <div className="flex items-center gap-2">
-                        <Badge variant={alert.severity === 'critical' ? 'destructive' : 'secondary'}>
+                        <Badge
+                          variant={alert.severity === 'critical' ? 'destructive' : 'secondary'}
+                        >
                           {alert.severity}
                         </Badge>
                         <span className="text-sm">{alert.message}</span>

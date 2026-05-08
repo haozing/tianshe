@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BrowserHandle } from '../core/browser-pool';
 import { ErrorCode } from '../types/error-codes';
-import type { McpSessionInfo } from './mcp-http-types';
+import {
+  createMcpSessionInfo,
+  type CreateMcpSessionInfoOptions,
+  type McpSessionInfo,
+} from './mcp-http-types';
 import {
   cleanupMcpSession,
   enqueueInvokeTask,
+  getMcpInvokeQueueState,
   type RuntimeMetricsSnapshot,
 } from './http-session-manager';
 
@@ -22,19 +27,17 @@ const createRuntimeMetrics = (): RuntimeMetricsSnapshot => ({
 });
 
 const createMcpSession = (
-  overrides: Partial<McpSessionInfo> = {}
-): McpSessionInfo => ({
-  transport: {
-    close: vi.fn(),
-  } as never,
-  lastActivity: Date.now(),
-  invokeQueue: Promise.resolve(),
-  pendingInvocations: 0,
-  activeInvocations: 0,
-  maxQueueSize: 8,
-  visible: false,
-  ...overrides,
-});
+  overrides: Partial<CreateMcpSessionInfoOptions> = {}
+): McpSessionInfo =>
+  createMcpSessionInfo({
+    transport: {
+      close: vi.fn(),
+    } as never,
+    lastActivity: Date.now(),
+    maxQueueSize: 8,
+    visible: false,
+    ...overrides,
+  });
 
 describe('http-session-manager', () => {
   it('enqueueInvokeTask aborts the task signal when invoke timeout fires', async () => {
@@ -45,7 +48,7 @@ describe('http-session-manager', () => {
 
     const invoke = enqueueInvokeTask({
       sessionLabel: 'mcp-timeout',
-      session,
+      session: getMcpInvokeQueueState(session),
       task: async ({ signal }) => {
         capturedSignal = signal;
         return await new Promise<string>((_resolve, reject) => {
@@ -67,8 +70,8 @@ describe('http-session-manager', () => {
     });
     expect(capturedSignal?.aborted).toBe(true);
     expect(runtimeMetrics.invokeTimeoutCount).toBe(1);
-    expect(session.pendingInvocations).toBe(0);
-    expect(session.activeInvocations).toBe(0);
+    expect(session.queue.pendingInvocations).toBe(0);
+    expect(session.queue.activeInvocations).toBe(0);
   });
 
   it('cleanupMcpSession aborts in-flight invoke and forces browser release', async () => {
@@ -94,7 +97,7 @@ describe('http-session-manager', () => {
 
     const invoke = enqueueInvokeTask({
       sessionLabel: 'mcp-cleanup',
-      session,
+      session: getMcpInvokeQueueState(session),
       task: async ({ signal }) =>
         await new Promise<string>((_resolve, reject) => {
           signal.addEventListener(
@@ -117,7 +120,7 @@ describe('http-session-manager', () => {
     });
     expect(transportClose).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledWith({ destroy: true });
-    expect(session.pendingInvocations).toBe(0);
-    expect(session.activeInvocations).toBe(0);
+    expect(session.queue.pendingInvocations).toBe(0);
+    expect(session.queue.activeInvocations).toBe(0);
   });
 });

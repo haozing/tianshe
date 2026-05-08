@@ -7,6 +7,8 @@
 import { DuckDBConnection } from '@duckdb/node-api';
 import type { LogEntry } from './types';
 import { parseRows } from './utils';
+import { runPrepared, allPrepared } from './statement-executor';
+import { getUnknownErrorMessage } from '../ipc-utils';
 
 export class LogService {
   private lastIdTimestamp = 0;
@@ -47,8 +49,8 @@ export class LogService {
     // DuckDB may not support ALTER COLUMN type in all versions; fall back to table copy if needed.
     try {
       await this.conn.run(`ALTER TABLE logs ALTER COLUMN id SET DATA TYPE BIGINT`);
-    } catch (error: any) {
-      const msg = String(error?.message || error);
+    } catch (error: unknown) {
+      const msg = getUnknownErrorMessage(error, String(error));
       // Only attempt migration when type change isn't supported or fails due to current type.
       if (
         msg.includes('Parser Error') ||
@@ -96,15 +98,13 @@ export class LogService {
     try {
       const id = this.nextId();
 
-      const stmt = await this.conn.prepare(`
-        INSERT INTO logs (id, task_id, timestamp, level, step_index, message, data)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `);
-
       const message = entry.message || null;
       const data = entry.data ? JSON.stringify(entry.data) : null;
 
-      stmt.bind([
+      await runPrepared(this.conn, `
+        INSERT INTO logs (id, task_id, timestamp, level, step_index, message, data)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [
         id,
         entry.taskId,
         Date.now(),
@@ -113,9 +113,6 @@ export class LogService {
         message,
         data,
       ]);
-
-      await stmt.run();
-      stmt.destroySync();
     } catch (error) {
       console.error('Failed to log:', error);
     }
@@ -134,11 +131,7 @@ export class LogService {
     }
     query += ' ORDER BY timestamp ASC';
 
-    const stmt = await this.conn.prepare(query);
-    stmt.bind(params);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
-
+    const result = await allPrepared(this.conn, query, params);
     const rows = parseRows(result);
 
     return rows.map((row: any) => ({
@@ -166,11 +159,7 @@ export class LogService {
     query += ' ORDER BY timestamp DESC LIMIT ?';
     params.push(limit);
 
-    const stmt = await this.conn.prepare(query);
-    stmt.bind(params);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
-
+    const result = await allPrepared(this.conn, query, params);
     const rows = parseRows(result);
 
     return rows.map((row: any) => ({
@@ -190,20 +179,14 @@ export class LogService {
   async cleanupLogs(daysToKeep: number = 7): Promise<number> {
     const cutoff = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
 
-    const countStmt = await this.conn.prepare(
-      'SELECT COUNT(*) as count FROM logs WHERE timestamp < ?'
+    const countResult = await allPrepared(this.conn,
+      'SELECT COUNT(*) as count FROM logs WHERE timestamp < ?',
+      [cutoff]
     );
-    countStmt.bind([cutoff]);
-    const countResult = await countStmt.runAndReadAll();
-    countStmt.destroySync();
-
     const rows = parseRows(countResult);
     const count = Number(rows[0]?.count || 0);
 
-    const deleteStmt = await this.conn.prepare('DELETE FROM logs WHERE timestamp < ?');
-    deleteStmt.bind([cutoff]);
-    await deleteStmt.run();
-    deleteStmt.destroySync();
+    await runPrepared(this.conn, 'DELETE FROM logs WHERE timestamp < ?', [cutoff]);
 
     return count;
   }

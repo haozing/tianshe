@@ -8,6 +8,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import type { ImportTask } from './types';
 import { detectFileType, cleanupTempFile, getTempFilePath, parseRows } from './utils';
+import { getUnknownErrorMessage } from '../ipc-utils';
 
 const task: ImportTask = workerData;
 
@@ -134,11 +135,11 @@ async function importFile() {
       columnCount: analysisResult.finalSchema.length,
       schema: analysisResult.finalSchema,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Import worker error:', error);
     parentPort?.postMessage({
       type: 'error',
-      error: error.message || 'Unknown error during import',
+      error: getUnknownErrorMessage(error, 'Unknown error during import'),
     });
   } finally {
     try {
@@ -470,7 +471,7 @@ function normalizeDelimiterForSql(delimiter: string): string {
 }
 
 function shouldRetryWithIgnoreErrors(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = getUnknownErrorMessage(error);
   return (
     message.includes('CSV Error') ||
     message.includes('Invalid unicode') ||
@@ -638,6 +639,51 @@ function escapeSqlString(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "''");
 }
 
+export async function writeWithBackpressure(
+  writeStream: fs.WriteStream,
+  text: string
+): Promise<void> {
+  const canWrite = writeStream.write(text);
+  if (!canWrite) {
+    await new Promise<void>((resolve, reject) => {
+      const onDrain = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = (err: Error) => {
+        cleanup();
+        reject(err);
+      };
+      const cleanup = () => {
+        writeStream.off('drain', onDrain);
+        writeStream.off('error', onError);
+      };
+      writeStream.once('drain', onDrain);
+      writeStream.once('error', onError);
+    });
+  }
+}
+
+export async function finishWriteStream(writeStream: fs.WriteStream): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onFinish = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+    const cleanup = () => {
+      writeStream.off('finish', onFinish);
+      writeStream.off('error', onError);
+    };
+    writeStream.once('finish', onFinish);
+    writeStream.once('error', onError);
+    writeStream.end();
+  });
+}
+
 async function transcodeCsvToUtf8(
   filePath: string
 ): Promise<{ tempFilePath: string; sourceEncoding: string }> {
@@ -649,53 +695,58 @@ async function transcodeCsvToUtf8(
 
   const decoder = new TextDecoder(sourceEncoding);
   let isFirstChunk = true;
+  const readStream = fs.createReadStream(filePath);
+  const writeStream = fs.createWriteStream(tempFilePath, { encoding: 'utf-8' });
+  let writeError: Error | null = null;
+  const recordWriteError = (error: Error) => {
+    writeError = error;
+  };
+  const throwIfWriteFailed = () => {
+    if (writeError) {
+      throw writeError;
+    }
+  };
 
-  await new Promise<void>((resolve, reject) => {
-    const readStream = fs.createReadStream(filePath);
-    const writeStream = fs.createWriteStream(tempFilePath, { encoding: 'utf-8' });
+  writeStream.on('error', recordWriteError);
 
-    const handleError = (error: unknown) => {
-      const err = error instanceof Error ? error : new Error(String(error));
-      readStream.destroy(err);
-      writeStream.destroy(err);
-      reject(err);
-    };
-
-    readStream.on('data', (chunk) => {
-      try {
-        let text = decoder.decode(chunk as Buffer, { stream: true });
-        if (isFirstChunk) {
-          text = stripBom(text);
-          isFirstChunk = false;
-        }
-        if (text.length > 0) {
-          writeStream.write(text);
-        }
-      } catch (error) {
-        handleError(error);
+  try {
+    for await (const chunk of readStream) {
+      throwIfWriteFailed();
+      let text = decoder.decode(chunk as Buffer, { stream: true });
+      if (isFirstChunk) {
+        text = stripBom(text);
+        isFirstChunk = false;
       }
-    });
-
-    readStream.on('end', () => {
-      try {
-        let text = decoder.decode();
-        if (isFirstChunk) {
-          text = stripBom(text);
-          isFirstChunk = false;
-        }
-        if (text.length > 0) {
-          writeStream.write(text);
-        }
-        writeStream.end();
-      } catch (error) {
-        handleError(error);
+      if (text.length > 0) {
+        await writeWithBackpressure(writeStream, text);
+        throwIfWriteFailed();
       }
-    });
+    }
 
-    readStream.on('error', handleError);
-    writeStream.on('error', handleError);
-    writeStream.on('finish', () => resolve());
-  });
+    throwIfWriteFailed();
+    let text = decoder.decode();
+    if (isFirstChunk) {
+      text = stripBom(text);
+      isFirstChunk = false;
+    }
+    if (text.length > 0) {
+      await writeWithBackpressure(writeStream, text);
+      throwIfWriteFailed();
+    }
+
+    await finishWriteStream(writeStream);
+  } catch (error) {
+    readStream.destroy();
+    writeStream.destroy();
+    try {
+      await fs.remove(tempFilePath);
+    } catch {
+      // ignore cleanup errors
+    }
+    throw error;
+  } finally {
+    writeStream.off('error', recordWriteError);
+  }
 
   return { tempFilePath, sourceEncoding };
 }
@@ -1325,10 +1376,12 @@ function looksLikeEmail(columnName: string, values: any[]): boolean {
   return hasEmailInName && matchCount / values.length > 0.8;
 }
 
-importFile().catch((error) => {
-  console.error('Unhandled error in import worker:', error);
-  parentPort?.postMessage({
-    type: 'error',
-    error: error.message || 'Unhandled error',
+if (workerData) {
+  importFile().catch((error) => {
+    console.error('Unhandled error in import worker:', error);
+    parentPort?.postMessage({
+      type: 'error',
+      error: getUnknownErrorMessage(error, 'Unhandled error'),
+    });
   });
-});
+}

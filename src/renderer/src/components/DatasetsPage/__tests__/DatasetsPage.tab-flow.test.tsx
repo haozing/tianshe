@@ -62,7 +62,9 @@ vi.mock('../DatasetTabs', () => ({
               {`rename-tab-${tab.id}`}
             </button>
           )}
-          {onDeleteTab && <button onClick={() => onDeleteTab(tab.id)}>{`delete-tab-${tab.id}`}</button>}
+          {onDeleteTab && (
+            <button onClick={() => onDeleteTab(tab.id)}>{`delete-tab-${tab.id}`}</button>
+          )}
         </div>
       ))}
       <button onClick={onCreateTab}>create-tab-copy</button>
@@ -84,9 +86,7 @@ vi.mock('../DatasetTabs', () => ({
 vi.mock('../DatasetToolbar', () => ({
   DatasetToolbar: ({ onCreateTabCopy }: any) => (
     <div data-testid="mock-toolbar">
-      {onCreateTabCopy ? (
-        <button onClick={onCreateTabCopy}>复制为新标签页</button>
-      ) : null}
+      {onCreateTabCopy ? <button onClick={onCreateTabCopy}>复制为新标签页</button> : null}
     </div>
   ),
 }));
@@ -177,6 +177,8 @@ describe('DatasetsPage tab group flow', () => {
       queryResult: null,
       importProgress: new Map(),
       processedImports: new Set(),
+      pendingLocalSchemaRefreshDatasets: new Set(),
+      localPatchTransaction: null,
       datasetInfoRequestId: 0,
       activeQuerySessionId: 0,
       activeQueryDatasetId: null,

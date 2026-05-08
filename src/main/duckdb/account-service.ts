@@ -5,7 +5,21 @@
  */
 
 import { DuckDBConnection } from '@duckdb/node-api';
-import { parseRows } from './utils';
+import { parseRows, runInDuckDbTransaction } from './utils';
+import { allPrepared, runPrepared } from './statement-executor';
+import { SqlUpdateBuilder } from './sql-update-builder';
+import { SchemaMigrationEngine } from './migration-engine';
+import {
+  ACCOUNT_SCHEMA_BACKFILLS,
+  ACCOUNT_SCHEMA_MIGRATIONS,
+  runSchemaBackfills,
+} from './schema-migrations';
+import {
+  normalizeSyncString,
+  normalizeSyncInteger,
+  normalizeSyncBoolean,
+  normalizeSyncTimestamp,
+} from './sync-field-normalizer';
 import { v4 as uuidv4 } from 'uuid';
 import { safeStorage } from 'electron';
 import { UNBOUND_PROFILE_ID } from '../../types/profile';
@@ -67,50 +81,8 @@ export class AccountService {
       )
     `);
 
-    await this.conn.run(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS platform_id VARCHAR`);
-    await this.conn.run(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS display_name VARCHAR`);
-    await this.conn.run(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS shop_id VARCHAR`);
-    await this.conn.run(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS shop_name VARCHAR`);
-    await this.conn.run(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS password TEXT`);
-    await this.conn.run(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS tags VARCHAR DEFAULT '[]'`);
-    await this.conn.run(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS sync_source_id VARCHAR`);
-    await this.conn.run(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS sync_owner_user_id BIGINT`);
-    await this.conn.run(
-      `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS sync_owner_user_name VARCHAR`
-    );
-    await this.conn.run(
-      `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS sync_permission VARCHAR DEFAULT 'mine/edit'`
-    );
-    await this.conn.run(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS sync_scope_type VARCHAR`);
-    await this.conn.run(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS sync_scope_id BIGINT`);
-    await this.conn.run(
-      `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS sync_managed BOOLEAN DEFAULT FALSE`
-    );
-    await this.conn.run(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS sync_updated_at TIMESTAMP`);
-
-    await this.conn.run(`
-      UPDATE accounts
-      SET profile_id = '${UNBOUND_PROFILE_ID}'
-      WHERE profile_id IS NULL OR TRIM(CAST(profile_id AS VARCHAR)) = ''
-    `);
-    await this.conn.run(`
-      UPDATE accounts
-      SET tags = '[]'
-      WHERE tags IS NULL OR TRIM(CAST(tags AS VARCHAR)) = ''
-    `);
-    await this.conn.run(`
-      UPDATE accounts
-      SET sync_managed = FALSE
-      WHERE sync_managed IS NULL
-    `);
-    await this.conn.run(`
-      UPDATE accounts
-      SET sync_permission = CASE
-        WHEN sync_managed = TRUE THEN 'shared/view_use'
-        ELSE 'mine/edit'
-      END
-      WHERE sync_permission IS NULL OR TRIM(CAST(sync_permission AS VARCHAR)) = ''
-    `);
+    await new SchemaMigrationEngine(this.conn).migrate(ACCOUNT_SCHEMA_MIGRATIONS);
+    await runSchemaBackfills(this.conn, ACCOUNT_SCHEMA_BACKFILLS);
 
     await this.conn.run(`
       CREATE INDEX IF NOT EXISTS idx_accounts_profile_id
@@ -139,15 +111,7 @@ export class AccountService {
   }
 
   async runInTransaction<T>(work: () => Promise<T>): Promise<T> {
-    await this.conn.run('BEGIN TRANSACTION');
-    try {
-      const result = await work();
-      await this.conn.run('COMMIT');
-      return result;
-    } catch (error) {
-      await this.conn.run('ROLLBACK');
-      throw error;
-    }
+    return runInDuckDbTransaction(this.conn, work);
   }
 
   private encryptPassword(password?: string | null): string | null {
@@ -240,22 +204,6 @@ export class AccountService {
     };
   }
 
-  private normalizeSyncSourceId(value: unknown): string | null {
-    const normalized = String(value ?? '').trim();
-    return normalized ? normalized : null;
-  }
-
-  private normalizeSyncOwnerUserId(value: unknown): number | null {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return null;
-    return Math.trunc(numeric);
-  }
-
-  private normalizeSyncOwnerUserName(value: unknown): string | null {
-    const normalized = String(value ?? '').trim();
-    return normalized ? normalized : null;
-  }
-
   private normalizeSyncPermission(value: unknown): AccountSyncPermission | null {
     const normalized = String(value ?? '')
       .trim()
@@ -267,7 +215,7 @@ export class AccountService {
   }
 
   private parseSyncPermission(row: { sync_managed?: unknown }): AccountSyncPermission {
-    return this.normalizeSyncManaged(row.sync_managed) ? 'shared/view_use' : 'mine/edit';
+    return normalizeSyncBoolean(row.sync_managed) ? 'shared/view_use' : 'mine/edit';
   }
 
   private buildAccountBase(row: any): Omit<Account, 'hasPassword'> & { hasPassword: boolean } {
@@ -280,7 +228,6 @@ export class AccountService {
       }
     }
 
-    const syncOwnerUserId = Number(row.sync_owner_user_id);
     return {
       id: String(row.id),
       profileId: String(row.profile_id),
@@ -296,58 +243,29 @@ export class AccountService {
       lastLoginAt: row.last_login_at ? new Date(row.last_login_at) : undefined,
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
-      syncSourceId: this.normalizeSyncSourceId(row.sync_source_id) ?? undefined,
-      syncOwnerUserId: Number.isFinite(syncOwnerUserId) ? Math.trunc(syncOwnerUserId) : undefined,
-      syncOwnerUserName: this.normalizeSyncOwnerUserName(row.sync_owner_user_name) ?? undefined,
+      syncSourceId: normalizeSyncString(row.sync_source_id) ?? undefined,
+      syncOwnerUserId: normalizeSyncInteger(row.sync_owner_user_id) ?? undefined,
+      syncOwnerUserName: normalizeSyncString(row.sync_owner_user_name) ?? undefined,
       syncPermission:
         this.normalizeSyncPermission(row.sync_permission) ?? this.parseSyncPermission(row),
-      syncScopeType: this.normalizeSyncScopeType(row.sync_scope_type) ?? undefined,
-      syncScopeId: this.normalizeSyncScopeId(row.sync_scope_id) ?? undefined,
-      syncManaged: this.normalizeSyncManaged(row.sync_managed),
+      syncScopeType: normalizeSyncString(row.sync_scope_type) ?? undefined,
+      syncScopeId: normalizeSyncInteger(row.sync_scope_id) ?? undefined,
+      syncManaged: normalizeSyncBoolean(row.sync_managed),
       syncUpdatedAt: row.sync_updated_at ? new Date(row.sync_updated_at) : undefined,
     };
   }
 
-  private normalizeSyncScopeType(value: unknown): string | null {
-    const normalized = String(value ?? '').trim();
-    return normalized ? normalized : null;
-  }
-
-  private normalizeSyncScopeId(value: unknown): number | null {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return null;
-    return Math.trunc(numeric);
-  }
-
-  private normalizeSyncManaged(value: unknown): boolean {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'number') return value !== 0;
-    const normalized = String(value ?? '')
-      .trim()
-      .toLowerCase();
-    return normalized === 'true' || normalized === '1';
-  }
-
-  private toTimestampValue(value?: Date | null): string | null {
-    if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
-      return null;
-    }
-    return value.toISOString();
-  }
 
   private async recordExists(
     tableName: 'browser_profiles' | 'saved_sites',
     id: string
   ): Promise<boolean> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT id
       FROM ${tableName}
       WHERE id = ?
       LIMIT 1
-    `);
-    stmt.bind([id]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [id]);
     return parseRows(result).length > 0;
   }
 
@@ -397,15 +315,12 @@ export class AccountService {
       values.push(excludedAccountId);
     }
 
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT id
       FROM accounts
       WHERE ${conditions.join(' AND ')}
       LIMIT 1
-    `);
-    stmt.bind(values);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, values);
     return parseRows(result).length > 0;
   }
 
@@ -458,14 +373,11 @@ export class AccountService {
   }
 
   private async updateAccountTags(id: string, tags: string[]): Promise<void> {
-    const stmt = await this.conn.prepare(`
+    await runPrepared(this.conn, `
       UPDATE accounts
       SET tags = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `);
-    stmt.bind([JSON.stringify(tags), id]);
-    await stmt.run();
-    stmt.destroySync();
+    `, [JSON.stringify(tags), id]);
   }
 
   private async mutateAccountTags(
@@ -514,27 +426,25 @@ export class AccountService {
     const { shopId, shopName } = this.resolveShopBinding(params.shopId, params.shopName, '创建');
     const normalizedLoginUrl = this.normalizeRequiredAccountText(params.loginUrl, '登录地址');
     const normalizedNotes = this.normalizeOptionalAccountText(params.notes);
-    const syncScopeType = this.normalizeSyncScopeType(params.syncScopeType);
-    const syncScopeId = this.normalizeSyncScopeId(params.syncScopeId);
-    const syncManaged = this.normalizeSyncManaged(params.syncManaged);
-    const syncUpdatedAt = this.toTimestampValue(params.syncUpdatedAt);
-    const syncSourceId = this.normalizeSyncSourceId(params.syncSourceId);
-    const syncOwnerUserId = this.normalizeSyncOwnerUserId(params.syncOwnerUserId);
-    const syncOwnerUserName = this.normalizeSyncOwnerUserName(params.syncOwnerUserName);
+    const syncScopeType = normalizeSyncString(params.syncScopeType);
+    const syncScopeId = normalizeSyncInteger(params.syncScopeId);
+    const syncManaged = normalizeSyncBoolean(params.syncManaged);
+    const syncUpdatedAt = normalizeSyncTimestamp(params.syncUpdatedAt);
+    const syncSourceId = normalizeSyncString(params.syncSourceId);
+    const syncOwnerUserId = normalizeSyncInteger(params.syncOwnerUserId);
+    const syncOwnerUserName = normalizeSyncString(params.syncOwnerUserName);
     const syncPermission =
       this.normalizeSyncPermission(params.syncPermission) ??
       (syncManaged ? 'shared/view_use' : 'mine/edit');
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(this.conn, `
       INSERT INTO accounts (
         id, profile_id, platform_id, display_name, name, shop_id, shop_name, password, login_url, tags, notes,
         sync_source_id, sync_owner_user_id, sync_owner_user_name, sync_permission,
         sync_scope_type, sync_scope_id, sync_managed, sync_updated_at,
         created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `);
-
-    stmt.bind([
+    `, [
       id,
       normalizedProfileId,
       normalizedPlatformId,
@@ -555,9 +465,6 @@ export class AccountService {
       syncManaged,
       syncUpdatedAt,
     ]);
-
-    await stmt.run();
-    stmt.destroySync();
 
     console.log(`[AccountService] Created account: ${normalizedName} (${id})`);
 
@@ -659,16 +566,12 @@ export class AccountService {
    * 获取单个账号
    */
   async get(id: string): Promise<Account | null> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT
         ${this.selectAccountColumns}
       FROM accounts
       WHERE id = ?
-    `);
-
-    stmt.bind([id]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [id]);
 
     const rows = parseRows(result);
     if (rows.length === 0) return null;
@@ -677,16 +580,12 @@ export class AccountService {
   }
 
   async getWithSecret(id: string): Promise<AccountWithSecret | null> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT
         ${this.selectAccountColumns}
       FROM accounts
       WHERE id = ?
-    `);
-
-    stmt.bind([id]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [id]);
 
     const rows = parseRows(result);
     if (rows.length === 0) return null;
@@ -698,17 +597,13 @@ export class AccountService {
    * 列出某个 Profile 的所有账号
    */
   async listByProfile(profileId: string): Promise<Account[]> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT
         ${this.selectAccountColumns}
       FROM accounts
       WHERE profile_id = ?
       ORDER BY created_at DESC
-    `);
-
-    stmt.bind([profileId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [profileId]);
 
     const rows = parseRows(result);
     return rows.map((row) => this.mapRowToAccount(row));
@@ -721,17 +616,13 @@ export class AccountService {
     const normalizedPlatformId = String(platformId || '').trim();
     if (!normalizedPlatformId) return [];
 
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT
         ${this.selectAccountColumns}
       FROM accounts
       WHERE platform_id = ?
       ORDER BY created_at DESC
-    `);
-
-    stmt.bind([normalizedPlatformId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [normalizedPlatformId]);
 
     const rows = parseRows(result);
     return rows.map((row) => this.mapRowToAccount(row));
@@ -827,110 +718,35 @@ export class AccountService {
       params.shopName !== undefined ? params.shopName : currentAccount.shopName,
       '更新'
     );
-    const fields: string[] = [];
-    const values: any[] = [];
+    const builder = new SqlUpdateBuilder()
+      .set('name', params.name, (v) => this.normalizeRequiredAccountText(v as string, '名称'))
+      .set('display_name', params.displayName, (v) => this.normalizeOptionalAccountText(v as string))
+      .set('profile_id', params.profileId, () => nextProfileId)
+      .set('platform_id', params.platformId, () => nextPlatformId)
+      .set('shop_id', params.shopId, () => nextShopBinding.shopId)
+      .set('shop_name', params.shopName, () => nextShopBinding.shopName)
+      .set('password', params.password, (v) => this.encryptPassword(v as string))
+      .set('login_url', params.loginUrl, (v) => this.normalizeRequiredAccountText(v as string, '登录地址'))
+      .set('tags', params.tags, (v) => JSON.stringify(this.normalizeAccountTags(v as string[])))
+      .set('notes', params.notes, (v) => this.normalizeOptionalAccountText(v as string))
+      .set('sync_source_id', params.syncSourceId, normalizeSyncString)
+      .set('sync_owner_user_id', params.syncOwnerUserId, normalizeSyncInteger)
+      .set('sync_owner_user_name', params.syncOwnerUserName, normalizeSyncString)
+      .set('sync_permission', params.syncPermission, (v) => this.normalizeSyncPermission(v))
+      .set('sync_scope_type', params.syncScopeType, normalizeSyncString)
+      .set('sync_scope_id', params.syncScopeId, normalizeSyncInteger)
+      .set('sync_managed', params.syncManaged, normalizeSyncBoolean)
+      .set('sync_updated_at', params.syncUpdatedAt, normalizeSyncTimestamp);
 
-    if (params.name !== undefined) {
-      fields.push('name = ?');
-      values.push(this.normalizeRequiredAccountText(params.name, '名称'));
-    }
-
-    if (params.displayName !== undefined) {
-      fields.push('display_name = ?');
-      values.push(this.normalizeOptionalAccountText(params.displayName));
-    }
-
-    if (params.profileId !== undefined) {
-      fields.push('profile_id = ?');
-      values.push(nextProfileId);
-    }
-
-    if (params.platformId !== undefined) {
-      fields.push('platform_id = ?');
-      values.push(nextPlatformId);
-    }
-
-    if (params.shopId !== undefined) {
-      fields.push('shop_id = ?');
-      values.push(nextShopBinding.shopId);
-    }
-
-    if (params.shopName !== undefined) {
-      fields.push('shop_name = ?');
-      values.push(nextShopBinding.shopName);
-    }
-
-    if (params.password !== undefined) {
-      fields.push('password = ?');
-      values.push(this.encryptPassword(params.password));
-    }
-
-    if (params.loginUrl !== undefined) {
-      fields.push('login_url = ?');
-      values.push(this.normalizeRequiredAccountText(params.loginUrl, '登录地址'));
-    }
-
-    if (params.tags !== undefined) {
-      fields.push('tags = ?');
-      values.push(JSON.stringify(this.normalizeAccountTags(params.tags)));
-    }
-
-    if (params.notes !== undefined) {
-      fields.push('notes = ?');
-      values.push(this.normalizeOptionalAccountText(params.notes));
-    }
-
-    if (params.syncSourceId !== undefined) {
-      fields.push('sync_source_id = ?');
-      values.push(this.normalizeSyncSourceId(params.syncSourceId));
-    }
-
-    if (params.syncOwnerUserId !== undefined) {
-      fields.push('sync_owner_user_id = ?');
-      values.push(this.normalizeSyncOwnerUserId(params.syncOwnerUserId));
-    }
-
-    if (params.syncOwnerUserName !== undefined) {
-      fields.push('sync_owner_user_name = ?');
-      values.push(this.normalizeSyncOwnerUserName(params.syncOwnerUserName));
-    }
-
-    if (params.syncPermission !== undefined) {
-      fields.push('sync_permission = ?');
-      values.push(this.normalizeSyncPermission(params.syncPermission));
-    }
-
-    if (params.syncScopeType !== undefined) {
-      fields.push('sync_scope_type = ?');
-      values.push(this.normalizeSyncScopeType(params.syncScopeType));
-    }
-
-    if (params.syncScopeId !== undefined) {
-      fields.push('sync_scope_id = ?');
-      values.push(this.normalizeSyncScopeId(params.syncScopeId));
-    }
-
-    if (params.syncManaged !== undefined) {
-      fields.push('sync_managed = ?');
-      values.push(this.normalizeSyncManaged(params.syncManaged));
-    }
-
-    if (params.syncUpdatedAt !== undefined) {
-      fields.push('sync_updated_at = ?');
-      values.push(this.toTimestampValue(params.syncUpdatedAt));
-    }
-
-    if (fields.length === 0) {
+    if (builder.isEmpty) {
       return currentAccount;
     }
 
-    fields.push('updated_at = CURRENT_TIMESTAMP');
-    values.push(id);
+    builder.setRaw('updated_at', 'CURRENT_TIMESTAMP');
 
-    const stmt = await this.conn.prepare(`UPDATE accounts SET ${fields.join(', ')} WHERE id = ?`);
-    stmt.bind(values);
-    await stmt.run();
-    stmt.destroySync();
+    const { sql, values } = builder.build('accounts', 'id', id)!;
+
+    await runPrepared(this.conn, sql, values);
 
     console.log(`[AccountService] Updated account: ${id}`);
 
@@ -942,10 +758,7 @@ export class AccountService {
    */
   async delete(id: string, options?: AccountMutationOptions): Promise<void> {
     await this.assertMutableAccount(id, options);
-    const stmt = await this.conn.prepare(`DELETE FROM accounts WHERE id = ?`);
-    stmt.bind([id]);
-    await stmt.run();
-    stmt.destroySync();
+    await runPrepared(this.conn, `DELETE FROM accounts WHERE id = ?`, [id]);
 
     console.log(`[AccountService] Deleted account: ${id}`);
   }
@@ -954,10 +767,7 @@ export class AccountService {
    * 删除某个 Profile 的所有账号
    */
   async deleteByProfile(profileId: string): Promise<void> {
-    const stmt = await this.conn.prepare(`DELETE FROM accounts WHERE profile_id = ?`);
-    stmt.bind([profileId]);
-    await stmt.run();
-    stmt.destroySync();
+    await runPrepared(this.conn, `DELETE FROM accounts WHERE profile_id = ?`, [profileId]);
 
     console.log(`[AccountService] Deleted all accounts for profile: ${profileId}`);
   }
@@ -966,15 +776,11 @@ export class AccountService {
    * 更新最后登录时间
    */
   async updateLastLogin(id: string): Promise<void> {
-    const stmt = await this.conn.prepare(`
+    await runPrepared(this.conn, `
       UPDATE accounts
       SET last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `);
-
-    stmt.bind([id]);
-    await stmt.run();
-    stmt.destroySync();
+    `, [id]);
   }
 
   /**

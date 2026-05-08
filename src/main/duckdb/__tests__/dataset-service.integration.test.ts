@@ -334,9 +334,7 @@ describe('DatasetService Integration Tests', () => {
       ).rejects.toThrow('Columns are not writable: total');
     });
 
-    // Skip: This test causes deadlock because batchInsertRecords calls insertRecord
-    // which tries to acquire the same queue lock
-    it.skip('should use insertRecord for single record', async () => {
+    it('should insert a single-record batch without nested queue deadlock', async () => {
       const records = [{ name: 'Single User', age: 35, email: 'single@example.com' }];
 
       await service.batchInsertRecords(testDatasetId, records);
@@ -344,6 +342,12 @@ describe('DatasetService Integration Tests', () => {
       // Verify insertion
       const result = await conn.runAndReadAll(`SELECT name FROM ds_${testDatasetId}.data`);
       expect(result.getRows()[0][0]).toBe('Single User');
+    });
+
+    it('should reject an empty record in a single-record batch', async () => {
+      await expect(service.batchInsertRecords(testDatasetId, [{}])).rejects.toThrow(
+        'Record must have at least one column'
+      );
     });
   });
 
@@ -618,6 +622,62 @@ describe('DatasetService Integration Tests', () => {
       const deleteColumnCount = Number(deleteRows[0][0]);
       const deleteSchemaLength = JSON.parse(String(deleteRows[0][1] || '[]')).length;
       expect(deleteColumnCount).toBe(deleteSchemaLength);
+    });
+
+    it('should reject unsafe user-created column names before SQL execution', async () => {
+      await expect(
+        service.addColumn({
+          datasetId: testDatasetId,
+          columnName: 'bad-name',
+          fieldType: 'text',
+          nullable: true,
+          storageMode: 'physical',
+        })
+      ).rejects.toThrow('列名只能包含中文、字母、数字和下划线');
+
+      await expect(
+        service.addColumn({
+          datasetId: testDatasetId,
+          columnName: '_row_id',
+          fieldType: 'text',
+          nullable: true,
+          storageMode: 'physical',
+        })
+      ).rejects.toThrow('列名不能为系统字段');
+
+      await expect(
+        service.updateColumn({
+          datasetId: testDatasetId,
+          columnName: 'name',
+          newName: 'bad name',
+        })
+      ).rejects.toThrow('列名只能包含中文、字母、数字和下划线');
+    });
+
+    it('should write imported schema column names with SQL keywords by quoting identifiers', async () => {
+      const metadataService = new DatasetMetadataService(conn, new DatasetStorageService(conn));
+      const dataset = await metadataService.getDatasetInfo(testDatasetId);
+      if (!dataset?.schema) {
+        throw new Error('Dataset schema missing');
+      }
+
+      await conn.run(`ALTER TABLE ds_${testDatasetId}.data ADD COLUMN "DROP" VARCHAR`);
+      await metadataService.updateDatasetSchema(testDatasetId, [
+        ...dataset.schema,
+        { name: 'DROP', duckdbType: 'VARCHAR', fieldType: 'text', nullable: true },
+      ]);
+
+      await service.insertRecord(testDatasetId, {
+        name: 'Keyword User',
+        age: 35,
+        email: 'keyword@example.com',
+        DROP: 'quoted',
+      });
+
+      const result = await conn.runAndReadAll(
+        `SELECT "DROP" FROM ds_${testDatasetId}.data WHERE name = 'Keyword User'`
+      );
+      expect(result.getRows()[0][0]).toBe('quoted');
     });
 
     it('should rename physical column in both table schema and metadata', async () => {

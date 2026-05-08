@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { McpSessionInfo } from './mcp-http-types';
+import {
+  createMcpSessionInfo,
+  type CreateMcpSessionInfoOptions,
+  type McpSessionInfo,
+} from './mcp-http-types';
 import type { OrchestrationSessionInfo } from './orchestration-http-routes';
 import { createHttpSessionBridge } from './http-session-bridge';
 
@@ -8,6 +12,17 @@ const createLogger = () => ({
   info: vi.fn(),
   error: vi.fn(),
 });
+
+const createMcpSession = (
+  overrides: Partial<CreateMcpSessionInfoOptions> = {}
+): McpSessionInfo =>
+  createMcpSessionInfo({
+    transport: {} as never,
+    lastActivity: Date.now(),
+    maxQueueSize: 10,
+    visible: false,
+    ...overrides,
+  });
 
 describe('http-session-bridge', () => {
   it('buildRuntimeMetricsPayload 返回会话与计数快照', () => {
@@ -19,14 +34,7 @@ describe('http-session-bridge', () => {
       browserAcquireFailureCount: 3,
       browserAcquireTimeoutCount: 1,
     };
-    transports.set('mcp-1', {
-      transport: {} as never,
-      lastActivity: Date.now(),
-      invokeQueue: Promise.resolve(),
-      pendingInvocations: 0,
-      activeInvocations: 0,
-      maxQueueSize: 10,
-    });
+    transports.set('mcp-1', createMcpSession());
     orchestrationSessions.set('orch-1', {
       browserHandle: {} as never,
       executor: {} as never,
@@ -62,14 +70,9 @@ describe('http-session-bridge', () => {
     const transports = new Map<string, McpSessionInfo>([
       [
         'stale-mcp',
-        {
-          transport: {} as never,
+        createMcpSession({
           lastActivity: now - 120_000,
-          invokeQueue: Promise.resolve(),
-          pendingInvocations: 0,
-          activeInvocations: 0,
-          maxQueueSize: 10,
-        },
+        }),
       ],
     ]);
     const orchestrationSessions = new Map<string, OrchestrationSessionInfo>([
@@ -108,7 +111,9 @@ describe('http-session-bridge', () => {
 
     expect(mcpCleanup).toHaveBeenCalledWith(
       'stale-mcp',
-      expect.objectContaining({ lastActivity: expect.any(Number) })
+      expect.objectContaining({
+        lifecycle: expect.objectContaining({ lastActivity: expect.any(Number) }),
+      })
     );
     expect(orchCleanup).toHaveBeenCalledWith(
       'stale-orch',
@@ -125,28 +130,18 @@ describe('http-session-bridge', () => {
     const transports = new Map<string, McpSessionInfo>([
       [
         'idle-without-browser',
-        {
-          transport: {} as never,
+        createMcpSession({
           lastActivity: now - 10 * 60 * 1000,
-          invokeQueue: Promise.resolve(),
-          pendingInvocations: 0,
-          activeInvocations: 0,
-          maxQueueSize: 10,
           visible: false,
-        },
+        }),
       ],
       [
         'idle-with-browser',
-        {
-          transport: {} as never,
+        createMcpSession({
           lastActivity: now - 10 * 60 * 1000,
-          invokeQueue: Promise.resolve(),
-          pendingInvocations: 0,
-          activeInvocations: 0,
-          maxQueueSize: 10,
           visible: false,
           browserHandle: {} as never,
-        },
+        }),
       ],
     ]);
 
@@ -170,7 +165,9 @@ describe('http-session-bridge', () => {
     expect(mcpCleanup).toHaveBeenCalledTimes(1);
     expect(mcpCleanup).toHaveBeenCalledWith(
       'idle-without-browser',
-      expect.objectContaining({ lastActivity: expect.any(Number) })
+      expect.objectContaining({
+        lifecycle: expect.objectContaining({ lastActivity: expect.any(Number) }),
+      })
     );
     expect(transports.has('idle-without-browser')).toBe(false);
     expect(transports.has('idle-with-browser')).toBe(true);
@@ -183,16 +180,13 @@ describe('http-session-bridge', () => {
     const transports = new Map<string, McpSessionInfo>([
       [
         'closing-mcp',
-        {
-          transport: {} as never,
+        createMcpSession({
           lastActivity: now - 20_000,
-          invokeQueue: Promise.resolve(),
           pendingInvocations: 1,
           activeInvocations: 1,
-          maxQueueSize: 10,
           visible: false,
           closing: true,
-        },
+        }),
       ],
     ]);
 

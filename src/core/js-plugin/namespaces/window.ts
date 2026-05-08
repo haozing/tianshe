@@ -5,16 +5,18 @@
  */
 
 import { BrowserWindow } from 'electron';
-import type { WindowManager } from '../../../main/window-manager';
-import type { WebContentsViewManager } from '../../../main/webcontentsview-manager';
-import type { ProfileService } from '../../../main/duckdb/profile-service';
-import { maybeOpenInternalBrowserDevTools } from '../../../main/internal-browser-devtools';
+import type {
+  IWebContentsViewManager,
+  IWindowManager,
+} from '../../browser-pool/ports';
+import type { IProfileService } from '../../../types/service-interfaces';
 import type { FingerprintConfig } from '../../../types/profile';
 import { buildStealthConfigFromFingerprint } from '../../fingerprint/fingerprint-projections';
-import { getDefaultFingerprint } from '../../../main/profile/presets';
-import { mergeFingerprintConfig } from '../../../constants/fingerprint-defaults';
+import { getDefaultFingerprint, mergeFingerprintConfig } from '../../../constants/fingerprint-defaults';
 import type { StealthConfig } from '../../stealth';
 import { createBlockedNavigationError } from '../../browser-core/navigation-guard';
+import { getUnknownErrorMessage } from '../../../utils/error-message';
+
 
 /**
  * 模态窗口配置
@@ -62,6 +64,14 @@ export interface ModalWindowResult {
 }
 
 /**
+ * DevTools 打开器（由主进程注入，避免 core→main 反向依赖）
+ */
+export type InternalDevToolsOpener = (
+  webContents: any,
+  options?: { override?: boolean; mode?: 'left' | 'right' | 'bottom' | 'detach' | 'undocked' }
+) => void;
+
+/**
  * Window 命名空间
  *
  * 提供窗口管理相关的 API
@@ -69,9 +79,10 @@ export interface ModalWindowResult {
 export class WindowNamespace {
   constructor(
     private pluginId: string,
-    private windowManager: WindowManager,
-    private viewManager: WebContentsViewManager,
-    private profileService: ProfileService
+    private windowManager: IWindowManager,
+    private viewManager: IWebContentsViewManager,
+    private profileService: IProfileService,
+    private devToolsOpener?: InternalDevToolsOpener
   ) {}
 
   private async resolveProfileStealth(
@@ -174,7 +185,7 @@ export class WindowNamespace {
       // 2. 设置窗口显示时机：ready-to-show 事件（首次渲染完成）
       activeWindow.once('ready-to-show', () => {
         activeWindow.show();
-        maybeOpenInternalBrowserDevTools(activeWindow.webContents, {
+        this.devToolsOpener?.(activeWindow.webContents, {
           override: config.openDevTools,
           mode: 'detach',
         });
@@ -227,7 +238,7 @@ export class WindowNamespace {
       }
 
       return result;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`❌ [WindowNamespace] Modal window error:`, error);
 
       // 确保关闭窗口
@@ -237,7 +248,7 @@ export class WindowNamespace {
 
       return {
         success: false,
-        error: error.message,
+        error: getUnknownErrorMessage(error),
       };
     }
   }

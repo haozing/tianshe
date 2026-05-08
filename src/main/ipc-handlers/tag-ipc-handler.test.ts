@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { ipcMain } from 'electron';
 import { registerTagHandlers } from './tag-ipc-handler';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn(),
+    removeHandler: vi.fn(),
+    removeListener: vi.fn(),
   },
 }));
 
@@ -38,13 +41,18 @@ describe('registerTagHandlers', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
     registeredHandlers.clear();
 
-    (ipcMain.handle as Mock).mockImplementation((channel: string, fn: (...args: unknown[]) => unknown) => {
-      registeredHandlers.set(channel, fn as (...args: unknown[]) => Promise<unknown>);
-    });
+    (ipcMain.handle as Mock).mockImplementation(
+      (channel: string, fn: (...args: unknown[]) => unknown) => {
+        registeredHandlers.set(channel, fn as (...args: unknown[]) => Promise<unknown>);
+      }
+    );
 
-    accountService.runInTransaction.mockImplementation(async (work: () => Promise<unknown>) => work());
+    accountService.runInTransaction.mockImplementation(async (work: () => Promise<unknown>) =>
+      work()
+    );
 
     registerTagHandlers(tagService as never, accountService as never, {
       onOwnedBundleChanged,

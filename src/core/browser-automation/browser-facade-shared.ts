@@ -11,10 +11,19 @@ import {
   waitForTextUsingStrategy as runWaitForTextUsingStrategy,
 } from './text-query-runtime';
 import { ViewportOCRService, type ViewportOCROptions } from './viewport-ocr';
-import { getOcrPool } from '../system-automation/ocr';
+import type { OCRProviderFactory } from '../system-automation/types';
 import { getSelectAllKeyModifiers } from './native-keyboard-utils';
+import { attachBrowserFailureBundle } from '../observability/browser-failure-bundle';
+import {
+  createChildTraceContext,
+  withTraceContext,
+} from '../observability/observation-context';
+import { observationService } from '../observability/observation-service';
+import type { TraceContext } from '../observability/types';
 import type {
   Bounds,
+  BrowserEngineName,
+  BrowserInterface,
   BrowserTextMatchNormalizedResult,
   BrowserTextQueryOptions,
   ConsoleMessage,
@@ -76,7 +85,8 @@ export function createViewportOCRService(
     rect?: Bounds;
     format?: ScreenshotFormat;
     quality?: number;
-  }) => Promise<Buffer>
+  }) => Promise<Buffer>,
+  ocrProviderFactory?: OCRProviderFactory
 ): ViewportOCRService {
   const capture = {
     screenshot: async (options?: {
@@ -86,11 +96,112 @@ export function createViewportOCRService(
     }) => captureViewportScreenshot(options),
   } as unknown as BrowserCaptureAPI;
 
-  return new ViewportOCRService(capture, {
-    recognize: async (image, options, runtimeOptions) => {
-      const pool = await getOcrPool();
-      return pool.recognize(image, options, runtimeOptions);
+  type OCRProviderWithTerminate = Awaited<ReturnType<OCRProviderFactory['create']>> & {
+    terminate?: () => Promise<void>;
+  };
+  let providerPromise: Promise<OCRProviderWithTerminate> | null = null;
+  const getProvider = async (): Promise<OCRProviderWithTerminate> => {
+    if (!ocrProviderFactory) {
+      throw new Error('OCR provider factory is not configured for this browser');
+    }
+    providerPromise ??= (ocrProviderFactory.create() as Promise<OCRProviderWithTerminate>).catch(
+      (error) => {
+        providerPromise = null;
+        throw error;
+      }
+    );
+    return providerPromise;
+  };
+
+  const ocrProvider = {
+    recognize: async (
+      image: Buffer,
+      options?: { language?: string; minConfidence?: number },
+      runtimeOptions?: { timeoutMs?: number; signal?: AbortSignal }
+    ) => {
+      const provider = await getProvider();
+      return provider.recognize(image, options, runtimeOptions);
     },
+    terminate: async () => {
+      if (!providerPromise) {
+        return;
+      }
+      const provider = await providerPromise;
+      await provider.terminate?.();
+      providerPromise = null;
+    },
+  };
+
+  return new ViewportOCRService(capture, ocrProvider);
+}
+
+export function createBrowserObservationContext(options: {
+  browserEngine: BrowserEngineName;
+  browserId: string;
+  partial?: Partial<TraceContext>;
+}): TraceContext {
+  return createChildTraceContext({
+    browserEngine: options.browserEngine,
+    browserId: options.browserId,
+    ...(options.partial || {}),
+  });
+}
+
+export async function observeBrowserOperation<T>(
+  browser: BrowserInterface,
+  options: {
+    context?: TraceContext;
+    browserEngine: BrowserEngineName;
+    browserId: string;
+    event: string;
+    attrs?: Record<string, unknown>;
+    getSuccessAttrs?: (result: T) => Record<string, unknown>;
+    failureLabel: string;
+    operation: () => Promise<T>;
+  }
+): Promise<T> {
+  const context =
+    options.context ??
+    createBrowserObservationContext({
+      browserEngine: options.browserEngine,
+      browserId: options.browserId,
+    });
+  const baseAttrs = {
+    engine: options.browserEngine,
+    browserId: options.browserId,
+    ...(options.attrs || {}),
+  };
+
+  return await withTraceContext(context, async () => {
+    const span = await observationService.startSpan({
+      context,
+      component: 'browser',
+      event: options.event,
+      attrs: baseAttrs,
+    });
+
+    try {
+      const result = await options.operation();
+      const successAttrs = options.getSuccessAttrs ? options.getSuccessAttrs(result) : {};
+      await span.succeed({
+        attrs: {
+          ...baseAttrs,
+          ...successAttrs,
+        },
+      });
+      return result;
+    } catch (error) {
+      const artifacts = await attachBrowserFailureBundle(browser, {
+        context,
+        component: 'browser',
+        labelPrefix: options.failureLabel,
+      });
+      await span.fail(error, {
+        attrs: baseAttrs,
+        artifactRefs: artifacts.map((artifact) => artifact.artifactId),
+      });
+      throw error;
+    }
   });
 }
 

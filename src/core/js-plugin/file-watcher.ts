@@ -6,6 +6,8 @@
 import * as chokidar from 'chokidar';
 import * as path from 'path';
 import { createLogger } from '../logger';
+import { getUnknownErrorMessage } from '../../utils/error-message';
+
 
 const logger = createLogger('FileWatcher');
 
@@ -257,8 +259,8 @@ export class PluginFileWatcherManager {
         try {
           await onReload();
           logger.info(`[WatcherManager] Hot reload completed for: ${pluginId}`);
-        } catch (error: any) {
-          logger.error(`[WatcherManager] Hot reload failed for ${pluginId}:`, error.message);
+        } catch (error: unknown) {
+          logger.error(`[WatcherManager] Hot reload failed for ${pluginId}:`, getUnknownErrorMessage(error));
         } finally {
           // 释放锁
           this.reloadLocks.set(pluginId, false);

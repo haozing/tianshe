@@ -2,7 +2,11 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'fs-extra';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FileStorage } from './file-storage';
+import {
+  FileStorage,
+  MAX_ATTACHMENT_BASE64_PREVIEW_BYTES,
+  MAX_ATTACHMENT_UPLOAD_BYTES,
+} from './file-storage';
 
 let userDataRoot = '';
 
@@ -31,6 +35,45 @@ describe('FileStorage path boundaries', () => {
 
     expect(path.resolve(fullPath).startsWith(path.resolve(userDataRoot, 'attachments'))).toBe(true);
     await expect(fs.readFile(fullPath, 'utf8')).resolves.toBe('hello');
+  });
+
+  it('copies attachment uploads from an existing local path without buffering in the caller', async () => {
+    const storage = new FileStorage();
+    const sourcePath = path.join(userDataRoot, 'source.csv');
+    await fs.writeFile(sourcePath, 'name\nAlice\n');
+
+    const metadata = await storage.saveFileFromPath('dataset-123', sourcePath, 'source.csv');
+
+    await expect(fs.readFile(storage.getFilePath(metadata.path), 'utf8')).resolves.toBe(
+      'name\nAlice\n'
+    );
+  });
+
+  it('rejects oversized attachment uploads before copying them', async () => {
+    const storage = new FileStorage();
+    const sourcePath = path.join(userDataRoot, 'large.bin');
+    await fs.writeFile(sourcePath, Buffer.from('hello'));
+
+    await expect(
+      storage.saveFileFromPath('dataset-123', sourcePath, 'large.bin', 1)
+    ).rejects.toThrow(/too large to upload/);
+  });
+
+  it('rejects files that exceed the Base64 preview limit before reading them', async () => {
+    const storage = new FileStorage();
+    const metadata = await storage.saveFile('dataset-123', Buffer.from('hello'), 'notes.txt');
+
+    await expect(storage.getFileAsBase64(metadata.path, 1)).rejects.toThrow(
+      /too large to preview as Base64/
+    );
+  });
+
+  it('keeps the default Base64 preview limit bounded', () => {
+    expect(MAX_ATTACHMENT_BASE64_PREVIEW_BYTES).toBe(10 * 1024 * 1024);
+  });
+
+  it('keeps the default attachment upload limit bounded', () => {
+    expect(MAX_ATTACHMENT_UPLOAD_BYTES).toBe(500 * 1024 * 1024);
   });
 
   it('rejects traversal reads and deletes outside the attachments root', async () => {

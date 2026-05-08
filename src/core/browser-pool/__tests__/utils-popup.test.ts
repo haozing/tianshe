@@ -1,18 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { showBrowserViewInPopup } from '../utils';
 
-const { mockMaybeOpenInternalBrowserDevTools } = vi.hoisted(() => ({
-  mockMaybeOpenInternalBrowserDevTools: vi.fn(),
-}));
-
-vi.mock('../../../main/internal-browser-devtools', () => ({
-  maybeOpenInternalBrowserDevTools: mockMaybeOpenInternalBrowserDevTools,
-}));
-
 describe('showBrowserViewInPopup', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    mockMaybeOpenInternalBrowserDevTools.mockReset();
   });
 
   it('view 不存在应返回 null', () => {
@@ -99,10 +90,6 @@ describe('showBrowserViewInPopup', () => {
     expect(windowManager.setPopupViewId).toHaveBeenCalledWith(popupId, 'view-1');
     expect(viewManager.setViewDisplayMode).toHaveBeenCalledWith('view-1', 'popup');
     expect(viewManager.setViewSource).toHaveBeenCalledWith('view-1', 'account');
-    expect(mockMaybeOpenInternalBrowserDevTools).toHaveBeenCalledWith(viewInfo.view.webContents, {
-      override: undefined,
-      mode: 'detach',
-    });
 
     // resize 时更新 bounds
     popupWindow.getContentBounds.mockReturnValue({ width: 900, height: 700 });

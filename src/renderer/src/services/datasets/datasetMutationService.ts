@@ -62,15 +62,6 @@ export async function importDatasetRecordsFromFile(datasetId: string, filePath: 
   return unwrapResult(result, 'Failed to import records from file');
 }
 
-export async function importDatasetRecordsFromBase64(
-  datasetId: string,
-  base64: string,
-  filename: string
-) {
-  const result = await datasetFacade.importRecordsFromBase64(datasetId, base64, filename);
-  return unwrapResult(result, 'Failed to import records from base64');
-}
-
 export async function updateDatasetRecord(
   datasetId: string,
   rowId: Parameters<DuckdbAPI['updateRecord']>[1],
@@ -85,8 +76,13 @@ export async function updateDatasetColumn(params: UpdateColumnParams) {
   return unwrapResult(result, 'Failed to update column');
 }
 
-export async function deleteDatasetColumn(params: DeleteColumnParams) {
+export async function deleteDatasetColumnRaw(params: DeleteColumnParams) {
   return await datasetFacade.deleteColumn(params);
+}
+
+export async function deleteDatasetColumn(params: DeleteColumnParams) {
+  const result = await deleteDatasetColumnRaw(params);
+  return unwrapResult(result, 'Failed to delete column');
 }
 
 export async function reorderDatasetColumns(params: ReorderColumnsParams) {

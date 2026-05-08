@@ -11,7 +11,8 @@
  */
 
 import { DuckDBConnection } from '@duckdb/node-api';
-import { parseRows } from './utils';
+import { parseRows, runInDuckDbTransaction } from './utils';
+import { allPrepared, runPrepared } from './statement-executor';
 import { v4 as uuidv4 } from 'uuid';
 import { DatasetMetadataService } from './dataset-metadata-service';
 import { DatasetStorageService } from './dataset-storage-service';
@@ -106,25 +107,16 @@ export class DatasetFolderService {
     const folderId = uuidv4();
     const now = Date.now();
 
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       INSERT INTO dataset_folders (
         id, name, parent_id, plugin_id, description, icon,
         folder_order, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-    `);
-
-    stmt.bind([
-      folderId,
-      name,
-      parentId,
-      pluginId,
-      options?.description || '',
-      options?.icon || '📁',
-      now,
-    ]);
-
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [folderId, name, parentId, pluginId, options?.description || '', options?.icon || '📁', now]
+    );
 
     console.log(`[DatasetFolderService] Created folder: ${name} (${folderId})`);
     return folderId;
@@ -134,18 +126,18 @@ export class DatasetFolderService {
    * ✅ 获取单个文件夹
    */
   async getFolder(folderId: string): Promise<DatasetFolder | null> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT
         id, name, parent_id as parentId, plugin_id as pluginId,
         description, icon, folder_order as folderOrder,
         created_at as createdAt, updated_at as updatedAt
       FROM dataset_folders
       WHERE id = ?
-    `);
-
-    stmt.bind([folderId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [folderId]
+    );
 
     const rows = parseRows(result);
     if (rows.length === 0) return null;
@@ -249,10 +241,10 @@ export class DatasetFolderService {
    * ✅ 移动数据集到文件夹
    */
   async moveDatasetToFolder(datasetId: string, folderId: string | null): Promise<void> {
-    const stmt = await this.conn.prepare(`UPDATE datasets SET folder_id = ? WHERE id = ?`);
-    stmt.bind([folderId, datasetId]);
-    await stmt.run();
-    stmt.destroySync();
+    await runPrepared(this.conn, `UPDATE datasets SET folder_id = ? WHERE id = ?`, [
+      folderId,
+      datasetId,
+    ]);
 
     console.log(`[DatasetFolderService] Moved dataset ${datasetId} to folder ${folderId}`);
   }
@@ -267,16 +259,10 @@ export class DatasetFolderService {
       return;
     }
 
-    await this.conn.run('BEGIN TRANSACTION');
-
-    try {
+    await runInDuckDbTransaction(this.conn, async () => {
       await this.deleteFolderRecursive(folderId);
-      await this.conn.run('COMMIT');
-      console.log(`[DatasetFolderService] Deleted folder ${folderId}`);
-    } catch (error) {
-      await this.conn.run('ROLLBACK');
-      throw error;
-    }
+    });
+    console.log(`[DatasetFolderService] Deleted folder ${folderId}`);
   }
 
   private async deleteFolderWithContents(folderId: string): Promise<void> {
@@ -303,18 +289,11 @@ export class DatasetFolderService {
       );
     }
 
-    await this.conn.run('BEGIN TRANSACTION');
-
-    try {
+    await runInDuckDbTransaction(this.conn, async () => {
       for (const folder of [...folders].reverse()) {
         await this.deleteFolderRecord(folder.id);
       }
-
-      await this.conn.run('COMMIT');
-    } catch (error) {
-      await this.conn.run('ROLLBACK');
-      throw error;
-    }
+    });
   }
 
   private async collectFolderSubtree(folderId: string): Promise<DatasetFolder[]> {
@@ -334,7 +313,9 @@ export class DatasetFolderService {
   }
 
   private async listChildFolders(parentId: string): Promise<DatasetFolder[]> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT
         id, name, parent_id as parentId, plugin_id as pluginId,
         description, icon, folder_order as folderOrder,
@@ -342,11 +323,9 @@ export class DatasetFolderService {
       FROM dataset_folders
       WHERE parent_id = ?
       ORDER BY folder_order ASC, created_at ASC
-    `);
-
-    stmt.bind([parentId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      [parentId]
+    );
 
     return parseRows(result).map((row: any) => ({
       id: String(row.id),
@@ -367,73 +346,66 @@ export class DatasetFolderService {
     }
 
     const placeholders = folderIds.map(() => '?').join(', ');
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(
+      this.conn,
+      `
       SELECT id
       FROM datasets
       WHERE folder_id IN (${placeholders})
       ORDER BY created_at ASC
-    `);
-
-    stmt.bind(folderIds);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `,
+      folderIds
+    );
 
     return parseRows(result).map((row: any) => String(row.id));
   }
 
   private async deleteFolderRecord(folderId: string): Promise<void> {
-    const stmt = await this.conn.prepare(`DELETE FROM dataset_folders WHERE id = ?`);
-    stmt.bind([folderId]);
-    await stmt.run();
-    stmt.destroySync();
+    await runPrepared(this.conn, `DELETE FROM dataset_folders WHERE id = ?`, [folderId]);
   }
 
   private async deleteFolderRecursive(folderId: string): Promise<void> {
-    const folderStmt = await this.conn.prepare(
-      `SELECT plugin_id FROM dataset_folders WHERE id = ?`
+    const folderResult = await allPrepared(
+      this.conn,
+      `SELECT plugin_id FROM dataset_folders WHERE id = ?`,
+      [folderId]
     );
-    folderStmt.bind([folderId]);
-    const folderRows = parseRows(await folderStmt.runAndReadAll());
-    folderStmt.destroySync();
+    const folderRows = parseRows(folderResult);
 
     if (folderRows.length === 0) {
       return;
     }
 
     if (folderRows[0].plugin_id) {
-      const datasetCountStmt = await this.conn.prepare(
-        `SELECT COUNT(*) as count FROM datasets WHERE folder_id = ?`
+      const datasetCountResult = await allPrepared(
+        this.conn,
+        `SELECT COUNT(*) as count FROM datasets WHERE folder_id = ?`,
+        [folderId]
       );
-      datasetCountStmt.bind([folderId]);
-      const datasetCountRows = parseRows(await datasetCountStmt.runAndReadAll());
-      datasetCountStmt.destroySync();
+      const datasetCountRows = parseRows(datasetCountResult);
 
       if (Number(datasetCountRows[0]?.count ?? 0) > 0) {
         throw new Error('无法删除插件目录，请先删除目录中的所有数据表');
       }
     }
 
-    const moveDatasetStmt = await this.conn.prepare(
-      `UPDATE datasets SET folder_id = NULL WHERE folder_id = ?`
-    );
-    moveDatasetStmt.bind([folderId]);
-    await moveDatasetStmt.run();
-    moveDatasetStmt.destroySync();
+    await runPrepared(this.conn, `UPDATE datasets SET folder_id = NULL WHERE folder_id = ?`, [
+      folderId,
+    ]);
     console.log(`[DatasetFolderService] Moved datasets out of folder ${folderId}`);
 
-    const childStmt = await this.conn.prepare(`SELECT id FROM dataset_folders WHERE parent_id = ?`);
-    childStmt.bind([folderId]);
-    const childRows = parseRows(await childStmt.runAndReadAll());
-    childStmt.destroySync();
+    const childResult = await allPrepared(
+      this.conn,
+      `SELECT id FROM dataset_folders WHERE parent_id = ?`,
+      [folderId]
+    );
+    const childRows = parseRows(childResult);
 
     for (const child of childRows) {
       await this.deleteFolderRecursive(String(child.id));
     }
 
-    const deleteFolderStmt = await this.conn.prepare(`DELETE FROM dataset_folders WHERE id = ?`);
-    deleteFolderStmt.bind([folderId]);
-    await deleteFolderStmt.run();
-    deleteFolderStmt.destroySync();
+    await runPrepared(this.conn, `DELETE FROM dataset_folders WHERE id = ?`, [folderId]);
   }
 
   /**
@@ -447,19 +419,16 @@ export class DatasetFolderService {
     const values: Array<string | number> = tableIds.flatMap((id, idx) => [id, idx]);
     values.push(folderId);
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       UPDATE datasets
       SET table_order = v.ord
       FROM (VALUES ${placeholders}) AS v(id, ord)
       WHERE datasets.id = v.id AND datasets.folder_id = ?
-    `);
-
-    try {
-      stmt.bind(values);
-      await stmt.run();
-    } finally {
-      stmt.destroySync();
-    }
+    `,
+      values
+    );
 
     console.log(`[DatasetFolderService] Reordered ${tableIds.length} tables in folder ${folderId}`);
   }
@@ -473,19 +442,16 @@ export class DatasetFolderService {
     const placeholders = folderIds.map(() => `(?, ?)`).join(',');
     const values: Array<string | number> = folderIds.flatMap((id, idx) => [id, idx]);
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       UPDATE dataset_folders
       SET folder_order = v.ord
       FROM (VALUES ${placeholders}) AS v(id, ord)
       WHERE dataset_folders.id = v.id
-    `);
-
-    try {
-      stmt.bind(values);
-      await stmt.run();
-    } finally {
-      stmt.destroySync();
-    }
+    `,
+      values
+    );
 
     console.log(`[DatasetFolderService] Reordered ${folderIds.length} folders`);
   }
@@ -524,12 +490,11 @@ export class DatasetFolderService {
     values.push(now);
     values.push(folderId);
 
-    const stmt = await this.conn.prepare(
-      `UPDATE dataset_folders SET ${fields.join(', ')} WHERE id = ?`
+    await runPrepared(
+      this.conn,
+      `UPDATE dataset_folders SET ${fields.join(', ')} WHERE id = ?`,
+      values
     );
-    stmt.bind(values);
-    await stmt.run();
-    stmt.destroySync();
 
     console.log(`[DatasetFolderService] Updated folder ${folderId}`);
   }
@@ -563,12 +528,12 @@ export class DatasetFolderService {
 
           if (config.folderConfig?.enabled) {
             // 检查是否已存在
-            const stmt = await this.conn.prepare(
-              `SELECT id FROM dataset_folders WHERE plugin_id = ?`
+            const existingResult = await allPrepared(
+              this.conn,
+              `SELECT id FROM dataset_folders WHERE plugin_id = ?`,
+              [pluginId]
             );
-            stmt.bind([pluginId]);
-            const existing = parseRows(await stmt.runAndReadAll());
-            stmt.destroySync();
+            const existing = parseRows(existingResult);
 
             if (existing.length === 0) {
               const folderId = await this.createFolder(
@@ -583,12 +548,11 @@ export class DatasetFolderService {
               );
 
               // ✅ 修复：移动插件创建的表，使用 created_by_plugin 字段查询
-              const stmt2 = await this.conn.prepare(
-                `UPDATE datasets SET folder_id = ? WHERE created_by_plugin = ?`
+              await runPrepared(
+                this.conn,
+                `UPDATE datasets SET folder_id = ? WHERE created_by_plugin = ?`,
+                [folderId, pluginId]
               );
-              stmt2.bind([folderId, pluginId]);
-              await stmt2.run();
-              stmt2.destroySync();
 
               createdCount++;
               console.log(`✅ Created folder for existing plugin: ${pluginName}`);

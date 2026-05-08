@@ -26,8 +26,8 @@ import type {
   APIFunction,
 } from '../../types/js-plugin';
 import type { PluginHelpers } from './helpers';
-import type { DuckDBService } from '../../main/duckdb/service';
-import type { EnhancedColumnSchema } from '../../main/duckdb/types';
+import type { IDuckDBService } from '../../types/duckdb';
+import type { EnhancedColumnSchema } from '../../types/duckdb';
 import { BytecodeRunner, BytecodeConfig } from './bytecode-runner';
 import {
   getPluginRegistry,
@@ -117,7 +117,7 @@ export class PluginContext {
   constructor(
     public readonly manifest: JSPluginManifest,
     private readonly helpers: PluginHelpers,
-    private readonly duckdb: DuckDBService,
+    private readonly duckdb: IDuckDBService,
     private readonly pluginId: string,
     dataTables: DataTableInfo[] = [] // ✅ 新增参数
   ) {

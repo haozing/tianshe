@@ -1,9 +1,10 @@
 import type {
-  ExtensionControlRelay,
+  IExtensionControlRelay,
   ExtensionRelayClientState,
   ExtensionRelayEvent,
-} from '../../main/profile/extension-control-relay';
-import type { RuyiFirefoxClient, RuyiFirefoxEvent } from '../../main/profile/ruyi-firefox-client';
+  IRuyiFirefoxClient,
+  RuyiFirefoxEvent,
+} from './transport-types';
 
 export interface BrowserCommandTransport<TEvent> {
   dispatch<TResult>(command: string, params?: unknown, timeoutMs?: number): Promise<TResult>;
@@ -17,7 +18,7 @@ export interface BrowserStateCommandTransport<TEvent, TState>
 }
 
 export function createExtensionRelayTransport(
-  relay: ExtensionControlRelay
+  relay: IExtensionControlRelay
 ): BrowserStateCommandTransport<ExtensionRelayEvent, ExtensionRelayClientState> {
   return {
     dispatch: (command, params, timeoutMs) => relay.dispatchCommand(command, params, timeoutMs),
@@ -28,7 +29,7 @@ export function createExtensionRelayTransport(
 }
 
 export function createRuyiFirefoxTransport(
-  client: RuyiFirefoxClient
+  client: IRuyiFirefoxClient
 ): BrowserCommandTransport<RuyiFirefoxEvent> {
   return {
     dispatch: (command, params, timeoutMs) => client.dispatch(command, params, timeoutMs),

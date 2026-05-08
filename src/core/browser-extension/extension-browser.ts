@@ -15,6 +15,7 @@ import { searchSnapshotElements } from '../browser-automation/search-runtime';
 import {
   captureViewportScreenshotBuffer,
   clickTextInDomUsingBrowser,
+  createBrowserObservationContext,
   createViewportOCRService,
   findTextInDomUsingBrowser,
   findTextNormalizedWithBrowser,
@@ -24,6 +25,7 @@ import {
   performSelectorSelectAction,
   performSelectorTypeAction,
   recognizeTextUsingBrowser,
+  observeBrowserOperation as observeSharedBrowserOperation,
   terminateViewportOCRService,
   textExistsInDomUsingBrowser,
   textExistsUsingBrowserStrategy,
@@ -64,30 +66,29 @@ import type {
   ScreenshotOptions,
 } from '../../types/browser-interface';
 import type { PooledBrowserController } from '../browser-pool/types';
-import { TextNotFoundError } from '../system-automation/types';
+import { TextNotFoundError, type OCRProviderFactory } from '../system-automation/types';
 import { filterBrowserCookies } from '../browser-core/cookie-filter-utils';
 import type {
-  ExtensionControlRelay,
+  IExtensionControlRelay,
   ExtensionRelayClientState,
   ExtensionRelayEvent,
-} from '../../main/profile/extension-control-relay';
-import { createChildTraceContext, withTraceContext } from '../observability/observation-context';
-import { observationService, summarizeForObservation } from '../observability/observation-service';
-import { attachBrowserFailureBundle } from '../observability/browser-failure-bundle';
+} from '../browser-automation/transport-types';
+import { summarizeForObservation } from '../observability/observation-service';
 import type { TraceContext } from '../observability/types';
 import {
   browserRuntimeSupports,
   getStaticEngineRuntimeDescriptor,
 } from '../browser-pool/engine-capability-registry';
-import { sendWindowsDialogKeys } from '../../main/profile/ruyi-firefox-launch-helpers';
+import { sendWindowsDialogKeys } from '../../utils/platform/windows-dialog';
 
 type WaitForSelectorState = 'attached' | 'visible' | 'hidden';
 
 type ExtensionBrowserOptions = {
-  relay: ExtensionControlRelay;
+  relay: IExtensionControlRelay;
   closeInternal: () => Promise<void>;
   initialClientState?: ExtensionRelayClientState | null;
   browserProcessId?: number | null;
+  ocrProviderFactory?: OCRProviderFactory;
 };
 
 type PendingDialogWait = {
@@ -123,6 +124,7 @@ export class ExtensionBrowser
   private boundTabId: number | null = null;
   private boundWindowId: number | null = null;
   private readonly browserProcessId: number | null;
+  private readonly ocrProviderFactory?: OCRProviderFactory;
   private currentDialog: BrowserDialogState | null = null;
   private readonly pendingDialogWaits = new Set<PendingDialogWait>();
   private readonly pendingDialogCloseWaits = new Set<PendingDialogCloseWait>();
@@ -137,6 +139,7 @@ export class ExtensionBrowser
       Number.isInteger(options.browserProcessId) && Number(options.browserProcessId) > 0
         ? Number(options.browserProcessId)
         : null;
+    this.ocrProviderFactory = options.ocrProviderFactory;
     this.updateBoundTarget(options.initialClientState || this.transport.getState());
     this.transportUnsubscribe = this.transport.onEvent((event) => {
       this.handleRelayEvent(event);
@@ -237,10 +240,10 @@ export class ExtensionBrowser
   }
 
   private createObservationContext(partial: Partial<TraceContext> = {}): TraceContext {
-    return createChildTraceContext({
+    return createBrowserObservationContext({
       browserEngine: 'extension',
       browserId: this.getObservationBrowserId(),
-      ...partial,
+      partial,
     });
   }
 
@@ -251,39 +254,10 @@ export class ExtensionBrowser
     failureLabel: string;
     operation: () => Promise<T>;
   }): Promise<T> {
-    const context = options.context ?? this.createObservationContext();
-    const baseAttrs = {
-      engine: 'extension',
+    return observeSharedBrowserOperation(this, {
+      ...options,
+      browserEngine: 'extension',
       browserId: this.getObservationBrowserId(),
-      ...(options.attrs || {}),
-    };
-
-    return await withTraceContext(context, async () => {
-      const span = await observationService.startSpan({
-        context,
-        component: 'browser',
-        event: options.event,
-        attrs: baseAttrs,
-      });
-
-      try {
-        const result = await options.operation();
-        await span.succeed({
-          attrs: baseAttrs,
-        });
-        return result;
-      } catch (error) {
-        const artifacts = await attachBrowserFailureBundle(this, {
-          context,
-          component: 'browser',
-          labelPrefix: options.failureLabel,
-        });
-        await span.fail(error, {
-          attrs: baseAttrs,
-          artifactRefs: artifacts.map((artifact) => artifact.artifactId),
-        });
-        throw error;
-      }
     });
   }
 
@@ -698,8 +672,9 @@ export class ExtensionBrowser
 
   async getViewportOCR(): Promise<ViewportOCRService> {
     if (!this.viewportOCR) {
-      this.viewportOCR = createViewportOCRService((options) =>
-        this.captureViewportScreenshot(options)
+      this.viewportOCR = createViewportOCRService(
+        (options) => this.captureViewportScreenshot(options),
+        this.ocrProviderFactory
       );
     }
 

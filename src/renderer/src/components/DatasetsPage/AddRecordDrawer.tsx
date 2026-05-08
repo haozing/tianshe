@@ -10,7 +10,6 @@ import { X, Plus, Calendar, Paperclip, FileText, Upload, Zap } from 'lucide-reac
 import { useDatasetStore } from '../../stores/datasetStore';
 import {
   batchInsertDatasetRecords,
-  importDatasetRecordsFromBase64,
   importDatasetRecordsFromFile,
   insertDatasetRecord,
   updateDatasetColumnMetadata,
@@ -28,6 +27,8 @@ import { ButtonField } from './fields/ButtonField';
 import { ButtonFieldConfig } from './fields/ButtonFieldConfig';
 import { buildPatchedColumnSchema } from './schemaPatch';
 import { DataParser } from '../../utils/data-parser';
+import { getNativePathForFile } from '../../utils/electron-file-path';
+import { assertImportRecordsFileAllowed } from './importFilePolicy';
 import {
   filterSystemFields,
   filterSystemFieldsFromArray,
@@ -46,10 +47,7 @@ interface AddRecordDrawerProps {
   onClose: () => void;
   datasetId: string;
   readOnly?: boolean;
-  onSubmitSuccess?: (options?: {
-    refreshView?: boolean;
-    refreshWorkspace?: boolean;
-  }) => void;
+  onSubmitSuccess?: (options?: { refreshView?: boolean; refreshWorkspace?: boolean }) => void;
 }
 
 type TabType = 'form' | 'file';
@@ -86,23 +84,6 @@ interface ColumnSchema {
 }
 
 type FileWithPath = File & { path?: string };
-
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  if (typeof btoa === 'function') {
-    const chunkSize = 0x8000;
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-    }
-    return btoa(binary);
-  }
-  const bufferCtor = (globalThis as any).Buffer;
-  if (bufferCtor) {
-    return bufferCtor.from(bytes).toString('base64');
-  }
-  throw new Error('Base64 encoder is not available');
-}
 
 export function AddRecordDrawer({
   isOpen,
@@ -303,10 +284,11 @@ export function AddRecordDrawer({
       // 优先处理文件上传（始终走后端）
       if (uploadedFiles.length > 0) {
         const file = uploadedFiles[0];
+        assertImportRecordsFileAllowed(file);
         fileToImport = file;
         // 获取文件的真实路径（通过 file.path 属性，electron 环境下可用）
         const fileWithPath: FileWithPath = file;
-        filePath = fileWithPath.path || '';
+        filePath = getNativePathForFile(fileWithPath);
 
         useBackendImport = true;
       }
@@ -317,9 +299,11 @@ export function AddRecordDrawer({
         if (filePath) {
           result = await importDatasetRecordsFromFile(datasetId, filePath);
         } else if (fileToImport) {
-          const buffer = await fileToImport.arrayBuffer();
-          const base64 = arrayBufferToBase64(buffer);
-          result = await importDatasetRecordsFromBase64(datasetId, base64, fileToImport.name);
+          toast.error(
+            'Unable to read file path',
+            'Please reselect the file from the desktop picker before importing.'
+          );
+          return;
         }
 
         if (!result) {
@@ -327,9 +311,13 @@ export function AddRecordDrawer({
           return;
         }
 
-        const localInsert = applyLocalRecordInsert(datasetId, {}, {
-          insertedCount: result.recordsInserted ?? 1,
-        });
+        const localInsert = applyLocalRecordInsert(
+          datasetId,
+          {},
+          {
+            insertedCount: result.recordsInserted ?? 1,
+          }
+        );
         toast.success(`成功导入 ${result.recordsInserted} 条记录！`);
         onSubmitSuccess?.({
           refreshView: true,
@@ -390,9 +378,13 @@ export function AddRecordDrawer({
 
         await batchInsertDatasetRecords(datasetId, normalizedRecords);
 
-        const localInsert = applyLocalRecordInsert(datasetId, {}, {
-          insertedCount: parseResult.data.length,
-        });
+        const localInsert = applyLocalRecordInsert(
+          datasetId,
+          {},
+          {
+            insertedCount: parseResult.data.length,
+          }
+        );
         toast.success(`成功添加 ${parseResult.data.length} 条记录！`);
         onSubmitSuccess?.({
           refreshView: true,

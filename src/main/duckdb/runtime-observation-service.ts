@@ -5,6 +5,7 @@ import type {
   RuntimeEvent,
 } from '../../core/observability/types';
 import { parseRows } from './utils';
+import { allPrepared, runPrepared } from './statement-executor';
 
 interface RuntimeEventRow {
   id: string;
@@ -148,16 +149,13 @@ export class RuntimeObservationService implements ObservationSink {
   }
 
   async recordEvent(event: RuntimeEvent): Promise<void> {
-    const stmt = await this.conn.prepare(`
+    await runPrepared(this.conn, `
       INSERT INTO runtime_events (
         id, trace_id, span_id, parent_span_id, timestamp, seq, level, event, outcome, component,
         message, duration_ms, source, capability, plugin_id, browser_engine, session_id,
         profile_id, dataset_id, browser_id, attrs, error, artifact_refs
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    try {
-      stmt.bind([
+    `, [
         event.eventId,
         event.traceId,
         event.spanId ?? null,
@@ -182,23 +180,16 @@ export class RuntimeObservationService implements ObservationSink {
         event.error ? JSON.stringify(event.error) : null,
         event.artifactRefs?.length ? JSON.stringify(event.artifactRefs) : null,
       ]);
-      await stmt.run();
-    } finally {
-      stmt.destroySync();
-    }
   }
 
   async recordArtifact(artifact: RuntimeArtifact): Promise<void> {
-    const stmt = await this.conn.prepare(`
+    await runPrepared(this.conn, `
       INSERT INTO runtime_artifacts (
         id, trace_id, span_id, parent_span_id, timestamp, seq, type, component, label, mime_type,
         source, capability, plugin_id, browser_engine, session_id, profile_id, dataset_id,
         browser_id, attrs, data
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    try {
-      stmt.bind([
+    `, [
         artifact.artifactId,
         artifact.traceId,
         artifact.spanId ?? null,
@@ -220,10 +211,6 @@ export class RuntimeObservationService implements ObservationSink {
         artifact.attrs ? JSON.stringify(artifact.attrs) : null,
         artifact.data !== undefined ? JSON.stringify(artifact.data) : null,
       ]);
-      await stmt.run();
-    } finally {
-      stmt.destroySync();
-    }
   }
 
   async listEventsByTrace(traceId: string, limit?: number): Promise<RuntimeEvent[]> {
@@ -241,14 +228,8 @@ export class RuntimeObservationService implements ObservationSink {
       params.push(normalizedLimit);
     }
 
-    const stmt = await this.conn.prepare(query);
-    try {
-      stmt.bind(params);
-      const result = await stmt.runAndReadAll();
-      return parseRows<RuntimeEventRow>(result).map((row) => this.toRuntimeEvent(row));
-    } finally {
-      stmt.destroySync();
-    }
+    const result = await allPrepared(this.conn, query, params);
+    return parseRows<RuntimeEventRow>(result).map((row) => this.toRuntimeEvent(row));
   }
 
   async listArtifactsByTrace(traceId: string, limit?: number): Promise<RuntimeArtifact[]> {
@@ -266,14 +247,8 @@ export class RuntimeObservationService implements ObservationSink {
       params.push(normalizedLimit);
     }
 
-    const stmt = await this.conn.prepare(query);
-    try {
-      stmt.bind(params);
-      const result = await stmt.runAndReadAll();
-      return parseRows<RuntimeArtifactRow>(result).map((row) => this.toRuntimeArtifact(row));
-    } finally {
-      stmt.destroySync();
-    }
+    const result = await allPrepared(this.conn, query, params);
+    return parseRows<RuntimeArtifactRow>(result).map((row) => this.toRuntimeArtifact(row));
   }
 
   async getArtifactsByIds(ids: string[]): Promise<RuntimeArtifact[]> {
@@ -283,37 +258,25 @@ export class RuntimeObservationService implements ObservationSink {
     }
 
     const placeholders = normalizedIds.map(() => '?').join(', ');
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT * FROM runtime_artifacts WHERE id IN (${placeholders}) ORDER BY seq ASC
-    `);
+    `, normalizedIds);
 
-    try {
-      stmt.bind(normalizedIds);
-      const result = await stmt.runAndReadAll();
-      return parseRows<RuntimeArtifactRow>(result).map((row) => this.toRuntimeArtifact(row));
-    } finally {
-      stmt.destroySync();
-    }
+    return parseRows<RuntimeArtifactRow>(result).map((row) => this.toRuntimeArtifact(row));
   }
 
   async listRecentFailureEvents(limit: number): Promise<RuntimeEvent[]> {
     const normalizedLimit = Math.max(1, Math.floor(limit || 20));
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT * FROM runtime_events
       WHERE outcome IN ('failed', 'blocked', 'timeout') OR level = 'error'
       ORDER BY seq DESC
       LIMIT ?
-    `);
+    `, [normalizedLimit]);
 
-    try {
-      stmt.bind([normalizedLimit]);
-      const result = await stmt.runAndReadAll();
-      return parseRows<RuntimeEventRow>(result)
-        .map((row) => this.toRuntimeEvent(row))
-        .reverse();
-    } finally {
-      stmt.destroySync();
-    }
+    return parseRows<RuntimeEventRow>(result)
+      .map((row) => this.toRuntimeEvent(row))
+      .reverse();
   }
 
   async getArtifactCountsByTraceIds(traceIds: string[]): Promise<Map<string, number>> {
@@ -325,23 +288,17 @@ export class RuntimeObservationService implements ObservationSink {
     }
 
     const placeholders = normalizedTraceIds.map(() => '?').join(', ');
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT trace_id, COUNT(*) AS artifact_count
       FROM runtime_artifacts
       WHERE trace_id IN (${placeholders})
       GROUP BY trace_id
-    `);
+    `, normalizedTraceIds);
 
-    try {
-      stmt.bind(normalizedTraceIds);
-      const result = await stmt.runAndReadAll();
-      const rows = parseRows<Array<{ trace_id: string; artifact_count: number }>[number]>(result);
-      return new Map(
-        rows.map((row) => [String(row.trace_id), Number(row.artifact_count || 0)])
-      );
-    } finally {
-      stmt.destroySync();
-    }
+    const rows = parseRows<Array<{ trace_id: string; artifact_count: number }>[number]>(result);
+    return new Map(
+      rows.map((row) => [String(row.trace_id), Number(row.artifact_count || 0)])
+    );
   }
 
   async clearAll(): Promise<void> {

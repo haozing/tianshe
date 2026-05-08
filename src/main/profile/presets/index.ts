@@ -11,10 +11,12 @@ import type {
 } from '../../../types/profile';
 import {
   FINGERPRINT_PRESETS,
-  cloneFingerprintConfig,
-  mergeFingerprintConfig,
   getDefaultFingerprint as getDefaultFingerprintFromConstants,
+  generateVariant,
+  applyPreset,
 } from '../../../constants/fingerprint-defaults';
+
+export { generateVariant, applyPreset };
 
 export const presets: FingerprintPreset[] = FINGERPRINT_PRESETS;
 
@@ -42,42 +44,4 @@ export function getPresetsByOS(os: 'windows' | 'macos' | 'linux'): FingerprintPr
 
 export function getPresetsByBrowser(browser: 'chrome' | 'firefox' | 'edge'): FingerprintPreset[] {
   return presets.filter((p) => p.browser === browser);
-}
-
-function randomChoice<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-export function generateVariant(baseConfig: FingerprintConfig): FingerprintConfig {
-  const resolution = randomChoice([
-    { width: 1920, height: 1080 },
-    { width: 1366, height: 768 },
-    { width: 2560, height: 1440 },
-    { width: 1536, height: 864 },
-    { width: 1440, height: 900 },
-  ]);
-
-  return mergeFingerprintConfig(baseConfig, {
-    identity: {
-      hardware: {
-        hardwareConcurrency: randomChoice([4, 6, 8, 12, 16]),
-        deviceMemory: randomChoice([4, 8, 16, 32]),
-      },
-      display: {
-        ...resolution,
-        availWidth: resolution.width,
-        availHeight: Math.max(0, resolution.height - 40),
-        colorDepth: baseConfig.identity.display.colorDepth,
-        pixelRatio: baseConfig.identity.display.pixelRatio,
-      },
-    },
-  });
-}
-
-export function applyPreset(presetId: string): FingerprintConfig {
-  const preset = getPreset(presetId);
-  if (!preset) {
-    return getDefaultFingerprint();
-  }
-  return cloneFingerprintConfig(preset.config);
 }

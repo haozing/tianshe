@@ -30,6 +30,7 @@
 
 import type { WebContents } from 'electron';
 import { createLogger } from '../logger';
+import { getUnknownErrorMessage } from '../../utils/error-message';
 
 /** 模块级 logger */
 const logger = createLogger('BrowserCDP');
@@ -76,7 +77,6 @@ export class BrowserCDPAPI {
       return;
     }
 
-
     try {
       const webContents = this.getWebContents();
       webContents.debugger.attach(protocolVersion);
@@ -84,15 +84,16 @@ export class BrowserCDPAPI {
       this.attachedByUs = true;
       this.ensureDebuggerMessageHandler();
       logger.debug('Debugger attached', { protocolVersion });
-    } catch (error: any) {
+    } catch (error: unknown) {
       // 可能已经被其他地方附加
-      if (error.message?.includes('already attached')) {
+      const message = getUnknownErrorMessage(error);
+      if (message.includes('already attached')) {
         this.attached = true;
         this.attachedByUs = false;
         this.ensureDebuggerMessageHandler();
         return;
       }
-      throw new Error(`Failed to attach debugger: ${error.message}`);
+      throw new Error(`Failed to attach debugger: ${message}`);
     }
   }
 
@@ -189,7 +190,9 @@ export class BrowserCDPAPI {
     }
 
     const timeoutMs =
-      typeof options.timeoutMs === 'number' && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+      typeof options.timeoutMs === 'number' &&
+      Number.isFinite(options.timeoutMs) &&
+      options.timeoutMs > 0
         ? options.timeoutMs
         : DEFAULT_CDP_COMMAND_TIMEOUT_MS;
     let timeoutId: NodeJS.Timeout | null = null;
@@ -228,19 +231,20 @@ export class BrowserCDPAPI {
       }
       const result = await Promise.race(racers);
       return result as T;
-    } catch (error: any) {
-      if (timedOut || String(error?.message || '').includes('timed out')) {
+    } catch (error: unknown) {
+      const message = getUnknownErrorMessage(error);
+      if (timedOut || message.includes('timed out')) {
         logger.warn('CDP command timed out; debugger detached for recovery', {
           method,
           timeoutMs,
         });
       }
-      if (aborted || String(error?.message || '').includes('aborted')) {
+      if (aborted || message.includes('aborted')) {
         logger.warn('CDP command aborted; debugger detached for recovery', {
           method,
         });
       }
-      throw new Error(`CDP command '${method}' failed: ${error.message}`);
+      throw new Error(`CDP command '${method}' failed: ${message}`);
     } finally {
       if (timeoutId) {
         clearTimeout(timeoutId);

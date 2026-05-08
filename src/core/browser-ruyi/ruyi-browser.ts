@@ -10,12 +10,14 @@ import { searchSnapshotElements } from '../browser-automation/search-runtime';
 import {
   captureViewportScreenshotBuffer,
   clickTextInDomUsingBrowser,
+  createBrowserObservationContext,
   createViewportOCRService,
   findTextInDomUsingBrowser,
   findTextNormalizedWithBrowser,
   findTextUsingBrowserStrategy,
   getBrowserViewport,
   normalizeViewportScreenshotBuffer,
+  observeBrowserOperation as observeSharedBrowserOperation,
   performSelectorSelectAction,
   performSelectorTypeAction,
   recognizeTextUsingBrowser,
@@ -76,28 +78,29 @@ import type {
   ViewportConfig,
 } from '../../types/browser-interface';
 import type { PooledBrowserController } from '../browser-pool/types';
-import { TextNotFoundError } from '../system-automation/types';
+import { TextNotFoundError, type OCRProviderFactory } from '../system-automation/types';
 import type {
-  RuyiFirefoxClient,
+  IRuyiFirefoxClient,
   RuyiFirefoxEvent,
-} from '../../main/profile/ruyi-firefox-client';
-import { attachBrowserFailureBundle } from '../observability/browser-failure-bundle';
-import {
-  createChildTraceContext,
-  withTraceContext,
-} from '../observability/observation-context';
-import { observationService, summarizeForObservation } from '../observability/observation-service';
+} from '../browser-automation/transport-types';
+import { summarizeForObservation } from '../observability/observation-service';
 import type { TraceContext } from '../observability/types';
 import {
   browserRuntimeSupports,
   getStaticEngineRuntimeDescriptor,
 } from '../browser-pool/engine-capability-registry';
+import {
+  getMimeTypeForScreenshotFormat,
+  normalizeScreenshotCaptureMode,
+  normalizeScreenshotFormat,
+} from '../browser-automation/screenshot-utils';
 
 type WaitForSelectorState = 'attached' | 'visible' | 'hidden';
 
 type RuyiBrowserOptions = {
-  client: RuyiFirefoxClient;
+  client: IRuyiFirefoxClient;
   closeInternal: () => Promise<void>;
+  ocrProviderFactory?: OCRProviderFactory;
 };
 
 const RUYI_BROWSER_RUNTIME = Object.freeze(getStaticEngineRuntimeDescriptor('ruyi'));
@@ -128,25 +131,6 @@ function sleep(ms: number): Promise<void> {
 
 function isRuyiDomClickBlockedByDialog(error: unknown): boolean {
   return error instanceof Error && /BiDi command timed out: script\.evaluate/i.test(error.message);
-}
-
-function normalizeScreenshotFormat(options?: ScreenshotOptions): 'png' | 'jpeg' {
-  return options?.format === 'jpeg' ? 'jpeg' : 'png';
-}
-
-function normalizeScreenshotCaptureMode(
-  options?: ScreenshotOptions
-): 'viewport' | 'full_page' {
-  if (options?.captureMode === 'full_page' || options?.fullPage === true) {
-    return 'full_page';
-  }
-  return 'viewport';
-}
-
-function getMimeTypeForScreenshotFormat(
-  format: 'png' | 'jpeg'
-): 'image/png' | 'image/jpeg' {
-  return format === 'jpeg' ? 'image/jpeg' : 'image/png';
 }
 
 function toDispatchObservationAttrs(
@@ -221,6 +205,7 @@ export class RuyiBrowser
   private readonly transport: BrowserCommandTransport<RuyiFirefoxEvent>;
   private readonly closeInternalFn: () => Promise<void>;
   private readonly observationBrowserId: string;
+  private readonly ocrProviderFactory?: OCRProviderFactory;
   private readonly contextManager = new TransformContextManager();
   private transportUnsubscribe: (() => void) | null = null;
   private viewportOCR: ViewportOCRService | null = null;
@@ -232,6 +217,7 @@ export class RuyiBrowser
     super();
     this.transport = createRuyiFirefoxTransport(options.client);
     this.closeInternalFn = options.closeInternal;
+    this.ocrProviderFactory = options.ocrProviderFactory;
     this.observationBrowserId =
       typeof options.client.getObservationBrowserId === 'function'
         ? options.client.getObservationBrowserId()
@@ -309,10 +295,10 @@ export class RuyiBrowser
   }
 
   private createObservationContext(partial: Partial<TraceContext> = {}): TraceContext {
-    return createChildTraceContext({
+    return createBrowserObservationContext({
       browserEngine: 'ruyi',
       browserId: this.observationBrowserId,
-      ...partial,
+      partial,
     });
   }
 
@@ -324,43 +310,10 @@ export class RuyiBrowser
     failureLabel: string;
     operation: () => Promise<T>;
   }): Promise<T> {
-    const context = options.context ?? this.createObservationContext();
-    const baseAttrs = {
-      engine: 'ruyi',
+    return observeSharedBrowserOperation(this, {
+      ...options,
+      browserEngine: 'ruyi',
       browserId: this.observationBrowserId,
-      ...(options.attrs || {}),
-    };
-
-    return await withTraceContext(context, async () => {
-      const span = await observationService.startSpan({
-        context,
-        component: 'browser',
-        event: options.event,
-        attrs: baseAttrs,
-      });
-
-      try {
-        const result = await options.operation();
-        const successAttrs = options.getSuccessAttrs ? options.getSuccessAttrs(result) : {};
-        await span.succeed({
-          attrs: {
-            ...baseAttrs,
-            ...successAttrs,
-          },
-        });
-        return result;
-      } catch (error) {
-        const artifacts = await attachBrowserFailureBundle(this, {
-          context,
-          component: 'browser',
-          labelPrefix: options.failureLabel,
-        });
-        await span.fail(error, {
-          attrs: baseAttrs,
-          artifactRefs: artifacts.map((artifact) => artifact.artifactId),
-        });
-        throw error;
-      }
     });
   }
 
@@ -747,8 +700,9 @@ export class RuyiBrowser
 
   async getViewportOCR(): Promise<ViewportOCRService> {
     if (!this.viewportOCR) {
-      this.viewportOCR = createViewportOCRService((options) =>
-        this.captureViewportScreenshot(options)
+      this.viewportOCR = createViewportOCRService(
+        (options) => this.captureViewportScreenshot(options),
+        this.ocrProviderFactory
       );
     }
 

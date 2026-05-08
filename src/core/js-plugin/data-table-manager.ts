@@ -6,14 +6,14 @@
  * - DataTableManager 保留为兼容包装层，避免现有导出和潜在调用方中断
  */
 
-import type { DuckDBService } from '../../main/duckdb/service';
-import type { EnhancedColumnSchema } from '../../main/duckdb/types';
+import type { IDuckDBService } from '../../types/duckdb';
+import type { EnhancedColumnSchema } from '../../types/duckdb';
 import type { DataTableDefinition, JSPluginManifest } from '../../types/js-plugin';
 import type { PluginLogger } from '../../utils/PluginLogger';
 import { PluginInstaller } from './plugin-installer';
 
 export interface DataTableManagerConfig {
-  duckdb: DuckDBService;
+  duckdb: IDuckDBService;
 }
 
 export interface TableCreateOptions {

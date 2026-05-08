@@ -13,8 +13,8 @@ import type {
   PooledBrowserController,
 } from '../types';
 import type { BrowserFactory, BrowserDestroyer } from '../global-pool';
-import type { ProfileService } from '../../../main/duckdb/profile-service';
-import type { BrowserProfile, DeepPartial, ProfileStats } from '../../../types/profile';
+import type { IProfileService } from '../../../types/service-interfaces';
+import type { BrowserProfile, DeepPartial } from '../../../types/profile';
 import {
   getDefaultFingerprint,
   mergeFingerprintConfig,
@@ -338,7 +338,7 @@ export function createDefaultProfile(): BrowserProfile {
  * 创建 Mock ProfileService
  */
 export function createMockProfileService(options: MockProfileServiceOptions = {}): {
-  service: ProfileService;
+  service: IProfileService;
   profiles: Map<string, BrowserProfile>;
 } {
   const profiles = new Map<string, BrowserProfile>();
@@ -354,7 +354,7 @@ export function createMockProfileService(options: MockProfileServiceOptions = {}
     }
   }
 
-  const service: ProfileService = {
+  const service: IProfileService = {
     get: vi.fn(async (id: string) => profiles.get(id) || null),
 
     list: vi.fn(async () => Array.from(profiles.values())),
@@ -388,35 +388,24 @@ export function createMockProfileService(options: MockProfileServiceOptions = {}
       });
     }),
 
-    delete: vi.fn(async (id: string) => {
-      if (!profiles.has(id)) return false;
+    deleteWithCascade: vi.fn(async (id: string) => {
+      if (!profiles.has(id)) return;
       profiles.delete(id);
-      return true;
     }),
 
+    isAvailable: vi.fn(async (id: string) => profiles.has(id)),
+
+    resetAllActiveStatus: vi.fn(async () => 0),
+
     getStats: vi.fn(
-      async (): Promise<ProfileStats> => ({
+      async () => ({
         total: profiles.size,
-        active: profiles.size,
-        byGroup: {},
-        recentlyUsed: [],
+        idle: profiles.size,
+        active: 0,
+        error: 0,
       })
     ),
-
-    updateLastActive: vi.fn(async () => {}),
-
-    getByGroup: vi.fn(async (groupId: string) =>
-      Array.from(profiles.values()).filter((p) => p.groupId === groupId)
-    ),
-
-    search: vi.fn(async (query: string) =>
-      Array.from(profiles.values()).filter((p) => p.name.includes(query) || p.id.includes(query))
-    ),
-
-    getDefault: vi.fn(async () => profiles.get('default') || null),
-
-    setDefault: vi.fn(async () => {}),
-  } as unknown as ProfileService;
+  };
 
   return { service, profiles };
 }
@@ -425,7 +414,7 @@ export function createMockProfileService(options: MockProfileServiceOptions = {}
  * 创建 getProfileService 函数（用于 BrowserPoolManager 构造函数）
  */
 export function createMockProfileServiceGetter(options: MockProfileServiceOptions = {}): {
-  getProfileService: () => ProfileService;
+  getProfileService: () => IProfileService;
   profiles: Map<string, BrowserProfile>;
 } {
   const { service, profiles } = createMockProfileService(options);

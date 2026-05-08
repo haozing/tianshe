@@ -244,6 +244,8 @@ describe('DatasetsPage CRUD isolation flow', () => {
       queryResult: null,
       importProgress: new Map(),
       processedImports: new Set(),
+      pendingLocalSchemaRefreshDatasets: new Set(),
+      localPatchTransaction: null,
       datasetInfoRequestId: 0,
       activeQuerySessionId: 0,
       activeQueryDatasetId: null,
@@ -367,7 +369,7 @@ describe('DatasetsPage CRUD isolation flow', () => {
     (window as any).electronAPI = {
       getAppInfo: vi.fn(async () => ({
         success: true,
-        info: {        },
+        info: {},
       })),
       duckdb: {
         listDatasets,
@@ -499,11 +501,13 @@ describe('DatasetsPage CRUD isolation flow', () => {
       };
     });
 
-    const hardDeleteRows = vi.fn(async ({ datasetId, rowIds }: { datasetId: string; rowIds: number[] }) => {
-      const rows = recordsByDataset[datasetId] || [];
-      recordsByDataset[datasetId] = rows.filter((row) => !rowIds.includes(row._row_id));
-      return { success: true, deletedCount: rowIds.length };
-    });
+    const hardDeleteRows = vi.fn(
+      async ({ datasetId, rowIds }: { datasetId: string; rowIds: number[] }) => {
+        const rows = recordsByDataset[datasetId] || [];
+        recordsByDataset[datasetId] = rows.filter((row) => !rowIds.includes(row._row_id));
+        return { success: true, deletedCount: rowIds.length };
+      }
+    );
 
     const listGroupTabs = vi.fn(async () => ({
       success: true,
@@ -532,7 +536,7 @@ describe('DatasetsPage CRUD isolation flow', () => {
     (window as any).electronAPI = {
       getAppInfo: vi.fn(async () => ({
         success: true,
-        info: {        },
+        info: {},
       })),
       duckdb: {
         listDatasets,
@@ -1407,7 +1411,9 @@ describe('DatasetsPage CRUD isolation flow', () => {
     expect(listDatasets).toHaveBeenCalledTimes(initialListDatasetsCalls);
     expect(recordsByDataset.ds1).toHaveLength(0);
     expect(useDatasetStore.getState().currentDataset?.rowCount).toBe(0);
-    expect(useDatasetStore.getState().datasets.find((dataset) => dataset.id === 'ds1')?.rowCount).toBe(0);
+    expect(
+      useDatasetStore.getState().datasets.find((dataset) => dataset.id === 'ds1')?.rowCount
+    ).toBe(0);
 
     confirmSpy.mockRestore();
   });
@@ -1699,4 +1705,3 @@ describe('DatasetsPage CRUD isolation flow', () => {
     });
   });
 });
-

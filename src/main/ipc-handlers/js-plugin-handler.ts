@@ -3,7 +3,8 @@
  * 负责处理前端的JS插件相关请求
  */
 
-import { ipcMain, type IpcMainInvokeEvent, dialog, app } from 'electron';
+import { type IpcMainInvokeEvent, dialog, app } from 'electron';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 import Store from 'electron-store';
 import fs from 'fs-extra';
 import { JSPluginManager } from '../../core/js-plugin/manager';
@@ -12,7 +13,7 @@ import { ButtonExecutor } from '../../core/js-plugin/button-executor';
 import { handleIPCError } from '../ipc-utils';
 import type { DuckDBService } from '../duckdb/service';
 import type { WebContentsViewManager } from '../webcontentsview-manager';
-import { windowManager } from '../index';
+import type { WindowManager } from '../window-manager';
 import { DEFAULT_VIEW_BOUNDS } from '../../constants/layout';
 import {
   pluginEventBus,
@@ -42,6 +43,7 @@ export class JSPluginIPCHandler {
     private pluginManager: JSPluginManager,
     private duckdb: DuckDBService,
     private viewManager: WebContentsViewManager,
+    private windowManager: WindowManager,
     private cloudRuntimePluginProvider?: CloudRuntimePluginProvider
   ) {
     // 创建按钮执行引擎
@@ -105,9 +107,23 @@ export class JSPluginIPCHandler {
    * 导入插件
    */
   private registerImport(): void {
-    ipcMain.handle(
-      'js-plugin:import',
-      async (event: IpcMainInvokeEvent, sourcePath?: string, options?: { devMode?: boolean }) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:import',
+      kind: 'handle',
+      permission: 'privileged',
+      schema: {
+        description: 'Import a local plugin package or development directory.',
+        args: [
+          { name: 'sourcePath', type: 'string', required: false },
+          { name: 'options', type: 'object', required: false },
+        ],
+        result: { success: 'boolean', pluginId: 'string?', error: 'string?' },
+      },
+      handler: async (
+        event: IpcMainInvokeEvent,
+        sourcePath?: string,
+        options?: { devMode?: boolean }
+      ) => {
         console.log(`[IPC] js-plugin:import called`);
         console.log(`[IPC] sourcePath provided: ${sourcePath ? 'YES' : 'NO'}`);
         console.log(`[IPC] devMode: ${options?.devMode}`);
@@ -197,17 +213,24 @@ export class JSPluginIPCHandler {
           console.error(`[IPC] Import failed:`, error);
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * 安装云端托管插件（安装鉴权 -> 下载 zip -> 本地导入）
    */
   private registerCloudPluginInstall(): void {
-    ipcMain.handle(
-      'cloud-catalog:plugins:install',
-      async (event: IpcMainInvokeEvent, params: { pluginCode: string }) => {
+    ipcRouteRegistry.register({
+      channel: 'cloud-catalog:plugins:install',
+      kind: 'handle',
+      permission: 'privileged',
+      schema: {
+        description: 'Download and install a managed cloud plugin package.',
+        args: [{ name: 'params', type: 'object', required: true }],
+        result: { success: 'boolean', data: 'object?', error: 'string?' },
+      },
+      handler: async (event: IpcMainInvokeEvent, params: { pluginCode: string }) => {
         let tempZipPath = '';
         try {
           const pluginCode = String(params?.pluginCode || '').trim();
@@ -265,21 +288,26 @@ export class JSPluginIPCHandler {
             }
           }
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * 列出所有已安装的插件
    */
   private registerList(): void {
-    ipcMain.handle('js-plugin:list', async () => {
-      try {
-        const plugins = await this.pluginManager.listPlugins();
-        return { success: true, plugins };
-      } catch (error: unknown) {
-        return handleIPCError(error);
-      }
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:list',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async () => {
+        try {
+          const plugins = await this.pluginManager.listPlugins();
+          return { success: true, plugins };
+        } catch (error: unknown) {
+          return handleIPCError(error);
+        }
+      },
     });
   }
 
@@ -287,32 +315,37 @@ export class JSPluginIPCHandler {
    * 获取插件详细信息
    */
   private registerGet(): void {
-    ipcMain.handle('js-plugin:get', async (event: IpcMainInvokeEvent, pluginId: string) => {
-      try {
-        const plugin = await this.pluginManager.getPluginInfo(pluginId);
-
-        if (!plugin) {
-          return { success: false, error: 'Plugin not found' };
-        }
-
-        // 读取 manifest 以获取完整信息
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:get',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string) => {
         try {
-          const manifest = await readManifest(plugin.path);
-          return {
-            success: true,
-            plugin: {
-              ...plugin,
-              manifest,
-            },
-          };
-        } catch (error) {
-          // 如果读取 manifest 失败，仍然返回基本信息
-          console.warn(`Failed to read manifest for plugin ${pluginId}:`, error);
-          return { success: true, plugin };
+          const plugin = await this.pluginManager.getPluginInfo(pluginId);
+
+          if (!plugin) {
+            return { success: false, error: 'Plugin not found' };
+          }
+
+          // 读取 manifest 以获取完整信息
+          try {
+            const manifest = await readManifest(plugin.path);
+            return {
+              success: true,
+              plugin: {
+                ...plugin,
+                manifest,
+              },
+            };
+          } catch (error) {
+            // 如果读取 manifest 失败，仍然返回基本信息
+            console.warn(`Failed to read manifest for plugin ${pluginId}:`, error);
+            return { success: true, plugin };
+          }
+        } catch (error: unknown) {
+          return handleIPCError(error);
         }
-      } catch (error: unknown) {
-        return handleIPCError(error);
-      }
+      },
     });
   }
 
@@ -320,13 +353,18 @@ export class JSPluginIPCHandler {
    * 获取所有插件运行态
    */
   private registerListRuntimeStatuses(): void {
-    ipcMain.handle('js-plugin:list-runtime-statuses', async () => {
-      try {
-        const statuses = await this.pluginManager.listRuntimeStatuses();
-        return { success: true, statuses };
-      } catch (error: unknown) {
-        return handleIPCError(error);
-      }
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:list-runtime-statuses',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async () => {
+        try {
+          const statuses = await this.pluginManager.listRuntimeStatuses();
+          return { success: true, statuses };
+        } catch (error: unknown) {
+          return handleIPCError(error);
+        }
+      },
     });
   }
 
@@ -334,9 +372,11 @@ export class JSPluginIPCHandler {
    * 获取单个插件运行态
    */
   private registerGetRuntimeStatus(): void {
-    ipcMain.handle(
-      'js-plugin:get-runtime-status',
-      async (_event: IpcMainInvokeEvent, pluginId: string) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:get-runtime-status',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (_event: IpcMainInvokeEvent, pluginId: string) => {
         try {
           const status = await this.pluginManager.getRuntimeStatus(pluginId);
           if (!status) {
@@ -346,8 +386,8 @@ export class JSPluginIPCHandler {
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
@@ -355,9 +395,23 @@ export class JSPluginIPCHandler {
    * 🆕 支持选择是否同时删除插件创建的数据表
    */
   private registerUninstall(): void {
-    ipcMain.handle(
-      'js-plugin:uninstall',
-      async (event: IpcMainInvokeEvent, pluginId: string, deleteTables: boolean = false) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:uninstall',
+      kind: 'handle',
+      permission: 'privileged',
+      schema: {
+        description: 'Uninstall a plugin and optionally delete plugin-owned data tables.',
+        args: [
+          { name: 'pluginId', type: 'string', required: true },
+          { name: 'deleteTables', type: 'boolean', required: false },
+        ],
+        result: { success: 'boolean', error: 'string?' },
+      },
+      handler: async (
+        event: IpcMainInvokeEvent,
+        pluginId: string,
+        deleteTables: boolean = false
+      ) => {
         try {
           await this.pluginManager.uninstall(pluginId, deleteTables);
 
@@ -371,54 +425,61 @@ export class JSPluginIPCHandler {
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * 取消插件的所有运行中/排队任务
    */
   private registerCancelPluginTasks(): void {
-    ipcMain.handle(
-      'js-plugin:cancel-plugin-tasks',
-      async (_event: IpcMainInvokeEvent, pluginId: string) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:cancel-plugin-tasks',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (_event: IpcMainInvokeEvent, pluginId: string) => {
         try {
           const result = await this.pluginManager.cancelPluginTasks(pluginId);
           return { success: true, ...result };
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * 🆕 获取插件创建的数据表列表
    */
   private registerGetPluginTables(): void {
-    ipcMain.handle('js-plugin:get-tables', async (event: IpcMainInvokeEvent, pluginId: string) => {
-      try {
-        const tables = await this.duckdb.executeSQLWithParams(
-          `SELECT id, name, row_count, column_count, size_bytes
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:get-tables',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string) => {
+        try {
+          const tables = await this.duckdb.executeSQLWithParams(
+            `SELECT id, name, row_count, column_count, size_bytes
            FROM datasets
            WHERE created_by_plugin = ?
            ORDER BY name`,
-          [pluginId]
-        );
+            [pluginId]
+          );
 
-        return {
-          success: true,
-          tables: tables.map((t: any) => ({
-            id: t.id,
-            name: t.name,
-            rowCount: t.row_count,
-            columnCount: t.column_count,
-            sizeBytes: t.size_bytes,
-          })),
-        };
-      } catch (error: unknown) {
-        return handleIPCError(error);
-      }
+          return {
+            success: true,
+            tables: tables.map((t: any) => ({
+              id: t.id,
+              name: t.name,
+              rowCount: t.row_count,
+              columnCount: t.column_count,
+              sizeBytes: t.size_bytes,
+            })),
+          };
+        } catch (error: unknown) {
+          return handleIPCError(error);
+        }
+      },
     });
   }
 
@@ -426,13 +487,18 @@ export class JSPluginIPCHandler {
    * 重新加载插件
    */
   private registerReload(): void {
-    ipcMain.handle('js-plugin:reload', async (event: IpcMainInvokeEvent, pluginId: string) => {
-      try {
-        await this.pluginManager.reload(pluginId);
-        return { success: true };
-      } catch (error: unknown) {
-        return handleIPCError(error);
-      }
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:reload',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string) => {
+        try {
+          await this.pluginManager.reload(pluginId);
+          return { success: true };
+        } catch (error: unknown) {
+          return handleIPCError(error);
+        }
+      },
     });
   }
 
@@ -440,25 +506,30 @@ export class JSPluginIPCHandler {
    * 🆕 修复插件（重新创建符号链接）
    */
   private registerRepair(): void {
-    ipcMain.handle('js-plugin:repair', async (event: IpcMainInvokeEvent, pluginId: string) => {
-      try {
-        console.log(`[IPC] Repairing plugin: ${pluginId}`);
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:repair',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string) => {
+        try {
+          console.log(`[IPC] Repairing plugin: ${pluginId}`);
 
-        const result = await this.pluginManager.repairPlugin(pluginId);
+          const result = await this.pluginManager.repairPlugin(pluginId);
 
-        if (result.success) {
-          // 发送插件状态变化事件
-          event.sender.send('js-plugin:state-changed', {
-            pluginId,
-            state: 'repaired',
-          });
+          if (result.success) {
+            // 发送插件状态变化事件
+            event.sender.send('js-plugin:state-changed', {
+              pluginId,
+              state: 'repaired',
+            });
+          }
+
+          return { success: true, result };
+        } catch (error: unknown) {
+          console.error(`[IPC] Repair failed:`, error);
+          return handleIPCError(error);
         }
-
-        return { success: true, result };
-      } catch (error: unknown) {
-        console.error(`[IPC] Repair failed:`, error);
-        return handleIPCError(error);
-      }
+      },
     });
   }
 
@@ -466,20 +537,25 @@ export class JSPluginIPCHandler {
    * 🆕 启用插件
    */
   private registerEnable(): void {
-    ipcMain.handle('js-plugin:enable', async (event: IpcMainInvokeEvent, pluginId: string) => {
-      try {
-        await this.pluginManager.enable(pluginId);
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:enable',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string) => {
+        try {
+          await this.pluginManager.enable(pluginId);
 
-        // 发送插件状态变化事件到渲染进程
-        event.sender.send('js-plugin:state-changed', {
-          pluginId,
-          state: 'enabled',
-        });
+          // 发送插件状态变化事件到渲染进程
+          event.sender.send('js-plugin:state-changed', {
+            pluginId,
+            state: 'enabled',
+          });
 
-        return { success: true };
-      } catch (error: unknown) {
-        return handleIPCError(error);
-      }
+          return { success: true };
+        } catch (error: unknown) {
+          return handleIPCError(error);
+        }
+      },
     });
   }
 
@@ -487,20 +563,25 @@ export class JSPluginIPCHandler {
    * 🆕 禁用插件
    */
   private registerDisable(): void {
-    ipcMain.handle('js-plugin:disable', async (event: IpcMainInvokeEvent, pluginId: string) => {
-      try {
-        await this.pluginManager.disable(pluginId);
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:disable',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string) => {
+        try {
+          await this.pluginManager.disable(pluginId);
 
-        // 发送插件状态变化事件到渲染进程
-        event.sender.send('js-plugin:state-changed', {
-          pluginId,
-          state: 'disabled',
-        });
+          // 发送插件状态变化事件到渲染进程
+          event.sender.send('js-plugin:state-changed', {
+            pluginId,
+            state: 'disabled',
+          });
 
-        return { success: true };
-      } catch (error: unknown) {
-        return handleIPCError(error);
-      }
+          return { success: true };
+        } catch (error: unknown) {
+          return handleIPCError(error);
+        }
+      },
     });
   }
 
@@ -510,9 +591,11 @@ export class JSPluginIPCHandler {
    * 获取插件配置项
    */
   private registerGetConfig(): void {
-    ipcMain.handle(
-      'js-plugin:get-config',
-      async (event: IpcMainInvokeEvent, pluginId: string, key: string) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:get-config',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string, key: string) => {
         try {
           // 验证插件存在
           const info = await this.pluginManager.getPluginInfo(pluginId);
@@ -543,17 +626,19 @@ export class JSPluginIPCHandler {
           console.error(`Failed to get config "${key}" for plugin "${pluginId}":`, error);
           throw error;
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * 设置插件配置项
    */
   private registerSetConfig(): void {
-    ipcMain.handle(
-      'js-plugin:set-config',
-      async (event: IpcMainInvokeEvent, pluginId: string, key: string, value: any) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:set-config',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string, key: string, value: any) => {
         try {
           // 验证插件存在
           const info = await this.pluginManager.getPluginInfo(pluginId);
@@ -582,8 +667,8 @@ export class JSPluginIPCHandler {
           console.error(`Failed to set config "${key}" for plugin "${pluginId}":`, error);
           throw error;
         }
-      }
-    );
+      },
+    });
   }
 
   // ========== 🆕 UI 扩展相关 ==========
@@ -593,23 +678,29 @@ export class JSPluginIPCHandler {
    * ✅ 不再创建临时 driver，由插件通过 helpers.profile.launch() 管理浏览器
    */
   private registerExecuteCommand(): void {
-    ipcMain.handle(
-      'js-plugin:execute-command',
-      this.withPluginLoaded(async (event, pluginId: string, commandId: string, params: any) => {
-        // ✅ 直接执行命令，不传递 driver
-        const result = await this.pluginManager.executeCommand(pluginId, commandId, params);
-        return { result };
-      })
-    );
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:execute-command',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: this.withPluginLoaded(
+        async (event, pluginId: string, commandId: string, params: any) => {
+          // ✅ 直接执行命令，不传递 driver
+          const result = await this.pluginManager.executeCommand(pluginId, commandId, params);
+          return { result };
+        }
+      ),
+    });
   }
 
   /**
    * 获取数据集的工具栏按钮（🆕 支持动态绑定）
    */
   private registerGetToolbarButtons(): void {
-    ipcMain.handle(
-      'js-plugin:get-toolbar-buttons',
-      async (event: IpcMainInvokeEvent, datasetId: string) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:get-toolbar-buttons',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, datasetId: string) => {
         try {
           // 🆕 首先查询当前数据集的创建者插件
           const datasetInfo = await this.duckdb.executeSQLWithParams(
@@ -677,8 +768,8 @@ export class JSPluginIPCHandler {
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
@@ -686,9 +777,11 @@ export class JSPluginIPCHandler {
    * ✅ 使用 ButtonExecutor 支持参数绑定、返回值绑定、触发链
    */
   private registerExecuteActionColumn(): void {
-    ipcMain.handle(
-      'js-plugin:execute-action-column',
-      async (
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:execute-action-column',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (
         event: IpcMainInvokeEvent,
         pluginId: string,
         commandId: string,
@@ -752,8 +845,8 @@ export class JSPluginIPCHandler {
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
@@ -762,9 +855,11 @@ export class JSPluginIPCHandler {
    * ✅ 支持 parameterMapping，传递 datasetId
    */
   private registerExecuteToolbarButton(): void {
-    ipcMain.handle(
-      'js-plugin:execute-toolbar-button',
-      async (
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:execute-toolbar-button',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (
         event: IpcMainInvokeEvent,
         pluginId: string,
         commandId: string,
@@ -815,59 +910,70 @@ export class JSPluginIPCHandler {
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * 🆕 获取插件的自定义页面列表
    */
   private registerGetCustomPages(): void {
-    ipcMain.handle(
-      'js-plugin:get-custom-pages',
-      async (event: IpcMainInvokeEvent, pluginId: string, datasetId?: string) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:get-custom-pages',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string, datasetId?: string) => {
         try {
           const pages = await this.pluginManager.getCustomPages(pluginId, datasetId);
           return { success: true, pages };
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * 🆕 渲染自定义页面内容
    */
   private registerRenderCustomPage(): void {
-    ipcMain.handle(
-      'js-plugin:render-custom-page',
-      async (event: IpcMainInvokeEvent, pluginId: string, pageId: string, datasetId?: string) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:render-custom-page',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (
+        event: IpcMainInvokeEvent,
+        pluginId: string,
+        pageId: string,
+        datasetId?: string
+      ) => {
         try {
           const html = await this.pluginManager.renderCustomPage(pluginId, pageId, datasetId);
           return { success: true, html };
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * 🆕 处理页面消息
    */
   private registerHandlePageMessage(): void {
-    ipcMain.handle(
-      'js-plugin:page-message',
-      this.withPluginLoaded(
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:page-message',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: this.withPluginLoaded(
         async (event, message: any) => {
           const result = await this.pluginManager.handlePageMessage(message);
           return { result };
         },
         // 自定义 pluginId 提取器：从 message 对象中获取
         (message: any) => message.pluginId
-      )
-    );
+      ),
+    });
   }
 
   // ========== ✅ Activity Bar 视图和 API 调用 ==========
@@ -876,23 +982,29 @@ export class JSPluginIPCHandler {
    * 调用插件暴露的 API
    */
   private registerCallPluginAPI(): void {
-    ipcMain.handle(
-      'js-plugin:call-api',
-      this.withPluginLoaded(async (event, pluginId: string, apiName: string, args: any[]) => {
-        // 调用插件 API
-        const result = await this.pluginManager.callPluginAPI(pluginId, apiName, args);
-        return { result };
-      })
-    );
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:call-api',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: this.withPluginLoaded(
+        async (event, pluginId: string, apiName: string, args: any[]) => {
+          // 调用插件 API
+          const result = await this.pluginManager.callPluginAPI(pluginId, apiName, args);
+          return { result };
+        }
+      ),
+    });
   }
 
   /**
    * 显示插件视图
    */
   private registerShowPluginView(): void {
-    ipcMain.handle(
-      'js-plugin:show-view',
-      async (
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:show-view',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (
         event: IpcMainInvokeEvent,
         pluginId: string,
         bounds?: { x: number; y: number; width: number; height: number }
@@ -933,29 +1045,34 @@ export class JSPluginIPCHandler {
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * 隐藏插件视图
    */
   private registerHidePluginView(): void {
-    ipcMain.handle('js-plugin:hide-view', async (event: IpcMainInvokeEvent, pluginId: string) => {
-      try {
-        const viewInfo = this.viewManager.getPluginViews(pluginId);
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:hide-view',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string) => {
+        try {
+          const viewInfo = this.viewManager.getPluginViews(pluginId);
 
-        if (!viewInfo.pageViewId) {
-          throw new Error(`Plugin ${pluginId} does not have a page view`);
+          if (!viewInfo.pageViewId) {
+            throw new Error(`Plugin ${pluginId} does not have a page view`);
+          }
+
+          // 隐藏插件页面视图（从窗口分离）
+          this.viewManager.detachView(viewInfo.pageViewId);
+
+          return { success: true };
+        } catch (error: unknown) {
+          return handleIPCError(error);
         }
-
-        // 隐藏插件页面视图（从窗口分离）
-        this.viewManager.detachView(viewInfo.pageViewId);
-
-        return { success: true };
-      } catch (error: unknown) {
-        return handleIPCError(error);
-      }
+      },
     });
   }
 
@@ -963,9 +1080,11 @@ export class JSPluginIPCHandler {
    * 获取插件视图信息
    */
   private registerGetPluginViewInfo(): void {
-    ipcMain.handle(
-      'js-plugin:get-view-info',
-      async (event: IpcMainInvokeEvent, pluginId: string) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:get-view-info',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string) => {
         try {
           const viewInfo = this.viewManager.getPluginViews(pluginId);
 
@@ -982,17 +1101,19 @@ export class JSPluginIPCHandler {
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * ✨ 设置插件视图边界（动态调整位置和大小）
    */
   private registerSetPluginViewBounds(): void {
-    ipcMain.handle(
-      'js-plugin:set-view-bounds',
-      async (
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:set-view-bounds',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (
         event: IpcMainInvokeEvent,
         pluginId: string,
         bounds: { x?: number; y?: number; width?: number; height?: number }
@@ -1027,17 +1148,19 @@ export class JSPluginIPCHandler {
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * ✨ 获取布局信息（Activity Bar 宽度、可用空间等）
    */
   private registerGetLayoutInfo(): void {
-    ipcMain.handle(
-      'js-plugin:get-layout-info',
-      async (_event: IpcMainInvokeEvent, _pluginId: string) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:get-layout-info',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (_event: IpcMainInvokeEvent, _pluginId: string) => {
         try {
           const layoutInfo = this.viewManager.getPluginLayoutInfo();
           if (!layoutInfo) {
@@ -1051,8 +1174,8 @@ export class JSPluginIPCHandler {
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
@@ -1273,7 +1396,7 @@ export class JSPluginIPCHandler {
       console.log(`✅ Plugin ${pluginId} loaded successfully`);
     } catch (error: unknown) {
       console.error(`❌ Failed to load plugin ${pluginId}:`, error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = handleIPCError(error).error;
       throw new Error(
         `Failed to activate plugin ${pluginId}: ${errorMessage}. ` +
           `Please check the plugin code or try reinstalling it.`
@@ -1285,51 +1408,57 @@ export class JSPluginIPCHandler {
    * 🆕 启用插件热重载
    */
   private registerEnableHotReload(): void {
-    ipcMain.handle(
-      'js-plugin:enable-hot-reload',
-      async (event: IpcMainInvokeEvent, pluginId: string) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:enable-hot-reload',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string) => {
         try {
           const result = await this.pluginManager.enableHotReload(pluginId);
           return { success: result.success, message: result.message };
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * 🆕 禁用插件热重载
    */
   private registerDisableHotReload(): void {
-    ipcMain.handle(
-      'js-plugin:disable-hot-reload',
-      async (event: IpcMainInvokeEvent, pluginId: string) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:disable-hot-reload',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string) => {
         try {
           const result = await this.pluginManager.disableHotReload(pluginId);
           return { success: result.success, message: result.message };
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
    * 🆕 获取插件热重载状态
    */
   private registerGetHotReloadStatus(): void {
-    ipcMain.handle(
-      'js-plugin:get-hot-reload-status',
-      async (event: IpcMainInvokeEvent, pluginId: string) => {
+    ipcRouteRegistry.register({
+      channel: 'js-plugin:get-hot-reload-status',
+      kind: 'handle',
+      permission: 'trusted-renderer',
+      handler: async (event: IpcMainInvokeEvent, pluginId: string) => {
         try {
           const isEnabled = this.pluginManager.isHotReloadEnabled(pluginId);
           return { success: true, enabled: isEnabled };
         } catch (error: unknown) {
           return handleIPCError(error);
         }
-      }
-    );
+      },
+    });
   }
 
   /**
@@ -1338,7 +1467,7 @@ export class JSPluginIPCHandler {
    */
   private setupPluginEventForwarding(): void {
     this.pluginManager.onRuntimeStatusChanged((payload: JSPluginRuntimeStatusChangeEvent) => {
-      const mainWindow = windowManager.getMainWindowV3();
+      const mainWindow = this.windowManager.getMainWindowV3();
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('js-plugin:runtime-status-changed', payload);
       }
@@ -1348,7 +1477,7 @@ export class JSPluginIPCHandler {
     pluginEventBus.on(PluginEvents.RELOADED, (payload: PluginReloadedPayload) => {
       this.cloudPluginBindingCache.delete(payload.pluginId);
       // v3 API: 使用 getMainWindowV3()
-      const mainWindow = windowManager.getMainWindowV3();
+      const mainWindow = this.windowManager.getMainWindowV3();
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('js-plugin:reloaded', payload);
         console.log(`[IPC] Plugin reloaded event forwarded: ${payload.pluginId}`);
@@ -1356,7 +1485,7 @@ export class JSPluginIPCHandler {
     });
 
     pluginEventBus.on(PluginEvents.NOTIFICATION, (payload: PluginNotificationPayload) => {
-      const mainWindow = windowManager.getMainWindowV3();
+      const mainWindow = this.windowManager.getMainWindowV3();
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('js-plugin:notification', payload);
       }

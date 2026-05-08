@@ -61,7 +61,7 @@ import type {
   ReadyBrowser,
 } from './types';
 import { isReadyBrowser } from './types';
-import type { ProfileService } from '../../main/duckdb/profile-service';
+import type { IProfileService } from '../../types/service-interfaces';
 import { AUTOMATION_ENGINES, normalizeProfileBrowserQuota } from '../../types/profile';
 import type { BrowserProfile } from '../../types/profile';
 
@@ -128,9 +128,9 @@ export class BrowserPoolManager {
   private stopped = false;
 
   /** 获取 ProfileService 的函数 */
-  private getProfileService: () => ProfileService;
+  private getProfileService: () => IProfileService;
 
-  constructor(getProfileService: () => ProfileService) {
+  constructor(getProfileService: () => IProfileService) {
     this.getProfileService = getProfileService;
     this.globalPool = new GlobalPool();
     this.waitQueue = new WaitQueue();
@@ -153,7 +153,7 @@ export class BrowserPoolManager {
   /**
    * 获取 ProfileService 实例
    */
-  private get profileService(): ProfileService {
+  private get profileService(): IProfileService {
     return this.getProfileService();
   }
 
@@ -1403,6 +1403,12 @@ export class BrowserPoolManager {
 
 let instance: BrowserPoolManager | null = null;
 
+export function createBrowserPoolManager(
+  getProfileService: () => IProfileService
+): BrowserPoolManager {
+  return new BrowserPoolManager(getProfileService);
+}
+
 /**
  * 初始化浏览器池管理器单例
  *
@@ -1411,14 +1417,14 @@ let instance: BrowserPoolManager | null = null;
  * @param getProfileService 获取 ProfileService 的函数
  */
 export function initBrowserPoolManager(
-  getProfileService: () => ProfileService
+  getProfileService: () => IProfileService
 ): BrowserPoolManager {
   if (instance) {
     logger.warn('Already initialized');
     return instance;
   }
 
-  instance = new BrowserPoolManager(getProfileService);
+  instance = createBrowserPoolManager(getProfileService);
   return instance;
 }
 
@@ -1437,9 +1443,11 @@ export function getBrowserPoolManager(): BrowserPoolManager {
 /**
  * 重置单例（仅用于测试）
  */
-export function resetBrowserPoolManager(): void {
-  if (instance) {
-    instance.stop().catch((err) => logger.error('Failed to stop pool manager', err));
-    instance = null;
+export async function resetBrowserPoolManager(): Promise<void> {
+  const manager = instance;
+  instance = null;
+
+  if (manager) {
+    await manager.stop();
   }
 }

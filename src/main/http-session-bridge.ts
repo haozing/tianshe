@@ -7,8 +7,8 @@ import {
   cleanupOrchestrationSession,
   enqueueInvokeTask,
   enqueueOrchestrationInvoke,
+  getMcpInvokeQueueState,
   type InvokeTaskContext,
-  type InvokeQueueState,
   type RuntimeMetricsPayload,
   type RuntimeMetricsSnapshot,
 } from './http-session-manager';
@@ -31,7 +31,7 @@ export interface HttpSessionBridge {
   buildRuntimeMetricsPayload: () => RuntimeMetricsPayload;
   enqueueInvokeTask: <T>(
     sessionLabel: string,
-    session: InvokeQueueState,
+    session: McpSessionInfo,
     task: (context: InvokeTaskContext) => Promise<T>,
     options: { timeoutMs: number }
   ) => Promise<T>;
@@ -68,7 +68,7 @@ export const createHttpSessionBridge = ({
     enqueueInvokeTask: (sessionLabel, session, task, options) =>
       enqueueInvokeTask({
         sessionLabel,
-        session,
+        session: getMcpInvokeQueueState(session),
         task,
         options,
         runtimeMetrics,

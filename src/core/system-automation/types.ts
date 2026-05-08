@@ -60,6 +60,17 @@ export interface DetailedOCRResult extends OCRResult {
 }
 
 /**
+ * OCR Provider 工厂接口
+ *
+ * 解耦浏览器层对 OCR 池全局单例的直接依赖，
+ * 允许在测试和不同运行环境中注入不同的 OCR 实现。
+ */
+export interface OCRProviderFactory {
+  /** 创建一个 OCR 提供者实例 */
+  create(): Promise<OCRAPI>;
+}
+
+/**
  * OCR API 接口
  */
 export interface OCRAPI {

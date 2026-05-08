@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { ipcMain } from 'electron';
 import { registerAccountHandlers } from './account-ipc-handler';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 import { UNBOUND_PROFILE_ID, type Account, type SavedSite } from '../../types/profile';
 import { getBrowserPoolManager, showBrowserViewInPopup } from '../../core/browser-pool';
 import {
@@ -11,6 +12,8 @@ import {
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn(),
+    removeHandler: vi.fn(),
+    removeListener: vi.fn(),
   },
 }));
 
@@ -125,6 +128,7 @@ describe('registerAccountHandlers - account:login', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
     registeredHandlers.clear();
 
     (ipcMain.handle as Mock).mockImplementation(
@@ -160,6 +164,7 @@ describe('registerAccountHandlers - account:login', () => {
 
   it('rejects account secret reads from unauthorized senders', async () => {
     registeredHandlers.clear();
+    ipcRouteRegistry.unregisterAll();
     const senderGuard = vi.fn(() => {
       throw new Error('Unauthorized sender');
     });

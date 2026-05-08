@@ -133,12 +133,16 @@ describe('previewLookup auto-attach integration', () => {
       validationEngine
     );
 
-    queryService = new DatasetQueryService(conn, metadataService, schemaService, storageService);
-
     duckdbService = new MinimalDuckDBService(conn, metadataService);
     queryEngine = new QueryEngine(duckdbService as any);
     duckdbService.setQueryEngine(queryEngine);
-    queryService.setQueryEngine(queryEngine);
+    queryService = new DatasetQueryService(
+      conn,
+      metadataService,
+      schemaService,
+      storageService,
+      queryEngine
+    );
 
     datasetId = 'preview_main';
     datasetPath = path.join(tempDir, `${datasetId}.duckdb`);

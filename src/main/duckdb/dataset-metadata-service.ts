@@ -12,9 +12,13 @@
  */
 
 import { DuckDBConnection } from '@duckdb/node-api';
-import { parseRows, quoteQualifiedName } from './utils';
+import { parseRows, quoteQualifiedName, runInDuckDbTransaction } from './utils';
+import { allPrepared, runPrepared } from './statement-executor';
 import { sanitizeDatasetId, DatasetStorageService } from './dataset-storage-service';
+import { getUnknownErrorMessage } from '../ipc-utils';
 import type { Dataset } from './types';
+import { SchemaMigrationEngine } from './migration-engine';
+import { DATASET_METADATA_SCHEMA_MIGRATIONS } from './schema-migrations';
 
 export class DatasetMetadataService {
   constructor(
@@ -47,29 +51,7 @@ export class DatasetMetadataService {
       )
     `);
 
-    // Backward compatibility: existing databases may have been created
-    // before some metadata columns were introduced.
-    await this.ensureDatasetColumnExists('folder_id', `ALTER TABLE datasets ADD COLUMN folder_id VARCHAR`);
-    await this.ensureDatasetColumnExists(
-      'table_order',
-      `ALTER TABLE datasets ADD COLUMN table_order INTEGER DEFAULT 0`
-    );
-    await this.ensureDatasetColumnExists(
-      'created_by_plugin',
-      `ALTER TABLE datasets ADD COLUMN created_by_plugin VARCHAR`
-    );
-    await this.ensureDatasetColumnExists(
-      'tab_group_id',
-      `ALTER TABLE datasets ADD COLUMN tab_group_id VARCHAR`
-    );
-    await this.ensureDatasetColumnExists(
-      'tab_order',
-      `ALTER TABLE datasets ADD COLUMN tab_order INTEGER DEFAULT 0`
-    );
-    await this.ensureDatasetColumnExists(
-      'is_group_default',
-      `ALTER TABLE datasets ADD COLUMN is_group_default BOOLEAN DEFAULT FALSE`
-    );
+    await new SchemaMigrationEngine(this.conn).migrate(DATASET_METADATA_SCHEMA_MIGRATIONS);
 
     await this.conn.run(`
       CREATE TABLE IF NOT EXISTS dataset_tab_groups (
@@ -109,16 +91,6 @@ export class DatasetMetadataService {
     `);
   }
 
-  private async ensureDatasetColumnExists(columnName: string, alterSQL: string): Promise<void> {
-    const result = await this.conn.runAndReadAll(`PRAGMA table_info('datasets')`);
-    const rows = parseRows(result);
-    const existing = new Set(
-      rows.map((row: any) => String(row.name ?? row.column_name ?? '').trim().toLowerCase())
-    );
-    if (existing.has(columnName.toLowerCase())) return;
-    await this.conn.run(alterSQL);
-  }
-
   /**
    * 💾 保存元数据
    * 插入新的数据集元数据记录
@@ -126,34 +98,33 @@ export class DatasetMetadataService {
   async saveMetadata(dataset: Dataset): Promise<void> {
     const schema = dataset.schema ? JSON.stringify(dataset.schema) : null;
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       INSERT INTO datasets (
         id, name, file_path, row_count, column_count, size_bytes, created_at, schema,
         folder_id, table_order, created_by_plugin,
         tab_group_id, tab_order, is_group_default
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.bind([
-      dataset.id,
-      dataset.name,
-      dataset.filePath,
-      dataset.rowCount,
-      dataset.columnCount,
-      dataset.sizeBytes,
-      dataset.createdAt,
-      schema,
-      dataset.folderId ?? null,
-      dataset.tableOrder ?? 0,
-      dataset.createdByPlugin ?? null,
-      dataset.tabGroupId ?? null,
-      dataset.tabOrder ?? 0,
-      dataset.isGroupDefault ?? false,
-    ]);
-
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [
+        dataset.id,
+        dataset.name,
+        dataset.filePath,
+        dataset.rowCount,
+        dataset.columnCount,
+        dataset.sizeBytes,
+        dataset.createdAt,
+        schema,
+        dataset.folderId ?? null,
+        dataset.tableOrder ?? 0,
+        dataset.createdByPlugin ?? null,
+        dataset.tabGroupId ?? null,
+        dataset.tabOrder ?? 0,
+        dataset.isGroupDefault ?? false,
+      ]
+    );
 
     // 🆕 对于插件数据表，立即执行 CHECKPOINT 确保数据持久化
     // 防止 WAL 未合并导致 datasets 记录在重启时丢失
@@ -161,8 +132,11 @@ export class DatasetMetadataService {
       try {
         await this.conn.run('CHECKPOINT');
         console.log(`  ✓ CHECKPOINT completed for dataset: ${dataset.id}`);
-      } catch (checkpointError: any) {
-        console.warn(`  [WARN] CHECKPOINT failed (non-critical):`, checkpointError.message);
+      } catch (checkpointError: unknown) {
+        console.warn(
+          `  [WARN] CHECKPOINT failed (non-critical):`,
+          getUnknownErrorMessage(checkpointError)
+        );
       }
     }
   }
@@ -201,10 +175,7 @@ export class DatasetMetadataService {
   async getDatasetInfo(datasetId: string): Promise<Dataset | null> {
     console.log(`[MetadataService] getDatasetInfo called for dataset: ${datasetId}`);
 
-    const stmt = await this.conn.prepare('SELECT * FROM datasets WHERE id = ?');
-    stmt.bind([datasetId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    const result = await allPrepared(this.conn, 'SELECT * FROM datasets WHERE id = ?', [datasetId]);
 
     const rows = parseRows(result);
 
@@ -262,10 +233,7 @@ export class DatasetMetadataService {
    * ✏️ 重命名数据集
    */
   async renameDataset(datasetId: string, newName: string): Promise<void> {
-    const stmt = await this.conn.prepare('UPDATE datasets SET name = ? WHERE id = ?');
-    stmt.bind([newName, datasetId]);
-    await stmt.run();
-    stmt.destroySync();
+    await runPrepared(this.conn, 'UPDATE datasets SET name = ? WHERE id = ?', [newName, datasetId]);
   }
 
   /**
@@ -276,14 +244,15 @@ export class DatasetMetadataService {
     const safeDelta = Math.trunc(delta);
     if (safeDelta === 0) return;
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       UPDATE datasets
       SET row_count = COALESCE(row_count, 0) + ?
       WHERE id = ?
-    `);
-    stmt.bind([safeDelta, datasetId]);
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [safeDelta, datasetId]
+    );
   }
 
   /**
@@ -291,92 +260,98 @@ export class DatasetMetadataService {
    * 级联删除所有关联表的记录，确保数据一致性
    */
   async deleteMetadata(datasetId: string): Promise<void> {
-    // 使用事务确保原子性
-    await this.conn.run('BEGIN TRANSACTION');
-
     try {
-      const groupStmt = await this.conn.prepare(`
+      await runInDuckDbTransaction(this.conn, async () => {
+        const groupResult = await allPrepared(
+          this.conn,
+          `
         SELECT tab_group_id, is_group_default
         FROM datasets
         WHERE id = ?
-      `);
-      groupStmt.bind([datasetId]);
-      const groupResult = await groupStmt.runAndReadAll();
-      groupStmt.destroySync();
-      const groupRows = parseRows(groupResult);
-      const tabGroupId = groupRows[0]?.tab_group_id ? String(groupRows[0].tab_group_id) : null;
-      const deletedWasDefault = Boolean(groupRows[0]?.is_group_default);
+      `,
+          [datasetId]
+        );
+        const groupRows = parseRows(groupResult);
+        const tabGroupId = groupRows[0]?.tab_group_id ? String(groupRows[0].tab_group_id) : null;
+        const deletedWasDefault = Boolean(groupRows[0]?.is_group_default);
 
-      // 1. 删除关联的视图元数据
-      await this.conn.run(`DELETE FROM dataset_query_templates WHERE dataset_id = ?`, [datasetId]);
-      console.log(`  ✓ [DeleteMeta] Deleted query templates for: ${datasetId}`);
+        // 1. 删除关联的视图元数据
+        await runPrepared(this.conn, `DELETE FROM dataset_query_templates WHERE dataset_id = ?`, [
+          datasetId,
+        ]);
+        console.log(`  ✓ [DeleteMeta] Deleted query templates for: ${datasetId}`);
 
-      // 2. 删除操作列配置
-      await this.conn.run(`DELETE FROM dataset_action_columns WHERE dataset_id = ?`, [datasetId]);
-      console.log(`  ✓ [DeleteMeta] Deleted action columns for: ${datasetId}`);
+        // 2. 删除操作列配置
+        await runPrepared(this.conn, `DELETE FROM dataset_action_columns WHERE dataset_id = ?`, [
+          datasetId,
+        ]);
+        console.log(`  ✓ [DeleteMeta] Deleted action columns for: ${datasetId}`);
 
-      // 3. 删除插件绑定
-      await this.conn.run(`DELETE FROM dataset_plugin_bindings WHERE dataset_id = ?`, [datasetId]);
-      console.log(`  ✓ [DeleteMeta] Deleted plugin bindings for: ${datasetId}`);
+        // 3. 删除插件绑定
+        await runPrepared(this.conn, `DELETE FROM dataset_plugin_bindings WHERE dataset_id = ?`, [
+          datasetId,
+        ]);
+        console.log(`  ✓ [DeleteMeta] Deleted plugin bindings for: ${datasetId}`);
 
-      // 4. 删除主记录
-      const stmt = await this.conn.prepare('DELETE FROM datasets WHERE id = ?');
-      stmt.bind([datasetId]);
-      await stmt.run();
-      stmt.destroySync();
-      console.log(`  ✓ [DeleteMeta] Deleted dataset record: ${datasetId}`);
+        // 4. 删除主记录
+        await runPrepared(this.conn, 'DELETE FROM datasets WHERE id = ?', [datasetId]);
+        console.log(`  ✓ [DeleteMeta] Deleted dataset record: ${datasetId}`);
 
-      if (tabGroupId) {
-        const countStmt = await this.conn.prepare(`
+        if (tabGroupId) {
+          const countResult = await allPrepared(
+            this.conn,
+            `
           SELECT COUNT(*) AS cnt
           FROM datasets
           WHERE tab_group_id = ?
-        `);
-        countStmt.bind([tabGroupId]);
-        const countResult = await countStmt.runAndReadAll();
-        countStmt.destroySync();
-        const remainingCount = Number(parseRows(countResult)[0]?.cnt ?? 0);
+        `,
+            [tabGroupId]
+          );
+          const remainingCount = Number(parseRows(countResult)[0]?.cnt ?? 0);
 
-        if (remainingCount <= 0) {
-          await this.conn.run(`DELETE FROM dataset_tab_groups WHERE id = ?`, [tabGroupId]);
-        } else if (deletedWasDefault) {
-          const nextStmt = await this.conn.prepare(`
+          if (remainingCount <= 0) {
+            await runPrepared(this.conn, `DELETE FROM dataset_tab_groups WHERE id = ?`, [
+              tabGroupId,
+            ]);
+          } else if (deletedWasDefault) {
+            const nextResult = await allPrepared(
+              this.conn,
+              `
             SELECT id
             FROM datasets
             WHERE tab_group_id = ?
             ORDER BY tab_order ASC, created_at ASC
             LIMIT 1
-          `);
-          nextStmt.bind([tabGroupId]);
-          const nextResult = await nextStmt.runAndReadAll();
-          nextStmt.destroySync();
-          const nextDatasetId = String(parseRows(nextResult)[0]?.id ?? '');
+          `,
+              [tabGroupId]
+            );
+            const nextDatasetId = String(parseRows(nextResult)[0]?.id ?? '');
 
-          if (nextDatasetId) {
-            await this.conn.run(
-              `
+            if (nextDatasetId) {
+              await runPrepared(
+                this.conn,
+                `
               UPDATE datasets
               SET is_group_default = CASE WHEN id = ? THEN TRUE ELSE FALSE END
               WHERE tab_group_id = ?
             `,
-              [nextDatasetId, tabGroupId]
-            );
-            await this.conn.run(
-              `
+                [nextDatasetId, tabGroupId]
+              );
+              await runPrepared(
+                this.conn,
+                `
               UPDATE dataset_tab_groups
               SET root_dataset_id = ?, updated_at = ?
               WHERE id = ?
             `,
-              [nextDatasetId, Date.now(), tabGroupId]
-            );
+                [nextDatasetId, Date.now(), tabGroupId]
+              );
+            }
           }
         }
-      }
-
-      await this.conn.run('COMMIT');
+      });
       console.log(`✅ [DeleteMeta] All metadata deleted for: ${datasetId}`);
     } catch (error) {
-      await this.conn.run('ROLLBACK');
       console.error(`❌ [DeleteMeta] Failed to delete metadata:`, error);
       throw error;
     }
@@ -394,23 +369,24 @@ export class DatasetMetadataService {
     );
 
     const schemaJson = JSON.stringify(schema);
-    const stmt = await this.conn.prepare(`
+    await runPrepared(
+      this.conn,
+      `
       UPDATE datasets
       SET schema = ?, column_count = ?
       WHERE id = ?
-    `);
-    stmt.bind([schemaJson, schema.length, datasetId]);
-    await stmt.run();
-    stmt.destroySync();
+    `,
+      [schemaJson, schema.length, datasetId]
+    );
 
     console.log(`[MetadataService] ✅ Schema update completed for dataset: ${datasetId}`);
 
     // 验证更新
-    const verifyStmt = await this.conn.prepare(
-      `SELECT schema, column_count FROM datasets WHERE id = ?`
+    const verifyResult = await allPrepared(
+      this.conn,
+      `SELECT schema, column_count FROM datasets WHERE id = ?`,
+      [datasetId]
     );
-    verifyStmt.bind([datasetId]);
-    const verifyResult = await verifyStmt.runAndReadAll();
     const rows = parseRows(verifyResult);
     console.log(`[MetadataService] Verification - column_count in DB:`, rows[0]?.column_count);
     const savedSchema = JSON.parse(String(rows[0]?.schema || '[]'));
@@ -418,7 +394,6 @@ export class DatasetMetadataService {
       `[MetadataService] Verification - saved schema columns (${savedSchema.length}):`,
       savedSchema.map((c: any) => c.name)
     );
-    verifyStmt.destroySync();
   }
 
   /**

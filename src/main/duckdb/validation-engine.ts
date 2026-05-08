@@ -5,6 +5,7 @@
 
 import type { DuckDBConnection } from '@duckdb/node-api';
 import { parseRows, quoteIdentifier, quoteQualifiedName } from './utils';
+import { getUnknownErrorMessage } from '../ipc-utils';
 
 export interface ValidationRule {
   type: 'required' | 'unique' | 'regex' | 'range' | 'length' | 'check' | 'enum';
@@ -110,9 +111,10 @@ export class ValidationEngine {
           default:
             console.warn(`  ⚠ Unknown validation rule type: ${rule.type}`);
         }
-      } catch (error: any) {
-        console.error(`  ✗ Failed to apply ${rule.type} validation:`, error.message);
-        throw new Error(`验证规则应用失败 (${rule.type}): ${error.message}`);
+      } catch (error: unknown) {
+        const errorMessage = getUnknownErrorMessage(error);
+        console.error(`  ✗ Failed to apply ${rule.type} validation:`, errorMessage);
+        throw new Error(`验证规则应用失败 (${rule.type}): ${errorMessage}`);
       }
     }
 
@@ -197,7 +199,7 @@ export class ValidationEngine {
             });
           }
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error(`Error validating rule ${rule.type}:`, error);
       }
     }

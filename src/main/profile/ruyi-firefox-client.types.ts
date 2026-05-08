@@ -1,6 +1,4 @@
 import type {
-  ConsoleMessage,
-  NetworkEntry,
   WindowOpenPolicy,
 } from '../../core/browser-core/types';
 import type {
@@ -9,7 +7,6 @@ import type {
   BrowserEmulationIdentityOptions,
   BrowserEmulationViewportOptions,
   BrowserInterceptPattern,
-  BrowserInterceptedRequest,
   BrowserPdfOptions,
   BrowserRuntimeEvent,
   BrowserStorageArea,
@@ -223,11 +220,8 @@ export type DispatchDownloadCancelParams = {
   id?: string;
 };
 
-export type RuyiFirefoxEvent =
-  | { type: 'network-entry'; entry: NetworkEntry }
-  | { type: 'console-message'; message: ConsoleMessage }
-  | { type: 'intercepted-request'; request: BrowserInterceptedRequest }
-  | { type: 'runtime-event'; event: BrowserRuntimeEvent };
+import type { RuyiFirefoxEvent } from '../../core/browser-automation/transport-types';
+export type { RuyiFirefoxEvent };
 
 export type RuyiFirefoxEventListener = (event: RuyiFirefoxEvent) => void;
 

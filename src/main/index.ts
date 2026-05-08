@@ -67,12 +67,10 @@ try {
   // ignore
 }
 
-import type { BrowserWindow as BrowserWindowType } from 'electron';
 import Store from 'electron-store';
 
 // 常量
 import { MAX_WEBCONTENTSVIEWS } from '../constants';
-import type { JSPluginInfo, JSPluginRuntimeStatus } from '../types/js-plugin';
 
 // 核心模块
 import { JSPluginManager } from '../core/js-plugin/manager';
@@ -86,6 +84,7 @@ import { DuckDBService } from './duckdb/service';
 import { WindowManager } from './window-manager';
 import { WebContentsViewManager } from './webcontentsview-manager';
 import { JSPluginIPCHandler } from './ipc-handlers/js-plugin-handler';
+import { maybeOpenInternalBrowserDevTools } from './internal-browser-devtools';
 import * as datasetFolderHandlerModule from './ipc-handlers/dataset-folder-handler';
 import { registerProfileHandlers } from './ipc-handlers/profile-ipc-handler';
 import { registerAccountHandlers } from './ipc-handlers/account-ipc-handler';
@@ -99,13 +98,17 @@ import { registerObservationHandlers } from './ipc-handlers/observation-handler'
 import { setSchedulerService } from '../core/js-plugin/namespaces/scheduler';
 import { HttpApiIPCHandler } from './ipc-handlers/http-api-handler';
 import type { IpcSenderGuard } from './ipc-handlers/utils';
-import { assertMainWindowIpcSender } from './ipc-authorization';
+import { createMainWindowIpcSenderGuard } from './ipc-authorization';
 import { OCRPoolIPCHandler } from './ipc-handlers/ocr-pool-handler';
-import { createDuckDbOrchestrationIdempotencyPersistence } from './orchestration-idempotency-duckdb-store';
 import { probeLocalHttpRuntime } from './http-runtime-diagnostics';
+import { AppRuntime } from './app-runtime';
 
 // AI-Dev 浏览器控制 API（HTTP MCP 服务器）
 import { createHttpMcpServer, AirpaHttpMcpServer } from './mcp-server-http';
+import {
+  buildRestApiDependencies,
+  type BuildRestApiDependenciesRuntime,
+} from './http-server-composition';
 
 // 浏览器启动工具（代理认证处理）
 import { setupProxyAuthHandler, clearProxyCredentials } from './profile/browser-launcher';
@@ -139,46 +142,23 @@ import {
   type OCRPoolConfig,
 } from '../constants/ocr-pool';
 import type { RestApiDependencies, RestApiConfig } from '../types/http-api';
-import { ErrorCode, createStructuredError } from '../types/error-codes';
 import { setOcrPoolConfig } from '../core/system-automation/ocr';
-import type { CreateProfileParams, UpdateProfileParams } from '../types/profile';
 import { resolveTiansheEdition } from '../edition';
 import { redactSensitiveUrl } from '../utils/redaction';
 
-// 全局变量
-let mainWindow: BrowserWindowType | null = null;
-let store: Store;
-let duckdbService: DuckDBService;
-let logger: LogStorageService;
-let downloadManager: DownloadManager;
-let _ipcHandler: IPCHandler;
-export let windowManager: WindowManager;
-let viewManager: WebContentsViewManager;
-let jsPluginManager: JSPluginManager;
-let updateManager: UpdateManager;
-let httpMcpServer: AirpaHttpMcpServer | null = null;
-let httpServerStartPromise: Promise<void> | null = null; // 启动锁，防止并发启动
-let schedulerService: SchedulerService;
-let extensionPackages: ExtensionPackagesManager;
 const tiansheEdition = resolveTiansheEdition();
+const appRuntime = new AppRuntime();
 
-// 🆕 Webhook 回调系统
-let hookBus: HookBus;
-let webhookSender: WebhookSender;
-
-const assertPrimaryRendererSender: IpcSenderGuard = (event, channel) => {
-  if (!mainWindow) {
-    throw new Error('Main window not created');
-  }
-  assertMainWindowIpcSender(event, mainWindow, channel);
-};
+const assertPrimaryRendererSender: IpcSenderGuard = createMainWindowIpcSenderGuard(
+  () => appRuntime.mainWindow
+);
 
 registerRuntimeErrorHandlers({
   startupLogPath,
   logStartup,
-  getLogger: () => logger,
-  getMainWindow: () => mainWindow,
-  getDuckDBService: () => duckdbService,
+  getLogger: () => appRuntime.logger,
+  getMainWindow: () => appRuntime.mainWindow,
+  getDuckDBService: () => appRuntime.duckdbService,
 });
 
 type DatasetFolderHandlersModule = {
@@ -212,7 +192,7 @@ function resolveRegisterDatasetFolderHandlers(
  * 创建主窗口（使用 WindowManager）
  */
 function createWindow(): void {
-  mainWindow = windowManager.createMainWindow();
+  appRuntime.mainWindow = appRuntime.requireWindowManager().createMainWindow();
 }
 
 function hideApplicationMenu(): void {
@@ -229,7 +209,8 @@ async function initializeServices(): Promise<void> {
 
   // 1. 初始化存储
   logStartup('Initializing electron-store...');
-  store = new Store();
+  appRuntime.store = new Store();
+  const store = appRuntime.store;
   logStartup('electron-store initialized');
 
   // 1.2. 读取 OCR 引擎池配置（全局）
@@ -244,31 +225,35 @@ async function initializeServices(): Promise<void> {
 
   // 🆕 1.5. 初始化 HookBus（事件总线）
   logStartup('Initializing HookBus...');
-  hookBus = new HookBus();
+  appRuntime.hookBus = new HookBus();
+  const hookBus = appRuntime.hookBus;
   console.log('[OK] HookBus initialized');
   logStartup('HookBus initialized');
 
   // 🆕 1.6. 初始化 WebhookSender（回调发送器）
-  webhookSender = new WebhookSender(hookBus);
+  appRuntime.webhookSender = new WebhookSender(hookBus);
+  const webhookSender = appRuntime.webhookSender;
   console.log('[OK] WebhookSender initialized');
 
   // 2. 初始化 DuckDB 服务（🆕 传入 hookBus）
   logStartup('Initializing DuckDB service...');
-  duckdbService = new DuckDBService(hookBus);
+  appRuntime.duckdbService = new DuckDBService(hookBus);
+  const duckdbService = appRuntime.duckdbService;
   await duckdbService.init();
   console.log('[OK] DuckDB service initialized');
   logStartup('DuckDB service initialized');
 
   // 3. 初始化日志系统（基于 DuckDB）
   logStartup('Initializing LogStorageService...');
-  logger = new LogStorageService(duckdbService);
+  appRuntime.logger = new LogStorageService(duckdbService);
   console.log('[OK] Logger initialized');
   logStartup('LogStorageService initialized');
 
   // 3.5. 初始化定时任务调度器
   logStartup('Initializing SchedulerService...');
   const scheduledTaskService = duckdbService.getScheduledTaskService();
-  schedulerService = new SchedulerService(scheduledTaskService);
+  appRuntime.schedulerService = new SchedulerService(scheduledTaskService);
+  const schedulerService = appRuntime.schedulerService;
   setSchedulerService(schedulerService); // 设置全局引用供插件使用
   await schedulerService.init(); // 从数据库恢复任务
   console.log('[OK] SchedulerService initialized');
@@ -276,19 +261,22 @@ async function initializeServices(): Promise<void> {
 
   // 4. 初始化窗口管理器（限制2个窗口）
   logStartup('Initializing WindowManager...');
-  windowManager = new WindowManager();
+  appRuntime.windowManager = new WindowManager();
+  const windowManager = appRuntime.windowManager;
   console.log('[OK] WindowManager initialized');
   logStartup('WindowManager initialized');
 
   // 5. 初始化 WebContentsView 管理器（池大小15，手动管理）
   logStartup('Initializing WebContentsViewManager...');
-  viewManager = new WebContentsViewManager(windowManager, MAX_WEBCONTENTSVIEWS);
+  appRuntime.viewManager = new WebContentsViewManager(windowManager, MAX_WEBCONTENTSVIEWS);
+  const viewManager = appRuntime.viewManager;
   console.log(`[OK] WebContentsViewManager initialized (max: ${MAX_WEBCONTENTSVIEWS} views)`);
   logStartup('WebContentsViewManager initialized');
 
   // 8. 初始化下载管理器
   logStartup('Initializing DownloadManager...');
-  downloadManager = new DownloadManager();
+  appRuntime.downloadManager = new DownloadManager();
+  const downloadManager = appRuntime.downloadManager;
   console.log('[OK] DownloadManager initialized');
   logStartup('DownloadManager initialized');
 
@@ -318,7 +306,10 @@ async function initializeServices(): Promise<void> {
     duckdbService.getProfileGroupService(),
     duckdbService.getAccountService(),
     viewManager,
-    windowManager
+    windowManager,
+    {
+      senderGuard: assertPrimaryRendererSender,
+    }
   );
   console.log('[OK] Profile handlers registered');
   logStartup('Profile Handlers registered');
@@ -353,7 +344,10 @@ async function initializeServices(): Promise<void> {
 
   // 9.575. Register extension packages manager handlers
   logStartup('Registering Extension Packages Manager Handlers...');
-  extensionPackages = new ExtensionPackagesManager(duckdbService.getExtensionPackagesService());
+  appRuntime.extensionPackages = new ExtensionPackagesManager(
+    duckdbService.getExtensionPackagesService()
+  );
+  const extensionPackages = appRuntime.extensionPackages;
   registerExtensionPackagesManagerHandlers(extensionPackages, duckdbService.getProfileService(), {
     syncOutboxService: duckdbService.getSyncOutboxService(),
     fetchBrowserExtensionInstallPackage:
@@ -399,13 +393,17 @@ async function initializeServices(): Promise<void> {
 
   // 10. 初始化JS插件管理器（不加载插件）（🆕 传入 hookBus 和 webhookSender）
   logStartup('Creating JSPluginManager...');
-  jsPluginManager = new JSPluginManager(
+  appRuntime.jsPluginManager = new JSPluginManager(
     duckdbService,
     viewManager,
     windowManager,
     hookBus,
-    webhookSender
+    webhookSender,
+    (webContents, options) => {
+      maybeOpenInternalBrowserDevTools(webContents, options);
+    }
   );
+  const jsPluginManager = appRuntime.jsPluginManager;
   // 不调用 init()，稍后在 IPC 注册后再加载插件
   console.log('[OK] JSPluginManager created');
   logStartup('JSPluginManager created');
@@ -466,15 +464,18 @@ async function initializeServices(): Promise<void> {
     return electronBrowserFactory(session);
   };
 
+  appRuntime.browserPoolReadiness.markInitializing();
   initializeBrowserPool(
     () => duckdbService.getProfileService(),
     browserFactory,
     createBrowserDestroyer(viewManager)
   )
     .then(() => {
+      appRuntime.browserPoolReadiness.markReady();
       console.log('[OK] BrowserPoolManager initialized');
     })
     .catch((error) => {
+      appRuntime.browserPoolReadiness.markFailed(error);
       console.error('[WARN] BrowserPoolManager initialization failed:', error);
       // 不阻塞应用启动，浏览器池是可选功能
     });
@@ -487,9 +488,10 @@ async function initializeServices(): Promise<void> {
  */
 function initializePluginIPC(): void {
   const jsPluginIPCHandler = new JSPluginIPCHandler(
-    jsPluginManager,
-    duckdbService,
-    viewManager,
+    appRuntime.requireJSPluginManager(),
+    appRuntime.requireDuckDBService(),
+    appRuntime.requireViewManager(),
+    appRuntime.requireWindowManager(),
     tiansheEdition.cloudCatalog.runtimePlugin
   );
   jsPluginIPCHandler.register();
@@ -501,7 +503,7 @@ function initializePluginIPC(): void {
  * 初始化 Scheduler IPC 处理器
  */
 function initializeSchedulerIPC(): void {
-  const schedulerIPCHandler = new SchedulerIPCHandler(schedulerService);
+  const schedulerIPCHandler = new SchedulerIPCHandler(appRuntime.requireSchedulerService());
   schedulerIPCHandler.register();
 
   console.log('[OK] Scheduler IPC handlers registered');
@@ -511,7 +513,7 @@ function initializeSchedulerIPC(): void {
  * 初始化 Observation IPC 处理器
  */
 function initializeObservationIPC(): void {
-  registerObservationHandlers(duckdbService);
+  registerObservationHandlers(appRuntime.requireDuckDBService());
 
   console.log('[OK] Observation IPC handlers registered');
 }
@@ -521,8 +523,8 @@ function initializeObservationIPC(): void {
  */
 function initializeHttpApiIPC(): void {
   const httpApiIPCHandler = new HttpApiIPCHandler(
-    store,
-    webhookSender,
+    appRuntime.requireStore(),
+    appRuntime.requireWebhookSender(),
     startHttpServer,
     stopHttpServer,
     assertPrimaryRendererSender
@@ -536,7 +538,7 @@ function initializeHttpApiIPC(): void {
  * 初始化 OCR Pool IPC 处理器
  */
 function initializeOcrPoolIPC(): void {
-  const ocrPoolIPCHandler = new OCRPoolIPCHandler(store);
+  const ocrPoolIPCHandler = new OCRPoolIPCHandler(appRuntime.requireStore());
   ocrPoolIPCHandler.register();
 
   console.log('[OK] OCR Pool IPC handlers registered');
@@ -546,17 +548,17 @@ function initializeOcrPoolIPC(): void {
  * 初始化主 IPC 处理器
  */
 function initializeIPC(): void {
-  if (!mainWindow) {
+  if (!appRuntime.mainWindow) {
     throw new Error('Main window not created');
   }
 
-  _ipcHandler = new IPCHandler(
-    logger,
-    downloadManager,
-    duckdbService,
-    mainWindow,
-    windowManager,
-    viewManager
+  appRuntime.ipcHandler = new IPCHandler(
+    appRuntime.requireLogger(),
+    appRuntime.requireDownloadManager(),
+    appRuntime.requireDuckDBService(),
+    appRuntime.mainWindow,
+    appRuntime.requireWindowManager(),
+    appRuntime.requireViewManager()
   );
 
   console.log('[OK] IPC handlers initialized');
@@ -566,13 +568,14 @@ function initializeIPC(): void {
  * 初始化软件更新管理器（仅生产环境）
  */
 async function initializeUpdater(): Promise<void> {
-  if (!mainWindow) {
+  if (!appRuntime.mainWindow) {
     console.warn('⚠️  Main window not created, skipping updater initialization');
     return;
   }
 
   try {
-    updateManager = new UpdateManager(logger, mainWindow);
+    appRuntime.updateManager = new UpdateManager(appRuntime.requireLogger(), appRuntime.mainWindow);
+    const updateManager = appRuntime.updateManager;
 
     // 注册更新相关的 IPC 处理器
     registerUpdaterHandlers(updateManager);
@@ -599,9 +602,11 @@ async function initializeUpdater(): Promise<void> {
  * 🆕 启动资源监控（内存泄漏检测）
  * 每分钟检查一次资源使用情况
  */
-function startResourceMonitoring(): void {
+function startResourceMonitoring(): () => void {
+  const viewManager = appRuntime.requireViewManager();
+
   // 定期检查资源统计
-  setInterval(() => {
+  const intervalId = setInterval(() => {
     const stats = viewManager.getResourceStats();
     const memUsage = process.memoryUsage();
 
@@ -634,6 +639,11 @@ function startResourceMonitoring(): void {
   }, 60000); // 每60秒检查一次
 
   console.log('[OK] Resource monitoring started (interval: 60s)');
+
+  return () => {
+    clearInterval(intervalId);
+    console.log('[OK] Resource monitoring stopped');
+  };
 }
 
 /**
@@ -641,18 +651,28 @@ function startResourceMonitoring(): void {
  */
 async function startHttpServer(): Promise<void> {
   // 如果启动正在进行中，直接等待而不是重新启动
-  if (httpServerStartPromise) {
+  if (appRuntime.httpServerStartPromise) {
     console.log('[HTTP] Server start already in progress, waiting...');
-    return httpServerStartPromise;
+    return appRuntime.httpServerStartPromise;
   }
 
   // 如果服务器已经在运行，先停止
-  if (httpMcpServer) {
+  if (appRuntime.httpMcpServer) {
     await stopHttpServer();
   }
 
-  // 创建启动 Promise 并保存引用
-  httpServerStartPromise = (async () => {
+  const store = appRuntime.requireStore();
+  const webhookSender = appRuntime.requireWebhookSender();
+  const duckdbService = appRuntime.requireDuckDBService();
+  const jsPluginManager = appRuntime.requireJSPluginManager();
+  const viewManager = appRuntime.requireViewManager();
+  const windowManager = appRuntime.requireWindowManager();
+
+  // 创建启动 Promise 并保存引用（带超时保护）
+  const HTTP_SERVER_START_TIMEOUT_MS = 30000;
+  let startTimedOut = false;
+
+  const startTask = (async () => {
     try {
       console.log('\n[HTTP] Starting HTTP Server (MCP + REST API)...');
 
@@ -667,7 +687,7 @@ async function startHttpServer(): Promise<void> {
 
       if (!httpApiConfig.enabled) {
         console.log('   [SKIP] HTTP Server start skipped because effective config is disabled');
-        httpMcpServer = null;
+        appRuntime.httpMcpServer = null;
         return;
       }
 
@@ -686,368 +706,18 @@ async function startHttpServer(): Promise<void> {
       }
 
       // 准备依赖项和配置
-      const toOrchestrationProfile = (profile: {
-        id?: unknown;
-        name?: unknown;
-        engine?: unknown;
-        status?: unknown;
-        partition?: unknown;
-        isSystem?: unknown;
-        totalUses?: unknown;
-        lastActiveAt?: Date | null;
-        updatedAt?: Date | null;
-      }) => ({
-        id: String(profile.id || ''),
-        name: String(profile.name || ''),
-        engine: String(profile.engine || ''),
-        status: String(profile.status || ''),
-        partition: String(profile.partition || ''),
-        isSystem: profile.isSystem === true,
-        totalUses: Number.isFinite(profile.totalUses) ? Number(profile.totalUses) : 0,
-        lastActiveAt: profile.lastActiveAt ? profile.lastActiveAt.toISOString() : '',
-        updatedAt: profile.updatedAt ? profile.updatedAt.toISOString() : '',
-      });
-
-      const toOrchestrationPluginInfo = (plugin: JSPluginInfo) => ({
-        id: String(plugin.id || ''),
-        name: String(plugin.name || ''),
-        version: String(plugin.version || ''),
-        author: String(plugin.author || ''),
-        ...(typeof plugin.description === 'string' && plugin.description.trim()
-          ? { description: plugin.description.trim() }
-          : {}),
-        ...(typeof plugin.icon === 'string' && plugin.icon.trim()
-          ? { icon: plugin.icon.trim() }
-          : {}),
-        ...(typeof plugin.category === 'string' && plugin.category.trim()
-          ? { category: plugin.category.trim() }
-          : {}),
-        installedAt:
-          typeof plugin.installedAt === 'number' && Number.isFinite(plugin.installedAt)
-            ? plugin.installedAt
-            : 0,
-        path: String(plugin.path || ''),
-        enabled: plugin.enabled !== false,
-        ...(typeof plugin.hasActivityBarView === 'boolean'
-          ? { hasActivityBarView: plugin.hasActivityBarView }
-          : {}),
-        ...(typeof plugin.activityBarViewOrder === 'number' &&
-        Number.isFinite(plugin.activityBarViewOrder)
-          ? { activityBarViewOrder: plugin.activityBarViewOrder }
-          : {}),
-        ...(typeof plugin.activityBarViewIcon === 'string' && plugin.activityBarViewIcon.trim()
-          ? { activityBarViewIcon: plugin.activityBarViewIcon.trim() }
-          : {}),
-        ...(typeof plugin.devMode === 'boolean' ? { devMode: plugin.devMode } : {}),
-        ...(typeof plugin.sourcePath === 'string' && plugin.sourcePath.trim()
-          ? { sourcePath: plugin.sourcePath.trim() }
-          : {}),
-        ...(typeof plugin.isSymlink === 'boolean' ? { isSymlink: plugin.isSymlink } : {}),
-        ...(typeof plugin.hotReloadEnabled === 'boolean'
-          ? { hotReloadEnabled: plugin.hotReloadEnabled }
-          : {}),
-        ...(plugin.sourceType ? { sourceType: plugin.sourceType } : {}),
-        ...(plugin.installChannel ? { installChannel: plugin.installChannel } : {}),
-        ...(typeof plugin.cloudPluginCode === 'string' && plugin.cloudPluginCode.trim()
-          ? { cloudPluginCode: plugin.cloudPluginCode.trim() }
-          : {}),
-        ...(typeof plugin.cloudReleaseVersion === 'string' && plugin.cloudReleaseVersion.trim()
-          ? { cloudReleaseVersion: plugin.cloudReleaseVersion.trim() }
-          : {}),
-        ...(typeof plugin.managedByPolicy === 'boolean'
-          ? { managedByPolicy: plugin.managedByPolicy }
-          : {}),
-        ...(typeof plugin.policyVersion === 'string' && plugin.policyVersion.trim()
-          ? { policyVersion: plugin.policyVersion.trim() }
-          : {}),
-        ...(typeof plugin.lastPolicySyncAt === 'number' && Number.isFinite(plugin.lastPolicySyncAt)
-          ? { lastPolicySyncAt: plugin.lastPolicySyncAt }
-          : {}),
-      });
-
-      const toOrchestrationPluginRuntimeStatus = (status: JSPluginRuntimeStatus) => ({
-        pluginId: String(status.pluginId || ''),
-        ...(typeof status.pluginName === 'string' && status.pluginName.trim()
-          ? { pluginName: status.pluginName.trim() }
-          : {}),
-        lifecyclePhase: status.lifecyclePhase,
-        workState: status.workState,
-        activeQueues:
-          typeof status.activeQueues === 'number' && Number.isFinite(status.activeQueues)
-            ? status.activeQueues
-            : 0,
-        runningTasks:
-          typeof status.runningTasks === 'number' && Number.isFinite(status.runningTasks)
-            ? status.runningTasks
-            : 0,
-        pendingTasks:
-          typeof status.pendingTasks === 'number' && Number.isFinite(status.pendingTasks)
-            ? status.pendingTasks
-            : 0,
-        failedTasks:
-          typeof status.failedTasks === 'number' && Number.isFinite(status.failedTasks)
-            ? status.failedTasks
-            : 0,
-        cancelledTasks:
-          typeof status.cancelledTasks === 'number' && Number.isFinite(status.cancelledTasks)
-            ? status.cancelledTasks
-            : 0,
-        ...(typeof status.currentSummary === 'string' && status.currentSummary.trim()
-          ? { currentSummary: status.currentSummary.trim() }
-          : {}),
-        ...(typeof status.currentOperation === 'string' && status.currentOperation.trim()
-          ? { currentOperation: status.currentOperation.trim() }
-          : {}),
-        ...(typeof status.progressPercent === 'number' && Number.isFinite(status.progressPercent)
-          ? { progressPercent: status.progressPercent }
-          : {}),
-        ...(status.lastError &&
-        typeof status.lastError.message === 'string' &&
-        Number.isFinite(status.lastError.at)
-          ? {
-              lastError: {
-                message: status.lastError.message,
-                at: status.lastError.at,
-              },
-            }
-          : {}),
-        ...(typeof status.lastActivityAt === 'number' && Number.isFinite(status.lastActivityAt)
-          ? { lastActivityAt: status.lastActivityAt }
-          : {}),
-        updatedAt:
-          typeof status.updatedAt === 'number' && Number.isFinite(status.updatedAt)
-            ? status.updatedAt
-            : Date.now(),
-      });
-
-      const profileService = duckdbService.getProfileService();
-      const hasProfileRuntimeMutation = (params: UpdateProfileParams) =>
-        params.fingerprint !== undefined ||
-        params.engine !== undefined ||
-        params.proxy !== undefined ||
-        params.quota !== undefined ||
-        params.idleTimeoutMs !== undefined ||
-        params.lockTimeoutMs !== undefined;
-
-      const dependencies: RestApiDependencies = {
+      const runtime: BuildRestApiDependenciesRuntime = {
+        duckdbService,
+        jsPluginManager,
         viewManager,
         windowManager,
-        datasetGateway: {
-          listDatasets: () => duckdbService.listDatasets(),
-          getDatasetInfo: (datasetId) => duckdbService.getDatasetInfo(datasetId),
-          queryDataset: (datasetId, sql, offset, limit) =>
-            duckdbService.queryDataset(datasetId, sql, offset, limit),
-          createEmptyDataset: (datasetName, options) =>
-            duckdbService.createEmptyDataset(datasetName, options),
-          importDatasetFile: (filePath, datasetName, options) =>
-            duckdbService.importDatasetFile(filePath, datasetName, options),
-          renameDataset: (datasetId, newName) => duckdbService.renameDataset(datasetId, newName),
-          deleteDataset: (datasetId) => duckdbService.deleteDataset(datasetId),
-        },
-        crossPluginGateway: {
-          listCallableApis: () => getPluginRegistry().listMCPCallableAPIs(),
-          callApi: (pluginId, apiName, params = []) =>
-            getPluginRegistry().callPluginAPIFromMCP(pluginId, apiName, params),
-        },
-        pluginGateway: {
-          listPlugins: async () => {
-            const plugins = await jsPluginManager.listPlugins();
-            return plugins.map((plugin) => toOrchestrationPluginInfo(plugin));
-          },
-          getPlugin: async (pluginId: string) => {
-            const plugin = await jsPluginManager.getPluginInfo(String(pluginId || '').trim());
-            return plugin ? toOrchestrationPluginInfo(plugin) : null;
-          },
-          listRuntimeStatuses: async () => {
-            const statuses = await jsPluginManager.listRuntimeStatuses();
-            return statuses.map((status) => toOrchestrationPluginRuntimeStatus(status));
-          },
-          getRuntimeStatus: async (pluginId: string) => {
-            const status = await jsPluginManager.getRuntimeStatus(String(pluginId || '').trim());
-            return status ? toOrchestrationPluginRuntimeStatus(status) : null;
-          },
-          installPlugin: async (request) => {
-            if (request.sourceType === 'cloud_code') {
-              const runtimePluginProvider = tiansheEdition.cloudCatalog.runtimePlugin;
-              if (!runtimePluginProvider) {
-                throw createStructuredError(
-                  ErrorCode.INVALID_PARAMETER,
-                  'cloud plugin install is not available in this edition'
-                );
-              }
-
-              const cloudPluginCode = String(request.cloudPluginCode || '').trim();
-              if (!cloudPluginCode) {
-                throw createStructuredError(
-                  ErrorCode.INVALID_PARAMETER,
-                  'cloudPluginCode is required for cloud plugin install'
-                );
-              }
-
-              const pkg = await runtimePluginProvider.fetchInstallPackage({
-                pluginCode: cloudPluginCode,
-              });
-              try {
-                const result = await jsPluginManager.installOrUpdateCloudPlugin(pkg.tempZipPath, {
-                  devMode: false,
-                  sourceType: 'cloud_managed',
-                  installChannel: 'cloud_download',
-                  trustedFirstParty: true,
-                  cloudPluginCode: pkg.pluginCode,
-                  cloudReleaseVersion: pkg.releaseVersion,
-                  managedByPolicy: true,
-                  policyVersion: pkg.policyVersion,
-                  lastPolicySyncAt: Date.now(),
-                });
-                if (!result.success || !result.pluginId) {
-                  throw new Error(result.error || 'Failed to install cloud plugin');
-                }
-                return {
-                  pluginId: result.pluginId,
-                  operation: result.operation || 'installed',
-                  sourceType: 'cloud_code' as const,
-                  ...(result.warnings?.length ? { warnings: result.warnings } : {}),
-                };
-              } finally {
-                if (pkg.tempZipPath) {
-                  await fs.promises.rm(pkg.tempZipPath, { force: true }).catch(() => undefined);
-                }
-              }
-            }
-
-            const sourcePath = String(request.sourcePath || '').trim();
-            if (!sourcePath) {
-              throw createStructuredError(
-                ErrorCode.INVALID_PARAMETER,
-                'sourcePath is required for local plugin install'
-              );
-            }
-            const result = await jsPluginManager.import(sourcePath, {
-              devMode: request.devMode === true,
-              trustedFirstParty: true,
-            });
-            if (!result.success || !result.pluginId) {
-              throw new Error(result.error || 'Failed to install local plugin');
-            }
-            return {
-              pluginId: result.pluginId,
-              operation: result.operation || 'installed',
-              sourceType: 'local_path' as const,
-              ...(result.warnings?.length ? { warnings: result.warnings } : {}),
-            };
-          },
-          reloadPlugin: async (pluginId: string) => {
-            await jsPluginManager.reload(String(pluginId || '').trim());
-          },
-          uninstallPlugin: async (pluginId: string, options?: { deleteTables?: boolean }) => {
-            await jsPluginManager.uninstall(
-              String(pluginId || '').trim(),
-              options?.deleteTables === true
-            );
-          },
-        },
-        profileGateway: {
-          listProfiles: async () => {
-            const profiles = await profileService.list();
-            return profiles.map((p) => toOrchestrationProfile(p));
-          },
-          getProfile: async (profileId: string) => {
-            const profile = await profileService.get(String(profileId || '').trim());
-            if (!profile) return null;
-            return toOrchestrationProfile(profile);
-          },
-          resolveProfile: async (query: string) => {
-            const q = String(query || '').trim();
-            if (!q) return null;
-
-            const byId = await profileService.get(q);
-            if (byId) {
-              return {
-                query: q,
-                matchedBy: 'id' as const,
-                profile: toOrchestrationProfile(byId),
-              };
-            }
-
-            const profiles = await profileService.list();
-            const byName = profiles.filter((p) => String(p.name || '').trim() === q);
-            if (!byName.length) return null;
-            if (byName.length > 1) {
-              throw createStructuredError(
-                ErrorCode.INVALID_PARAMETER,
-                `Profile query "${q}" matches multiple profiles`,
-                {
-                  suggestion:
-                    'Use profile_resolve with an exact profile id, or disambiguate by listing profiles first',
-                  context: {
-                    query: q,
-                    candidateCount: byName.length,
-                    candidates: byName.map((item) => toOrchestrationProfile(item)),
-                  },
-                }
-              );
-            }
-            return {
-              query: q,
-              matchedBy: 'name' as const,
-              profile: toOrchestrationProfile(byName[0]),
-            };
-          },
-          createProfile: async (params: CreateProfileParams) => {
-            const profile = await profileService.create(params);
-            return toOrchestrationProfile(profile);
-          },
-          updateProfile: async (id: string, params: UpdateProfileParams) => {
-            const updated = await profileService.update(id, params);
-
-            if (hasProfileRuntimeMutation(params)) {
-              try {
-                fingerprintManager.clearCache(updated.id);
-              } catch {
-                // ignore
-              }
-
-              try {
-                fingerprintManager.clearCache(updated.partition);
-              } catch {
-                // ignore
-              }
-
-              try {
-                const poolManager = getBrowserPoolManager();
-                await poolManager.destroyProfileBrowsers(id);
-              } catch {
-                // ignore
-              }
-            }
-
-            return toOrchestrationProfile(updated);
-          },
-          deleteProfile: async (id: string) => {
-            try {
-              const poolManager = getBrowserPoolManager();
-              await poolManager.destroyProfileBrowsers(id);
-            } catch {
-              // ignore
-            }
-
-            await profileService.deleteWithCascade(id);
-          },
-        },
-        observationGateway: {
-          getTraceSummary: (traceId: string) => duckdbService.getTraceSummary(traceId),
-          getFailureBundle: (traceId: string) => duckdbService.getFailureBundle(traceId),
-          getTraceTimeline: (traceId: string, limit?: number) =>
-            duckdbService.getTraceTimeline(traceId, limit),
-          searchRecentFailures: (limit?: number) => duckdbService.searchRecentFailures(limit),
-        },
-        ...(httpApiConfig.orchestrationIdempotencyStore === 'duckdb'
-          ? {
-              idempotencyPersistence:
-                createDuckDbOrchestrationIdempotencyPersistence(duckdbService),
-            }
-          : {}),
+        fingerprintManager,
+        getBrowserPoolManager,
+        getPluginRegistry,
+        cloudRuntimePluginProvider: tiansheEdition.cloudCatalog.runtimePlugin,
       };
+
+      const dependencies = buildRestApiDependencies({ runtime, httpApiConfig });
 
       const restApiConfig: RestApiConfig = {
         enableAuth: httpApiConfig.enableAuth,
@@ -1063,7 +733,7 @@ async function startHttpServer(): Promise<void> {
       const mcpHost = HTTP_SERVER_DEFAULTS.BIND_ADDRESS;
 
       // 启动 HTTP 服务器（固定端口策略）
-      httpMcpServer = await createHttpMcpServer(
+      const startedServer = await createHttpMcpServer(
         {
           port: mcpPort,
           name: 'airpa-browser-http',
@@ -1073,6 +743,18 @@ async function startHttpServer(): Promise<void> {
         restApiConfig,
         getBrowserPoolManager
       );
+
+      if (startTimedOut) {
+        console.warn(
+          `   [WARN] HTTP Server started after timeout; stopping late server on port ${mcpPort}`
+        );
+        await startedServer.stop().catch((stopError) => {
+          console.error('   [ERROR] Failed to stop late HTTP Server:', stopError);
+        });
+        return;
+      }
+
+      appRuntime.httpMcpServer = startedServer;
 
       console.log(`   [OK] HTTP Server started on port ${mcpPort}`);
       // MCP 端点（仅在启用时显示）
@@ -1135,19 +817,37 @@ async function startHttpServer(): Promise<void> {
       }
       console.error('   Please check if the port is already in use or view the full error log');
       throw error;
-    } finally {
-      // 无论成功失败都清除启动锁
-      httpServerStartPromise = null;
     }
   })();
 
-  return httpServerStartPromise;
+  let timeoutId: NodeJS.Timeout | undefined;
+  const timeoutTask = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      startTimedOut = true;
+      reject(new Error(`HTTP server start timed out after ${HTTP_SERVER_START_TIMEOUT_MS}ms`));
+    }, HTTP_SERVER_START_TIMEOUT_MS);
+  });
+
+  const guardedStartPromise = Promise.race([startTask, timeoutTask]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    if (appRuntime.httpServerStartPromise === guardedStartPromise) {
+      appRuntime.httpServerStartPromise = null;
+    }
+  });
+
+  appRuntime.httpServerStartPromise = guardedStartPromise;
+
+  return appRuntime.httpServerStartPromise;
 }
 
 /**
  * 停止 HTTP 服务器
  */
 async function stopHttpServer(): Promise<void> {
+  const httpMcpServer = appRuntime.httpMcpServer;
+
   if (!httpMcpServer) {
     console.log('[HTTP] Server is not running');
     return;
@@ -1156,7 +856,7 @@ async function stopHttpServer(): Promise<void> {
   try {
     console.log('[HTTP] Stopping HTTP Server...');
     await httpMcpServer.stop();
-    httpMcpServer = null;
+    appRuntime.httpMcpServer = null;
     console.log('   [OK] HTTP Server stopped');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1173,7 +873,9 @@ async function stopHttpServer(): Promise<void> {
 async function initializeBrowserControlApi(): Promise<void> {
   // 从配置读取是否启用
   const httpApiConfig = resolveEffectiveHttpApiConfig(
-    store.get('httpApiConfig', DEFAULT_HTTP_API_CONFIG) as Partial<typeof DEFAULT_HTTP_API_CONFIG>
+    appRuntime.requireStore().get('httpApiConfig', DEFAULT_HTTP_API_CONFIG) as Partial<
+      typeof DEFAULT_HTTP_API_CONFIG
+    >
   );
 
   if (!httpApiConfig.enabled) {
@@ -1199,30 +901,33 @@ async function handleInitializationFailure(error: unknown): Promise<void> {
 
 const shutdownBootstrap = createShutdownBootstrap({
   stopHttpServer,
+  disposeResourceMonitoring: () => {
+    appRuntime.disposeResourceMonitoring?.();
+  },
   disposeScheduler: async () => {
-    if (schedulerService) {
-      await schedulerService.dispose();
+    if (appRuntime.schedulerService) {
+      await appRuntime.schedulerService.dispose();
     }
   },
   cleanupUpdater: () => {
-    if (updateManager) {
-      updateManager.cleanup();
+    if (appRuntime.updateManager) {
+      appRuntime.updateManager.cleanup();
     }
   },
   stopBrowserPool,
   cleanupViewManager: async () => {
-    if (viewManager) {
-      await viewManager.cleanup();
+    if (appRuntime.viewManager) {
+      await appRuntime.viewManager.cleanup();
     }
   },
   cleanupWindowManager: () => {
-    if (windowManager) {
-      windowManager.cleanup();
+    if (appRuntime.windowManager) {
+      appRuntime.windowManager.cleanup();
     }
   },
   closeDuckDB: async () => {
-    if (duckdbService) {
-      await duckdbService.close();
+    if (appRuntime.duckdbService) {
+      await appRuntime.duckdbService.close();
     }
   },
   exitApp: (code) => app.exit(code),
@@ -1249,13 +954,15 @@ app.whenReady().then(async () => {
     initializeObservationIPC,
     initializeHttpApiIPC,
     initializeOcrPoolIPC,
-    initializePlugins: () => jsPluginManager.init(),
+    initializePlugins: () => appRuntime.requireJSPluginManager().init(),
     createWindow,
-    setupWindowResizeListener: () => viewManager.setupWindowResizeListener(),
+    setupWindowResizeListener: () => appRuntime.requireViewManager().setupWindowResizeListener(),
     initializeIPC,
     shouldInitializeUpdater: () => isProductionMode(),
     initializeUpdater,
-    startResourceMonitoring,
+    startResourceMonitoring: () => {
+      appRuntime.disposeResourceMonitoring = startResourceMonitoring();
+    },
     initializeBrowserControlApi,
     handleInitializationFailure,
   });
@@ -1264,10 +971,6 @@ app.whenReady().then(async () => {
 /**
  * 导出全局访问器（用于调试）
  */
-export function getLogger(): LogStorageService {
-  return logger;
-}
-
-export function getDuckDBService(): DuckDBService {
-  return duckdbService;
+export function getBrowserPoolReadiness() {
+  return appRuntime.browserPoolReadiness.getSnapshot();
 }

@@ -11,7 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as path from 'path';
-import type { DuckDBService } from '../../main/duckdb/service';
+import type { IDuckDBService } from '../../types/duckdb';
 import type { JSPluginManifest } from '../../types/js-plugin';
 import { PluginLoader, type PluginImportCallbacks } from './plugin-loader';
 
@@ -99,7 +99,7 @@ const createTestManifest = (overrides?: Partial<JSPluginManifest>): JSPluginMani
 });
 
 /** 创建测试用的 DuckDB Service mock */
-const createMockDuckDB = (): DuckDBService =>
+const createMockDuckDB = (): IDuckDBService =>
   ({
     executeWithParams: vi.fn().mockResolvedValue(undefined),
   }) as any;
@@ -122,7 +122,7 @@ const createMockCallbacks = (): PluginImportCallbacks => ({
 
 describe('PluginLoader', () => {
   let loader: PluginLoader;
-  let mockDuckDB: DuckDBService;
+  let mockDuckDB: IDuckDBService;
 
   beforeEach(() => {
     // 重置所有 mocks

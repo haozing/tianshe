@@ -86,6 +86,7 @@ vi.mock('../../lib/toast', () => ({
 }));
 
 import { AddRecordDrawer } from '../AddRecordDrawer';
+import { assertImportRecordsFileAllowed } from '../importFilePolicy';
 
 describe('AddRecordDrawer', () => {
   const defaultProps = {
@@ -330,6 +331,27 @@ describe('AddRecordDrawer', () => {
   });
 
   describe('Batch Data Submission', () => {
+    it('should reject unsupported uploaded file extensions before reading file content', () => {
+      expect(() =>
+        assertImportRecordsFileAllowed({
+          name: 'records.exe',
+          size: 10,
+        } as File)
+      ).toThrow('不支持的导入文件类型');
+    });
+
+    it('should reject oversized uploaded files before reading file content', () => {
+      expect(() =>
+        assertImportRecordsFileAllowed(
+          {
+            name: 'records.csv',
+            size: 3,
+          } as File,
+          2
+        )
+      ).toThrow('文件过大');
+    });
+
     it('should parse and submit pasted CSV data', async () => {
       mockBatchInsertRecords.mockResolvedValue({ success: true });
 

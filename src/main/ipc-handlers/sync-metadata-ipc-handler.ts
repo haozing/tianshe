@@ -19,7 +19,12 @@ export function registerSyncMetadataHandlers(syncMetadataService: SyncMetadataSe
 
   createIpcHandler(
     'sync-metadata:get-entity-mapping',
-    async (domain: SyncDomain, entityType: SyncEntityType, localId: string, context?: SyncScopeContext) => {
+    async (
+      domain: SyncDomain,
+      entityType: SyncEntityType,
+      localId: string,
+      context?: SyncScopeContext
+    ) => {
       return await syncMetadataService.getEntityMapping(domain, entityType, localId, context);
     },
     'Failed to get sync entity mapping'
@@ -33,7 +38,12 @@ export function registerSyncMetadataHandlers(syncMetadataService: SyncMetadataSe
       globalUid: string,
       context?: SyncScopeContext
     ) => {
-      return await syncMetadataService.getEntityMappingByGlobalUid(domain, entityType, globalUid, context);
+      return await syncMetadataService.getEntityMappingByGlobalUid(
+        domain,
+        entityType,
+        globalUid,
+        context
+      );
     },
     'Failed to get sync entity mapping by global UID'
   );
@@ -48,7 +58,12 @@ export function registerSyncMetadataHandlers(syncMetadataService: SyncMetadataSe
 
   createIpcVoidHandler(
     'sync-metadata:delete-entity-mapping',
-    async (domain: SyncDomain, entityType: SyncEntityType, localId: string, context?: SyncScopeContext) => {
+    async (
+      domain: SyncDomain,
+      entityType: SyncEntityType,
+      localId: string,
+      context?: SyncScopeContext
+    ) => {
       await syncMetadataService.deleteEntityMapping(domain, entityType, localId, context);
     },
     'Failed to delete sync entity mapping'

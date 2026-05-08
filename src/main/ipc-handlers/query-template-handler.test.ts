@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockIpcMainHandle } = vi.hoisted(() => ({
+const { mockIpcMainHandle, mockRemoveHandler, mockRemoveListener } = vi.hoisted(() => ({
   mockIpcMainHandle: vi.fn(),
+  mockRemoveHandler: vi.fn(),
+  mockRemoveListener: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   ipcMain: {
     handle: mockIpcMainHandle,
+    removeHandler: mockRemoveHandler,
+    removeListener: mockRemoveListener,
   },
 }));
 
@@ -19,6 +23,7 @@ vi.mock('../ipc-utils', () => ({
 
 import { QueryTemplateIPCHandler } from './query-template-handler';
 import type { DuckDBService } from '../duckdb/service';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 
 describe('QueryTemplateIPCHandler', () => {
   let handlers: Map<string, Function>;
@@ -26,6 +31,7 @@ describe('QueryTemplateIPCHandler', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
     handlers = new Map();
     mockIpcMainHandle.mockImplementation((channel: string, handler: Function) => {
       handlers.set(channel, handler);
@@ -373,7 +379,3 @@ describe('QueryTemplateIPCHandler', () => {
     });
   });
 });
-
-
-
-

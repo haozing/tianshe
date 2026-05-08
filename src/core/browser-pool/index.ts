@@ -107,6 +107,7 @@ export { WaitQueue } from './wait-queue';
 // 池管理器导出
 export {
   BrowserPoolManager,
+  createBrowserPoolManager,
   initBrowserPoolManager,
   getBrowserPoolManager,
   resetBrowserPoolManager,
@@ -123,7 +124,7 @@ export type { BrowserPoolEvents, BrowserAcquiredEvent, BrowserReleasedEvent } fr
 import { initBrowserPoolManager, getBrowserPoolManager } from './pool-manager';
 import type { BrowserFactory, BrowserDestroyer } from './global-pool';
 import type { BrowserPoolConfig } from '../../constants/browser-pool';
-import type { ProfileService } from '../../main/duckdb/profile-service';
+import type { IProfileService } from '../../types/service-interfaces';
 
 /**
  * 初始化浏览器池
@@ -136,7 +137,7 @@ import type { ProfileService } from '../../main/duckdb/profile-service';
  * @param config 可选的池配置
  */
 export async function initializeBrowserPool(
-  getProfileService: () => ProfileService,
+  getProfileService: () => IProfileService,
   browserFactory: BrowserFactory,
   browserDestroyer: BrowserDestroyer,
   config?: Partial<BrowserPoolConfig>

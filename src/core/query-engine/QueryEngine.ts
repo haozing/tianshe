@@ -5,14 +5,9 @@
 
 import type { IDatasetResolver } from './interfaces/IDatasetResolver';
 import type { IQueryDuckDBService } from './interfaces/IQueryDuckDBService';
-import type {
-  ComputeConfig,
-  QueryConfig,
-  QueryExecutionResult,
-  SQLContext,
-  SoftDeleteConfig,
-} from './types';
+import type { ComputeConfig, QueryConfig, QueryExecutionResult, SQLContext } from './types';
 import { ConfigValidator } from './validators/ConfigValidator';
+import { FieldReferenceValidator } from './validators/FieldReferenceValidator';
 import { FilterBuilder } from './builders/FilterBuilder';
 import { ColumnBuilder } from './builders/ColumnBuilder';
 import { SortBuilder } from './builders/SortBuilder';
@@ -30,6 +25,7 @@ import { LRUCache } from 'lru-cache';
 import { LoggerFactory, type ILogger } from './utils/logger';
 import { PreviewService } from './services/PreviewService';
 import { SQLUtils } from './utils/sql-utils';
+import { QueryPipeline, createBuilderStep, createSoftDeleteStep } from './pipeline';
 
 export class QueryEngine {
   // 预览服务（公开访问）
@@ -67,6 +63,7 @@ export class QueryEngine {
   private explodeBuilder: ExplodeBuilder; //
   private aggregateBuilder: AggregateBuilder; //
   private groupBuilder: GroupBuilder; //
+  private pipeline: QueryPipeline;
 
   constructor(
     private duckdbService: IQueryDuckDBService,
@@ -91,20 +88,129 @@ export class QueryEngine {
     this.aggregateBuilder = new AggregateBuilder(); //
     this.groupBuilder = new GroupBuilder(); //
 
+    // 组装查询管道（将硬编码的 Builder 调用链转为可注册步骤）
+    this.pipeline = new QueryPipeline()
+      .register(createSoftDeleteStep(this.logger))
+      .register(
+        createBuilderStep(this.filterBuilder, {
+          key: 'filter',
+          phase: 'pre-dedupe',
+          extractConfig: (c) => (c.filter?.conditions?.length ? c.filter : undefined),
+          cteName: 'filtered',
+        })
+      )
+      .register(
+        createBuilderStep(this.cleanBuilder, {
+          key: 'clean',
+          phase: 'pre-dedupe',
+          extractConfig: (c) => (c.clean?.length ? c.clean : undefined),
+          cteName: 'cleaned',
+        })
+      )
+      .register(
+        createBuilderStep(this.explodeBuilder, {
+          key: 'explode',
+          phase: 'pre-dedupe',
+          extractConfig: (c) => (c.explode?.length ? c.explode : undefined),
+          cteName: 'exploded',
+        })
+      )
+      .register(
+        createBuilderStep(this.validationBuilder, {
+          key: 'validation',
+          phase: 'pre-dedupe',
+          extractConfig: (c) => (c.validation?.length ? c.validation : undefined),
+          cteName: 'validated',
+        })
+      )
+      .register(
+        createBuilderStep(this.lookupBuilder, {
+          key: 'lookup',
+          phase: 'pre-dedupe',
+          extractConfig: (c) => (c.lookup?.length ? c.lookup : undefined),
+          cteName: 'enriched',
+        })
+      )
+      .register(
+        createBuilderStep(this.computeBuilder, {
+          key: 'compute',
+          phase: 'pre-dedupe',
+          extractConfig: (c) => (c.compute?.length ? c.compute : undefined),
+          cteName: 'computed',
+          preApply: (computeConfig, context) => {
+            for (const compute of computeConfig) {
+              if (context.availableColumns.has(compute.name)) {
+                throw QueryErrorFactory.invalidParam(
+                  'compute.name',
+                  compute.name,
+                  `列名 '${compute.name}' 已存在，请使用不同的列名或先删除已有列`
+                );
+              }
+            }
+          },
+        })
+      )
+      .register(
+        createBuilderStep(this.groupBuilder, {
+          key: 'group',
+          phase: 'pre-dedupe',
+          extractConfig: (c) => c.group,
+          cteName: 'grouped',
+        })
+      )
+      .register(
+        createBuilderStep(this.aggregateBuilder, {
+          key: 'aggregate',
+          phase: 'pre-dedupe',
+          extractConfig: (c) => c.aggregate,
+          cteName: 'aggregated',
+          preApply: (aggregateConfig, context) => {
+            if (context.isAggregated) {
+              throw QueryErrorFactory.unsupportedOperation('double aggregation', 'aggregate');
+            }
+            this.assertAggregateFieldsExist(aggregateConfig, context);
+          },
+          postApply: (_config, context) => {
+            context.isAggregated = true;
+          },
+        })
+      )
+      .register(
+        createBuilderStep(this.dedupeBuilder, {
+          key: 'dedupe',
+          phase: 'dedupe',
+          extractConfig: (c) => c.dedupe,
+          cteName: 'deduped',
+          preApply: (_config, context) => {
+            if (context.isAggregated) {
+              throw QueryErrorFactory.unsupportedOperation('dedupe after aggregation', 'dedupe');
+            }
+          },
+        })
+      )
+      .register(
+        createBuilderStep(this.sampleBuilder, {
+          key: 'sample',
+          phase: 'post-dedupe',
+          extractConfig: (c) => c.sample,
+          cteName: 'sampled',
+          preApply: (_config, context) => {
+            if (context.isAggregated) {
+              throw QueryErrorFactory.unsupportedOperation(
+                'sampling after aggregation. 采样应用于原始数据或筛选后的数据，不能用于聚合统计结果。建议：移除采样配置或移除聚合配置',
+                'sample'
+              );
+            }
+          },
+        })
+      );
+
     // 初始化预览服务
     this.preview = new PreviewService({
       duckdbService: this.duckdbService,
       logger: this.logger,
-      builders: {
-        clean: this.cleanBuilder,
-        dedupe: this.dedupeBuilder,
-        filter: this.filterBuilder,
-        aggregate: this.aggregateBuilder,
-        sample: this.sampleBuilder,
-        lookup: this.lookupBuilder,
-        compute: this.computeBuilder,
-        group: this.groupBuilder,
-      },
+      pipeline: this.pipeline,
+      lookupBuilder: this.lookupBuilder,
       createBaseContext: (datasetId: string) => this.createBaseContext(datasetId),
       createDedupePreviewContext: (datasetId: string, config: QueryConfig = {}) =>
         this.createDedupePreviewContext(datasetId, config),
@@ -114,14 +220,10 @@ export class QueryEngine {
     this.logger.info('QueryEngine initialized with all builders and preview service');
   }
 
-  /**
-   * 内部方法：生成 SQL 并返回元数据（是否应用默认 LIMIT）
-   */
   private async buildSQLWithMetadata(
     datasetId: string,
     config: QueryConfig
   ): Promise<{ sql: string; isDefaultLimitApplied: boolean }> {
-    // 1. 验证配置
     const validation = ConfigValidator.validate(config);
     if (!validation.success) {
       throw QueryErrorFactory.invalidParam(
@@ -132,32 +234,23 @@ export class QueryEngine {
     }
 
     const validatedConfig = validation.data!;
+    if (validatedConfig.group && validatedConfig.aggregate) {
+      throw QueryErrorFactory.unsupportedOperation(
+        'Cannot use simple grouping with aggregation',
+        'group'
+      );
+    }
 
-    // 2. 初始化 SQL 上下文（统一注入持久化计算列）
+    await this.populateDefaultGroupStatsFields(datasetId, validatedConfig);
+
     const context = await this.createBaseContext(datasetId);
 
     this.logger.info(`Building SQL for dataset ${datasetId}`);
     this.logger.debug(`Available columns:`, Array.from(context.availableColumns));
 
-    // 3. 按顺序应用各个Builder（CTE链式结构）
-    await this.applyPreDedupeOperations(datasetId, context, validatedConfig);
+    await this.pipeline.executePhase('pre-dedupe', context, validatedConfig);
+    await this.pipeline.executePhase('dedupe', context, validatedConfig);
 
-    // 3.9 去重
-    if (validatedConfig.dedupe) {
-      if (context.isAggregated) {
-        throw QueryErrorFactory.unsupportedOperation('dedupe after aggregation', 'dedupe');
-      }
-      const dedupeSQL = this.dedupeBuilder.build(context, validatedConfig.dedupe);
-      context.ctes.push({ name: 'deduped', sql: dedupeSQL });
-      context.currentTable = 'deduped';
-      context.availableColumns = this.dedupeBuilder.getResultColumns(
-        context,
-        validatedConfig.dedupe
-      );
-      this.logger.debug(`Applied dedupe: ${validatedConfig.dedupe.type}`);
-    }
-
-    // 3.10 采样（在所有数据处理操作之后，排序和分页之前执行）
     const defaultSampleOrderBy =
       validatedConfig.sample &&
       (validatedConfig.sort?.columns?.length ?? 0) === 0 &&
@@ -165,23 +258,8 @@ export class QueryEngine {
         ? `ORDER BY ${SQLUtils.escapeIdentifier('_row_id')} ASC`
         : '';
 
-    if (validatedConfig.sample) {
-      // ✅ 检查：采样和聚合不能同时使用（语义冲突）
-      if (context.isAggregated) {
-        throw QueryErrorFactory.unsupportedOperation(
-          'sampling after aggregation. 采样应用于原始数据或筛选后的数据，不能用于聚合统计结果。建议：移除采样配置或移除聚合配置',
-          'sample'
-        );
-      }
+    await this.pipeline.executePhase('post-dedupe', context, validatedConfig);
 
-      const sampleSQL = await this.sampleBuilder.build(context, validatedConfig.sample);
-      context.ctes.push({ name: 'sampled', sql: sampleSQL });
-      context.currentTable = 'sampled';
-      // availableColumns 不变（采样不改变列结构）
-      this.logger.debug(`Applied sample: ${validatedConfig.sample.type}`);
-    }
-
-    // 3.11 选列（投影裁剪 - 倒数第二步）
     const selectList = this.columnBuilder.buildSelectList(context, validatedConfig.columns);
     if (validatedConfig.columns) {
       context.availableColumns = this.columnBuilder.getResultColumns(
@@ -190,37 +268,29 @@ export class QueryEngine {
       );
     }
 
-    // 3.12 排序和分页（最后执行）
     const orderByClause = this.sortBuilder.buildOrderBy(validatedConfig.sort);
     const limitClause = this.sortBuilder.buildLimit(validatedConfig.sort);
 
-    // 4. 组装最终SQL
     let finalSQL = '';
-
     if (context.ctes.length > 0) {
-      // 使用 CTE
       const cteStatements = context.ctes
         .map((cte) => `${cte.name} AS (\n  ${cte.sql}\n)`)
         .join(',\n');
       finalSQL = `WITH ${cteStatements}\nSELECT ${selectList}\nFROM ${context.currentTable}`;
     } else {
-      // 没有 CTE，直接查询
       finalSQL = `SELECT ${selectList}\nFROM ${context.currentTable}`;
     }
 
-    // 添加 ORDER BY
     if (orderByClause) {
       finalSQL += `\n${orderByClause}`;
     } else if (defaultSampleOrderBy) {
       finalSQL += `\n${defaultSampleOrderBy}`;
     }
 
-    // 添加 LIMIT（如果用户未指定，则使用默认上限）
     let isDefaultLimitApplied = false;
     if (limitClause) {
       finalSQL += `\n${limitClause}`;
     } else {
-      // 添加默认结果集上限以防止 OOM
       finalSQL += `\nLIMIT ${QueryEngine.DEFAULT_MAX_ROWS}`;
       isDefaultLimitApplied = true;
       this.logger.warn(`Applied default LIMIT: ${QueryEngine.DEFAULT_MAX_ROWS}`);
@@ -229,132 +299,6 @@ export class QueryEngine {
     this.logger.debug(`Generated SQL:\n${finalSQL}`);
 
     return { sql: finalSQL, isDefaultLimitApplied };
-  }
-
-  private async applyPreDedupeOperations(
-    datasetId: string,
-    context: SQLContext,
-    config: QueryConfig
-  ): Promise<void> {
-    if (config.softDelete) {
-      const softDeleteCTE = this.applySoftDelete(context, config.softDelete);
-      if (softDeleteCTE) {
-        context.ctes.push(softDeleteCTE);
-        context.currentTable = softDeleteCTE.name;
-        this.logger.debug(`Applied soft delete filter: ${config.softDelete.show} mode`);
-      }
-    }
-
-    if (config.filter?.conditions && config.filter.conditions.length > 0) {
-      const filterSQL = this.filterBuilder.build(context, config.filter);
-      context.ctes.push({ name: 'filtered', sql: filterSQL });
-      context.currentTable = 'filtered';
-      this.logger.debug(`Applied filter: ${config.filter.conditions.length} conditions`);
-    }
-
-    if (config.clean && config.clean.length > 0) {
-      const cleanSQL = this.cleanBuilder.build(context, config.clean);
-      context.ctes.push({ name: 'cleaned', sql: cleanSQL });
-      context.currentTable = 'cleaned';
-      context.availableColumns = this.cleanBuilder.getResultColumns(context, config.clean);
-      this.logger.debug(`Applied clean: ${config.clean.length} operations`);
-    }
-
-    if (config.explode && config.explode.length > 0) {
-      const explodeSQL = await this.explodeBuilder.build(context, config.explode);
-      context.ctes.push({ name: 'exploded', sql: explodeSQL });
-      context.currentTable = 'exploded';
-      context.availableColumns = await this.explodeBuilder.getResultColumns(
-        context,
-        config.explode
-      );
-      this.logger.debug(`Applied explode: ${config.explode.length} operations`);
-    }
-
-    if (config.validation && config.validation.length > 0) {
-      const validSQL = this.validationBuilder.build(context, config.validation);
-      context.ctes.push({ name: 'validated', sql: validSQL });
-      context.currentTable = 'validated';
-      context.availableColumns = this.validationBuilder.getResultColumns(
-        context,
-        config.validation
-      );
-      this.logger.debug(`Applied validation: ${config.validation.length} rules`);
-    }
-
-    if (config.lookup && config.lookup.length > 0) {
-      const lookupSQL = await this.lookupBuilder.build(context, config.lookup);
-      context.ctes.push({ name: 'enriched', sql: lookupSQL });
-      context.currentTable = 'enriched';
-      context.availableColumns = await this.lookupBuilder.getResultColumns(context, config.lookup);
-      this.logger.debug(`Applied lookup: ${config.lookup.length} lookups`);
-    }
-
-    if (config.compute && config.compute.length > 0) {
-      for (const compute of config.compute) {
-        if (context.availableColumns.has(compute.name)) {
-          throw QueryErrorFactory.invalidParam(
-            'compute.name',
-            compute.name,
-            `列名 '${compute.name}' 已存在，请使用不同的列名或先删除已有列`
-          );
-        }
-      }
-
-      const computeSQL = this.computeBuilder.build(context, config.compute);
-      context.ctes.push({ name: 'computed', sql: computeSQL });
-      context.currentTable = 'computed';
-      context.availableColumns = this.computeBuilder.getResultColumns(context, config.compute);
-      this.logger.debug(`Applied compute: ${config.compute.length} columns`);
-    }
-
-    if (config.group) {
-      if (config.aggregate) {
-        throw QueryErrorFactory.unsupportedOperation(
-          'Cannot use simple grouping with aggregation',
-          'group'
-        );
-      }
-
-      await this.populateDefaultGroupStatsFields(datasetId, config);
-
-      const groupSQL = await this.groupBuilder.build(context, config.group);
-      context.ctes.push({ name: 'grouped', sql: groupSQL });
-      context.currentTable = 'grouped';
-      context.availableColumns = await this.groupBuilder.getResultColumns(context, config.group);
-      this.logger.debug(`Applied group: ${config.group.field}`);
-    }
-
-    if (config.aggregate) {
-      if (context.isAggregated) {
-        throw QueryErrorFactory.unsupportedOperation('double aggregation', 'aggregate');
-      }
-
-      for (const field of config.aggregate.groupBy) {
-        if (!context.availableColumns.has(field)) {
-          throw QueryErrorFactory.fieldNotFound(field, Array.from(context.availableColumns));
-        }
-      }
-
-      for (const measure of config.aggregate.measures) {
-        if (measure.field && !context.availableColumns.has(measure.field)) {
-          throw QueryErrorFactory.fieldNotFound(
-            measure.field,
-            Array.from(context.availableColumns)
-          );
-        }
-      }
-
-      const aggregateSQL = await this.aggregateBuilder.build(context, config.aggregate);
-      context.ctes.push({ name: 'aggregated', sql: aggregateSQL });
-      context.currentTable = 'aggregated';
-      context.availableColumns = await this.aggregateBuilder.getResultColumns(
-        context,
-        config.aggregate
-      );
-      context.isAggregated = true;
-      this.logger.debug(`Applied aggregate: GROUP BY ${config.aggregate.groupBy.join(', ')}`);
-    }
   }
 
   private async populateDefaultGroupStatsFields(
@@ -369,7 +313,7 @@ export class QueryEngine {
     const dataset = await this.duckdbService.getDatasetInfo(datasetId);
     if (dataset?.schema) {
       dataset.schema.forEach((col) => {
-        const type = col.duckdbType?.toLowerCase() || '';
+        const type = String(col.duckdbType ?? col.type ?? '').toLowerCase();
         if (
           type.includes('int') ||
           type.includes('float') ||
@@ -401,8 +345,17 @@ export class QueryEngine {
     }
 
     const validatedConfig = validation.data || {};
+    if (validatedConfig.group && validatedConfig.aggregate) {
+      throw QueryErrorFactory.unsupportedOperation(
+        'Cannot use simple grouping with aggregation',
+        'group'
+      );
+    }
+
+    await this.populateDefaultGroupStatsFields(datasetId, validatedConfig);
+
     const context = await this.createBaseContext(datasetId);
-    await this.applyPreDedupeOperations(datasetId, context, validatedConfig);
+    await this.pipeline.executePhase('pre-dedupe', context, validatedConfig);
 
     if (context.isAggregated) {
       throw QueryErrorFactory.unsupportedOperation('dedupe after aggregation', 'dedupe');
@@ -517,37 +470,51 @@ export class QueryEngine {
     return context;
   }
 
-  /**
-   * 核心方法：将JSON配置转换为SQL（公共接口）
-   */
+  private assertAggregateFieldsExist(
+    aggregateConfig: NonNullable<QueryConfig['aggregate']>,
+    context: SQLContext
+  ): void {
+    for (const field of aggregateConfig.groupBy) {
+      if (!context.availableColumns.has(field)) {
+        throw QueryErrorFactory.fieldNotFound(field, Array.from(context.availableColumns));
+      }
+    }
+
+    for (const measure of aggregateConfig.measures) {
+      const referencedFields = [
+        measure.field,
+        measure.params?.orderBy,
+        measure.params?.argField,
+      ].filter((field): field is string => Boolean(field));
+
+      for (const field of referencedFields) {
+        if (!context.availableColumns.has(field)) {
+          throw QueryErrorFactory.fieldNotFound(field, Array.from(context.availableColumns));
+        }
+      }
+    }
+  }
+
   async buildSQL(datasetId: string, config: QueryConfig): Promise<string> {
     const { sql } = await this.buildSQLWithMetadata(datasetId, config);
     return sql;
   }
 
-  /**
-   * 执行查询
-   */
   async execute(datasetId: string, config: QueryConfig): Promise<QueryExecutionResult> {
     const startTime = Date.now();
 
     try {
-      // 2. 生成SQL（使用内部方法获取元数据）
       const { sql, isDefaultLimitApplied } = await this.buildSQLWithMetadata(datasetId, config);
-
-      // 3. 执行SQL
       const result = await this.duckdbService.queryDataset(datasetId, sql);
-
       const executionTime = Date.now() - startTime;
 
       this.logger.info(`Query executed in ${executionTime}ms, returned ${result.rowCount} rows`);
 
-      // 构建警告信息
       const warnings: string[] = [];
       if (isDefaultLimitApplied) {
         warnings.push(
-          `结果已自动限制为 ${QueryEngine.DEFAULT_MAX_ROWS.toLocaleString()} 行。` +
-            `如需获取更多数据，请在查询配置中明确指定 limit 参数。`
+          `Result automatically limited to ${QueryEngine.DEFAULT_MAX_ROWS.toLocaleString()} rows. ` +
+            'Specify an explicit limit in the query configuration to retrieve more rows.'
         );
       }
 
@@ -566,7 +533,6 @@ export class QueryEngine {
       const errorObj = error instanceof Error ? error : new Error(String(error));
       this.logger.error(`Query failed:`, errorObj);
 
-      // 翻译 DuckDB 错误为用户友好的消息
       const friendlyError = this.translateExecutionError(errorObj);
 
       return {
@@ -578,355 +544,7 @@ export class QueryEngine {
     }
   }
 
-  /**
-   * Execute dictionary filter with Aho-Corasick.
-   * AC path applies the same builder chain as the normal path.
-   */
-  private async executeWithAhoCorasick(
-    datasetId: string,
-    config: QueryConfig,
-    _unsupportedConfigs: string[] = []
-  ): Promise<QueryExecutionResult> {
-    throw QueryErrorFactory.unsupportedOperation(
-      'Aho-Corasick dictionary filtering has been removed',
-      'filter'
-    );
-    /*
-    const startTime = Date.now();
-    let tempRowIdTable: string | null = null;
-
-    try {
-      // 1. 使用公共方法提取并执行 AC 匹配
-      const { matchedRowIds, otherConditions } = await this.extractAndExecuteAC(
-        datasetId,
-        config.filter!
-      );
-
-      // 2. 没有匹配的行时，提前返回
-      if (matchedRowIds.length === 0) {
-        return {
-          success: true,
-          columns: [],
-          rows: [],
-          rowCount: 0,
-          executionTime: Date.now() - startTime,
-          generatedSQL: '-- No rows matched by Aho-Corasick',
-        };
-      }
-
-      // 3. Build base table reference (use temp table for large row_id list)
-      const availableColumns = await this.getDatasetColumns(datasetId);
-
-      const useRowIdTempTable = matchedRowIds.length > QueryEngine.AC_ROW_ID_TEMP_TABLE_THRESHOLD;
-
-      if (useRowIdTempTable) {
-        tempRowIdTable = `ac_row_ids_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        await this.duckdbService.createTempRowIdTable(datasetId, tempRowIdTable, matchedRowIds);
-      }
-
-      const baseTable =
-        SQLUtils.escapeIdentifier('ds_' + datasetId) + '.' + SQLUtils.escapeIdentifier('data');
-
-      let baseDataSQL: string;
-      if (useRowIdTempTable && tempRowIdTable) {
-        const tempTableRef = SQLUtils.escapeIdentifier(tempRowIdTable);
-        baseDataSQL = `
-SELECT t.* FROM ${baseTable} t
-INNER JOIN ${tempTableRef} r ON t._row_id = r._row_id
-`.trim();
-      } else {
-        const rowIdList = matchedRowIds.join(', ');
-        baseDataSQL = `
-SELECT * FROM ${baseTable}
-WHERE _row_id IN (${rowIdList})
-`.trim();
-      }
-
-      const context: SQLContext = {
-        datasetId,
-        currentTable: 'base_data',
-        ctes: [{ name: 'base_data', sql: baseDataSQL }],
-        availableColumns,
-        isAggregated: false,
-      };
-
-      // 4. Apply builder chain
-      if (config.softDelete) {
-        const softDeleteCTE = this.applySoftDelete(context, config.softDelete);
-        if (softDeleteCTE) {
-          context.ctes.push(softDeleteCTE);
-          context.currentTable = softDeleteCTE.name;
-          this.logger.debug(`[AhoCorasick] Applied softDelete: ${config.softDelete.show} mode`);
-        }
-      }
-
-      if (otherConditions.length > 0) {
-        this.logger.info(
-          `[AhoCorasick] Applying ${otherConditions.length} additional filter conditions`
-        );
-
-        const additionalFilterConfig: FilterConfig = {
-          conditions: otherConditions,
-          combinator: config.filter?.combinator,
-        };
-
-        const filterSQL = this.filterBuilder.build(context, additionalFilterConfig);
-        context.ctes.push({ name: 'filtered', sql: filterSQL });
-        context.currentTable = 'filtered';
-        this.logger.debug(`Applied filter: ${otherConditions.length} conditions`);
-      }
-
-      if (config.clean && config.clean.length > 0) {
-        const cleanSQL = this.cleanBuilder.build(context, config.clean);
-        context.ctes.push({ name: 'cleaned', sql: cleanSQL });
-        context.currentTable = 'cleaned';
-        context.availableColumns = this.cleanBuilder.getResultColumns(context, config.clean);
-        this.logger.debug(`Applied clean: ${config.clean.length} operations`);
-      }
-
-      if (config.explode && config.explode.length > 0) {
-        const explodeSQL = await this.explodeBuilder.build(context, config.explode);
-        context.ctes.push({ name: 'exploded', sql: explodeSQL });
-        context.currentTable = 'exploded';
-        context.availableColumns = await this.explodeBuilder.getResultColumns(
-          context,
-          config.explode
-        );
-        this.logger.debug(`Applied explode: ${config.explode.length} operations`);
-      }
-
-      if (config.validation && config.validation.length > 0) {
-        const validSQL = this.validationBuilder.build(context, config.validation);
-        context.ctes.push({ name: 'validated', sql: validSQL });
-        context.currentTable = 'validated';
-        context.availableColumns = this.validationBuilder.getResultColumns(
-          context,
-          config.validation
-        );
-        this.logger.debug(`Applied validation: ${config.validation.length} rules`);
-      }
-
-      if (config.lookup && config.lookup.length > 0) {
-        const lookupSQL = await this.lookupBuilder.build(context, config.lookup);
-        context.ctes.push({ name: 'enriched', sql: lookupSQL });
-        context.currentTable = 'enriched';
-        context.availableColumns = await this.lookupBuilder.getResultColumns(
-          context,
-          config.lookup
-        );
-        this.logger.debug(`Applied lookup: ${config.lookup.length} lookups`);
-      }
-
-      if (config.compute && config.compute.length > 0) {
-        for (const compute of config.compute) {
-          if (context.availableColumns.has(compute.name)) {
-            throw QueryErrorFactory.invalidParam(
-              'compute.name',
-              compute.name,
-              `列名 '${compute.name}' 已存在，请使用不同的列名或先删除已有列`
-            );
-          }
-        }
-
-        const computeSQL = this.computeBuilder.build(context, config.compute);
-        context.ctes.push({ name: 'computed', sql: computeSQL });
-        context.currentTable = 'computed';
-        context.availableColumns = this.computeBuilder.getResultColumns(context, config.compute);
-        this.logger.debug(`Applied compute: ${config.compute.length} columns`);
-      }
-
-      if (config.group) {
-        if (config.aggregate) {
-          throw QueryErrorFactory.unsupportedOperation(
-            'Cannot use simple grouping with aggregation',
-            'group'
-          );
-        }
-
-        const groupConfig = { ...config.group };
-
-        if (groupConfig.showStats !== false && !groupConfig.statsFields) {
-          const numericFields: string[] = [];
-          const dataset = await this.duckdbService.getDatasetInfo(datasetId);
-          if (dataset && dataset.schema) {
-            dataset.schema.forEach((col) => {
-              const type = col.duckdbType?.toLowerCase() || '';
-              if (
-                type.includes('int') ||
-                type.includes('float') ||
-                type.includes('double') ||
-                type.includes('decimal') ||
-                type.includes('numeric')
-              ) {
-                numericFields.push(col.name);
-              }
-            });
-          }
-
-          if (numericFields.length > 0) {
-            groupConfig.statsFields = numericFields.slice(0, 3);
-          }
-        }
-
-        const groupSQL = await this.groupBuilder.build(context, groupConfig);
-        context.ctes.push({ name: 'grouped', sql: groupSQL });
-        context.currentTable = 'grouped';
-        context.availableColumns = await this.groupBuilder.getResultColumns(context, groupConfig);
-        this.logger.debug(`Applied group: ${groupConfig.field}`);
-      }
-
-      if (config.aggregate) {
-        if (context.isAggregated) {
-          throw QueryErrorFactory.unsupportedOperation('double aggregation', 'aggregate');
-        }
-
-        for (const field of config.aggregate.groupBy) {
-          if (!context.availableColumns.has(field)) {
-            throw QueryErrorFactory.fieldNotFound(field, Array.from(context.availableColumns));
-          }
-        }
-
-        for (const measure of config.aggregate.measures) {
-          if (measure.field && !context.availableColumns.has(measure.field)) {
-            throw QueryErrorFactory.fieldNotFound(
-              measure.field,
-              Array.from(context.availableColumns)
-            );
-          }
-        }
-
-        const aggregateSQL = await this.aggregateBuilder.build(context, config.aggregate);
-        context.ctes.push({ name: 'aggregated', sql: aggregateSQL });
-        context.currentTable = 'aggregated';
-        context.availableColumns = await this.aggregateBuilder.getResultColumns(
-          context,
-          config.aggregate
-        );
-        context.isAggregated = true;
-        this.logger.debug(`Applied aggregate: GROUP BY ${config.aggregate.groupBy.join(', ')}`);
-      }
-
-      if (config.dedupe) {
-        if (context.isAggregated) {
-          throw QueryErrorFactory.unsupportedOperation('dedupe after aggregation', 'dedupe');
-        }
-        const dedupeSQL = this.dedupeBuilder.build(context, config.dedupe);
-        context.ctes.push({ name: 'deduped', sql: dedupeSQL });
-        context.currentTable = 'deduped';
-        context.availableColumns = this.dedupeBuilder.getResultColumns(context, config.dedupe);
-        this.logger.debug(`Applied dedupe: ${config.dedupe.type}`);
-      }
-
-      if (config.sample) {
-        if (context.isAggregated) {
-          throw QueryErrorFactory.unsupportedOperation(
-            'sampling after aggregation. 采样应用于原始数据或筛选后的数据，不能用于聚合统计结果。建议：移除采样配置或移除聚合配置',
-            'sample'
-          );
-        }
-
-        const sampleSQL = await this.sampleBuilder.build(context, config.sample);
-        context.ctes.push({ name: 'sampled', sql: sampleSQL });
-        context.currentTable = 'sampled';
-        this.logger.debug(`Applied sample: ${config.sample.type}`);
-      }
-
-      const selectList = this.columnBuilder.buildSelectList(context, config.columns);
-      if (config.columns) {
-        context.availableColumns = this.columnBuilder.getResultColumns(context, config.columns);
-      }
-
-      const orderByClause = this.sortBuilder.buildOrderBy(config.sort);
-      const limitClause = this.sortBuilder.buildLimit(config.sort);
-
-      let finalSQL = '';
-
-      if (context.ctes.length > 0) {
-        const cteStatements = context.ctes
-          .map((cte) => `${cte.name} AS (\n  ${cte.sql}\n)`)
-          .join(',\n');
-        finalSQL = `WITH ${cteStatements}\nSELECT ${selectList}\nFROM ${context.currentTable}`;
-      } else {
-        finalSQL = `SELECT ${selectList}\nFROM ${context.currentTable}`;
-      }
-
-      if (orderByClause) {
-        finalSQL += `\n${orderByClause}`;
-      }
-
-      let isDefaultLimitApplied = false;
-      if (limitClause) {
-        finalSQL += `\n${limitClause}`;
-      } else {
-        finalSQL += `\nLIMIT ${QueryEngine.DEFAULT_MAX_ROWS}`;
-        isDefaultLimitApplied = true;
-        this.logger.warn(`[AhoCorasick] Applied default LIMIT: ${QueryEngine.DEFAULT_MAX_ROWS}`);
-      }
-
-      // 8. 执行最终查询
-      const result = await this.duckdbService.queryDataset(datasetId, finalSQL);
-
-      const executionTime = Date.now() - startTime;
-
-      this.logger.info(
-        `[AhoCorasick] Query executed in ${executionTime}ms, returned ${result.rowCount} rows`
-      );
-
-      // 9. 构建警告信息
-      const warnings: string[] = [];
-      if (unsupportedConfigs.length > 0) {
-        warnings.push(
-          `词库筛选模式（Aho-Corasick）不支持以下配置，已被忽略：${unsupportedConfigs.join('、')}。` +
-            `如需使用这些功能，请改用非词库筛选方式。`
-        );
-      }
-      if (isDefaultLimitApplied) {
-        warnings.push(
-          `结果已自动限制为 ${QueryEngine.DEFAULT_MAX_ROWS.toLocaleString()} 行。` +
-            `如需获取更多数据，请在查询配置中明确指定 limit 或 pagination 参数。`
-        );
-      }
-
-      return {
-        success: true,
-        columns: result.columns,
-        rows: result.rows,
-        rowCount: result.rowCount,
-        executionTime,
-        generatedSQL: finalSQL,
-        isTruncated: isDefaultLimitApplied,
-        warnings: warnings.length > 0 ? warnings : undefined,
-      };
-    } catch (error: unknown) {
-      const executionTime = Date.now() - startTime;
-      const errorObj = error instanceof Error ? error : new Error(String(error));
-      this.logger.error(`[AhoCorasick] Query failed:`, errorObj);
-
-      const friendlyError = this.translateExecutionError(errorObj);
-
-      return {
-        success: false,
-        error: friendlyError.message,
-        executionTime,
-        errorDetails: friendlyError.details,
-      };
-    } finally {
-      if (tempRowIdTable) {
-        try {
-          await this.duckdbService.dropTempRowIdTable(datasetId, tempRowIdTable);
-        } catch (dropError) {
-          this.logger.warn(`[AhoCorasick] Failed to drop temp table ${tempRowIdTable}:`, dropError);
-        }
-      }
-    }
-    */
-  }
-
-  /**
-   * 翻译执行错误
-   */
   private translateExecutionError(error: Error): { message: string; details?: any } {
-    // 如果已经是 QueryEngineError，直接返回
     if (error instanceof QueryEngineError) {
       return {
         message: error.getUserMessage(),
@@ -934,54 +552,11 @@ WHERE _row_id IN (${rowIdList})
       };
     }
 
-    // 否则使用 DuckDB 错误翻译器
     const translatedError = QueryErrorFactory.translateDuckDBError(error);
     return {
       message: translatedError.message,
       details: translatedError.details,
     };
-  }
-
-  /**
-   * 应用软删除过滤（视图级设置）
-   *
-   * @param context SQL上下文
-   * @param config 软删除配置
-   * @returns CTE定义，如果字段不存在则返回null
-   */
-  private applySoftDelete(
-    context: SQLContext,
-    config: SoftDeleteConfig
-  ): { name: string; sql: string } | null {
-    const { field, show } = config;
-
-    // 检查字段是否存在
-    if (!context.availableColumns.has(field)) {
-      this.logger.warn(
-        `Soft delete field "${field}" not found in dataset ${context.datasetId}, skipping`
-      );
-      return null;
-    }
-
-    // 根据 show 模式生成 WHERE 子句
-    let whereClause = '';
-    if (show === 'active') {
-      // 只显示活跃行（deleted_at IS NULL）
-      whereClause = `WHERE "${field}" IS NULL`;
-    } else if (show === 'deleted') {
-      // 只显示已删除行（deleted_at IS NOT NULL）
-      whereClause = `WHERE "${field}" IS NOT NULL`;
-    } else if (show === 'all') {
-      // 显示所有行（不过滤）
-      whereClause = '';
-    }
-
-    const cteName = 'cte_soft_delete';
-    const sql = `SELECT * FROM ${context.currentTable} ${whereClause}`.trim();
-
-    this.logger.debug(`Generated soft delete SQL: ${sql}`);
-
-    return { name: cteName, sql };
   }
 
   /**
@@ -1017,7 +592,6 @@ WHERE _row_id IN (${rowIdList})
     errors?: string[];
     warnings?: string[];
   }> {
-    // 1. 验证JSON Schema
     const validation = ConfigValidator.validate(config);
     if (!validation.success) {
       return {
@@ -1026,222 +600,13 @@ WHERE _row_id IN (${rowIdList})
       };
     }
 
-    // 2. 验证字段存在性
     const { allColumns: availableColumns } = await this.getDatasetColumnState(datasetId);
-    const errors: string[] = [];
-    const warnings: string[] = [];
+    const validatedConfig = validation.data ?? config;
+    const { errors, warnings } = FieldReferenceValidator.validate(
+      validatedConfig,
+      availableColumns
+    );
 
-    // 检查 filter 中的字段
-    if (config.filter?.conditions) {
-      for (const condition of config.filter.conditions) {
-        if (!availableColumns.has(condition.field)) {
-          errors.push(`Filter field '${condition.field}' does not exist in dataset`);
-        }
-      }
-    }
-
-    // 检查 columns 中的字段
-    if (config.columns?.select) {
-      for (const col of config.columns.select) {
-        if (!availableColumns.has(col)) {
-          errors.push(`Column '${col}' does not exist in dataset`);
-        }
-      }
-    }
-
-    // 检查 sort 中的字段
-    if (config.sort?.columns) {
-      for (const sortCol of config.sort.columns) {
-        if (!availableColumns.has(sortCol.field)) {
-          errors.push(`Sort field '${sortCol.field}' does not exist in dataset`);
-        }
-      }
-    }
-
-    // 检查 clean 中的字段
-    if (config.clean) {
-      for (const cleanField of config.clean) {
-        if (!availableColumns.has(cleanField.field)) {
-          errors.push(`Clean field '${cleanField.field}' does not exist in dataset`);
-        }
-      }
-    }
-
-    // 检查 dedupe 中的字段
-    if (config.dedupe) {
-      for (const field of config.dedupe.partitionBy) {
-        if (!availableColumns.has(field)) {
-          errors.push(`Dedupe partitionBy field '${field}' does not exist in dataset`);
-        }
-      }
-      // 检查 orderBy 字段
-      if (config.dedupe.orderBy) {
-        for (const orderCol of config.dedupe.orderBy) {
-          if (!availableColumns.has(orderCol.field)) {
-            errors.push(`Dedupe orderBy field '${orderCol.field}' does not exist in dataset`);
-          }
-        }
-      }
-      // 检查 tieBreaker 字段
-      if (config.dedupe.tieBreaker && !availableColumns.has(config.dedupe.tieBreaker)) {
-        errors.push(
-          `Dedupe tieBreaker field '${config.dedupe.tieBreaker}' does not exist in dataset`
-        );
-      }
-    }
-
-    // 🆕 检查 compute 中的字段
-    if (config.compute) {
-      for (const compute of config.compute) {
-        // 检查 bucket 字段
-        if (compute.type === 'bucket' && compute.params?.field) {
-          if (!availableColumns.has(compute.params.field)) {
-            errors.push(`Compute bucket field '${compute.params.field}' does not exist in dataset`);
-          }
-        }
-        // 检查 amount 字段
-        if (compute.type === 'amount') {
-          if (compute.params?.priceField && !availableColumns.has(compute.params.priceField)) {
-            errors.push(
-              `Compute priceField '${compute.params.priceField}' does not exist in dataset`
-            );
-          }
-          if (
-            compute.params?.quantityField &&
-            !availableColumns.has(compute.params.quantityField)
-          ) {
-            errors.push(
-              `Compute quantityField '${compute.params.quantityField}' does not exist in dataset`
-            );
-          }
-        }
-        // 检查 discount 字段
-        if (compute.type === 'discount') {
-          if (
-            compute.params?.originalPriceField &&
-            !availableColumns.has(compute.params.originalPriceField)
-          ) {
-            errors.push(
-              `Compute originalPriceField '${compute.params.originalPriceField}' does not exist in dataset`
-            );
-          }
-          if (
-            compute.params?.discountedPriceField &&
-            !availableColumns.has(compute.params.discountedPriceField)
-          ) {
-            errors.push(
-              `Compute discountedPriceField '${compute.params.discountedPriceField}' does not exist in dataset`
-            );
-          }
-        }
-        // 检查 concat 字段
-        if (compute.type === 'concat' && compute.params?.fields) {
-          for (const field of compute.params.fields) {
-            if (!availableColumns.has(field)) {
-              errors.push(`Compute concat field '${field}' does not exist in dataset`);
-            }
-          }
-        }
-      }
-    }
-
-    // 🆕 检查 validation 中的字段
-    if (config.validation) {
-      for (const validField of config.validation) {
-        if (!availableColumns.has(validField.field)) {
-          errors.push(`Validation field '${validField.field}' does not exist in dataset`);
-        }
-        // 检查 cross_field 引用的字段
-        for (const rule of validField.rules) {
-          if (rule.type === 'cross_field' && rule.params?.compareField) {
-            if (!availableColumns.has(rule.params.compareField)) {
-              errors.push(
-                `Validation cross_field compareField '${rule.params.compareField}' does not exist in dataset`
-              );
-            }
-          }
-        }
-      }
-    }
-
-    // 🆕 检查 explode 中的字段
-    if (config.explode) {
-      for (const explode of config.explode) {
-        if (!availableColumns.has(explode.field)) {
-          errors.push(`Explode field '${explode.field}' does not exist in dataset`);
-        }
-      }
-    }
-
-    // 🆕 检查 group 中的字段
-    if (config.group) {
-      if (!availableColumns.has(config.group.field)) {
-        errors.push(`Group field '${config.group.field}' does not exist in dataset`);
-      }
-      if (config.group.statsFields) {
-        for (const field of config.group.statsFields) {
-          if (!availableColumns.has(field)) {
-            errors.push(`Group statsField '${field}' does not exist in dataset`);
-          }
-        }
-      }
-    }
-
-    // 🆕 检查 aggregate 中的字段
-    if (config.aggregate) {
-      // 检查 groupBy 字段
-      for (const field of config.aggregate.groupBy) {
-        if (!availableColumns.has(field)) {
-          errors.push(`Aggregate groupBy field '${field}' does not exist in dataset`);
-        }
-      }
-      // 检查 measures 字段
-      for (const measure of config.aggregate.measures) {
-        if (measure.field && !availableColumns.has(measure.field)) {
-          errors.push(`Aggregate measure field '${measure.field}' does not exist in dataset`);
-        }
-        // 检查 argField（ARG_MIN/ARG_MAX）
-        if (measure.params?.argField && !availableColumns.has(measure.params.argField)) {
-          errors.push(
-            `Aggregate measure argField '${measure.params.argField}' does not exist in dataset`
-          );
-        }
-      }
-    }
-
-    // 🆕 检查 softDelete 字段
-    if (config.softDelete) {
-      if (!availableColumns.has(config.softDelete.field)) {
-        warnings.push(
-          `SoftDelete field '${config.softDelete.field}' does not exist in dataset, will be ignored`
-        );
-      }
-    }
-
-    // 🆕 检查 columns.rename / hide / show 中的字段
-    if (config.columns?.rename) {
-      for (const oldName of Object.keys(config.columns.rename)) {
-        if (!availableColumns.has(oldName)) {
-          errors.push(`Column rename source '${oldName}' does not exist in dataset`);
-        }
-      }
-    }
-    if (config.columns?.hide) {
-      for (const col of config.columns.hide) {
-        if (!availableColumns.has(col)) {
-          warnings.push(`Column to hide '${col}' does not exist in dataset, will be ignored`);
-        }
-      }
-    }
-    if (config.columns?.show) {
-      for (const col of config.columns.show) {
-        if (!availableColumns.has(col)) {
-          warnings.push(`Column to show '${col}' does not exist in dataset, will be ignored`);
-        }
-      }
-    }
-
-    // 合并 ConfigValidator 的 warnings
     if (validation.warnings) {
       warnings.push(...validation.warnings);
     }

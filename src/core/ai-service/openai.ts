@@ -12,6 +12,11 @@ import { AzureOpenAI } from 'openai';
 import type { Stream } from 'openai/streaming';
 import type { ChatCompletionChunk } from 'openai/resources/chat/completions';
 import { OpenAIError } from './errors';
+import {
+  getUnknownErrorCode,
+  getUnknownErrorMessage,
+  getUnknownErrorName,
+} from '../../utils/error-message';
 
 // Re-export all types from the centralized types file
 export type {
@@ -247,7 +252,7 @@ export class OpenAIService {
     return this.client;
   }
 
-  private handleError(error: any): never {
+  private handleError(error: unknown): never {
     if (error instanceof OpenAIError) {
       throw error;
     }
@@ -289,7 +294,11 @@ export class OpenAIService {
       );
     }
 
-    if (error.name === 'AbortError' || error.message?.includes('timeout')) {
+    const errorName = getUnknownErrorName(error);
+    const errorCode = getUnknownErrorCode(error);
+    const errorMessage = getUnknownErrorMessage(error, 'Unknown OpenAI error');
+
+    if (errorName === 'AbortError' || errorMessage.includes('timeout')) {
       throw new OpenAIError(
         'Request timed out',
         { errorType: 'timeout', timeout: this.config.timeout },
@@ -297,7 +306,7 @@ export class OpenAIService {
       );
     }
 
-    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+    if (errorCode === 'ECONNREFUSED' || errorCode === 'ENOTFOUND') {
       throw new OpenAIError(
         'Network error: Unable to connect to OpenAI API',
         { errorType: 'network' },
@@ -305,7 +314,7 @@ export class OpenAIService {
       );
     }
 
-    throw new OpenAIError(error.message || 'Unknown OpenAI error', { errorType: 'server' }, error);
+    throw new OpenAIError(errorMessage, { errorType: 'server' }, error);
   }
 
   // ========== 验证辅助方法 ==========
@@ -412,7 +421,7 @@ export class OpenAIService {
         model: response.model,
         system_fingerprint: response.system_fingerprint || undefined,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -449,7 +458,7 @@ export class OpenAIService {
           };
         }
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -540,8 +549,8 @@ export class OpenAIService {
       callbacks.onFinish?.(response);
 
       return response;
-    } catch (error: any) {
-      callbacks.onError?.(error);
+    } catch (error: unknown) {
+      callbacks.onError?.(error instanceof Error ? error : new Error(getUnknownErrorMessage(error)));
       this.handleError(error);
     }
   }
@@ -570,7 +579,7 @@ export class OpenAIService {
       });
 
       return response.data.map((item) => item.embedding);
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -605,7 +614,7 @@ export class OpenAIService {
           revised_prompt: item.revised_prompt,
         })),
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -652,7 +661,7 @@ export class OpenAIService {
           revised_prompt: item.revised_prompt,
         })),
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -721,7 +730,7 @@ export class OpenAIService {
         words: (response as any).words,
         segments: (response as any).segments,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -745,7 +754,7 @@ export class OpenAIService {
 
       const arrayBuffer = await response.arrayBuffer();
       return Buffer.from(arrayBuffer);
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -774,7 +783,7 @@ export class OpenAIService {
         model: response.model,
         results: response.results as any,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -804,7 +813,7 @@ export class OpenAIService {
       });
 
       return batch as unknown as OpenAIBatch;
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -817,7 +826,7 @@ export class OpenAIService {
     try {
       const batch = await client.batches.retrieve(batchId);
       return batch as unknown as OpenAIBatch;
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -830,7 +839,7 @@ export class OpenAIService {
     try {
       const batch = await client.batches.cancel(batchId);
       return batch as unknown as OpenAIBatch;
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -841,7 +850,7 @@ export class OpenAIService {
     try {
       const response = await client.batches.list({ limit });
       return response.data as unknown as OpenAIBatch[];
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -873,7 +882,7 @@ export class OpenAIService {
         .map((line) => JSON.parse(line));
 
       return results;
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -900,7 +909,7 @@ export class OpenAIService {
       });
 
       return response as OpenAIFile;
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -911,7 +920,7 @@ export class OpenAIService {
     try {
       const response = await client.files.list({ purpose: purpose as any });
       return response.data as OpenAIFile[];
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -923,7 +932,7 @@ export class OpenAIService {
 
     try {
       await client.files.delete(fileId);
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -936,7 +945,7 @@ export class OpenAIService {
     try {
       const response = await client.files.content(fileId);
       return await response.text();
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -949,7 +958,7 @@ export class OpenAIService {
     try {
       const response = await client.models.list();
       return response.data as OpenAIModel[];
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -962,7 +971,7 @@ export class OpenAIService {
     try {
       const response = await client.models.retrieve(modelId);
       return response as OpenAIModel;
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }

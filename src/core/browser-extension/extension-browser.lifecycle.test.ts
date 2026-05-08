@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../main/profile/ruyi-firefox-launch-helpers', () => ({
+vi.mock('../../utils/platform/windows-dialog', () => ({
   sendWindowsDialogKeys: vi.fn(async () => false),
 }));
 
 import { ExtensionBrowser } from './extension-browser';
-import { sendWindowsDialogKeys } from '../../main/profile/ruyi-firefox-launch-helpers';
+import { sendWindowsDialogKeys } from '../../utils/platform/windows-dialog';
 
 describe('ExtensionBrowser lifecycle', () => {
   it('reports closed when the relay has been stopped', () => {

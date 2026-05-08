@@ -6,6 +6,9 @@
 
 import { DuckDBConnection } from '@duckdb/node-api';
 import { parseRows } from './utils';
+import { allPrepared, runPrepared } from './statement-executor';
+import { SchemaMigrationEngine } from './migration-engine';
+import { SCHEDULED_TASK_SCHEMA_MIGRATIONS } from './schema-migrations';
 import type {
   ScheduledTask,
   TaskExecution,
@@ -69,12 +72,7 @@ export class ScheduledTaskService {
       )
     `);
 
-    await this.conn.run(
-      `ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS resource_keys JSON`
-    );
-    await this.conn.run(
-      `ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS resource_wait_timeout_ms BIGINT`
-    );
+    await new SchemaMigrationEngine(this.conn).migrate(SCHEDULED_TASK_SCHEMA_MIGRATIONS);
 
     // 创建执行历史表
     await this.conn.run(`
@@ -149,7 +147,7 @@ export class ScheduledTaskService {
       updatedAt: now,
     };
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(this.conn, `
       INSERT INTO scheduled_tasks (
         id, plugin_id, name, description,
         schedule_type, cron_expression, interval_ms, run_at,
@@ -158,9 +156,7 @@ export class ScheduledTaskService {
         status, next_run_at, run_count, fail_count,
         created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.bind([
+    `, [
       task.id,
       task.pluginId,
       task.name,
@@ -185,9 +181,6 @@ export class ScheduledTaskService {
       toDuckDbBigInt(task.updatedAt),
     ]);
 
-    await stmt.run();
-    stmt.destroySync();
-
     return task;
   }
 
@@ -195,10 +188,7 @@ export class ScheduledTaskService {
    * 获取单个任务
    */
   async getTask(taskId: string): Promise<ScheduledTask | null> {
-    const stmt = await this.conn.prepare(`SELECT * FROM scheduled_tasks WHERE id = ?`);
-    stmt.bind([taskId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    const result = await allPrepared(this.conn, `SELECT * FROM scheduled_tasks WHERE id = ?`, [taskId]);
 
     const rows = parseRows(result);
     if (rows.length === 0) return null;
@@ -221,12 +211,11 @@ export class ScheduledTaskService {
    * 获取插件的所有任务
    */
   async getTasksByPlugin(pluginId: string): Promise<ScheduledTask[]> {
-    const stmt = await this.conn.prepare(
-      `SELECT * FROM scheduled_tasks WHERE plugin_id = ? ORDER BY created_at DESC`
+    const result = await allPrepared(
+      this.conn,
+      `SELECT * FROM scheduled_tasks WHERE plugin_id = ? ORDER BY created_at DESC`,
+      [pluginId]
     );
-    stmt.bind([pluginId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
 
     const rows = parseRows(result);
     return rows.map((row: any) => this.rowToTask(row));
@@ -259,10 +248,7 @@ export class ScheduledTaskService {
 
     // 获取总数
     const countSql = `SELECT COUNT(*) as count FROM scheduled_tasks ${whereClause}`;
-    const countStmt = await this.conn.prepare(countSql);
-    if (params.length > 0) countStmt.bind(params);
-    const countResult = await countStmt.runAndReadAll();
-    countStmt.destroySync();
+    const countResult = await allPrepared(this.conn, countSql, params);
     const total = Number(parseRows(countResult)[0]?.count || 0);
 
     // 获取数据
@@ -272,10 +258,7 @@ export class ScheduledTaskService {
       ORDER BY created_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `;
-    const dataStmt = await this.conn.prepare(dataSql);
-    if (params.length > 0) dataStmt.bind(params);
-    const dataResult = await dataStmt.runAndReadAll();
-    dataStmt.destroySync();
+    const dataResult = await allPrepared(this.conn, dataSql, params);
 
     const rows = parseRows(dataResult);
     const tasks = rows.map((row: any) => this.rowToTask(row));
@@ -371,12 +354,11 @@ export class ScheduledTaskService {
 
     values.push(taskId);
 
-    const stmt = await this.conn.prepare(
-      `UPDATE scheduled_tasks SET ${setFields.join(', ')} WHERE id = ?`
+    await runPrepared(
+      this.conn,
+      `UPDATE scheduled_tasks SET ${setFields.join(', ')} WHERE id = ?`,
+      values
     );
-    stmt.bind(values);
-    await stmt.run();
-    stmt.destroySync();
   }
 
   /**
@@ -384,16 +366,10 @@ export class ScheduledTaskService {
    */
   async deleteTask(taskId: string): Promise<void> {
     // 先删除执行历史
-    const deleteExecStmt = await this.conn.prepare(`DELETE FROM task_executions WHERE task_id = ?`);
-    deleteExecStmt.bind([taskId]);
-    await deleteExecStmt.run();
-    deleteExecStmt.destroySync();
+    await runPrepared(this.conn, `DELETE FROM task_executions WHERE task_id = ?`, [taskId]);
 
     // 再删除任务
-    const deleteTaskStmt = await this.conn.prepare(`DELETE FROM scheduled_tasks WHERE id = ?`);
-    deleteTaskStmt.bind([taskId]);
-    await deleteTaskStmt.run();
-    deleteTaskStmt.destroySync();
+    await runPrepared(this.conn, `DELETE FROM scheduled_tasks WHERE id = ?`, [taskId]);
   }
 
   /**
@@ -401,10 +377,7 @@ export class ScheduledTaskService {
    */
   async deleteTasksByPlugin(pluginId: string): Promise<number> {
     // 获取插件的所有任务ID
-    const stmt = await this.conn.prepare(`SELECT id FROM scheduled_tasks WHERE plugin_id = ?`);
-    stmt.bind([pluginId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    const result = await allPrepared(this.conn, `SELECT id FROM scheduled_tasks WHERE plugin_id = ?`, [pluginId]);
 
     const rows = parseRows(result);
     const taskIds = rows.map((row: any) => row.id);
@@ -437,21 +410,16 @@ export class ScheduledTaskService {
       triggerType: params.triggerType,
     };
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(this.conn, `
       INSERT INTO task_executions (id, task_id, status, started_at, trigger_type)
       VALUES (?, ?, ?, ?, ?)
-    `);
-
-    stmt.bind([
+    `, [
       execution.id,
       execution.taskId,
       execution.status,
       toDuckDbBigInt(execution.startedAt),
       execution.triggerType,
     ]);
-
-    await stmt.run();
-    stmt.destroySync();
 
     return execution;
   }
@@ -497,27 +465,23 @@ export class ScheduledTaskService {
 
     values.push(executionId);
 
-    const stmt = await this.conn.prepare(
-      `UPDATE task_executions SET ${setFields.join(', ')} WHERE id = ?`
+    await runPrepared(
+      this.conn,
+      `UPDATE task_executions SET ${setFields.join(', ')} WHERE id = ?`,
+      values
     );
-    stmt.bind(values);
-    await stmt.run();
-    stmt.destroySync();
   }
 
   /**
    * 获取任务的执行历史
    */
   async getExecutions(taskId: string, limit: number = 50): Promise<TaskExecution[]> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT * FROM task_executions
       WHERE task_id = ?
       ORDER BY started_at DESC
       LIMIT ?
-    `);
-    stmt.bind([taskId, limit]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [taskId, limit]);
 
     const rows = parseRows(result);
     return rows.map((row: any) => this.rowToExecution(row));
@@ -527,14 +491,11 @@ export class ScheduledTaskService {
    * 获取最近的执行记录（全局）
    */
   async getRecentExecutions(limit: number = 20): Promise<TaskExecution[]> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT * FROM task_executions
       ORDER BY started_at DESC
       LIMIT ?
-    `);
-    stmt.bind([limit]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [limit]);
 
     const rows = parseRows(result);
     return rows.map((row: any) => this.rowToExecution(row));
@@ -546,19 +507,14 @@ export class ScheduledTaskService {
   async cleanupOldExecutions(daysToKeep: number = 30): Promise<number> {
     const cutoff = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
 
-    const countStmt = await this.conn.prepare(
-      `SELECT COUNT(*) as count FROM task_executions WHERE started_at < ?`
+    const countResult = await allPrepared(
+      this.conn,
+      `SELECT COUNT(*) as count FROM task_executions WHERE started_at < ?`,
+      [toDuckDbBigInt(cutoff)]
     );
-    countStmt.bind([toDuckDbBigInt(cutoff)]);
-    const countResult = await countStmt.runAndReadAll();
-    countStmt.destroySync();
-
     const count = Number(parseRows(countResult)[0]?.count || 0);
 
-    const deleteStmt = await this.conn.prepare(`DELETE FROM task_executions WHERE started_at < ?`);
-    deleteStmt.bind([toDuckDbBigInt(cutoff)]);
-    await deleteStmt.run();
-    deleteStmt.destroySync();
+    await runPrepared(this.conn, `DELETE FROM task_executions WHERE started_at < ?`, [toDuckDbBigInt(cutoff)]);
 
     return count;
   }

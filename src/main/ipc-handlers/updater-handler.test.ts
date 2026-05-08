@@ -5,14 +5,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // 使用 vi.hoisted 解决 mock 提升问题
-const { mockIpcMainHandle } = vi.hoisted(() => ({
+const { mockIpcMainHandle, mockRemoveHandler, mockRemoveListener } = vi.hoisted(() => ({
   mockIpcMainHandle: vi.fn(),
+  mockRemoveHandler: vi.fn(),
+  mockRemoveListener: vi.fn(),
 }));
 
 // Mock electron
 vi.mock('electron', () => ({
   ipcMain: {
     handle: mockIpcMainHandle,
+    removeHandler: mockRemoveHandler,
+    removeListener: mockRemoveListener,
   },
   app: {
     getVersion: vi.fn(() => '1.0.0'),
@@ -29,6 +33,7 @@ vi.mock('../ipc-utils', () => ({
 
 import { registerUpdaterHandlers } from './updater-handler';
 import type { UpdateManager } from '../updater';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 
 describe('registerUpdaterHandlers', () => {
   let mockUpdateManager: UpdateManager;
@@ -36,6 +41,7 @@ describe('registerUpdaterHandlers', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
     handlers = new Map();
 
     // 捕获注册的处理器

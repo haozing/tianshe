@@ -135,6 +135,63 @@ export interface TaskInfo {
 }
 
 /**
+ * 任务执行上下文（传递给 handler）
+ */
+export interface TaskExecutionContext {
+  signal: AbortSignal;
+  payload?: Record<string, unknown>;
+  triggerType?: 'scheduled' | 'manual' | 'recovery';
+}
+
+/**
+ * 任务处理器记录（存储在调度器内部）
+ */
+export interface TaskHandler {
+  pluginId: string;
+  handlerId: string;
+  handler: (ctx: TaskExecutionContext) => Promise<unknown>;
+}
+
+/**
+ * 调度器服务接口（用于消除 core→main 的 C 类类型导入）
+ */
+export interface ISchedulerService {
+  registerHandler(
+    pluginId: string,
+    handlerId: string,
+    handler: (ctx: TaskExecutionContext) => Promise<unknown>
+  ): void;
+  unregisterHandler(pluginId: string, handlerId: string): void;
+  unregisterPluginHandlers(pluginId: string): void;
+  createTask(params: {
+    pluginId: string;
+    name: string;
+    description?: string;
+    scheduleType: 'cron' | 'interval' | 'once';
+    cron?: string;
+    interval?: string | number;
+    runAt?: Date | number;
+    handlerId: string;
+    payload?: Record<string, unknown>;
+    timeout?: number;
+    retry?: number;
+    retryDelay?: number;
+    missedPolicy?: MissedPolicy;
+    immediate?: boolean;
+    resourceKeys?: string[];
+    resourceWaitTimeoutMs?: number;
+  }): Promise<ScheduledTask>;
+  deleteTasksByPlugin(pluginId: string): Promise<number>;
+  pauseTask(taskId: string): Promise<void>;
+  resumeTask(taskId: string): Promise<void>;
+  cancelTask(taskId: string): Promise<void>;
+  triggerTask(taskId: string): Promise<TaskExecution>;
+  getTasksByPlugin(pluginId: string): Promise<ScheduledTask[]>;
+  getTask(taskId: string): Promise<ScheduledTask | null>;
+  getTaskHistory(taskId: string, limit?: number): Promise<TaskExecution[]>;
+}
+
+/**
  * 格式化工具函数类型
  */
 export interface SchedulerFormatUtils {

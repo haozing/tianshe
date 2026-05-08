@@ -8,7 +8,7 @@
  * 4. 触发链执行
  */
 
-import type { DuckDBService } from '../../main/duckdb/service';
+import type { IDuckDBService } from '../../types/duckdb';
 import type { JSPluginManager } from './manager';
 import type {
   ColumnMetadata,
@@ -18,9 +18,11 @@ import type {
   TriggerCondition,
   ButtonExecuteResult,
   EnhancedColumnSchema,
-} from '../../main/duckdb/types';
+} from '../../types/duckdb';
 import { createLogger } from '../logger';
 import { SQLUtils } from '../query-engine/utils/sql-utils';
+import { getUnknownErrorMessage } from '../../utils/error-message';
+
 
 const logger = createLogger('ButtonExecutor');
 
@@ -64,7 +66,7 @@ export class ButtonExecutor {
 
   constructor(
     private pluginManager: JSPluginManager,
-    private duckdb: DuckDBService
+    private duckdb: IDuckDBService
   ) {}
 
   /**
@@ -121,12 +123,12 @@ export class ButtonExecutor {
 
       try {
         result = await this.executeWithTimeout(pluginId, methodId, params, timeout, signal);
-      } catch (error: any) {
+      } catch (error: unknown) {
         // 判断是否是取消错误
         if (signal?.aborted) {
           return { success: false, error: '执行被取消' };
         }
-        result = { success: false, error: error.message };
+        result = { success: false, error: getUnknownErrorMessage(error) };
       }
 
       // 6️⃣ 处理返回值绑定（回写数据表）
@@ -165,7 +167,7 @@ export class ButtonExecutor {
         updatedFields,
         triggeredNext,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('执行失败: ' + executionId, error);
 
       // 更新执行状态
@@ -174,7 +176,7 @@ export class ButtonExecutor {
         state.status = 'failed';
       }
 
-      return { success: false, error: error.message };
+      return { success: false, error: getUnknownErrorMessage(error) };
     } finally {
       // 8️⃣ 清理执行状态（延迟清理，避免快速重复点击）
       setTimeout(() => {
@@ -384,7 +386,7 @@ export class ButtonExecutor {
           logger.debug('子链条失败，停止执行');
           break;
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         logger.error('触发链执行失败: ' + nextButtonColumn, error);
 
         const triggerErrorStrategy = trigger.errorStrategy || errorStrategy.onCurrentFail;

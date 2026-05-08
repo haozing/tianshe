@@ -16,6 +16,8 @@ function getFileApi(): FileAPI {
 export const fileFacade = {
   upload: (datasetId: string, fileData: Parameters<FileAPI['upload']>[1]) =>
     getFileApi().upload(datasetId, fileData),
+  uploadFromPath: (datasetId: string, fileData: Parameters<FileAPI['uploadFromPath']>[1]) =>
+    getFileApi().uploadFromPath(datasetId, fileData),
   delete: (relativePath: string) => getFileApi().delete(relativePath),
   open: (relativePath: string) => getFileApi().open(relativePath),
   getImageData: (relativePath: string) => getFileApi().getImageData(relativePath),

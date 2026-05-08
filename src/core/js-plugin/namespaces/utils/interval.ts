@@ -5,6 +5,7 @@
  */
 
 import { ValidationError } from '../../errors';
+import { toError } from '../../../../utils/error-message';
 
 /**
  * 定时任务控制器接口
@@ -182,11 +183,11 @@ export class IntervalUtils {
             console.error(`[IntervalUtils] onComplete callback failed:`, error);
           }
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         // 错误处理
         if (opts.errorHandler) {
           try {
-            await opts.errorHandler(error);
+            await opts.errorHandler(toError(error));
           } catch (handlerError) {
             console.error(`[IntervalUtils] Error handler failed:`, handlerError);
           }

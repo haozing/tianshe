@@ -26,8 +26,12 @@ import { BrowserCDPAPI } from './cdp';
 import { bindAbortSignalToFacade } from './abort-facade';
 import { createBlockedNavigationError, installWindowOpenBlocker } from './navigation-guard';
 import { getSessionWebRequestHub } from './web-request-hub';
-import { createChildTraceContext, getCurrentTraceContext } from '../observability/observation-context';
+import {
+  createChildTraceContext,
+  getCurrentTraceContext,
+} from '../observability/observation-context';
 import { observationService } from '../observability/observation-service';
+import { getUnknownErrorMessage } from '../../utils/error-message';
 
 // 类型
 import type { WindowOpenPolicy, WindowOpenRule, WindowOpenAction } from './types';
@@ -464,7 +468,7 @@ export class SimpleBrowser {
       await this.viewManager.closeView(this.viewId);
 
       this.disposed = true;
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.disposed = true;
       throw error;
     }
@@ -610,9 +614,11 @@ export class SimpleBrowser {
         });
 
         checkIdle();
-      } catch (error: any) {
+      } catch (error: unknown) {
         cleanup();
-        reject(new Error(`Failed to setup network idle monitoring: ${error.message}`));
+        reject(
+          new Error(`Failed to setup network idle monitoring: ${getUnknownErrorMessage(error)}`)
+        );
       }
     });
   }

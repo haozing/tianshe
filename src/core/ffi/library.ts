@@ -8,6 +8,7 @@ import * as koffi from 'koffi';
 import { FFIError } from './errors';
 import { FFI_TYPE_MAP } from './types';
 import type { FunctionSignature } from './types';
+import { getUnknownErrorMessage, toError } from '../../utils/error-message';
 
 /**
  * 动态链接库实例
@@ -69,11 +70,11 @@ export class Library {
       });
 
       console.log(`[FFI] Defined function: ${this.libPath}::${name}`);
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new FFIError(
-        `Failed to define function '${name}': ${error.message}`,
+        `Failed to define function '${name}': ${getUnknownErrorMessage(error)}`,
         'DEFINE_FAILED',
-        error
+        toError(error)
       );
     }
   }
@@ -131,10 +132,14 @@ export class Library {
       console.log(`[FFI] ${name} completed in ${duration}ms`);
 
       return result;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`[FFI] Error calling ${this.libPath}::${name}:`, error);
       if (error instanceof FFIError) throw error;
-      throw new FFIError(`FFI call failed: ${error.message}`, 'CALL_FAILED', error);
+      throw new FFIError(
+        `FFI call failed: ${getUnknownErrorMessage(error)}`,
+        'CALL_FAILED',
+        toError(error)
+      );
     }
   }
 

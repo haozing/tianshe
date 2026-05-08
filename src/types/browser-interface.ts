@@ -564,12 +564,11 @@ export interface BrowserInterceptCapability {
   failRequest(requestId: string, errorReason?: string): Promise<void>;
 }
 
-export interface BrowserCore
-  extends BrowserRuntimeIntrospection,
-    BrowserCoordinateCapability,
-    BrowserNativeInputCapability,
-    BrowserTextCapability {
+export interface BrowserAbortSignalCapability {
   withAbortSignal?(signal: AbortSignal): BrowserInterface;
+}
+
+export interface BrowserNavigationCapability {
   goto(
     url: string,
     options?: {
@@ -582,16 +581,10 @@ export interface BrowserCore
   reload(): Promise<void>;
   getCurrentUrl(): Promise<string>;
   title(): Promise<string>;
+}
+
+export interface BrowserPageContentCapability {
   snapshot(options?: SnapshotOptions): Promise<PageSnapshot>;
-  click(selector: string): Promise<void>;
-  type(selector: string, text: string, options?: { clear?: boolean }): Promise<void>;
-  select(selector: string, value: string): Promise<void>;
-  waitForSelector(
-    selector: string,
-    options?: { timeout?: number; state?: 'attached' | 'visible' | 'hidden' }
-  ): Promise<void>;
-  getText(selector: string): Promise<string>;
-  getAttribute(selector: string, attribute: string): Promise<string | null>;
   search(query: string, options?: SearchOptions): Promise<SearchResult[]>;
   evaluate<T>(script: string): Promise<T>;
   evaluateWithArgs<T>(
@@ -600,13 +593,43 @@ export interface BrowserCore
   ): Promise<T>;
   screenshot(options?: ScreenshotOptions): Promise<string>;
   screenshotDetailed(options?: ScreenshotOptions): Promise<BrowserScreenshotResult>;
+  getText(selector: string): Promise<string>;
+  getAttribute(selector: string, attribute: string): Promise<string | null>;
+}
+
+export interface BrowserElementInteractionCapability {
+  click(selector: string): Promise<void>;
+  type(selector: string, text: string, options?: { clear?: boolean }): Promise<void>;
+  select(selector: string, value: string): Promise<void>;
+  waitForSelector(
+    selector: string,
+    options?: { timeout?: number; state?: 'attached' | 'visible' | 'hidden' }
+  ): Promise<void>;
+}
+
+export interface BrowserCookieCapability {
   getCookies(filter?: BrowserCookieFilter): Promise<Cookie[]>;
   setCookie(cookie: Cookie): Promise<void>;
   clearCookies(): Promise<void>;
   getUserAgent(): Promise<string>;
+}
+
+export interface BrowserVisibilityCapability {
   show(): Promise<void>;
   hide(): Promise<void>;
 }
+
+export interface BrowserCore
+  extends BrowserRuntimeIntrospection,
+    BrowserAbortSignalCapability,
+    BrowserNavigationCapability,
+    BrowserPageContentCapability,
+    BrowserElementInteractionCapability,
+    BrowserCookieCapability,
+    BrowserVisibilityCapability,
+    BrowserCoordinateCapability,
+    BrowserNativeInputCapability,
+    BrowserTextCapability {}
 
 export type BrowserOptionalCapabilitySet =
   Partial<BrowserNetworkCaptureCapability> &
@@ -624,3 +647,277 @@ export type BrowserOptionalCapabilitySet =
   Partial<BrowserInterceptCapability>;
 
 export type BrowserInterface = BrowserCore & BrowserOptionalCapabilitySet;
+
+type BrowserCapabilityMethodName<TCapability extends object> = Extract<keyof TCapability, string>;
+
+function getMissingBrowserCapabilityMethods<TCapability extends object>(
+  browser: unknown,
+  methodNames: readonly BrowserCapabilityMethodName<TCapability>[]
+): string[] {
+  if (!browser || typeof browser !== 'object') {
+    return [...methodNames];
+  }
+
+  const target = browser as Record<string, unknown>;
+  return methodNames.filter((methodName) => typeof target[methodName] !== 'function');
+}
+
+export function hasBrowserCapabilityMethods<TCapability extends object>(
+  browser: unknown,
+  methodNames: readonly BrowserCapabilityMethodName<TCapability>[]
+): browser is TCapability {
+  return getMissingBrowserCapabilityMethods<TCapability>(browser, methodNames).length === 0;
+}
+
+export function assertBrowserCapabilityMethods<TCapability extends object>(
+  browser: unknown,
+  methodNames: readonly BrowserCapabilityMethodName<TCapability>[],
+  capabilityLabel: string = 'browser capability'
+): asserts browser is TCapability {
+  const missing = getMissingBrowserCapabilityMethods<TCapability>(browser, methodNames);
+  if (missing.length > 0) {
+    throw new Error(`${capabilityLabel} is not available: missing ${missing.join(', ')}`);
+  }
+}
+
+const BROWSER_NETWORK_CAPTURE_METHODS = [
+  'startNetworkCapture',
+  'stopNetworkCapture',
+  'getNetworkEntries',
+  'getNetworkSummary',
+  'clearNetworkEntries',
+  'waitForResponse',
+] as const satisfies readonly BrowserCapabilityMethodName<BrowserNetworkCaptureCapability>[];
+
+const BROWSER_CONSOLE_CAPTURE_METHODS = [
+  'startConsoleCapture',
+  'stopConsoleCapture',
+  'getConsoleMessages',
+  'clearConsoleMessages',
+] as const satisfies readonly BrowserCapabilityMethodName<BrowserConsoleCaptureCapability>[];
+
+const BROWSER_WINDOW_OPEN_POLICY_METHODS = [
+  'setWindowOpenPolicy',
+  'getWindowOpenPolicy',
+  'clearWindowOpenPolicy',
+] as const satisfies readonly BrowserCapabilityMethodName<BrowserWindowOpenPolicyCapability>[];
+
+const BROWSER_TEXT_OCR_METHODS = [
+  'recognizeText',
+] as const satisfies readonly BrowserCapabilityMethodName<BrowserTextOcrCapability>[];
+
+const BROWSER_DOWNLOAD_METHODS = [
+  'setDownloadBehavior',
+  'listDownloads',
+  'waitForDownload',
+  'cancelDownload',
+] as const satisfies readonly BrowserCapabilityMethodName<BrowserDownloadCapability>[];
+
+const BROWSER_PDF_METHODS = [
+  'savePdf',
+] as const satisfies readonly BrowserCapabilityMethodName<BrowserPdfCapability>[];
+
+const BROWSER_DIALOG_METHODS = [
+  'waitForDialog',
+  'handleDialog',
+] as const satisfies readonly BrowserCapabilityMethodName<BrowserDialogCapability>[];
+
+const BROWSER_TAB_METHODS = [
+  'listTabs',
+  'createTab',
+  'activateTab',
+  'closeTab',
+] as const satisfies readonly BrowserCapabilityMethodName<BrowserTabCapability>[];
+
+const BROWSER_EMULATION_METHODS = [
+  'setEmulationIdentity',
+  'setViewportEmulation',
+  'clearEmulation',
+] as const satisfies readonly BrowserCapabilityMethodName<BrowserEmulationCapability>[];
+
+const BROWSER_STORAGE_METHODS = [
+  'getStorageItem',
+  'setStorageItem',
+  'removeStorageItem',
+  'clearStorageArea',
+] as const satisfies readonly BrowserCapabilityMethodName<BrowserStorageCapability>[];
+
+const BROWSER_INTERCEPT_METHODS = [
+  'enableRequestInterception',
+  'disableRequestInterception',
+  'getInterceptedRequests',
+  'clearInterceptedRequests',
+  'waitForInterceptedRequest',
+  'continueRequest',
+  'fulfillRequest',
+  'failRequest',
+] as const satisfies readonly BrowserCapabilityMethodName<BrowserInterceptCapability>[];
+
+export function hasBrowserNetworkCaptureCapability(
+  browser: unknown
+): browser is BrowserNetworkCaptureCapability {
+  return hasBrowserCapabilityMethods<BrowserNetworkCaptureCapability>(
+    browser,
+    BROWSER_NETWORK_CAPTURE_METHODS
+  );
+}
+
+export function hasBrowserConsoleCaptureCapability(
+  browser: unknown
+): browser is BrowserConsoleCaptureCapability {
+  return hasBrowserCapabilityMethods<BrowserConsoleCaptureCapability>(
+    browser,
+    BROWSER_CONSOLE_CAPTURE_METHODS
+  );
+}
+
+export function hasBrowserWindowOpenPolicyCapability(
+  browser: unknown
+): browser is BrowserWindowOpenPolicyCapability {
+  return hasBrowserCapabilityMethods<BrowserWindowOpenPolicyCapability>(
+    browser,
+    BROWSER_WINDOW_OPEN_POLICY_METHODS
+  );
+}
+
+export function hasBrowserTextOcrCapability(browser: unknown): browser is BrowserTextOcrCapability {
+  return hasBrowserCapabilityMethods<BrowserTextOcrCapability>(browser, BROWSER_TEXT_OCR_METHODS);
+}
+
+export function hasBrowserDownloadCapability(browser: unknown): browser is BrowserDownloadCapability {
+  return hasBrowserCapabilityMethods<BrowserDownloadCapability>(browser, BROWSER_DOWNLOAD_METHODS);
+}
+
+export function hasBrowserPdfCapability(browser: unknown): browser is BrowserPdfCapability {
+  return hasBrowserCapabilityMethods<BrowserPdfCapability>(browser, BROWSER_PDF_METHODS);
+}
+
+export function hasBrowserDialogCapability(browser: unknown): browser is BrowserDialogCapability {
+  return hasBrowserCapabilityMethods<BrowserDialogCapability>(browser, BROWSER_DIALOG_METHODS);
+}
+
+export function hasBrowserTabCapability(browser: unknown): browser is BrowserTabCapability {
+  return hasBrowserCapabilityMethods<BrowserTabCapability>(browser, BROWSER_TAB_METHODS);
+}
+
+export function hasBrowserEmulationCapability(browser: unknown): browser is BrowserEmulationCapability {
+  return hasBrowserCapabilityMethods<BrowserEmulationCapability>(browser, BROWSER_EMULATION_METHODS);
+}
+
+export function hasBrowserStorageCapability(browser: unknown): browser is BrowserStorageCapability {
+  return hasBrowserCapabilityMethods<BrowserStorageCapability>(browser, BROWSER_STORAGE_METHODS);
+}
+
+export function hasBrowserInterceptCapability(browser: unknown): browser is BrowserInterceptCapability {
+  return hasBrowserCapabilityMethods<BrowserInterceptCapability>(browser, BROWSER_INTERCEPT_METHODS);
+}
+
+export function assertBrowserNetworkCaptureCapability(
+  browser: unknown
+): asserts browser is BrowserNetworkCaptureCapability {
+  assertBrowserCapabilityMethods<BrowserNetworkCaptureCapability>(
+    browser,
+    BROWSER_NETWORK_CAPTURE_METHODS,
+    'network capture capability'
+  );
+}
+
+export function assertBrowserConsoleCaptureCapability(
+  browser: unknown
+): asserts browser is BrowserConsoleCaptureCapability {
+  assertBrowserCapabilityMethods<BrowserConsoleCaptureCapability>(
+    browser,
+    BROWSER_CONSOLE_CAPTURE_METHODS,
+    'console capture capability'
+  );
+}
+
+export function assertBrowserWindowOpenPolicyCapability(
+  browser: unknown
+): asserts browser is BrowserWindowOpenPolicyCapability {
+  assertBrowserCapabilityMethods<BrowserWindowOpenPolicyCapability>(
+    browser,
+    BROWSER_WINDOW_OPEN_POLICY_METHODS,
+    'window open policy capability'
+  );
+}
+
+export function assertBrowserTextOcrCapability(
+  browser: unknown
+): asserts browser is BrowserTextOcrCapability {
+  assertBrowserCapabilityMethods<BrowserTextOcrCapability>(
+    browser,
+    BROWSER_TEXT_OCR_METHODS,
+    'text OCR capability'
+  );
+}
+
+export function assertBrowserDownloadCapability(
+  browser: unknown
+): asserts browser is BrowserDownloadCapability {
+  assertBrowserCapabilityMethods<BrowserDownloadCapability>(
+    browser,
+    BROWSER_DOWNLOAD_METHODS,
+    'download capability'
+  );
+}
+
+export function assertBrowserPdfCapability(
+  browser: unknown
+): asserts browser is BrowserPdfCapability {
+  assertBrowserCapabilityMethods<BrowserPdfCapability>(
+    browser,
+    BROWSER_PDF_METHODS,
+    'PDF capability'
+  );
+}
+
+export function assertBrowserDialogCapability(
+  browser: unknown
+): asserts browser is BrowserDialogCapability {
+  assertBrowserCapabilityMethods<BrowserDialogCapability>(
+    browser,
+    BROWSER_DIALOG_METHODS,
+    'dialog capability'
+  );
+}
+
+export function assertBrowserTabCapability(
+  browser: unknown
+): asserts browser is BrowserTabCapability {
+  assertBrowserCapabilityMethods<BrowserTabCapability>(
+    browser,
+    BROWSER_TAB_METHODS,
+    'tab capability'
+  );
+}
+
+export function assertBrowserEmulationCapability(
+  browser: unknown
+): asserts browser is BrowserEmulationCapability {
+  assertBrowserCapabilityMethods<BrowserEmulationCapability>(
+    browser,
+    BROWSER_EMULATION_METHODS,
+    'emulation capability'
+  );
+}
+
+export function assertBrowserStorageCapability(
+  browser: unknown
+): asserts browser is BrowserStorageCapability {
+  assertBrowserCapabilityMethods<BrowserStorageCapability>(
+    browser,
+    BROWSER_STORAGE_METHODS,
+    'storage capability'
+  );
+}
+
+export function assertBrowserInterceptCapability(
+  browser: unknown
+): asserts browser is BrowserInterceptCapability {
+  assertBrowserCapabilityMethods<BrowserInterceptCapability>(
+    browser,
+    BROWSER_INTERCEPT_METHODS,
+    'intercept capability'
+  );
+}

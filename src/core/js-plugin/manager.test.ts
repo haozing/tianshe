@@ -13,11 +13,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs-extra';
 import { JSPluginManager } from './manager';
-import type { DuckDBService } from '../../main/duckdb/service';
-import type { WebContentsViewManager } from '../../main/webcontentsview-manager';
-import type { WindowManager } from '../../main/window-manager';
+import type { IDuckDBService } from '../../types/duckdb';
+import type {
+  IWebContentsViewManager,
+  IWindowManager,
+} from '../browser-pool/ports';
 import type { HookBus } from '../hookbus';
-import type { WebhookSender } from '../../main/webhook/sender';
+import type { IWebhookSender } from '../../types/service-interfaces';
 import type { JSPluginInfo, JSPluginManifest, JSPluginImportResult } from '../../types/js-plugin';
 import { setObservationSink } from '../observability/observation-service';
 import type { ObservationSink, RuntimeArtifact, RuntimeEvent } from '../observability/types';
@@ -154,11 +156,11 @@ class MemoryObservationSink implements ObservationSink {
 
 describe('JSPluginManager', () => {
   let manager: JSPluginManager;
-  let mockDuckDB: DuckDBService;
-  let mockViewManager: WebContentsViewManager;
-  let mockWindowManager: WindowManager;
+  let mockDuckDB: IDuckDBService;
+  let mockViewManager: IWebContentsViewManager;
+  let mockWindowManager: IWindowManager;
   let mockHookBus: HookBus;
-  let mockWebhookSender: WebhookSender;
+  let mockWebhookSender: IWebhookSender;
 
   // 创建 Mock 依赖
   beforeEach(() => {
@@ -175,7 +177,7 @@ describe('JSPluginManager', () => {
     mockViewManager = {} as WebContentsViewManager;
     mockWindowManager = {} as WindowManager;
     mockHookBus = {} as HookBus;
-    mockWebhookSender = {} as WebhookSender;
+    mockWebhookSender = {} as IWebhookSender;
 
     // 创建管理器实例
     manager = new JSPluginManager(

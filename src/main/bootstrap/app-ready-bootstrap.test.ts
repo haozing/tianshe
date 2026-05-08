@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { runAppReadyBootstrap } from './app-ready-bootstrap';
+import {
+  AppReadyBootstrapStageError,
+  AppReadyBootstrapStageTimeoutError,
+  runAppReadyBootstrap,
+} from './app-ready-bootstrap';
 
 describe('app-ready-bootstrap', () => {
   beforeEach(() => {
@@ -84,7 +88,7 @@ describe('app-ready-bootstrap', () => {
     expect(error).not.toHaveBeenCalled();
   });
 
-  it('delegates initialization failures to the injected handler', async () => {
+  it('delegates initialization failures with stage metadata to the injected handler', async () => {
     const handleInitializationFailure = vi.fn();
 
     await runAppReadyBootstrap({
@@ -108,6 +112,93 @@ describe('app-ready-bootstrap', () => {
       consoleRef: { log: vi.fn(), error: vi.fn() },
     });
 
-    expect(handleInitializationFailure).toHaveBeenCalledWith(expect.any(Error));
+    expect(handleInitializationFailure).toHaveBeenCalledWith(
+      expect.any(AppReadyBootstrapStageError)
+    );
+    const error = handleInitializationFailure.mock.calls[0][0] as AppReadyBootstrapStageError;
+    expect(error.stage).toBe('initializeServices');
+    expect(error.message).toContain('Bootstrap stage "initializeServices" failed: boom');
+  });
+
+  it('delegates stuck stages as timeout errors and does not continue the sequence', async () => {
+    vi.useFakeTimers();
+    try {
+      const handleInitializationFailure = vi.fn();
+      const initializePluginIPC = vi.fn();
+      const bootstrapPromise = runAppReadyBootstrap({
+        logStartup: vi.fn(),
+        hideApplicationMenu: vi.fn(),
+        initializeServices: () => new Promise(() => {}),
+        initializePluginIPC,
+        initializeSchedulerIPC: vi.fn(),
+        initializeObservationIPC: vi.fn(),
+        initializeHttpApiIPC: vi.fn(),
+        initializeOcrPoolIPC: vi.fn(),
+        initializePlugins: vi.fn(),
+        createWindow: vi.fn(),
+        setupWindowResizeListener: vi.fn(),
+        initializeIPC: vi.fn(),
+        shouldInitializeUpdater: () => false,
+        initializeUpdater: vi.fn(),
+        startResourceMonitoring: vi.fn(),
+        initializeBrowserControlApi: vi.fn(),
+        handleInitializationFailure,
+        consoleRef: { log: vi.fn(), error: vi.fn() },
+        stageTimeoutMs: { initializeServices: 25, default: 10_000 },
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+      await bootstrapPromise;
+
+      expect(handleInitializationFailure).toHaveBeenCalledWith(
+        expect.any(AppReadyBootstrapStageTimeoutError)
+      );
+      const error = handleInitializationFailure.mock
+        .calls[0][0] as AppReadyBootstrapStageTimeoutError;
+      expect(error.stage).toBe('initializeServices');
+      expect(error.timeoutMs).toBe(25);
+      expect(initializePluginIPC).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the default stage timeout when a specific stage timeout is not configured', async () => {
+    vi.useFakeTimers();
+    try {
+      const handleInitializationFailure = vi.fn();
+      const bootstrapPromise = runAppReadyBootstrap({
+        logStartup: vi.fn(),
+        hideApplicationMenu: vi.fn(),
+        initializeServices: async () => undefined,
+        initializePluginIPC: () => new Promise(() => {}),
+        initializeSchedulerIPC: vi.fn(),
+        initializeObservationIPC: vi.fn(),
+        initializeHttpApiIPC: vi.fn(),
+        initializeOcrPoolIPC: vi.fn(),
+        initializePlugins: vi.fn(),
+        createWindow: vi.fn(),
+        setupWindowResizeListener: vi.fn(),
+        initializeIPC: vi.fn(),
+        shouldInitializeUpdater: () => false,
+        initializeUpdater: vi.fn(),
+        startResourceMonitoring: vi.fn(),
+        initializeBrowserControlApi: vi.fn(),
+        handleInitializationFailure,
+        consoleRef: { log: vi.fn(), error: vi.fn() },
+        stageTimeoutMs: { default: 15 },
+      });
+
+      await vi.advanceTimersByTimeAsync(15);
+      await bootstrapPromise;
+
+      const error = handleInitializationFailure.mock
+        .calls[0][0] as AppReadyBootstrapStageTimeoutError;
+      expect(error).toBeInstanceOf(AppReadyBootstrapStageTimeoutError);
+      expect(error.stage).toBe('initializePluginIPC');
+      expect(error.timeoutMs).toBe(15);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

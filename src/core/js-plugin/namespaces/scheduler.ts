@@ -36,7 +36,7 @@
  * });
  */
 
-import type { SchedulerService } from '../../../main/scheduler';
+import type { ISchedulerService } from '../../../types/scheduler';
 import {
   Scheduler,
   setSchedulerService as setCoreSchedulerService,
@@ -64,7 +64,7 @@ export type TaskInfo = ScheduledTaskInfo;
  * 设置全局 SchedulerService 引用
  * @internal
  */
-export function setSchedulerService(service: SchedulerService): void {
+export function setSchedulerService(service: ISchedulerService): void {
   setCoreSchedulerService(service);
 }
 
@@ -72,7 +72,7 @@ export function setSchedulerService(service: SchedulerService): void {
  * 获取全局 SchedulerService 引用
  * @internal
  */
-export function getSchedulerService(): SchedulerService | null {
+export function getSchedulerService(): ISchedulerService | null {
   return getCoreSchedulerService();
 }
 

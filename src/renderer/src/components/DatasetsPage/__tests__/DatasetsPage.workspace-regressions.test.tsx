@@ -161,6 +161,8 @@ const resetStoreState = () => {
     queryResult: null,
     importProgress: new Map(),
     processedImports: new Set(),
+    pendingLocalSchemaRefreshDatasets: new Set(),
+    localPatchTransaction: null,
     datasetInfoRequestId: 0,
     activeQuerySessionId: 0,
     activeQueryDatasetId: null,

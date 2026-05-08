@@ -7,19 +7,25 @@
 
 import * as path from 'path';
 import * as fs from 'fs-extra';
-import type { DuckDBService } from '../../main/duckdb/service';
-import type { WebContentsViewManager } from '../../main/webcontentsview-manager';
-import type { WindowManager } from '../../main/window-manager';
+import type { IDuckDBService } from '../../types/duckdb';
+import type {
+  IWebContentsViewManager,
+  IWindowManager,
+} from '../browser-pool/ports';
 import type { JSPluginManifest, LoadedJSPlugin, JSPluginInfo } from '../../types/js-plugin';
 import { readManifest } from './loader';
 import { createPluginLogger, PluginLogger } from '../../utils/PluginLogger';
 import { PluginHelpers } from './helpers';
+import type { InternalDevToolsOpener } from './namespaces/window';
+import type { IWebhookSender } from '../../types/service-interfaces';
 import { PluginContext, DataTableInfo } from './context';
 import { PluginFileWatcherManager } from './file-watcher';
 import { pluginEventBus, PluginEvents, type PluginReloadedPayload } from './events';
 import { getPluginRegistry } from './registry';
 import type { PluginRuntimeRegistry } from './runtime-registry';
 import { createLogger } from '../logger';
+import { getUnknownErrorMessage } from '../../utils/error-message';
+
 
 /** 模块级 logger */
 const logger = createLogger('PluginLifecycle');
@@ -61,12 +67,13 @@ export class PluginLifecycleManager {
   private fileWatcherManager: PluginFileWatcherManager;
 
   constructor(
-    private duckdb: DuckDBService,
-    private viewManager: WebContentsViewManager,
-    private windowManager: WindowManager,
+    private duckdb: IDuckDBService,
+    private viewManager: IWebContentsViewManager,
+    private windowManager: IWindowManager,
     private hookBus: import('../hookbus').HookBus,
-    private webhookSender: import('../../main/webhook/sender').WebhookSender,
-    private runtimeRegistry?: PluginRuntimeRegistry
+    private webhookSender: IWebhookSender,
+    private runtimeRegistry?: PluginRuntimeRegistry,
+    private devToolsOpener?: InternalDevToolsOpener
   ) {
     this.fileWatcherManager = new PluginFileWatcherManager();
   }
@@ -166,7 +173,7 @@ export class PluginLifecycleManager {
         callbacks.reloadPlugin
       );
       this.runtimeRegistry?.setLifecyclePhase(pluginId, 'active', plugin.manifest.name);
-    } catch (error: any) {
+    } catch (error: unknown) {
       pluginLogger.error('Plugin activation failed', error);
       this.runtimeRegistry?.recordError(pluginId, error, 'error', plugin.manifest.name);
 
@@ -182,7 +189,7 @@ export class PluginLifecycleManager {
       // 清理插件实例（防止状态残留）
       this.plugins.delete(pluginId);
 
-      throw new Error(`Plugin activation failed: ${error.message}`);
+      throw new Error(`Plugin activation failed: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -224,7 +231,7 @@ export class PluginLifecycleManager {
           this.runtimeRegistry?.setLifecyclePhase(pluginId, 'active', plugin?.manifest?.name);
           return false;
         }
-      } catch (guardError: any) {
+      } catch (guardError: unknown) {
         logger.error('Plugin canDeactivate hook failed', { pluginId, error: guardError });
       }
     }
@@ -238,7 +245,7 @@ export class PluginLifecycleManager {
         const registry = getPluginRegistry();
         registry.unregisterPlugin(pluginId);
         logger.debug('Plugin unregistered from Registry', { pluginId });
-      } catch (registryError: any) {
+      } catch (registryError: unknown) {
         logger.error('Failed to unregister from Registry', registryError);
       }
 
@@ -247,7 +254,7 @@ export class PluginLifecycleManager {
         try {
           await plugin.module.onStop(helpers);
           logger.debug('Plugin onStop hook completed', { pluginId });
-        } catch (hookError: any) {
+        } catch (hookError: unknown) {
           logger.error('Plugin onStop hook failed', hookError);
         }
       }
@@ -256,7 +263,7 @@ export class PluginLifecycleManager {
         try {
           await plugin.module.deactivate();
           logger.debug('Plugin deactivate hook completed', { pluginId });
-        } catch (hookError: any) {
+        } catch (hookError: unknown) {
           logger.error('Plugin deactivate hook failed', hookError);
         }
       }
@@ -267,7 +274,7 @@ export class PluginLifecycleManager {
           context.dispose();
           this.contexts.delete(pluginId);
           logger.debug('Context disposed', { pluginId });
-        } catch (contextError: any) {
+        } catch (contextError: unknown) {
           logger.error('Context dispose failed', contextError);
         }
       }
@@ -278,7 +285,7 @@ export class PluginLifecycleManager {
           await helpers.dispose();
           this.helpers.delete(pluginId);
           logger.debug('Helpers disposed', { pluginId });
-        } catch (helpersError: any) {
+        } catch (helpersError: unknown) {
           logger.error('Helpers dispose failed', helpersError);
           this.helpers.delete(pluginId);
         }
@@ -289,7 +296,7 @@ export class PluginLifecycleManager {
         try {
           await this.fileWatcherManager.stopWatching(pluginId);
           logger.debug('Stopped file watcher', { pluginId });
-        } catch (watcherError: any) {
+        } catch (watcherError: unknown) {
           logger.error('Failed to stop file watcher', watcherError);
         }
       }
@@ -298,7 +305,7 @@ export class PluginLifecycleManager {
       try {
         await this.viewManager.cleanupPluginViews(pluginId);
         logger.debug('Cleaned up remaining plugin views', { pluginId });
-      } catch (viewError: any) {
+      } catch (viewError: unknown) {
         logger.error('Failed to cleanup plugin views', viewError);
       }
 
@@ -306,14 +313,14 @@ export class PluginLifecycleManager {
       try {
         await callbacks.unregisterUIContributions(pluginId);
         logger.debug('Unregistered UI contributions', { pluginId });
-      } catch (uiError: any) {
+      } catch (uiError: unknown) {
         logger.error('Failed to unregister UI contributions', uiError);
       }
 
       logger.info('Plugin deactivated', { pluginId });
       this.runtimeRegistry?.setLifecyclePhase(pluginId, 'inactive');
       return true;
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('Failed to deactivate plugin', { pluginId, error });
       this.runtimeRegistry?.recordError(pluginId, error, 'error');
       throw error;
@@ -394,8 +401,8 @@ export class PluginLifecycleManager {
           version: latestManifest.version,
         });
       }
-    } catch (metadataError: any) {
-      logger.warn('Failed to update metadata', { error: metadataError.message });
+    } catch (metadataError: unknown) {
+      logger.warn('Failed to update metadata', { error: getUnknownErrorMessage(metadataError) });
     }
 
     logger.info('Reload completed', { pluginId });
@@ -474,8 +481,8 @@ export class PluginLifecycleManager {
       );
 
       return { success: true, message: '热重载已启用' };
-    } catch (error: any) {
-      return { success: false, message: `启用热重载失败: ${error.message}` };
+    } catch (error: unknown) {
+      return { success: false, message: `启用热重载失败: ${getUnknownErrorMessage(error)}` };
     }
   }
 
@@ -496,8 +503,8 @@ export class PluginLifecycleManager {
       );
 
       return { success: true, message: '热重载已禁用' };
-    } catch (error: any) {
-      return { success: false, message: `禁用热重载失败: ${error.message}` };
+    } catch (error: unknown) {
+      return { success: false, message: `禁用热重载失败: ${getUnknownErrorMessage(error)}` };
     }
   }
 
@@ -529,7 +536,8 @@ export class PluginLifecycleManager {
       this.windowManager,
       this.hookBus,
       this.webhookSender,
-      this.runtimeRegistry
+      this.runtimeRegistry,
+      this.devToolsOpener
     );
     this.helpers.set(pluginId, helpers);
     return helpers;
@@ -672,9 +680,9 @@ export class PluginLifecycleManager {
         pluginLogger.info('File watcher started (hot reload enabled)', {
           sourcePath: pluginInfo.sourcePath,
         });
-      } catch (watchError: any) {
+      } catch (watchError: unknown) {
         pluginLogger.warn('Failed to start file watcher', {
-          error: watchError.message,
+          error: getUnknownErrorMessage(watchError),
           note: 'Hot reload will not be available, but plugin is still active',
         });
       }

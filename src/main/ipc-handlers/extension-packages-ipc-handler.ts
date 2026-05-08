@@ -7,6 +7,8 @@ import { createIpcHandler } from './utils';
 import type { ExtensionPackagesManager } from '../profile/extension-packages-manager';
 import type { SyncOutboxService } from '../sync/sync-outbox-service';
 import type { BrowserExtensionInstallPackage } from '../../edition/types';
+import { getUnknownErrorMessage } from '../ipc-utils';
+import { redactSensitiveText } from '../../utils/redaction';
 
 interface RestartRunningBrowsersResult {
   affectedProfiles: string[];
@@ -59,7 +61,7 @@ async function restartRunningProfileBrowsers(
       );
       restartFailures.push({
         profileId,
-        error: error instanceof Error ? error.message : 'unknown_error',
+        error: redactSensitiveText(getUnknownErrorMessage(error, 'unknown_error')),
       });
     }
   }
@@ -101,10 +103,7 @@ export function registerExtensionPackagesManagerHandlers(
   }
 ): void {
   const syncOutboxService = options?.syncOutboxService;
-  const emitExtensionPackageUpsertEvent = async (
-    item: ExtensionPackage,
-    logSource: string
-  ) => {
+  const emitExtensionPackageUpsertEvent = async (item: ExtensionPackage, logSource: string) => {
     void syncOutboxService;
     void item;
     void logSource;
@@ -182,10 +181,7 @@ export function registerExtensionPackagesManagerHandlers(
     async (inputs: Array<{ path: string; extensionIdHint?: string }>) => {
       const result = await manager.importLocalPackagesDetailed(inputs);
       for (const item of result.succeeded) {
-        await emitExtensionPackageUpsertEvent(
-          item,
-          'extension-packages:import-local-packages'
-        );
+        await emitExtensionPackageUpsertEvent(item, 'extension-packages:import-local-packages');
       }
       return result;
     },
@@ -205,10 +201,7 @@ export function registerExtensionPackagesManagerHandlers(
     ) => {
       const result = await manager.downloadCloudPackagesDetailed(inputs);
       for (const item of result.succeeded) {
-        await emitExtensionPackageUpsertEvent(
-          item,
-          'extension-packages:download-cloud-packages'
-        );
+        await emitExtensionPackageUpsertEvent(item, 'extension-packages:download-cloud-packages');
       }
       return result;
     },
@@ -257,7 +250,7 @@ export function registerExtensionPackagesManagerHandlers(
             failed.push({
               extensionId,
               name: String(item?.name || '').trim() || undefined,
-              error: error instanceof Error ? error.message : '未知错误',
+              error: redactSensitiveText(getUnknownErrorMessage(error, '未知错误')),
             });
           } finally {
             if (tempZipPath) {
@@ -328,10 +321,7 @@ export function registerExtensionPackagesManagerHandlers(
       const result = await manager.unbindExtensionsFromProfiles(input);
       const restartResult = await restartRunningProfileBrowsers(input.profileIds);
       for (const item of result.removedPackages) {
-        await emitExtensionPackageDeleteEvent(
-          item,
-          'extension-packages:batch-unbind'
-        );
+        await emitExtensionPackageDeleteEvent(item, 'extension-packages:batch-unbind');
       }
       return {
         removedBindings: result.removedBindings,
@@ -346,4 +336,3 @@ export function registerExtensionPackagesManagerHandlers(
     '批量解绑扩展失败'
   );
 }
-

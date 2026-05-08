@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import type { BrowserFactory } from '../../core/browser-pool/global-pool';
 import type { SessionConfig } from '../../core/browser-pool/types';
+import { getOcrPool } from '../../core/system-automation/ocr';
 import { AIRPA_RUNTIME_CONFIG } from '../../constants/runtime-config';
 import { ExtensionBrowser } from '../../core/browser-extension';
 import {
@@ -268,6 +269,9 @@ export function createExtensionBrowserFactory(options?: ExtensionFactoryOptions)
         closeInternal: cleanup,
         initialClientState,
         browserProcessId: chromeProcess.pid ?? null,
+        ocrProviderFactory: {
+          create: async () => getOcrPool(),
+        },
       });
 
       return {

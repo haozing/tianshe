@@ -417,8 +417,7 @@ describe('Dataset operations integration', () => {
     queryEngine = new QueryEngine(testDb as any);
     testDb.setQueryEngine(queryEngine);
 
-    exportService = new DatasetExportService(conn, metadataService, storageService);
-    exportService.setExportQuerySQLBuilder(testDb as any);
+    exportService = new DatasetExportService(conn, metadataService, storageService, testDb as any);
   });
 
   afterAll(async () => {

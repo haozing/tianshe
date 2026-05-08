@@ -25,6 +25,9 @@ import type { BrowserCaptureAPI } from '../browser-core/capture';
 import type { OCRAPI } from '../system-automation/types';
 import { TextNotFoundError } from '../system-automation/types';
 import { sleep } from '../browser-core/utils';
+import { createLogger } from '../logger';
+
+const logger = createLogger('ViewportOCRService');
 
 /**
  * 视口 OCR 选项
@@ -101,11 +104,11 @@ export class ViewportOCRService {
     // 注意：CDP 截图不支持 region 参数，只能截取整个视口
     if (this.cdpScreenshot && !region) {
       try {
-        console.log('[ViewportOCRService] Using CDP screenshot');
+        logger.debug('Using CDP screenshot');
         const base64 = await this.cdpScreenshot(signal);
         return Buffer.from(base64, 'base64');
       } catch (cdpError) {
-        console.log('[ViewportOCRService] CDP screenshot failed, trying capturePage:', cdpError);
+        logger.debug('CDP screenshot failed, trying capturePage', cdpError);
         // CDP 失败时尝试 capturePage
       }
     }
@@ -116,7 +119,7 @@ export class ViewportOCRService {
     } catch (error) {
       // 如果有 CDP 函数但上面没用（因为有 region），这里再尝试 CDP
       if (this.cdpScreenshot) {
-        console.log('[ViewportOCRService] capturePage failed, falling back to CDP screenshot');
+        logger.debug('capturePage failed, falling back to CDP screenshot');
         const base64 = await this.cdpScreenshot(signal);
         return Buffer.from(base64, 'base64');
       }
@@ -134,7 +137,7 @@ export class ViewportOCRService {
   async recognize(region?: Bounds, options?: ViewportOCROptions): Promise<ViewportOCRResult[]> {
     // 使用 capturePage 截图（支持 CDP fallback）
     const screenshot = await this.getScreenshot(region, options?.signal);
-    console.log('[ViewportOCRService] Screenshot obtained, size:', screenshot.length, 'bytes');
+    logger.debug('Screenshot obtained', { size: screenshot.length });
 
     // OCR 识别
     const results = await this.ocrProvider.recognize(screenshot, {
@@ -144,7 +147,7 @@ export class ViewportOCRService {
       timeoutMs: options?.timeoutMs,
       signal: options?.signal,
     });
-    console.log('[ViewportOCRService] OCR results:', results.length, 'items');
+    logger.debug('OCR results received', { count: results.length });
 
     // 如果有区域限制，调整坐标偏移
     if (region) {

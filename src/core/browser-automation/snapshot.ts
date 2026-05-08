@@ -24,7 +24,9 @@ export interface SnapshotDependencies {
   getUrl: () => string;
   getTitle: () => Promise<string>;
   networkManager?: NetworkCaptureManager;
+  getNetworkManager?: () => NetworkCaptureManager | undefined;
   consoleManager?: ConsoleCaptureManager;
+  getConsoleManager?: () => ConsoleCaptureManager | undefined;
   waitForSelector?: (selector: string, options: { timeout: number }) => Promise<void>;
 }
 
@@ -41,6 +43,14 @@ export interface SnapshotDependencies {
  */
 export class BrowserSnapshotService {
   constructor(private deps: SnapshotDependencies) {}
+
+  private getNetworkManager(): NetworkCaptureManager | undefined {
+    return this.deps.getNetworkManager?.() ?? this.deps.networkManager;
+  }
+
+  private getConsoleManager(): ConsoleCaptureManager | undefined {
+    return this.deps.getConsoleManager?.() ?? this.deps.consoleManager;
+  }
 
   /**
    * 获取页面快照
@@ -71,19 +81,21 @@ export class BrowserSnapshotService {
     }
 
     // 网络请求
-    if (options?.includeNetwork && this.deps.networkManager?.isCapturing()) {
+    const networkManager = this.getNetworkManager();
+    if (options?.includeNetwork && networkManager?.isCapturing()) {
       if (typeof options.includeNetwork === 'string' && options.includeNetwork === 'smart') {
         snapshot.network = this.getNetworkEntries({ type: 'api' });
         snapshot.networkSummary = this.getNetworkSummary();
       } else {
-        snapshot.network = this.deps.networkManager.getAll();
+        snapshot.network = networkManager.getAll();
         snapshot.networkSummary = this.getNetworkSummary();
       }
     }
 
     // 控制台消息
-    if (options?.includeConsole && this.deps.consoleManager?.isCapturing()) {
-      snapshot.console = this.deps.consoleManager.getAll();
+    const consoleManager = this.getConsoleManager();
+    if (options?.includeConsole && consoleManager?.isCapturing()) {
+      snapshot.console = consoleManager.getAll();
     }
 
     return snapshot;
@@ -102,17 +114,19 @@ export class BrowserSnapshotService {
    * 获取网络请求记录（带过滤）
    */
   getNetworkEntries(filter?: NetworkFilter): NetworkEntry[] {
-    if (!this.deps.networkManager) {
+    const networkManager = this.getNetworkManager();
+    if (!networkManager) {
       return [];
     }
-    return this.deps.networkManager.getEntries(filter);
+    return networkManager.getEntries(filter);
   }
 
   /**
    * 获取网络请求摘要
    */
   getNetworkSummary(): NetworkSummary {
-    if (!this.deps.networkManager) {
+    const networkManager = this.getNetworkManager();
+    if (!networkManager) {
       return {
         total: 0,
         byType: {},
@@ -123,6 +137,6 @@ export class BrowserSnapshotService {
       };
     }
 
-    return summarizeNetworkEntries(this.deps.networkManager.getAll());
+    return summarizeNetworkEntries(networkManager.getAll());
   }
 }

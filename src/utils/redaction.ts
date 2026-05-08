@@ -4,6 +4,14 @@ const SENSITIVE_KEY_PATTERN =
 const MAX_REDACTION_DEPTH = 6;
 
 export const REDACTED_VALUE = '[REDACTED]';
+export const REDACTED_PATH = '[REDACTED_PATH]';
+export const REDACTED_SQL = '[REDACTED_SQL]';
+
+const WINDOWS_ABSOLUTE_PATH_PATTERN = /\b[A-Za-z]:[\\/][^\s'"`<>|),;:]+/g;
+const POSIX_ABSOLUTE_PATH_PATTERN =
+  /(^|[\s(["'])\/(?:Users|home|var|tmp|private|Volumes|mnt|opt|etc|data|app|Applications)\/[^\s'"`<>),;:]+/g;
+const SQL_STATEMENT_PATTERN =
+  /\b(?:SELECT\b[\s\S]*?\bFROM\b|INSERT\s+INTO\b|UPDATE\b[\s\S]*?\bSET\b|DELETE\s+FROM\b|CREATE\s+TABLE\b|DROP\s+TABLE\b|ALTER\s+TABLE\b|WITH\b[\s\S]*?\bSELECT\b)[^\r\n]*/gi;
 
 export function redactSensitiveText(value: string): string {
   return String(value)
@@ -11,7 +19,10 @@ export function redactSensitiveText(value: string): string {
     .replace(
       /((?:token|secret|password|passwd|api[_-]?key|access[_-]?key|session)=)[^&\s]+/gi,
       `$1${REDACTED_VALUE}`
-    );
+    )
+    .replace(WINDOWS_ABSOLUTE_PATH_PATTERN, REDACTED_PATH)
+    .replace(POSIX_ABSOLUTE_PATH_PATTERN, (_match, prefix: string) => `${prefix}${REDACTED_PATH}`)
+    .replace(SQL_STATEMENT_PATTERN, REDACTED_SQL);
 }
 
 export function redactSensitiveUrl(value: string): string {

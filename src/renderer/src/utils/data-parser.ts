@@ -16,6 +16,22 @@ export interface ParseResult {
   rowCount?: number;
 }
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  if (error && typeof error === 'object' && 'message' in error) {
+    return String((error as Record<string, unknown>).message);
+  }
+
+  return '未知错误';
+}
+
 export class DataParser {
   /**
    * 自动检测格式并解析
@@ -94,7 +110,7 @@ export class DataParser {
         data: [],
         error: 'JSON格式无效，必须是对象或对象数组',
       };
-    } catch (_error: any) {
+    } catch (_error: unknown) {
       // 不是JSON格式，返回失败（但不报错，继续尝试其他格式）
       return {
         success: false,
@@ -219,11 +235,11 @@ export class DataParser {
         format: formatName as 'csv' | 'tsv' | 'pipe',
         rowCount: data.length,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       return {
         success: false,
         data: [],
-        error: `解析失败: ${error.message}`,
+        error: `解析失败: ${getErrorMessage(error)}`,
       };
     }
   }
@@ -237,7 +253,11 @@ export class DataParser {
     expectedColumns?: string[]
   ): boolean {
     if (expectedColumns && expectedColumns.length > 0) {
-      const normalize = (value: string) => value.trim().replace(/^\ufeff/, '').toLowerCase();
+      const normalize = (value: string) =>
+        value
+          .trim()
+          .replace(/^\ufeff/, '')
+          .toLowerCase();
       const normalizedFirst = firstLineParts.map(normalize);
       const normalizedExpected = expectedColumns.map(normalize);
 

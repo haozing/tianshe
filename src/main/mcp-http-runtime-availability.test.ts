@@ -4,24 +4,26 @@ import {
   buildMcpRuntimeSessionContext,
   evaluateCapabilityRuntimeAvailability,
 } from './mcp-http-runtime-availability';
-import type { McpSessionInfo } from './mcp-http-types';
+import {
+  createMcpSessionInfo,
+  type CreateMcpSessionInfoOptions,
+  type McpSessionInfo,
+} from './mcp-http-types';
 
-const createSession = (overrides: Partial<McpSessionInfo> = {}): McpSessionInfo => ({
-  sessionId: ' session-1 ',
-  transport: null as any,
-  lastActivity: Date.now(),
-  invokeQueue: Promise.resolve(),
-  pendingInvocations: 0,
-  activeInvocations: 0,
-  maxQueueSize: 64,
-  partition: undefined,
-  engine: undefined,
-  visible: false,
-  authScopes: [],
-  closing: false,
-  terminateAfterResponse: false,
-  ...overrides,
-});
+const createSession = (
+  overrides: Partial<CreateMcpSessionInfoOptions> = {}
+): McpSessionInfo =>
+  createMcpSessionInfo({
+    sessionId: ' session-1 ',
+    transport: null as any,
+    lastActivity: Date.now(),
+    maxQueueSize: 64,
+    visible: false,
+    authScopes: [],
+    closing: false,
+    terminateAfterResponse: false,
+    ...overrides,
+  });
 
 const createCapability = (
   overrides: Partial<OrchestrationCapabilityDefinition> = {}

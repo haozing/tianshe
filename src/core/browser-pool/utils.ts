@@ -4,15 +4,21 @@
 
 import { createLogger } from '../logger';
 import type { BrowserInterface, ReleaseOptions } from './types';
-import type { WebContentsViewManager } from '../../main/webcontentsview-manager';
-import type { WindowManager } from '../../main/window-manager';
-import { LayoutCalculator } from '../../main/layout-calculator';
-import { maybeOpenInternalBrowserDevTools } from '../../main/internal-browser-devtools';
+import type { IWebContentsViewManager, IWindowManager, ViewDisplayMode } from './ports';
+import { LayoutCalculator } from '../layout/layout-calculator';
 import { MIN_VIEW_SIZE, RENDERER_TOP_INSET } from '../../constants/layout';
 
 const logger = createLogger('BrowserPool');
 
 type Bounds = { x: number; y: number; width: number; height: number };
+type BrowserResetOptions = Pick<ReleaseOptions, 'clearStorage' | 'navigateTo'>;
+type BrowserWithReset = BrowserInterface & {
+  reset(options?: BrowserResetOptions): Promise<void> | void;
+};
+
+function hasBrowserResetCapability(browser: BrowserInterface): browser is BrowserWithReset {
+  return typeof (browser as { reset?: unknown }).reset === 'function';
+}
 
 function applyRendererTopInset(bounds: Bounds): Bounds {
   const inset = Math.max(0, Math.round(RENDERER_TOP_INSET));
@@ -47,8 +53,8 @@ export async function resetBrowserState(
 
   try {
     // 优先使用 reset 方法（如果浏览器支持，这是 SimpleBrowser 的扩展）
-    if (typeof (browser as any).reset === 'function') {
-      await (browser as any).reset({
+    if (hasBrowserResetCapability(browser)) {
+      await browser.reset({
         navigateTo: options.navigateTo,
         clearStorage: options.clearStorage,
       });
@@ -77,8 +83,8 @@ export async function resetBrowserState(
  */
 export function attachBrowserView(
   viewId: string,
-  viewManager: WebContentsViewManager,
-  windowManager: WindowManager,
+  viewManager: IWebContentsViewManager,
+  windowManager: IWindowManager,
   windowId: string = 'main'
 ): boolean {
   const window = windowManager.getWindowById(windowId);
@@ -125,8 +131,8 @@ export function attachBrowserView(
  */
 export function showBrowserView(
   viewId: string,
-  viewManager: WebContentsViewManager,
-  windowManager: WindowManager,
+  viewManager: IWebContentsViewManager,
+  windowManager: IWindowManager,
   windowIdOrOptions:
     | string
     | {
@@ -250,7 +256,7 @@ const OFFSCREEN_BOUNDS = {
  * @param viewManager WebContentsView 管理器
  * @returns 是否成功隐藏
  */
-export function hideBrowserView(viewId: string, viewManager: WebContentsViewManager): boolean {
+export function hideBrowserView(viewId: string, viewManager: IWebContentsViewManager): boolean {
   try {
     // 如果当前是右栏停靠视图，先清理停靠状态（并移除插件布局映射）
     viewManager.clearRightDockedPoolView(viewId);
@@ -283,6 +289,8 @@ export interface PopupDisplayConfig {
   openDevTools?: boolean;
   /** 关闭弹窗时的回调（用于释放浏览器等清理操作） */
   onClose?: () => void;
+  /** 视图就绪时的回调（用于打开 DevTools 等操作） */
+  onViewReady?: (view: { webContents: any }) => void;
 }
 
 /**
@@ -303,8 +311,8 @@ export interface PopupDisplayConfig {
  */
 export function showBrowserViewInPopup(
   viewId: string,
-  viewManager: WebContentsViewManager,
-  windowManager: WindowManager,
+  viewManager: IWebContentsViewManager,
+  windowManager: IWindowManager,
   config?: PopupDisplayConfig
 ): string | null {
   try {
@@ -367,10 +375,9 @@ export function showBrowserViewInPopup(
     popupWindow.contentView.addChildView(viewInfo.view);
     viewInfo.view.setBounds(viewBounds);
     viewInfo.view.setVisible(true);
-    maybeOpenInternalBrowserDevTools(viewInfo.view.webContents, {
-      override: config?.openDevTools,
-      mode: 'detach',
-    });
+    if (config?.onViewReady) {
+      config.onViewReady(viewInfo.view);
+    }
 
     // ✅ 记录 attachedTo，保证 viewManager.detachView/closeView 在弹窗场景可正确分离视图
     viewInfo.attachedTo = popupWindowId;
@@ -418,6 +425,6 @@ export function showBrowserViewInPopup(
  * @param popupId 弹窗 ID
  * @param windowManager 窗口管理器
  */
-export function closeBrowserPopup(popupId: string, windowManager: WindowManager): void {
+export function closeBrowserPopup(popupId: string, windowManager: IWindowManager): void {
   windowManager.closeWindowById(`popup-${popupId}`);
 }

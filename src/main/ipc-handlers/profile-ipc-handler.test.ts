@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { ipcMain } from 'electron';
 import { registerProfileHandlers } from './profile-ipc-handler';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 import { getBrowserPoolManager } from '../../core/browser-pool';
 import {
   acquireProfileLiveSessionLease,
@@ -10,6 +11,8 @@ import {
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn(),
+    removeHandler: vi.fn(),
+    removeListener: vi.fn(),
   },
 }));
 
@@ -93,11 +96,14 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
     registeredHandlers.clear();
 
-    (ipcMain.handle as Mock).mockImplementation((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
-      registeredHandlers.set(channel, handler);
-    });
+    (ipcMain.handle as Mock).mockImplementation(
+      (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
+        registeredHandlers.set(channel, handler);
+      }
+    );
     (getBrowserPoolManager as Mock).mockReturnValue(poolManager);
     (attachProfileLiveSessionLease as Mock).mockImplementation((handle) => handle);
     (acquireProfileLiveSessionLease as Mock).mockResolvedValue({

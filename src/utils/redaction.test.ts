@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  REDACTED_PATH,
+  REDACTED_SQL,
   REDACTED_VALUE,
   redactSensitiveText,
   redactSensitiveUrl,
@@ -10,6 +12,21 @@ describe('redaction utilities', () => {
   it('redacts bearer tokens and query secrets in text', () => {
     expect(redactSensitiveText('Authorization: Bearer abc.def token=secret')).toBe(
       `Authorization: Bearer ${REDACTED_VALUE} token=${REDACTED_VALUE}`
+    );
+  });
+
+  it('redacts absolute filesystem paths in text', () => {
+    expect(redactSensitiveText('failed to open C:\\Users\\alice\\secret.duckdb')).toBe(
+      `failed to open ${REDACTED_PATH}`
+    );
+    expect(redactSensitiveText('failed to open /home/alice/secret.duckdb')).toBe(
+      `failed to open ${REDACTED_PATH}`
+    );
+  });
+
+  it('redacts SQL statements in text', () => {
+    expect(redactSensitiveText('DuckDB error near SELECT * FROM users WHERE token=abc')).toBe(
+      `DuckDB error near ${REDACTED_SQL}`
     );
   });
 

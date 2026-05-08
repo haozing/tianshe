@@ -21,6 +21,7 @@
  */
 
 import { HttpError, HttpTimeoutError, HttpErrorCode, type RequestOptions } from './types';
+import { getUnknownErrorMessage, toError } from '../../utils/error-message';
 
 /**
  * HTTP 客户端类
@@ -115,10 +116,10 @@ export class HttpClient {
       } else {
         return (await response.text()) as unknown as T;
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       clearTimeout(timeoutId);
 
-      if (error.name === 'AbortError') {
+      if (error instanceof Error && error.name === 'AbortError') {
         throw new HttpTimeoutError(url, timeout);
       }
 
@@ -126,11 +127,15 @@ export class HttpClient {
         throw error;
       }
 
-      throw new HttpError(`HTTP request failed: ${error.message}`, HttpErrorCode.REQUEST_FAILED, {
-        url,
-        method,
-        cause: error,
-      });
+      throw new HttpError(
+        `HTTP request failed: ${getUnknownErrorMessage(error)}`,
+        HttpErrorCode.REQUEST_FAILED,
+        {
+          url,
+          method,
+          cause: toError(error),
+        }
+      );
     }
   }
 

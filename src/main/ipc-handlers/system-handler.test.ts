@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { ipcRouteRegistry } from '../ipc-route-registry';
 
 // 使用 vi.hoisted 解决 mock 提升问题
 const { mockIpcMainHandle, mockGetBounds } = vi.hoisted(() => ({
@@ -14,6 +15,8 @@ const { mockIpcMainHandle, mockGetBounds } = vi.hoisted(() => ({
 vi.mock('electron', () => ({
   ipcMain: {
     handle: mockIpcMainHandle,
+    removeHandler: vi.fn(),
+    removeListener: vi.fn(),
   },
   app: {
     getVersion: vi.fn(() => '1.0.0'),
@@ -43,6 +46,14 @@ vi.mock('electron-store', () => {
 
 // Mock ipc-utils
 vi.mock('../ipc-utils', () => ({
+  getUnknownErrorMessage: vi.fn((error, fallback = 'Unknown error occurred') => {
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    if (error && typeof error === 'object' && 'message' in error) {
+      return String((error as Record<string, unknown>).message);
+    }
+    return fallback;
+  }),
   handleIPCError: vi.fn((error) => ({
     success: false,
     error: error instanceof Error ? error.message : String(error),
@@ -104,6 +115,7 @@ describe('SystemIPCHandler', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ipcRouteRegistry.unregisterAll();
     mockFetch = vi.fn();
     vi.stubGlobal('fetch', mockFetch);
     handlers = new Map();
@@ -315,7 +327,7 @@ describe('SystemIPCHandler', () => {
     it('应该返回内置浏览器 DevTools 配置', async () => {
       const h = handlers.get('internal-browser:get-devtools-config')!;
 
-      const result = await h({} as any);
+      const result = await h(trustedEvent as any);
 
       expect(result.success).toBe(true);
       expect(result.config).toEqual({ autoOpenDevTools: false });

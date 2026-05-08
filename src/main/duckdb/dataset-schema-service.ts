@@ -20,12 +20,15 @@ import { DependencyManager } from './dependency-manager';
 import { ValidationEngine } from './validation-engine';
 import type { Dataset, ValidationRule } from './types';
 import { escapeSqlStringLiteral, quoteIdentifier, quoteQualifiedName } from './utils';
+import { runPrepared } from './statement-executor';
+import { getUnknownErrorMessage } from '../ipc-utils';
 import {
   doesComputeColumnDependOn,
   extractDependenciesFromComputeConfig,
   getDependentComputedColumns,
   rewriteColumnReferencesInSchema,
 } from '../../utils/computed-schema-helpers';
+import { assertDatasetColumnNamePolicy } from '../../utils/dataset-column-name-policy';
 
 export class DatasetSchemaService {
   constructor(
@@ -65,7 +68,7 @@ export class DatasetSchemaService {
   }): Promise<void> {
     const {
       datasetId,
-      columnName,
+      columnName: rawColumnName,
       fieldType,
       nullable,
       duckdbTypeOverride,
@@ -77,6 +80,7 @@ export class DatasetSchemaService {
     } = params;
 
     const safeDatasetId = sanitizeDatasetId(datasetId);
+    const columnName = assertDatasetColumnNamePolicy(rawColumnName);
 
     // 🔄 使用队列机制执行添加列操作，避免并发 ATTACH 导致文件锁定
     return this.storageService.executeInQueue(safeDatasetId, async () => {
@@ -158,8 +162,8 @@ export class DatasetSchemaService {
               rules: validationRules,
             });
             console.log(`✓ 已应用 ${validationRules.length} 条验证规则`);
-          } catch (error: any) {
-            console.error(`⚠ 验证规则应用失败:`, error.message);
+          } catch (error: unknown) {
+            console.error(`⚠ 验证规则应用失败:`, getUnknownErrorMessage(error));
             // 不中断流程，只是警告
           }
         }
@@ -244,8 +248,8 @@ export class DatasetSchemaService {
           `);
 
           console.log(`✓ 已从 "${copyDataFrom}" 复制数据到 "${columnName}"`);
-        } catch (error: any) {
-          console.error(`⚠ 数据复制失败:`, error.message);
+        } catch (error: unknown) {
+          console.error(`⚠ 数据复制失败:`, getUnknownErrorMessage(error));
           // 不中断流程，新列已创建
         } finally {
           // ✅ ATTACH 保持有效，供 VIEW 使用
@@ -289,7 +293,10 @@ export class DatasetSchemaService {
       }
 
       const column = dataset.schema[columnIndex];
-      const targetName = newName?.trim() || columnName;
+      const targetName =
+        newName !== undefined && newName.trim()
+          ? assertDatasetColumnNamePolicy(newName)
+          : columnName;
       const isRenaming = targetName !== columnName;
 
       if (isRenaming) {
@@ -385,7 +392,9 @@ export class DatasetSchemaService {
         await this.validateComputeConfig(safeDatasetId, updatedTargetColumn.computeConfig);
 
         const schemaColumnNames = new Set(updatedSchema.map((col) => col.name));
-        const rawDependsOn = extractDependenciesFromComputeConfig(updatedTargetColumn.computeConfig);
+        const rawDependsOn = extractDependenciesFromComputeConfig(
+          updatedTargetColumn.computeConfig
+        );
         if (updatedTargetColumn.computeConfig.type !== 'custom') {
           const missingDependencies = rawDependsOn.filter((dep) => !schemaColumnNames.has(dep));
           if (missingDependencies.length > 0) {
@@ -393,7 +402,9 @@ export class DatasetSchemaService {
           }
         }
         const dependsOn = rawDependsOn.filter((dep) => schemaColumnNames.has(dep));
-        const schemaWithoutSelf = updatedSchema.filter((col) => col.name !== updatedTargetColumn.name);
+        const schemaWithoutSelf = updatedSchema.filter(
+          (col) => col.name !== updatedTargetColumn.name
+        );
         this.dependencyManager.rebuildFromSchema(schemaWithoutSelf as any);
         const cycleCheck = this.dependencyManager.checkCyclicDependency(
           updatedTargetColumn.name,
@@ -580,7 +591,9 @@ FROM base_data
         if (!params.fields || params.fields.length === 0) {
           throw new Error('concat compute requires fields');
         }
-        const fields = params.fields.map((f: string) => `COALESCE(CAST(${quoteIdentifier(f)} AS VARCHAR), '')`);
+        const fields = params.fields.map(
+          (f: string) => `COALESCE(CAST(${quoteIdentifier(f)} AS VARCHAR), '')`
+        );
         const separator = params.separator || '';
         return `CONCAT_WS('${escapeSqlStringLiteral(String(separator))}', ${fields.join(', ')})`;
       }
@@ -670,7 +683,9 @@ FROM base_data
    * 🔗 从计算配置中提取依赖列
    */
   private isPhysicalStoredColumn(column: any): boolean {
-    return column.storageMode !== 'computed' && !['button', 'attachment'].includes(column.fieldType);
+    return (
+      column.storageMode !== 'computed' && !['button', 'attachment'].includes(column.fieldType)
+    );
   }
 
   private async validateComputeConfig(datasetId: string, computeConfig: any): Promise<void> {
@@ -908,12 +923,11 @@ FROM base_data
     await this.storageService.smartAttach(safeDatasetId, escapedPath);
 
     const quotedColumn = quoteIdentifier(columnName);
-    const stmt = await this.conn.prepare(
-      `UPDATE ${quoteQualifiedName(`ds_${safeDatasetId}`, 'data')} SET ${quotedColumn} = ?`
+    await runPrepared(
+      this.conn,
+      `UPDATE ${quoteQualifiedName(`ds_${safeDatasetId}`, 'data')} SET ${quotedColumn} = ?`,
+      [value]
     );
-    stmt.bind([value]);
-    await stmt.run();
-    stmt.destroySync();
     console.log(`✅ Filled default value for dataset table: ${safeDatasetId}.data.${columnName}`);
   }
 }

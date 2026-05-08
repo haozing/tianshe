@@ -35,16 +35,11 @@ import type {
   QueryConfig,
 } from '../types';
 
-import type { CleanBuilder } from '../builders/CleanBuilder';
-import type { DedupeBuilder } from '../builders/DedupeBuilder';
-import type { FilterBuilder } from '../builders/FilterBuilder';
-import type { AggregateBuilder } from '../builders/AggregateBuilder';
-import type { SampleBuilder } from '../builders/SampleBuilder';
+import type { QueryPipeline } from '../pipeline/QueryPipeline';
 import type { LookupBuilder } from '../builders/LookupBuilder';
-import type { ComputeBuilder } from '../builders/ComputeBuilder';
-import type { GroupBuilder } from '../builders/GroupBuilder';
 import { SQLUtils } from '../utils/sql-utils';
 import { normalizeRuntimeSQL } from '../../../utils/query-runtime';
+import { getUnknownErrorMessage, toError } from '../../../utils/error-message';
 
 /**
  * PreviewService构造器参数
@@ -52,16 +47,9 @@ import { normalizeRuntimeSQL } from '../../../utils/query-runtime';
 export interface PreviewServiceDependencies {
   duckdbService: IQueryDuckDBService;
   logger: ILogger;
-  builders: {
-    clean: CleanBuilder;
-    dedupe: DedupeBuilder;
-    filter: FilterBuilder;
-    aggregate: AggregateBuilder;
-    sample: SampleBuilder;
-    lookup: LookupBuilder;
-    compute: ComputeBuilder;
-    group: GroupBuilder;
-  };
+  pipeline: QueryPipeline;
+  /** LookupBuilder 保留直接引用，因其 buildJoinSelectItems 不在标准 Builder 接口 */
+  lookupBuilder: LookupBuilder;
   createBaseContext: (datasetId: string) => Promise<SQLContext>;
   createDedupePreviewContext: (datasetId: string, config: QueryConfig) => Promise<SQLContext>;
   buildQuerySQL: (datasetId: string, config: QueryConfig) => Promise<string>;
@@ -74,7 +62,8 @@ export interface PreviewServiceDependencies {
 export class PreviewService {
   private duckdbService: IQueryDuckDBService;
   private logger: ILogger;
-  private builders: PreviewServiceDependencies['builders'];
+  private pipeline: QueryPipeline;
+  private lookupBuilder: LookupBuilder;
   private createBaseContext: (datasetId: string) => Promise<SQLContext>;
   private createDedupePreviewContext: (
     datasetId: string,
@@ -85,7 +74,8 @@ export class PreviewService {
   constructor(dependencies: PreviewServiceDependencies) {
     this.duckdbService = dependencies.duckdbService;
     this.logger = dependencies.logger;
-    this.builders = dependencies.builders;
+    this.pipeline = dependencies.pipeline;
+    this.lookupBuilder = dependencies.lookupBuilder;
     this.createBaseContext = dependencies.createBaseContext;
     this.createDedupePreviewContext = dependencies.createDedupePreviewContext;
     this.buildQuerySQL = dependencies.buildQuerySQL;
@@ -95,6 +85,33 @@ export class PreviewService {
 
   private async createPreviewContext(datasetId: string): Promise<SQLContext> {
     return this.createBaseContext(datasetId);
+  }
+
+  private cloneContext(context: SQLContext): SQLContext {
+    return {
+      datasetId: context.datasetId,
+      currentTable: context.currentTable,
+      ctes: [...context.ctes],
+      availableColumns: new Set(context.availableColumns),
+      isAggregated: context.isAggregated,
+    };
+  }
+
+  private async buildStepSQL(
+    key: string,
+    baseContext: SQLContext,
+    config: QueryConfig
+  ): Promise<{ sql: string; context: SQLContext }> {
+    const step = this.pipeline.getStep(key);
+    if (!step) throw new Error(`Pipeline step "${key}" not found`);
+    const previewContext = this.cloneContext(baseContext);
+    const result = await step.apply(previewContext, config);
+    const appliedContext = result?.nextContext ?? previewContext;
+    const newCTEs = appliedContext.ctes.slice(baseContext.ctes.length);
+    if (newCTEs.length === 0) {
+      throw new Error(`Pipeline step "${key}" did not generate any CTE`);
+    }
+    return { sql: newCTEs[0].sql, context: appliedContext };
   }
 
   private buildPreviewSQL(
@@ -282,10 +299,12 @@ export class PreviewService {
     );
     const originalData = await this.duckdbService.executeSQLWithParams(originalSQL, []);
 
-    // 2. 构建清洗 SQL
-    const cleanSQL = this.builders.clean.build(context, config);
+    // 2. 执行清洗 pipeline step
+    const { sql: cleanSQL } = await this.buildStepSQL('clean', context, {
+      clean: config,
+    } as QueryConfig);
 
-    // 3. 执行清洗（仅预览，不修改数据）
+    // 3. 执行清洗预览
     const previewSQL = this.buildPreviewSQL(
       context,
       `SELECT * FROM cleaned${stableOrderBy} LIMIT ${limit} OFFSET ${offset}`,
@@ -484,7 +503,9 @@ export class PreviewService {
           : (removedResult as any).rows || [];
       }
 
-      const dedupeSQL = this.builders.dedupe.build(context, config);
+      const { sql: dedupeSQL } = await this.buildStepSQL('dedupe', context, {
+        dedupe: config,
+      } as QueryConfig);
 
       return {
         stats,
@@ -667,7 +688,9 @@ export class PreviewService {
       const totalResult = await this.duckdbService.executeSQLWithParams(totalRowsSQL, []);
       const totalRows = totalResult[0]?.total || 0;
 
-      const filterSQL = this.builders.filter.build(context, filterConfig);
+      const { sql: filterSQL } = await this.buildStepSQL('filter', context, {
+        filter: filterConfig,
+      } as QueryConfig);
       const countSQL = this.buildPreviewSQL(context, `SELECT COUNT(*) AS matched FROM filtered`, [
         { name: 'filtered', sql: filterSQL },
       ]);
@@ -681,9 +704,9 @@ export class PreviewService {
         matchRate: totalRows > 0 ? matchedRows / totalRows : 0,
         executionTime: Date.now() - startTime,
       };
-    } catch (error: any) {
-      this.logger.error('previewFilterCount error:', error);
-      throw new Error(`筛选预览失败: ${error.message}`);
+    } catch (error: unknown) {
+      this.logger.error('previewFilterCount error:', toError(error));
+      throw new Error(`筛选预览失败: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -709,7 +732,9 @@ export class PreviewService {
       const originalRows = totalResult[0]?.total || 0;
 
       // 2. 构建聚合SQL
-      const aggregateSQL = await this.builders.aggregate.build(context, aggregateConfig);
+      const { sql: aggregateSQL } = await this.buildStepSQL('aggregate', context, {
+        aggregate: aggregateConfig,
+      } as QueryConfig);
 
       // 3. 获取分组数量
       const countSQL = this.buildPreviewSQL(context, `SELECT COUNT(*) AS group_count FROM agg`, [
@@ -757,9 +782,9 @@ export class PreviewService {
         },
         generatedSQL: this.buildPreviewSQL(context, aggregateSQL),
       };
-    } catch (error: any) {
-      this.logger.error('previewAggregate error:', error);
-      throw new Error(`聚合预览失败: ${error.message}`);
+    } catch (error: unknown) {
+      this.logger.error('previewAggregate error:', toError(error));
+      throw new Error(`聚合预览失败: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -809,9 +834,9 @@ export class PreviewService {
         },
         quality,
       };
-    } catch (error: any) {
-      this.logger.error('previewSample error:', error);
-      throw new Error(`采样预览失败: ${error.message}`);
+    } catch (error: unknown) {
+      this.logger.error('previewSample error:', toError(error));
+      throw new Error(`采样预览失败: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -878,7 +903,7 @@ export class PreviewService {
       const lookupKey = SQLUtils.escapeIdentifier(lookupConfig.lookupKey);
 
       const usedNames = new Set<string>(context.availableColumns);
-      const lookupSelectItems = await this.builders.lookup.buildJoinSelectItems(
+      const lookupSelectItems = await this.lookupBuilder.buildJoinSelectItems(
         lookupConfig,
         usedNames,
         'lookup_table'
@@ -914,7 +939,10 @@ export class PreviewService {
       selectExcludeClause = ` EXCLUDE (${matchField}, ${mainRowField})`;
       lookupSQL = previewSQL;
     } else {
-      lookupSQL = await this.builders.lookup.build(context, [lookupConfig]);
+      const { sql: lookupSQLResult } = await this.buildStepSQL('lookup', context, {
+        lookup: [lookupConfig],
+      } as QueryConfig);
+      lookupSQL = lookupSQLResult;
       previewSQL = lookupSQL;
       statsSourceSQL = previewSQL;
       matchedSourceSQL = previewSQL;
@@ -1023,14 +1051,15 @@ export class PreviewService {
     stepIndex: number
   ): Promise<SQLContext> {
     const stepName = `__lookup_preview_step_${stepIndex}`;
-    const nextSQL = await this.builders.lookup.build(context, [lookupConfig]);
-    const nextColumns = await this.builders.lookup.getResultColumns(context, [lookupConfig]);
+    const { sql: nextSQL, context: nextContext } = await this.buildStepSQL('lookup', context, {
+      lookup: [lookupConfig],
+    } as QueryConfig);
 
     return {
       ...context,
       currentTable: stepName,
       ctes: [...context.ctes, { name: stepName, sql: nextSQL }],
-      availableColumns: nextColumns,
+      availableColumns: nextContext.availableColumns,
     };
   }
 
@@ -1077,9 +1106,9 @@ export class PreviewService {
             steps,
           }
         : lastStep;
-    } catch (error: any) {
-      this.logger.error('previewLookup error:', error);
-      throw new Error(`关联预览失败: ${error.message}`);
+    } catch (error: unknown) {
+      this.logger.error('previewLookup error:', toError(error));
+      throw new Error(`关联预览失败: ${getUnknownErrorMessage(error)}`);
     }
   }
 
@@ -1146,11 +1175,11 @@ export class PreviewService {
           dataType,
         },
       };
-    } catch (error: any) {
-      this.logger.error('validateComputeExpression error:', error);
+    } catch (error: unknown) {
+      this.logger.error('validateComputeExpression error:', toError(error));
       return {
         valid: false,
-        error: error.message,
+        error: getUnknownErrorMessage(error),
         previewValues: [],
       };
     }
@@ -1210,9 +1239,9 @@ export class PreviewService {
           minGroupSize: stats.min_size || 0,
         },
       };
-    } catch (error: any) {
-      this.logger.error('previewGroup error:', error);
-      throw new Error(`分组预览失败: ${error.message}`);
+    } catch (error: unknown) {
+      this.logger.error('previewGroup error:', toError(error));
+      throw new Error(`分组预览失败: ${getUnknownErrorMessage(error)}`);
     }
   }
 }

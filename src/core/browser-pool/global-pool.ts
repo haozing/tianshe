@@ -42,6 +42,7 @@ import {
   SessionLimitExceededError,
   BrowserFactoryTimeoutError,
 } from '../errors/BrowserPoolError';
+import { getUnknownErrorMessage } from '../../utils/error-message';
 
 /**
  * 浏览器创建工厂函数类型
@@ -63,6 +64,18 @@ export type BrowserDestroyer = (browser: PooledBrowserController, viewId?: strin
 export type SessionBrowsersChangedCallback = (sessionId: string) => Promise<void> | void;
 
 const logger = createLogger('GlobalPool');
+
+interface BrowserClosedStateProbe {
+  isClosed(): boolean;
+}
+
+function hasBrowserClosedStateProbe(browser: unknown): browser is BrowserClosedStateProbe {
+  return (
+    typeof browser === 'object' &&
+    browser !== null &&
+    typeof (browser as { isClosed?: unknown }).isClosed === 'function'
+  );
+}
 
 /**
  * 全局浏览器池
@@ -399,7 +412,7 @@ export class GlobalPool {
         throw new Error('Invariant violation: readyBrowser is null after successful creation');
       }
       return readyBrowser;
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (timeoutId) {
         clearTimeout(timeoutId);
         timeoutId = undefined;
@@ -421,7 +434,7 @@ export class GlobalPool {
           });
       }
 
-      logger.error(`Failed to create browser: ${error.message}`, error);
+      logger.error(`Failed to create browser: ${getUnknownErrorMessage(error)}`, error);
       throw error;
     } finally {
       this.pendingFactoryPromises.delete(browserId);
@@ -899,9 +912,9 @@ export class GlobalPool {
           continue;
         }
 
-        // 额外检查 browser.browser 是否为 null（测试场景可能设置为 null）
-        // 使用 as any 绕过类型检查，因为测试可能手动设置为 null
-        if ((browser.browser as any) === null) {
+        // Runtime defensive check for tests or corrupted pool state.
+        const browserController = browser.browser as unknown;
+        if (browserController === null) {
           this.browsers.delete(browser.id);
           changedSessions.add(browser.sessionId);
           removedWithoutDestroyer++;
@@ -910,8 +923,8 @@ export class GlobalPool {
         }
 
         // 检查是否已关闭（如果 SimpleBrowser 有 isClosed 方法）
-        if (typeof (browser.browser as any).isClosed === 'function') {
-          const isClosed = (browser.browser as any).isClosed();
+        if (hasBrowserClosedStateProbe(browserController)) {
+          const isClosed = browserController.isClosed();
           if (isClosed) {
             toDestroy.push(browser.id);
             logger.warn(`Unhealthy browser (closed): ${browser.id}`);

@@ -6,8 +6,22 @@
 
 import { DuckDBConnection } from '@duckdb/node-api';
 import { parseRows } from './utils';
+import { allPrepared, runPrepared } from './statement-executor';
 import { v4 as uuidv4 } from 'uuid';
 import type { SavedSite, CreateSavedSiteParams, UpdateSavedSiteParams } from '../../types/profile';
+import { SqlUpdateBuilder } from './sql-update-builder';
+import { SchemaMigrationEngine } from './migration-engine';
+import {
+  runSchemaBackfills,
+  SAVED_SITE_SCHEMA_BACKFILLS,
+  SAVED_SITE_SCHEMA_MIGRATIONS,
+} from './schema-migrations';
+import {
+  normalizeSyncString,
+  normalizeSyncInteger,
+  normalizeSyncBoolean,
+  normalizeSyncTimestamp,
+} from './sync-field-normalizer';
 
 /**
  * 常用网站服务
@@ -35,47 +49,8 @@ export class SavedSiteService {
       )
     `);
 
-    await this.conn.run(`ALTER TABLE saved_sites ADD COLUMN IF NOT EXISTS sync_source_id VARCHAR`);
-    await this.conn.run(
-      `ALTER TABLE saved_sites ADD COLUMN IF NOT EXISTS sync_canonical_name VARCHAR`
-    );
-    await this.conn.run(
-      `ALTER TABLE saved_sites ADD COLUMN IF NOT EXISTS sync_owner_user_id BIGINT`
-    );
-    await this.conn.run(
-      `ALTER TABLE saved_sites ADD COLUMN IF NOT EXISTS sync_owner_user_name VARCHAR`
-    );
-    await this.conn.run(`ALTER TABLE saved_sites ADD COLUMN IF NOT EXISTS sync_scope_type VARCHAR`);
-    await this.conn.run(`ALTER TABLE saved_sites ADD COLUMN IF NOT EXISTS sync_scope_id BIGINT`);
-    await this.conn.run(
-      `ALTER TABLE saved_sites ADD COLUMN IF NOT EXISTS sync_managed BOOLEAN DEFAULT FALSE`
-    );
-    await this.conn.run(
-      `ALTER TABLE saved_sites ADD COLUMN IF NOT EXISTS sync_updated_at TIMESTAMP`
-    );
-
-    await this.conn.run(`
-      UPDATE saved_sites
-      SET usage_count = 0
-      WHERE usage_count IS NULL
-    `);
-    await this.conn.run(`
-      UPDATE saved_sites
-      SET sync_managed = FALSE
-      WHERE sync_managed IS NULL
-    `);
-    await this.conn.run(`
-      UPDATE saved_sites
-      SET sync_source_id = NULL
-      WHERE sync_source_id IS NOT NULL
-        AND TRIM(CAST(sync_source_id AS VARCHAR)) = ''
-    `);
-    await this.conn.run(`
-      UPDATE saved_sites
-      SET sync_canonical_name = NULL
-      WHERE sync_canonical_name IS NOT NULL
-        AND TRIM(CAST(sync_canonical_name AS VARCHAR)) = ''
-    `);
+    await new SchemaMigrationEngine(this.conn).migrate(SAVED_SITE_SCHEMA_MIGRATIONS);
+    await runSchemaBackfills(this.conn, SAVED_SITE_SCHEMA_BACKFILLS);
 
     await this.conn.run(`
       CREATE INDEX IF NOT EXISTS idx_saved_sites_usage_count
@@ -109,18 +84,19 @@ export class SavedSiteService {
       },
       { id: 'preset-zhihu', name: '知乎', url: 'https://www.zhihu.com/signin', icon: '❓' },
     ];
-    const presetStmt = await this.conn.prepare(`
-      INSERT INTO saved_sites (
-        id, name, url, icon, usage_count, created_at, sync_managed
-      )
-      VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP, FALSE)
-      ON CONFLICT (id) DO NOTHING
-    `);
     for (const site of presetSites) {
-      presetStmt.bind([site.id, site.name, site.url, site.icon]);
-      await presetStmt.run();
+      await runPrepared(
+        this.conn,
+        `
+          INSERT INTO saved_sites (
+            id, name, url, icon, usage_count, created_at, sync_managed
+          )
+          VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP, FALSE)
+          ON CONFLICT (id) DO NOTHING
+        `,
+        [site.id, site.name, site.url, site.icon]
+      );
     }
-    presetStmt.destroySync();
   }
 
   private normalizeName(name: string): string {
@@ -139,55 +115,6 @@ export class SavedSiteService {
     return normalized;
   }
 
-  private normalizeSyncScopeType(value: unknown): string | null {
-    const normalized = String(value ?? '').trim();
-    return normalized ? normalized : null;
-  }
-
-  private normalizeSyncScopeId(value: unknown): number | null {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return null;
-    return Math.trunc(numeric);
-  }
-
-  private normalizeSyncManaged(value: unknown): boolean {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'number') return value !== 0;
-    const normalized = String(value ?? '')
-      .trim()
-      .toLowerCase();
-    return normalized === 'true' || normalized === '1';
-  }
-
-  private normalizeSyncSourceId(value: unknown): string | null {
-    const normalized = String(value ?? '').trim();
-    return normalized ? normalized : null;
-  }
-
-  private normalizeSyncCanonicalName(value: unknown): string | null {
-    const normalized = String(value ?? '').trim();
-    return normalized ? normalized : null;
-  }
-
-  private normalizeSyncOwnerUserId(value: unknown): number | null {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return null;
-    const normalized = Math.trunc(numeric);
-    return normalized > 0 ? normalized : null;
-  }
-
-  private normalizeSyncOwnerUserName(value: unknown): string | null {
-    const normalized = String(value ?? '').trim();
-    return normalized ? normalized : null;
-  }
-
-  private toTimestampValue(value?: Date | null): string | null {
-    if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
-      return null;
-    }
-    return value.toISOString();
-  }
-
   private async ensureNameUnique(name: string, excludeId?: string): Promise<void> {
     const hasExcludeId = typeof excludeId === 'string' && excludeId.trim().length > 0;
     const sql = hasExcludeId
@@ -204,10 +131,7 @@ export class SavedSiteService {
       WHERE name = ?
       LIMIT 1
     `;
-    const stmt = await this.conn.prepare(sql);
-    stmt.bind(hasExcludeId ? [name, excludeId] : [name]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    const result = await allPrepared(this.conn, sql, hasExcludeId ? [name, excludeId] : [name]);
 
     const rows = parseRows(result);
     if (rows.length > 0) {
@@ -216,14 +140,11 @@ export class SavedSiteService {
   }
 
   private async countAccountReferences(id: string): Promise<number> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT COUNT(*) AS reference_count
       FROM accounts
       WHERE platform_id = ?
-    `);
-    stmt.bind([id]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [id]);
 
     const rows = parseRows(result);
     return Number(rows[0]?.reference_count) || 0;
@@ -238,26 +159,24 @@ export class SavedSiteService {
     await this.ensureNameUnique(normalizedName);
 
     const id = uuidv4();
-    const syncSourceId = this.normalizeSyncSourceId(params.syncSourceId);
+    const syncSourceId = normalizeSyncString(params.syncSourceId);
     const syncCanonicalName =
-      this.normalizeSyncCanonicalName(params.syncCanonicalName) ??
+      normalizeSyncString(params.syncCanonicalName) ??
       (syncSourceId ? normalizedName : null);
-    const syncOwnerUserId = this.normalizeSyncOwnerUserId(params.syncOwnerUserId);
-    const syncOwnerUserName = this.normalizeSyncOwnerUserName(params.syncOwnerUserName);
-    const syncScopeType = this.normalizeSyncScopeType(params.syncScopeType);
-    const syncScopeId = this.normalizeSyncScopeId(params.syncScopeId);
-    const syncManaged = this.normalizeSyncManaged(params.syncManaged);
-    const syncUpdatedAt = this.toTimestampValue(params.syncUpdatedAt);
+    const syncOwnerUserId = normalizeSyncInteger(params.syncOwnerUserId, { min: 1 });
+    const syncOwnerUserName = normalizeSyncString(params.syncOwnerUserName);
+    const syncScopeType = normalizeSyncString(params.syncScopeType);
+    const syncScopeId = normalizeSyncInteger(params.syncScopeId);
+    const syncManaged = normalizeSyncBoolean(params.syncManaged);
+    const syncUpdatedAt = normalizeSyncTimestamp(params.syncUpdatedAt);
 
-    const stmt = await this.conn.prepare(`
+    await runPrepared(this.conn, `
       INSERT INTO saved_sites (
         id, name, url, icon, usage_count, created_at,
         sync_source_id, sync_canonical_name, sync_owner_user_id, sync_owner_user_name,
         sync_scope_type, sync_scope_id, sync_managed, sync_updated_at
       ) VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.bind([
+    `, [
       id,
       normalizedName,
       normalizedUrl,
@@ -272,9 +191,6 @@ export class SavedSiteService {
       syncUpdatedAt,
     ]);
 
-    await stmt.run();
-    stmt.destroySync();
-
     console.log(`[SavedSiteService] Created saved site: ${normalizedName} (${id})`);
 
     return this.get(id) as Promise<SavedSite>;
@@ -284,18 +200,14 @@ export class SavedSiteService {
    * 获取单个常用网站
    */
   async get(id: string): Promise<SavedSite | null> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT
         id, name, url, icon, usage_count, created_at,
         sync_source_id, sync_canonical_name, sync_owner_user_id, sync_owner_user_name,
         sync_scope_type, sync_scope_id, sync_managed, sync_updated_at
       FROM saved_sites
       WHERE id = ?
-    `);
-
-    stmt.bind([id]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [id]);
 
     const rows = parseRows(result);
     if (rows.length === 0) return null;
@@ -307,7 +219,7 @@ export class SavedSiteService {
    * 通过名称查找平台
    */
   async getByName(name: string): Promise<SavedSite | null> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT
         id, name, url, icon, usage_count, created_at,
         sync_source_id, sync_canonical_name, sync_owner_user_id, sync_owner_user_name,
@@ -316,11 +228,7 @@ export class SavedSiteService {
       WHERE name = ?
       ORDER BY created_at ASC, id ASC
       LIMIT 1
-    `);
-
-    stmt.bind([name]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [name]);
 
     const rows = parseRows(result);
     if (rows.length === 0) return null;
@@ -332,18 +240,14 @@ export class SavedSiteService {
    * 通过 URL 查找常用网站
    */
   async getByUrl(url: string): Promise<SavedSite | null> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT
         id, name, url, icon, usage_count, created_at,
         sync_source_id, sync_canonical_name, sync_owner_user_id, sync_owner_user_name,
         sync_scope_type, sync_scope_id, sync_managed, sync_updated_at
       FROM saved_sites
       WHERE url = ?
-    `);
-
-    stmt.bind([url]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [url]);
 
     const rows = parseRows(result);
     if (rows.length === 0) return null;
@@ -372,81 +276,35 @@ export class SavedSiteService {
    * 更新常用网站
    */
   async update(id: string, params: UpdateSavedSiteParams): Promise<SavedSite> {
-    const fields: string[] = [];
-    const values: any[] = [];
+    const builder = new SqlUpdateBuilder();
 
     if (params.name !== undefined) {
       const normalizedName = this.normalizeName(params.name);
       await this.ensureNameUnique(normalizedName, id);
-      fields.push('name = ?');
-      values.push(normalizedName);
+      builder.set('name', normalizedName);
     }
 
-    if (params.url !== undefined) {
-      const normalizedUrl = this.normalizeUrl(params.url);
-      fields.push('url = ?');
-      values.push(normalizedUrl);
-    }
+    builder
+      .set('url', params.url, (v) => this.normalizeUrl(v as string))
+      .set('icon', params.icon)
+      .set('sync_source_id', params.syncSourceId, normalizeSyncString)
+      .set('sync_canonical_name', params.syncCanonicalName, normalizeSyncString)
+      .set('sync_owner_user_id', params.syncOwnerUserId, (v) => normalizeSyncInteger(v, { min: 1 }))
+      .set('sync_owner_user_name', params.syncOwnerUserName, normalizeSyncString)
+      .set('sync_scope_type', params.syncScopeType, normalizeSyncString)
+      .set('sync_scope_id', params.syncScopeId, normalizeSyncInteger)
+      .set('sync_managed', params.syncManaged, normalizeSyncBoolean)
+      .set('sync_updated_at', params.syncUpdatedAt, normalizeSyncTimestamp);
 
-    if (params.icon !== undefined) {
-      fields.push('icon = ?');
-      values.push(params.icon);
-    }
-
-    if (params.syncSourceId !== undefined) {
-      fields.push('sync_source_id = ?');
-      values.push(this.normalizeSyncSourceId(params.syncSourceId));
-    }
-
-    if (params.syncCanonicalName !== undefined) {
-      fields.push('sync_canonical_name = ?');
-      values.push(this.normalizeSyncCanonicalName(params.syncCanonicalName));
-    }
-
-    if (params.syncOwnerUserId !== undefined) {
-      fields.push('sync_owner_user_id = ?');
-      values.push(this.normalizeSyncOwnerUserId(params.syncOwnerUserId));
-    }
-
-    if (params.syncOwnerUserName !== undefined) {
-      fields.push('sync_owner_user_name = ?');
-      values.push(this.normalizeSyncOwnerUserName(params.syncOwnerUserName));
-    }
-
-    if (params.syncScopeType !== undefined) {
-      fields.push('sync_scope_type = ?');
-      values.push(this.normalizeSyncScopeType(params.syncScopeType));
-    }
-
-    if (params.syncScopeId !== undefined) {
-      fields.push('sync_scope_id = ?');
-      values.push(this.normalizeSyncScopeId(params.syncScopeId));
-    }
-
-    if (params.syncManaged !== undefined) {
-      fields.push('sync_managed = ?');
-      values.push(this.normalizeSyncManaged(params.syncManaged));
-    }
-
-    if (params.syncUpdatedAt !== undefined) {
-      fields.push('sync_updated_at = ?');
-      values.push(this.toTimestampValue(params.syncUpdatedAt));
-    }
-
-    if (fields.length === 0) {
+    if (builder.isEmpty) {
       const site = await this.get(id);
       if (!site) throw new Error(`SavedSite not found: ${id}`);
       return site;
     }
 
-    values.push(id);
+    const { sql, values } = builder.build('saved_sites', 'id', id)!;
 
-    const stmt = await this.conn.prepare(
-      `UPDATE saved_sites SET ${fields.join(', ')} WHERE id = ?`
-    );
-    stmt.bind(values);
-    await stmt.run();
-    stmt.destroySync();
+    await runPrepared(this.conn, sql, values);
 
     console.log(`[SavedSiteService] Updated saved site: ${id}`);
 
@@ -462,10 +320,7 @@ export class SavedSiteService {
       throw new Error(`平台仍被 ${referenceCount} 个账号引用，请先处理相关账号`);
     }
 
-    const stmt = await this.conn.prepare(`DELETE FROM saved_sites WHERE id = ?`);
-    stmt.bind([id]);
-    await stmt.run();
-    stmt.destroySync();
+    await runPrepared(this.conn, `DELETE FROM saved_sites WHERE id = ?`, [id]);
 
     console.log(`[SavedSiteService] Deleted saved site: ${id}`);
   }
@@ -474,15 +329,11 @@ export class SavedSiteService {
    * 增加使用次数
    */
   async incrementUsage(id: string): Promise<void> {
-    const stmt = await this.conn.prepare(`
+    await runPrepared(this.conn, `
       UPDATE saved_sites
       SET usage_count = usage_count + 1
       WHERE id = ?
-    `);
-
-    stmt.bind([id]);
-    await stmt.run();
-    stmt.destroySync();
+    `, [id]);
   }
 
   /**
@@ -496,13 +347,13 @@ export class SavedSiteService {
       icon: row.icon ? String(row.icon) : undefined,
       usageCount: Number(row.usage_count) || 0,
       createdAt: new Date(row.created_at),
-      syncSourceId: this.normalizeSyncSourceId(row.sync_source_id) ?? undefined,
-      syncCanonicalName: this.normalizeSyncCanonicalName(row.sync_canonical_name) ?? undefined,
-      syncOwnerUserId: this.normalizeSyncOwnerUserId(row.sync_owner_user_id) ?? undefined,
-      syncOwnerUserName: this.normalizeSyncOwnerUserName(row.sync_owner_user_name) ?? undefined,
-      syncScopeType: this.normalizeSyncScopeType(row.sync_scope_type) ?? undefined,
-      syncScopeId: this.normalizeSyncScopeId(row.sync_scope_id) ?? undefined,
-      syncManaged: this.normalizeSyncManaged(row.sync_managed),
+      syncSourceId: normalizeSyncString(row.sync_source_id) ?? undefined,
+      syncCanonicalName: normalizeSyncString(row.sync_canonical_name) ?? undefined,
+      syncOwnerUserId: normalizeSyncInteger(row.sync_owner_user_id, { min: 1 }) ?? undefined,
+      syncOwnerUserName: normalizeSyncString(row.sync_owner_user_name) ?? undefined,
+      syncScopeType: normalizeSyncString(row.sync_scope_type) ?? undefined,
+      syncScopeId: normalizeSyncInteger(row.sync_scope_id) ?? undefined,
+      syncManaged: normalizeSyncBoolean(row.sync_managed),
       syncUpdatedAt: row.sync_updated_at ? new Date(row.sync_updated_at) : undefined,
     };
   }

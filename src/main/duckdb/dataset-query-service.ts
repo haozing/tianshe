@@ -14,8 +14,10 @@ import { DuckDBConnection } from '@duckdb/node-api';
 import { DatasetMetadataService } from './dataset-metadata-service';
 import { DatasetSchemaService } from './dataset-schema-service';
 import { DatasetStorageService, sanitizeDatasetId } from './dataset-storage-service';
-import { parseRows, quoteIdentifier, quoteQualifiedName } from './utils';
+import { parseRows, quoteIdentifier, quoteQualifiedName, runInDuckDbTransaction } from './utils';
+import { runPrepared } from './statement-executor';
 import type { QueryResult } from './types';
+import type { QueryEngine } from '../../core/query-engine';
 import { assertReadOnlySQL, isSelectLikeSQL } from '../../utils/sql-readonly';
 import AhoCorasick from 'aho-corasick';
 
@@ -63,20 +65,23 @@ function normalizePaginationValue(
 }
 
 export class DatasetQueryService {
-  private queryEngine!: import('../../core/query-engine/QueryEngine').QueryEngine;
+  private queryEngine: QueryEngine | null = null;
 
   constructor(
     private conn: DuckDBConnection,
     private metadataService: DatasetMetadataService,
     private schemaService: DatasetSchemaService,
-    private storageService: DatasetStorageService
-  ) {}
+    private storageService: DatasetStorageService,
+    queryEngine?: QueryEngine
+  ) {
+    this.queryEngine = queryEngine ?? null;
+  }
 
-  /**
-   * 设置 QueryEngine 实例（由 DuckDBService 初始化后调用）
-   */
-  setQueryEngine(queryEngine: import('../../core/query-engine/QueryEngine').QueryEngine): void {
-    this.queryEngine = queryEngine;
+  private requireQueryEngine(): QueryEngine {
+    if (!this.queryEngine) {
+      throw new Error('QueryEngine not initialized for DatasetQueryService preview operation');
+    }
+    return this.queryEngine;
   }
 
   private async ensureDatasetAttached(datasetId: string, filePath: string): Promise<void> {
@@ -101,13 +106,7 @@ export class DatasetQueryService {
     limit: number = 50
   ): Promise<QueryResult> {
     const safeDatasetId = sanitizeDatasetId(datasetId);
-    const safeOffset = normalizePaginationValue(
-      offset,
-      'offset',
-      0,
-      0,
-      Number.MAX_SAFE_INTEGER
-    );
+    const safeOffset = normalizePaginationValue(offset, 'offset', 0, 0, Number.MAX_SAFE_INTEGER);
     const safeLimit = normalizePaginationValue(limit, 'limit', 50, 1, MAX_QUERY_LIMIT);
 
     // 🔄 使用队列机制执行查询，避免并发 ATTACH 导致文件锁定
@@ -163,12 +162,10 @@ export class DatasetQueryService {
         console.log(`[Query] Result: ${rows.length} rows, ${columns.length} columns`);
 
         // 更新最后查询时间
-        const updateStmt = await this.conn.prepare(
-          'UPDATE datasets SET last_queried_at = ? WHERE id = ?'
-        );
-        updateStmt.bind([Date.now(), safeDatasetId]);
-        await updateStmt.run();
-        updateStmt.destroySync();
+        await runPrepared(this.conn, 'UPDATE datasets SET last_queried_at = ? WHERE id = ?', [
+          Date.now(),
+          safeDatasetId,
+        ]);
 
         return {
           columns,
@@ -189,6 +186,7 @@ export class DatasetQueryService {
    */
   async previewFilterCount(datasetId: string, filterConfig: any): Promise<any> {
     const sanitizedId = sanitizeDatasetId(datasetId);
+    const queryEngine = this.requireQueryEngine();
 
     // 🔒 使用队列机制确保串行执行，避免并发 ATTACH 导致文件锁定
     return this.storageService.executeInQueue(sanitizedId, async () => {
@@ -201,7 +199,7 @@ export class DatasetQueryService {
 
       // ✅ 依赖管理已由 QueryEngine 统一处理
       // QueryEngine.previewFilterCount() 会自动调用 ensureAllDependencies()
-      return await this.queryEngine.previewFilterCount(sanitizedId, filterConfig);
+      return await queryEngine.previewFilterCount(sanitizedId, filterConfig);
     });
   }
 
@@ -210,6 +208,7 @@ export class DatasetQueryService {
    */
   async previewAggregate(datasetId: string, aggregateConfig: any, options?: any): Promise<any> {
     const sanitizedId = sanitizeDatasetId(datasetId);
+    const queryEngine = this.requireQueryEngine();
 
     // 🔒 使用队列机制确保串行执行
     return this.storageService.executeInQueue(sanitizedId, async () => {
@@ -221,7 +220,7 @@ export class DatasetQueryService {
       await this.ensureDatasetAttached(sanitizedId, dataset.filePath);
 
       // 使用 QueryEngine PreviewService
-      return await this.queryEngine.preview.previewAggregate(sanitizedId, aggregateConfig, options);
+      return await queryEngine.preview.previewAggregate(sanitizedId, aggregateConfig, options);
     });
   }
 
@@ -230,6 +229,7 @@ export class DatasetQueryService {
    */
   async previewSample(datasetId: string, sampleConfig: any, queryConfig?: any): Promise<any> {
     const sanitizedId = sanitizeDatasetId(datasetId);
+    const queryEngine = this.requireQueryEngine();
 
     return this.storageService.executeInQueue(sanitizedId, async () => {
       const dataset = await this.metadataService.getDatasetInfo(sanitizedId);
@@ -240,7 +240,7 @@ export class DatasetQueryService {
       await this.ensureDatasetAttached(sanitizedId, dataset.filePath);
 
       // 使用 QueryEngine PreviewService
-      return await this.queryEngine.preview.previewSample(sanitizedId, sampleConfig, queryConfig);
+      return await queryEngine.preview.previewSample(sanitizedId, sampleConfig, queryConfig);
     });
   }
 
@@ -249,6 +249,7 @@ export class DatasetQueryService {
    */
   async previewLookup(datasetId: string, lookupConfig: any, options?: any): Promise<any> {
     const sanitizedId = sanitizeDatasetId(datasetId);
+    const queryEngine = this.requireQueryEngine();
     const lookupConfigs = Array.isArray(lookupConfig) ? lookupConfig : [lookupConfig];
     const queueDatasetIds = new Set<string>([sanitizedId]);
 
@@ -285,7 +286,7 @@ export class DatasetQueryService {
       }
 
       // 使用 QueryEngine PreviewService
-      return await this.queryEngine.preview.previewLookup(sanitizedId, lookupConfigs, options);
+      return await queryEngine.preview.previewLookup(sanitizedId, lookupConfigs, options);
     });
   }
 
@@ -294,6 +295,7 @@ export class DatasetQueryService {
    */
   async previewGroup(datasetId: string, groupConfig: any, _options?: any): Promise<any> {
     const sanitizedId = sanitizeDatasetId(datasetId);
+    const queryEngine = this.requireQueryEngine();
 
     return this.storageService.executeInQueue(sanitizedId, async () => {
       const dataset = await this.metadataService.getDatasetInfo(sanitizedId);
@@ -304,7 +306,30 @@ export class DatasetQueryService {
       await this.ensureDatasetAttached(sanitizedId, dataset.filePath);
 
       // 使用 QueryEngine PreviewService
-      return await this.queryEngine.preview.previewGroup(sanitizedId, groupConfig);
+      return await queryEngine.preview.previewGroup(sanitizedId, groupConfig);
+    });
+  }
+
+  /**
+   * 🔍 验证计算列表达式
+   */
+  async validateComputeExpression(
+    datasetId: string,
+    expression: string,
+    options?: any
+  ): Promise<any> {
+    const sanitizedId = sanitizeDatasetId(datasetId);
+    const queryEngine = this.requireQueryEngine();
+
+    return this.storageService.executeInQueue(sanitizedId, async () => {
+      const dataset = await this.metadataService.getDatasetInfo(sanitizedId);
+      if (!dataset) {
+        throw new Error(`Dataset not found: ${sanitizedId}`);
+      }
+
+      await this.ensureDatasetAttached(sanitizedId, dataset.filePath);
+
+      return await queryEngine.preview.validateComputeExpression(sanitizedId, expression, options);
     });
   }
 
@@ -472,22 +497,13 @@ export class DatasetQueryService {
       await this.conn.run(`DROP TABLE IF EXISTS ${tempTable}`);
       await this.conn.run(`CREATE TEMP TABLE ${tempTable} (_row_id BIGINT)`);
 
-      await this.conn.run('BEGIN TRANSACTION');
-      try {
+      await runInDuckDbTransaction(this.conn, async () => {
         for (let i = 0; i < rowIds.length; i += AC_ROW_ID_INSERT_BATCH_SIZE) {
           const batch = rowIds.slice(i, i + AC_ROW_ID_INSERT_BATCH_SIZE);
           const values = batch.map((id) => `(${id})`).join(',');
           await this.conn.run(`INSERT INTO ${tempTable} VALUES ${values}`);
         }
-        await this.conn.run('COMMIT');
-      } catch (error) {
-        try {
-          await this.conn.run('ROLLBACK');
-        } catch {
-          // ignore rollback errors
-        }
-        throw error;
-      }
+      });
     });
   }
 

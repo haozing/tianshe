@@ -132,12 +132,15 @@ describe('preview pipeline consistency integration', () => {
       validationEngine
     );
 
-    queryService = new DatasetQueryService(conn, metadataService, schemaService, storageService);
-
     queryEngine = new QueryEngine(new MinimalDuckDBService(conn, metadataService) as any);
-    queryService.setQueryEngine(queryEngine);
-    queryTemplateService = new QueryTemplateService(conn);
-    queryTemplateService.setQueryEngine(queryEngine);
+    queryService = new DatasetQueryService(
+      conn,
+      metadataService,
+      schemaService,
+      storageService,
+      queryEngine
+    );
+    queryTemplateService = new QueryTemplateService(conn, queryEngine);
 
     datasetId = 'preview_pipeline_main';
     datasetPath = path.join(tempDir, `${datasetId}.duckdb`);

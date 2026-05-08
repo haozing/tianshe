@@ -4,7 +4,7 @@
  */
 
 import { HookBus } from '../../hookbus';
-import type { WebhookSender } from '../../../main/webhook/sender';
+import type { IWebhookSender } from '../../../types/service-interfaces';
 import { createLogger } from '../../logger';
 
 const logger = createLogger('WebhookNamespace');
@@ -31,7 +31,7 @@ export class WebhookNamespace {
   constructor(
     private pluginId: string,
     private hookBus: HookBus,
-    private webhookSender: WebhookSender
+    private webhookSender: IWebhookSender
   ) {}
 
   /**

@@ -1,5 +1,9 @@
-import { ipcMain, IpcMainInvokeEvent } from 'electron';
+import { IpcMainInvokeEvent } from 'electron';
 import { IpcError, type IpcErrorCode } from './errors';
+import type { IpcRouteDefinition, IpcRoutePermission, IpcRouteSchema } from '../ipc-route-registry';
+import { ipcRouteRegistry } from '../ipc-route-registry';
+import { getUnknownErrorMessage } from '../ipc-utils';
+import { redactSensitiveText } from '../../utils/redaction';
 
 export { IpcError, type IpcErrorCode } from './errors';
 
@@ -15,19 +19,39 @@ export type IpcSenderGuard = (event: IpcMainInvokeEvent, channel: string) => voi
 export interface IpcHandlerOptions {
   errorMessage?: string;
   senderGuard?: IpcSenderGuard;
+  permission?: IpcRoutePermission;
+  schema?: IpcRouteSchema;
 }
 
 function normalizeIpcHandlerOptions(
   errorMessageOrOptions?: string | IpcHandlerOptions,
   fallbackErrorMessage = '操作失败'
-): Required<Pick<IpcHandlerOptions, 'errorMessage'>> & Pick<IpcHandlerOptions, 'senderGuard'> {
+): Required<Pick<IpcHandlerOptions, 'errorMessage' | 'permission'>> &
+  Pick<IpcHandlerOptions, 'senderGuard' | 'schema'> {
   if (typeof errorMessageOrOptions === 'string') {
-    return { errorMessage: errorMessageOrOptions };
+    return { errorMessage: errorMessageOrOptions, permission: 'trusted-renderer' };
   }
 
   return {
     errorMessage: errorMessageOrOptions?.errorMessage || fallbackErrorMessage,
     senderGuard: errorMessageOrOptions?.senderGuard,
+    permission: errorMessageOrOptions?.permission || 'trusted-renderer',
+    schema: errorMessageOrOptions?.schema,
+  };
+}
+
+function createErrorResponse(error: unknown, defaultMessage: string): IPCResponse<never> {
+  if (error instanceof IpcError) {
+    return {
+      success: false,
+      error: redactSensitiveText(error.message),
+      code: error.code,
+    };
+  }
+
+  return {
+    success: false,
+    error: redactSensitiveText(getUnknownErrorMessage(error, defaultMessage)),
   };
 }
 
@@ -35,62 +59,52 @@ export function createIpcHandler<TArgs extends unknown[], TResult>(
   channel: string,
   handler: (...args: TArgs) => Promise<TResult>,
   errorMessageOrOptions: string | IpcHandlerOptions = '操作失败'
-): void {
+): IpcRouteDefinition {
   const options = normalizeIpcHandlerOptions(errorMessageOrOptions);
-  ipcMain.handle(
+  const route: IpcRouteDefinition = {
     channel,
-    async (event: IpcMainInvokeEvent, ...args: TArgs): Promise<IPCResponse<TResult>> => {
+    kind: 'handle',
+    permission: options.permission,
+    ...(options.schema ? { schema: options.schema } : {}),
+    handler: async (event: IpcMainInvokeEvent, ...args: TArgs): Promise<IPCResponse<TResult>> => {
       try {
         options.senderGuard?.(event, channel);
         const result = await handler(...args);
         return { success: true, data: result };
       } catch (error) {
         console.error(`[IPC] ${channel} error:`, error);
-        if (error instanceof IpcError) {
-          return {
-            success: false,
-            error: error.message,
-            code: error.code,
-          };
-        }
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : options.errorMessage,
-        };
+        return createErrorResponse(error, options.errorMessage);
       }
-    }
-  );
+    },
+  };
+  ipcRouteRegistry.register(route);
+  return route;
 }
 
 export function createIpcVoidHandler<TArgs extends unknown[]>(
   channel: string,
   handler: (...args: TArgs) => Promise<void>,
   errorMessageOrOptions: string | IpcHandlerOptions = '操作失败'
-): void {
+): IpcRouteDefinition {
   const options = normalizeIpcHandlerOptions(errorMessageOrOptions);
-  ipcMain.handle(
+  const route: IpcRouteDefinition = {
     channel,
-    async (event: IpcMainInvokeEvent, ...args: TArgs): Promise<IPCResponse<void>> => {
+    kind: 'handle',
+    permission: options.permission,
+    ...(options.schema ? { schema: options.schema } : {}),
+    handler: async (event: IpcMainInvokeEvent, ...args: TArgs): Promise<IPCResponse<void>> => {
       try {
         options.senderGuard?.(event, channel);
         await handler(...args);
         return { success: true };
       } catch (error) {
         console.error(`[IPC] ${channel} error:`, error);
-        if (error instanceof IpcError) {
-          return {
-            success: false,
-            error: error.message,
-            code: error.code,
-          };
-        }
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : options.errorMessage,
-        };
+        return createErrorResponse(error, options.errorMessage);
       }
-    }
-  );
+    },
+  };
+  ipcRouteRegistry.register(route);
+  return route;
 }
 
 export function registerIpcHandlers(
@@ -100,14 +114,17 @@ export function registerIpcHandlers(
     errorMsg?: string;
     isVoid?: boolean;
     senderGuard?: IpcSenderGuard;
+    permission?: IpcRoutePermission;
+    schema?: IpcRouteSchema;
   }>
 ): void {
-  for (const { channel, handler, errorMsg, isVoid, senderGuard } of handlers) {
-    const options = { errorMessage: errorMsg, senderGuard };
+  const routes: IpcRouteDefinition[] = [];
+  for (const { channel, handler, errorMsg, isVoid, senderGuard, permission, schema } of handlers) {
+    const options = { errorMessage: errorMsg, senderGuard, permission, schema };
     if (isVoid) {
-      createIpcVoidHandler(channel, handler, options);
+      routes.push(createIpcVoidHandler(channel, handler, options));
     } else {
-      createIpcHandler(channel, handler, options);
+      routes.push(createIpcHandler(channel, handler, options));
     }
   }
 }
@@ -116,15 +133,5 @@ export function handleIPCError(
   error: unknown,
   defaultMessage: string = '操作失败'
 ): IPCResponse<never> {
-  if (error instanceof IpcError) {
-    return {
-      success: false,
-      error: error.message,
-      code: error.code,
-    };
-  }
-  return {
-    success: false,
-    error: error instanceof Error ? error.message : defaultMessage,
-  };
+  return createErrorResponse(error, defaultMessage);
 }

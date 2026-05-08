@@ -1,6 +1,10 @@
 import { execFile, type ChildProcess } from 'node:child_process';
 import net from 'node:net';
 
+// 🔽 sendWindowsDialogKeys 已下沉到 src/utils/platform/windows-dialog
+// 保留重新导出以兼容现有导入
+export { sendWindowsDialogKeys } from '../../utils/platform/windows-dialog';
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -35,60 +39,6 @@ export async function killChildProcess(child: ChildProcess): Promise<void> {
   if (!exited) {
     child.kill('SIGKILL');
   }
-}
-
-function escapePowerShellSingleQuoted(value: string): string {
-  return value.replace(/'/g, "''");
-}
-
-function escapeForWindowsSendKeys(value: string): string {
-  return value.replace(/[+^%~()[\]{}]/g, (char) => `{${char}}`);
-}
-
-export async function sendWindowsDialogKeys(options: {
-  processId?: number | null;
-  accept: boolean;
-  promptText?: string;
-}): Promise<boolean> {
-  if (process.platform !== 'win32') {
-    return false;
-  }
-
-  const pid = Number(options.processId);
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return false;
-  }
-
-  const steps: string[] = [
-    '$wshell = New-Object -ComObject WScript.Shell',
-    `$null = $wshell.AppActivate(${pid})`,
-    'Start-Sleep -Milliseconds 400',
-  ];
-
-  if (typeof options.promptText === 'string' && options.promptText.length > 0) {
-    const escapedText = escapeForWindowsSendKeys(options.promptText);
-    steps.push(`$wshell.SendKeys('${escapePowerShellSingleQuoted(escapedText)}')`);
-    steps.push('Start-Sleep -Milliseconds 150');
-  }
-
-  steps.push(`$wshell.SendKeys('${options.accept ? '{ENTER}' : '{ESC}'}')`);
-
-  await new Promise<void>((resolve, reject) => {
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-Command', steps.join('; ')],
-      { windowsHide: true },
-      (error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      }
-    );
-  });
-
-  return true;
 }
 
 export async function findFreeTcpPort(start: number = 9222, end: number = 9322): Promise<number> {

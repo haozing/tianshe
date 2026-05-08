@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { toast } from '../lib/toast';
+import { getUnknownErrorMessage } from '../../../utils/error-message';
 import type {
   JSPluginRuntimeStatus,
   JSPluginRuntimeStatusChangeEvent,
@@ -45,21 +46,24 @@ export const usePluginRuntimeStore = create<PluginRuntimeStore>((set, get) => ({
         throw new Error(result.error || 'Failed to load plugin runtime statuses');
       }
 
-      const statuses = result.statuses.reduce<Record<string, JSPluginRuntimeStatus>>((acc, status) => {
-        if (status?.pluginId) {
-          acc[status.pluginId] = status;
-        }
-        return acc;
-      }, {});
+      const statuses = result.statuses.reduce<Record<string, JSPluginRuntimeStatus>>(
+        (acc, status) => {
+          if (status?.pluginId) {
+            acc[status.pluginId] = status;
+          }
+          return acc;
+        },
+        {}
+      );
 
       set({
         statuses,
         loading: false,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       set({
         loading: false,
-        error: `加载插件运行状态失败：${error.message}`,
+        error: `加载插件运行状态失败：${getUnknownErrorMessage(error)}`,
       });
     }
   },
@@ -80,10 +84,11 @@ export const usePluginRuntimeStore = create<PluginRuntimeStore>((set, get) => ({
       }
 
       await get().loadStatuses();
-    } catch (error: any) {
-      const message = `停止任务失败：${error.message}`;
+    } catch (error: unknown) {
+      const rawMessage = getUnknownErrorMessage(error);
+      const message = `停止任务失败：${rawMessage}`;
       set({ error: message });
-      toast.error('停止插件任务失败', error.message);
+      toast.error('停止插件任务失败', rawMessage);
     }
   },
 

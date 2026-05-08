@@ -35,6 +35,7 @@ vi.mock('electron', () => ({
 
 vi.mock('fs-extra', () => ({
   existsSync: vi.fn(() => true),
+  realpathSync: vi.fn((targetPath: string) => targetPath),
 }));
 
 import { FFINamespace } from '../core/js-plugin/namespaces/ffi';

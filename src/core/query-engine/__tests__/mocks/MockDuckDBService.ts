@@ -207,40 +207,83 @@ export class MockDuckDBService {
    * 简单的 SQL 执行模拟
    */
   private executeSimpleQuery(sql: string, dataset: MockDataset): any[] {
-    const lowerSql = sql.toLowerCase();
+    const tokens = this.tokenizeSql(sql);
 
     // 处理 LIMIT
-    let limit = dataset.data.length;
-    const limitMatch = sql.match(/LIMIT\s+(\d+)/i);
-    if (limitMatch) {
-      limit = parseInt(limitMatch[1]);
-    }
+    const limit = this.readLimit(tokens, dataset.data.length);
 
     // 处理 WHERE age > X
-    if (lowerSql.includes('where') && lowerSql.includes('age')) {
-      const ageMatch = sql.match(/age\s*>\s*(\d+)/i);
-      if (ageMatch) {
-        const minAge = parseInt(ageMatch[1]);
-        return dataset.data.filter((row) => row.age > minAge).slice(0, limit);
-      }
+    const minAge = this.readComparisonNumber(tokens, 'age', '>');
+    if (minAge !== null) {
+      return dataset.data.filter((row) => row.age > minAge).slice(0, limit);
     }
 
     // 处理 WHERE city = X
-    if (lowerSql.includes('where') && lowerSql.includes('city')) {
-      const cityMatch = sql.match(/city\s*=\s*'([^']+)'/i);
-      if (cityMatch) {
-        const city = cityMatch[1];
-        return dataset.data.filter((row) => row.city === city).slice(0, limit);
-      }
+    const city = this.readComparisonText(tokens, 'city', '=');
+    if (city !== null) {
+      return dataset.data.filter((row) => row.city === city).slice(0, limit);
     }
 
     // 处理 COUNT(*)
-    if (lowerSql.includes('count(*)')) {
+    if (tokens.includes('count') && tokens.includes('*')) {
       return [{ total: dataset.data.length }];
     }
 
     // 默认返回所有数据（带 LIMIT）
     return dataset.data.slice(0, limit);
+  }
+
+  private tokenizeSql(sql: string): string[] {
+    const separators = new Set([' ', '\r', '\n', '\t', ',', '(', ')', ';']);
+    const tokens: string[] = [];
+    let current = '';
+
+    const pushCurrent = () => {
+      if (!current) return;
+      tokens.push(current.replaceAll('"', '').replaceAll("'", '').toLowerCase());
+      current = '';
+    };
+
+    for (const char of sql) {
+      if (separators.has(char)) {
+        pushCurrent();
+      } else {
+        current += char;
+      }
+    }
+    pushCurrent();
+
+    return tokens;
+  }
+
+  private readLimit(tokens: string[], fallback: number): number {
+    const limitIndex = tokens.lastIndexOf('limit');
+    if (limitIndex < 0) {
+      return fallback;
+    }
+
+    const parsed = Number.parseInt(tokens[limitIndex + 1] || '', 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  private readComparisonNumber(tokens: string[], field: string, operator: string): number | null {
+    const value = this.readComparisonText(tokens, field, operator);
+    if (value === null) {
+      return null;
+    }
+
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private readComparisonText(tokens: string[], field: string, operator: string): string | null {
+    for (let index = 0; index < tokens.length - 2; index += 1) {
+      if (tokens[index] === field && tokens[index + 1] === operator) {
+        return tokens[index + 2];
+      }
+    }
+
+    return null;
   }
 
   /**

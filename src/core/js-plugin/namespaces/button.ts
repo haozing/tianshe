@@ -34,16 +34,18 @@
  * });
  */
 
-import type { DuckDBService } from '../../../main/duckdb/service';
 import type {
+  IDuckDBService,
   ColumnMetadata,
   ParameterBinding,
   ReturnBinding,
   TriggerChainConfig,
   TriggerRule,
   EnhancedColumnSchema,
-} from '../../../main/duckdb/types';
+} from '../../../types/duckdb';
 import type { PluginContext } from '../context';
+import { getUnknownErrorMessage } from '../../../utils/error-message';
+
 
 /**
  * 按钮配置
@@ -124,7 +126,7 @@ export interface AddButtonResult {
  */
 export class ButtonNamespace {
   constructor(
-    private duckdb: DuckDBService,
+    private duckdb: IDuckDBService,
     private pluginId: string,
     private getContext: () => PluginContext | null
   ) {}
@@ -159,7 +161,7 @@ export class ButtonNamespace {
 
       // 检查列是否已存在
       const existingSchema = await this.duckdb.getDatasetInfo(datasetId);
-      if (existingSchema?.schema?.some((col) => col.name === config.columnName)) {
+      if (existingSchema?.schema?.some((col: EnhancedColumnSchema) => col.name === config.columnName)) {
         console.log(`[ButtonNamespace] 按钮列 "${config.columnName}" 已存在，跳过创建`);
         return { success: true, columnName: config.columnName };
       }
@@ -185,12 +187,12 @@ export class ButtonNamespace {
       console.log(`[ButtonNamespace] 已添加按钮列 "${config.columnName}" 到表 "${tableCode}"`);
 
       return { success: true, columnName: config.columnName };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`[ButtonNamespace] 添加按钮失败:`, error);
       return {
         success: false,
         columnName: config.columnName,
-        error: error.message,
+        error: getUnknownErrorMessage(error),
       };
     }
   }
@@ -215,7 +217,7 @@ export class ButtonNamespace {
 
       // 获取现有配置
       const datasetInfo = await this.duckdb.getDatasetInfo(datasetId);
-      const column = datasetInfo?.schema?.find((c) => c.name === columnName);
+      const column = datasetInfo?.schema?.find((c: EnhancedColumnSchema) => c.name === columnName);
 
       if (!column || column.fieldType !== 'button') {
         return { success: false, error: `按钮列 "${columnName}" 不存在` };
@@ -234,9 +236,9 @@ export class ButtonNamespace {
       console.log(`[ButtonNamespace] 已更新按钮 "${columnName}"`);
 
       return { success: true };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`[ButtonNamespace] 更新按钮失败:`, error);
-      return { success: false, error: error.message };
+      return { success: false, error: getUnknownErrorMessage(error) };
     }
   }
 
@@ -261,9 +263,9 @@ export class ButtonNamespace {
       console.log(`[ButtonNamespace] 已删除按钮列 "${columnName}"`);
 
       return { success: true };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`[ButtonNamespace] 删除按钮失败:`, error);
-      return { success: false, error: error.message };
+      return { success: false, error: getUnknownErrorMessage(error) };
     }
   }
 
@@ -310,7 +312,7 @@ export class ButtonNamespace {
     }
 
     const datasetInfo = await this.duckdb.getDatasetInfo(datasetId);
-    return (datasetInfo?.schema || []).filter((col) => col.fieldType === 'button');
+    return (datasetInfo?.schema || []).filter((col: EnhancedColumnSchema) => col.fieldType === 'button');
   }
 
   /**

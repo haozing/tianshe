@@ -6,6 +6,7 @@
 
 import { DuckDBConnection } from '@duckdb/node-api';
 import { parseRows } from './utils';
+import { allPrepared, runPrepared } from './statement-executor';
 import { v4 as uuidv4 } from 'uuid';
 import type { ProfileGroup, CreateGroupParams, UpdateGroupParams } from '../../types/profile';
 
@@ -25,16 +26,14 @@ export class ProfileGroupService {
   async create(params: CreateGroupParams): Promise<ProfileGroup> {
     const id = uuidv4();
 
-    const stmt = await this.conn.prepare(`
+    // ??????????????? sort_order
+    const maxOrder = await this.getMaxSortOrder(params.parentId || null);
+
+    const result = await allPrepared(this.conn, `
       INSERT INTO profile_groups (
         id, name, parent_id, color, icon, description, sort_order, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `);
-
-    // 获取同级分组中最大的 sort_order
-    const maxOrder = await this.getMaxSortOrder(params.parentId || null);
-
-    stmt.bind([
+    `, [
       id,
       params.name,
       params.parentId || null,
@@ -43,9 +42,6 @@ export class ProfileGroupService {
       params.description || null,
       maxOrder + 1,
     ]);
-
-    await stmt.run();
-    stmt.destroySync();
 
     console.log(`[ProfileGroupService] Created group: ${params.name} (${id})`);
 
@@ -56,17 +52,13 @@ export class ProfileGroupService {
    * 获取单个分组
    */
   async get(id: string): Promise<ProfileGroup | null> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT
         id, name, parent_id, color, icon, description,
         sort_order, created_at, updated_at
       FROM profile_groups
       WHERE id = ?
-    `);
-
-    stmt.bind([id]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [id]);
 
     const rows = parseRows(result);
     if (rows.length === 0) return null;
@@ -134,13 +126,7 @@ export class ProfileGroupService {
       bindValues = [parentId];
     }
 
-    const stmt = await this.conn.prepare(sql);
-    if (bindValues.length > 0) {
-      stmt.bind(bindValues);
-    }
-
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    const result = await allPrepared(this.conn, sql, bindValues);
 
     const rows = parseRows(result);
     return rows.map((row) => this.mapRowToGroup(row));
@@ -194,12 +180,11 @@ export class ProfileGroupService {
     fields.push('updated_at = CURRENT_TIMESTAMP');
     values.push(id);
 
-    const stmt = await this.conn.prepare(
-      `UPDATE profile_groups SET ${fields.join(', ')} WHERE id = ?`
+    await runPrepared(
+      this.conn,
+      `UPDATE profile_groups SET ${fields.join(', ')} WHERE id = ?`,
+      values
     );
-    stmt.bind(values);
-    await stmt.run();
-    stmt.destroySync();
 
     console.log(`[ProfileGroupService] Updated group: ${id}`);
 
@@ -235,10 +220,7 @@ export class ProfileGroupService {
     }
 
     // 删除分组
-    const stmt = await this.conn.prepare(`DELETE FROM profile_groups WHERE id = ?`);
-    stmt.bind([id]);
-    await stmt.run();
-    stmt.destroySync();
+    await runPrepared(this.conn, `DELETE FROM profile_groups WHERE id = ?`, [id]);
 
     console.log(`[ProfileGroupService] Deleted group: ${id}`);
   }
@@ -255,12 +237,9 @@ export class ProfileGroupService {
    */
   async reorder(groupIds: string[]): Promise<void> {
     for (let i = 0; i < groupIds.length; i++) {
-      const stmt = await this.conn.prepare(`
+      await runPrepared(this.conn, `
         UPDATE profile_groups SET sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      `);
-      stmt.bind([i, groupIds[i]]);
-      await stmt.run();
-      stmt.destroySync();
+      `, [i, groupIds[i]]);
     }
 
     console.log(`[ProfileGroupService] Reordered ${groupIds.length} groups`);
@@ -274,12 +253,9 @@ export class ProfileGroupService {
    * 获取分组下的 Profile 数量
    */
   private async getProfileCount(groupId: string): Promise<number> {
-    const stmt = await this.conn.prepare(`
+    const result = await allPrepared(this.conn, `
       SELECT COUNT(*) as count FROM browser_profiles WHERE group_id = ?
-    `);
-    stmt.bind([groupId]);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    `, [groupId]);
 
     const rows = parseRows(result);
     return Number(rows[0]?.count) || 0;
@@ -319,13 +295,7 @@ export class ProfileGroupService {
       bindValues = [parentId];
     }
 
-    const stmt = await this.conn.prepare(sql);
-    if (bindValues.length > 0) {
-      stmt.bind(bindValues);
-    }
-
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    const result = await allPrepared(this.conn, sql, bindValues);
 
     const rows = parseRows(result);
     return Number(rows[0]?.max_order) || 0;

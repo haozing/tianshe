@@ -5,8 +5,7 @@
  * 所有数据库相关的方法都集中在这里
  */
 
-import type { DuckDBService } from '../../../main/duckdb/service';
-import type { EnhancedColumnSchema } from '../../../main/duckdb/types';
+import type { IDuckDBService, EnhancedColumnSchema } from '../../../types/duckdb';
 import type {
   DataTableExportOptions,
   DataTableExportResult,
@@ -19,6 +18,10 @@ import { assertReadOnlySQL } from '../../../utils/sql-readonly';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
+import { getUnknownErrorMessage } from '../../../utils/error-message';
+
+export const MAX_PLUGIN_DATABASE_BASE64_IMPORT_BYTES = 500 * 1024 * 1024;
+const BASE64_PAYLOAD_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
 
 type DataTableImportFormat = 'csv' | 'tsv' | 'xlsx' | 'xls';
 
@@ -44,6 +47,39 @@ interface DataTableImportResult {
   cleared: boolean;
 }
 
+export function normalizeDatabaseImportBase64(
+  base64: string,
+  maxBytes = MAX_PLUGIN_DATABASE_BASE64_IMPORT_BYTES
+): { payload: string; decodedBytes: number } {
+  const dataUrlMatch = base64.match(/^data:[^,]*;base64,(.*)$/s);
+  const payload = (dataUrlMatch ? dataUrlMatch[1] : base64).replace(/\s/g, '');
+
+  if (payload.length === 0) {
+    throw new DatabaseError('Base64 content cannot be empty', {
+      operation: 'importRecordsFromBase64',
+    });
+  }
+
+  if (payload.length % 4 !== 0 || !BASE64_PAYLOAD_PATTERN.test(payload)) {
+    throw new DatabaseError('Base64 content is invalid', {
+      operation: 'importRecordsFromBase64',
+    });
+  }
+
+  const padding = payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0;
+  const decodedBytes = (payload.length / 4) * 3 - padding;
+
+  if (decodedBytes > maxBytes) {
+    throw new DatabaseError('Base64 import file is too large', {
+      operation: 'importRecordsFromBase64',
+      size: decodedBytes,
+      maxBytes,
+    });
+  }
+
+  return { payload, decodedBytes };
+}
+
 /**
  * 数据库命名空间
  *
@@ -62,7 +98,7 @@ interface DataTableImportResult {
  */
 export class DatabaseNamespace {
   constructor(
-    private duckdb: DuckDBService,
+    private duckdb: IDuckDBService,
     private pluginId: string
   ) {}
 
@@ -102,17 +138,20 @@ export class DatabaseNamespace {
         result = await this.duckdb.queryDataset(datasetId, 'SELECT * FROM data');
       }
       return result.rows;
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (
-        error.message?.includes('read-only SQL') ||
-        error.message?.includes('Only a single') ||
-        error.message?.includes('must not contain')
+        getUnknownErrorMessage(error)?.includes('read-only SQL') ||
+        getUnknownErrorMessage(error)?.includes('Only a single') ||
+        getUnknownErrorMessage(error)?.includes('must not contain')
       ) {
         throw error;
       }
 
       // 区分错误类型
-      if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+      if (
+        getUnknownErrorMessage(error)?.includes('not found') ||
+        getUnknownErrorMessage(error)?.includes('does not exist')
+      ) {
         throw new DatasetNotFoundError(datasetId);
       }
 
@@ -123,7 +162,7 @@ export class DatabaseNamespace {
           datasetId,
           sql: sql || 'SELECT * FROM data',
           operation: 'query',
-          originalError: error.message,
+          originalError: getUnknownErrorMessage(error),
         },
         error
       );
@@ -158,8 +197,11 @@ export class DatabaseNamespace {
 
     try {
       await this.duckdb.insertRecord(datasetId, record);
-    } catch (error: any) {
-      if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+    } catch (error: unknown) {
+      if (
+        getUnknownErrorMessage(error)?.includes('not found') ||
+        getUnknownErrorMessage(error)?.includes('does not exist')
+      ) {
         throw new DatasetNotFoundError(datasetId);
       }
 
@@ -203,8 +245,11 @@ export class DatabaseNamespace {
       // ✅ 修复：使用 DuckDB 服务的 batchInsertRecords 方法
       // 该方法会正确处理数据库 ATTACH，避免 "does not exist" 错误
       await this.duckdb.batchInsertRecords(datasetId, records);
-    } catch (error: any) {
-      if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+    } catch (error: unknown) {
+      if (
+        getUnknownErrorMessage(error)?.includes('not found') ||
+        getUnknownErrorMessage(error)?.includes('does not exist')
+      ) {
         throw new DatasetNotFoundError(datasetId);
       }
 
@@ -294,7 +339,7 @@ export class DatabaseNamespace {
 
     try {
       await this.duckdb.updateRecord(datasetId, this.normalizeRowId(rowId), updates);
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new DatabaseError(
         `Failed to update row ${rowId} in dataset "${datasetId}"`,
         {
@@ -365,8 +410,11 @@ export class DatabaseNamespace {
 
     try {
       await this.duckdb.hardDeleteRows(datasetId, [this.normalizeRowId(rowId)]);
-    } catch (error: any) {
-      if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+    } catch (error: unknown) {
+      if (
+        getUnknownErrorMessage(error)?.includes('not found') ||
+        getUnknownErrorMessage(error)?.includes('does not exist')
+      ) {
         throw new DatasetNotFoundError(datasetId);
       }
 
@@ -405,7 +453,7 @@ export class DatabaseNamespace {
         throw new DatasetNotFoundError(datasetId);
       }
       return dataset.schema || [];
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof DatasetNotFoundError) {
         throw error;
       }
@@ -441,7 +489,7 @@ export class DatabaseNamespace {
         throw new DatasetNotFoundError(datasetId);
       }
       return dataset;
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof DatasetNotFoundError) {
         throw error;
       }
@@ -469,7 +517,7 @@ export class DatabaseNamespace {
   async listDatasets(): Promise<any[]> {
     try {
       return await this.duckdb.listDatasets();
-    } catch (error: any) {
+    } catch (error: unknown) {
       throw new DatabaseError(
         'Failed to list datasets',
         {
@@ -533,8 +581,11 @@ export class DatabaseNamespace {
         failed: 0,
         cleared: false,
       };
-    } catch (error: any) {
-      if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+    } catch (error: unknown) {
+      if (
+        getUnknownErrorMessage(error)?.includes('not found') ||
+        getUnknownErrorMessage(error)?.includes('does not exist')
+      ) {
         throw new DatasetNotFoundError(datasetId);
       }
 
@@ -544,7 +595,7 @@ export class DatabaseNamespace {
           datasetId,
           filePath,
           operation: 'importRecordsFromFile',
-          originalError: error.message,
+          originalError: getUnknownErrorMessage(error),
         },
         error
       );
@@ -564,12 +615,22 @@ export class DatabaseNamespace {
       ParamValidator.validateEnum(options.format, 'format', ['csv', 'tsv', 'xlsx', 'xls']);
     }
 
-    const normalizedBase64 = this.normalizeBase64(options.base64!);
+    const { payload: normalizedBase64, decodedBytes } = normalizeDatabaseImportBase64(
+      options.base64!
+    );
     const fallbackExtension = options.format ? `.${options.format}` : '.csv';
     const tempFilePath = await this.buildTempFilePath(options.filename!, fallbackExtension);
 
     try {
-      await fs.writeFile(tempFilePath, Buffer.from(normalizedBase64, 'base64'));
+      const fileBuffer = Buffer.from(normalizedBase64, 'base64');
+      if (fileBuffer.byteLength !== decodedBytes) {
+        throw new DatabaseError('Base64 content is invalid', {
+          operation: 'importRecordsFromBase64',
+          filename: options.filename,
+        });
+      }
+
+      await fs.writeFile(tempFilePath, fileBuffer);
       return await this.importRecordsFromFile(options.datasetId, tempFilePath);
     } finally {
       try {
@@ -686,7 +747,7 @@ export class DatabaseNamespace {
       }
 
       return response;
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof DatabaseError) {
         throw error;
       }
@@ -698,7 +759,7 @@ export class DatabaseNamespace {
           format,
           outputType,
           operation: 'exportDataset',
-          originalError: error.message,
+          originalError: getUnknownErrorMessage(error),
         },
         error
       );
@@ -762,11 +823,11 @@ export class DatabaseNamespace {
       }
 
       return await this.duckdb.executeSQLWithParams(finalSql, params || []);
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (
-        error.message?.includes('read-only SQL') ||
-        error.message?.includes('Only a single') ||
-        error.message?.includes('must not contain')
+        getUnknownErrorMessage(error)?.includes('read-only SQL') ||
+        getUnknownErrorMessage(error)?.includes('Only a single') ||
+        getUnknownErrorMessage(error)?.includes('must not contain')
       ) {
         throw error;
       }
@@ -830,11 +891,6 @@ export class DatabaseNamespace {
     // ✅ 修复：所有表都使用统一的表名格式 ds_{datasetId}.data
     const tableName = `${SQLUtils.escapeIdentifier(`ds_${datasetId}`)}.${SQLUtils.escapeIdentifier('data')}`;
     return sql.replace(/\b(FROM|INTO|UPDATE|JOIN)\s+data\b/gi, `$1 ${tableName}`);
-  }
-
-  private normalizeBase64(base64: string): string {
-    const match = base64.match(/^data:.*;base64,(.*)$/);
-    return match ? match[1] : base64;
   }
 
   private async buildTempFilePath(filename: string, fallbackExtension: string): Promise<string> {

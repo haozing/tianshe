@@ -17,17 +17,29 @@ interface LoggerLike {
   info(message: string, ...args: unknown[]): void;
 }
 
-interface RegisterHttpRoutesOptions {
+interface HttpServerRouteContext {
   app: Application;
   serverName: string;
   serverVersion: string;
   restApiConfig?: RestApiConfig;
   dependencies?: RestApiDependencies;
+  logger: LoggerLike;
+}
+
+interface HttpSessionRouteContext {
   transports: Map<string, McpSessionInfo>;
   orchestrationSessions: Map<string, OrchestrationSessionInfo>;
-  browserPoolAvailable: boolean;
+  getSessionCounts?: () => SessionCountsSnapshot;
+  buildRuntimeMetricsPayload: () => RuntimeMetricsPayload;
+}
+
+interface HttpAuthRouteContext {
   parseScopesHeader: (value: unknown) => string[];
   firstString: (value: unknown) => string;
+}
+
+interface HttpBrowserRouteContext {
+  browserPoolAvailable: boolean;
   parseRequestedEngine: (value: string | undefined) => AutomationEngine | undefined;
   acquireBrowserFromPool: (
     profileId?: string,
@@ -35,6 +47,9 @@ interface RegisterHttpRoutesOptions {
     source?: 'mcp' | 'http'
   ) => Promise<BrowserHandle>;
   getBrowserPoolManager?: () => BrowserPoolManager;
+}
+
+interface HttpInvokeRouteContext {
   enqueueInvokeTask: <T>(
     sessionLabel: string,
     session: McpSessionInfo,
@@ -51,79 +66,99 @@ interface RegisterHttpRoutesOptions {
     sessionId: string,
     session: OrchestrationSessionInfo
   ) => Promise<void>;
-  getSessionCounts?: () => SessionCountsSnapshot;
-  buildRuntimeMetricsPayload: () => RuntimeMetricsPayload;
+}
+
+interface HttpErrorRouteContext {
   normalizeStructuredError: (error: unknown) => StructuredError;
   mapErrorStatus: (code: string, fallback?: number) => number;
   mapStructuredErrorStatus: (error: StructuredError, fallback?: number) => number;
   asyncHandler: (
     handler: (req: Request, res: Response) => Promise<void>
   ) => (req: Request, res: Response) => Promise<void>;
-  logger: LoggerLike;
+}
+
+interface RegisterHttpRoutesOptions {
+  server: HttpServerRouteContext;
+  sessions: HttpSessionRouteContext;
+  auth: HttpAuthRouteContext;
+  browser: HttpBrowserRouteContext;
+  invoke: HttpInvokeRouteContext;
+  errors: HttpErrorRouteContext;
 }
 
 /**
  * 注册 HTTP 主入口下的系统路由、MCP 路由与编排路由。
  */
 export const registerHttpRoutes = (options: RegisterHttpRoutesOptions): void => {
-  const mcpConfigured = options.restApiConfig?.enableMcp ?? false;
+  const mcpConfigured = options.server.restApiConfig?.enableMcp ?? false;
   const mcpEndpointEnabled = mcpConfigured;
 
   registerHealthRoute({
-    app: options.app,
-    serverName: options.serverName,
-    serverVersion: options.serverVersion,
-    restApiConfig: options.restApiConfig,
+    app: options.server.app,
+    serverName: options.server.serverName,
+    serverVersion: options.server.serverVersion,
+    restApiConfig: options.server.restApiConfig,
     mcpConfigured,
     mcpEndpointEnabled,
     getSessionCounts:
-      options.getSessionCounts ??
+      options.sessions.getSessionCounts ??
       (() => ({
-        activeSessions: options.transports.size + options.orchestrationSessions.size,
-        mcpSessions: options.transports.size,
-        orchestrationSessions: options.orchestrationSessions.size,
+        activeSessions:
+          options.sessions.transports.size + options.sessions.orchestrationSessions.size,
+        mcpSessions: options.sessions.transports.size,
+        orchestrationSessions: options.sessions.orchestrationSessions.size,
       })),
-    getRuntimeMetrics: () => options.buildRuntimeMetricsPayload(),
+    getRuntimeMetrics: () => options.sessions.buildRuntimeMetricsPayload(),
   });
 
   if (mcpEndpointEnabled) {
     registerMcpRoutes({
-      app: options.app,
-      transports: options.transports,
-      serverInfo: {
-        name: options.serverName,
-        version: options.serverVersion,
+      routeContext: {
+        app: options.server.app,
+        transports: options.sessions.transports,
+        serverInfo: {
+          name: options.server.serverName,
+          version: options.server.serverVersion,
+        },
+        restApiConfig: options.server.restApiConfig,
+        dependencies: options.server.dependencies,
       },
-      restApiConfig: options.restApiConfig,
-      dependencies: options.dependencies,
-      parseScopesHeader: options.parseScopesHeader,
-      parseRequestedEngine: options.parseRequestedEngine,
-      acquireBrowserFromPool: options.acquireBrowserFromPool,
-      getBrowserPoolManager: options.getBrowserPoolManager,
-      enqueueInvokeTask: options.enqueueInvokeTask,
-      cleanupSession: options.cleanupSession,
-      normalizeStructuredError: options.normalizeStructuredError,
+      authContext: {
+        parseScopesHeader: options.auth.parseScopesHeader,
+        normalizeStructuredError: options.errors.normalizeStructuredError,
+      },
+      browserBinding: {
+        parseRequestedEngine: options.browser.parseRequestedEngine,
+        acquireBrowserFromPool: options.browser.acquireBrowserFromPool,
+        getBrowserPoolManager: options.browser.getBrowserPoolManager,
+      },
+      invokeQueue: {
+        enqueueInvokeTask: options.invoke.enqueueInvokeTask,
+      },
+      sessionLifecycle: {
+        cleanupSession: options.invoke.cleanupSession,
+      },
     });
-    options.logger.info('MCP endpoint enabled: /mcp');
+    options.server.logger.info('MCP endpoint enabled: /mcp');
   } else {
-    options.logger.info('MCP endpoint disabled (enableMcp=false)');
+    options.server.logger.info('MCP endpoint disabled (enableMcp=false)');
   }
 
   registerOrchestrationRoutes({
-    app: options.app,
-    restApiConfig: options.restApiConfig,
-    dependencies: options.dependencies,
-    browserPoolAvailable: options.browserPoolAvailable,
-    orchestrationSessions: options.orchestrationSessions,
-    parseScopesHeader: options.parseScopesHeader,
-    firstString: options.firstString,
-    acquireBrowserFromPool: options.acquireBrowserFromPool,
-    enqueueOrchestrationInvoke: options.enqueueOrchestrationInvoke,
-    cleanupOrchestrationSession: options.cleanupOrchestrationSession,
-    buildRuntimeMetricsPayload: options.buildRuntimeMetricsPayload,
-    normalizeStructuredError: options.normalizeStructuredError,
-    mapErrorStatus: options.mapErrorStatus,
-    mapStructuredErrorStatus: options.mapStructuredErrorStatus,
-    asyncHandler: options.asyncHandler,
+    app: options.server.app,
+    restApiConfig: options.server.restApiConfig,
+    dependencies: options.server.dependencies,
+    browserPoolAvailable: options.browser.browserPoolAvailable,
+    orchestrationSessions: options.sessions.orchestrationSessions,
+    parseScopesHeader: options.auth.parseScopesHeader,
+    firstString: options.auth.firstString,
+    acquireBrowserFromPool: options.browser.acquireBrowserFromPool,
+    enqueueOrchestrationInvoke: options.invoke.enqueueOrchestrationInvoke,
+    cleanupOrchestrationSession: options.invoke.cleanupOrchestrationSession,
+    buildRuntimeMetricsPayload: options.sessions.buildRuntimeMetricsPayload,
+    normalizeStructuredError: options.errors.normalizeStructuredError,
+    mapErrorStatus: options.errors.mapErrorStatus,
+    mapStructuredErrorStatus: options.errors.mapStructuredErrorStatus,
+    asyncHandler: options.errors.asyncHandler,
   });
 };

@@ -4,7 +4,7 @@
  * 简化的插件系统 - 插件通过 helpers.profile.launch() 获取浏览器句柄
  */
 
-import type { FieldType, ColumnMetadata } from '../main/duckdb/types';
+import type { FieldType, ColumnMetadata } from './duckdb';
 import type { PluginHelpers } from '../core/js-plugin/helpers';
 
 /**
@@ -300,7 +300,7 @@ export interface DataTableInfo {
   /** 数据表代码（唯一标识） */
   code: string;
   /** 列定义 */
-  columns?: import('../main/duckdb/types').EnhancedColumnSchema[];
+  columns?: import('./duckdb').EnhancedColumnSchema[];
 }
 
 /**

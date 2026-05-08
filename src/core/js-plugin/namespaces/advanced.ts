@@ -29,6 +29,7 @@ import { clipboard, desktopCapturer, nativeImage } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
+import { getUnknownErrorCode } from '../../../utils/error-message';
 
 /**
  * 桌面捕获源类型
@@ -356,8 +357,8 @@ export class FileSystemAPI {
   private async ensureDir(dirPath: string): Promise<void> {
     try {
       await fs.promises.mkdir(dirPath, { recursive: true });
-    } catch (error: any) {
-      if (error.code !== 'EEXIST') {
+    } catch (error: unknown) {
+      if (getUnknownErrorCode(error) !== 'EEXIST') {
         throw error;
       }
     }

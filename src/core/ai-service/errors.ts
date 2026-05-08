@@ -5,13 +5,14 @@
  */
 
 import { CoreError } from '../errors/BaseError';
+import { toOptionalError } from '../../utils/error-message';
 
 /**
  * AI 服务基础错误
  */
 export class AIServiceError extends CoreError {
-  constructor(message: string, details?: Record<string, any>, cause?: Error) {
-    super('AI_SERVICE_ERROR', message, details, { component: 'AIService' }, cause);
+  constructor(message: string, details?: Record<string, any>, cause?: unknown) {
+    super('AI_SERVICE_ERROR', message, details, { component: 'AIService' }, toOptionalError(cause));
     this.name = 'AIServiceError';
     Object.setPrototypeOf(this, AIServiceError.prototype);
   }
@@ -53,9 +54,9 @@ export class OpenAIError extends CoreError {
       timeout?: number;
       [key: string]: any;
     },
-    cause?: Error
+    cause?: unknown
   ) {
-    super('OPENAI_ERROR', message, details, { component: 'OpenAI' }, cause);
+    super('OPENAI_ERROR', message, details, { component: 'OpenAI' }, toOptionalError(cause));
     this.name = 'OpenAIError';
     Object.setPrototypeOf(this, OpenAIError.prototype);
   }

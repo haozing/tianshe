@@ -10,7 +10,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { BrowserPoolManager } from '../pool-manager';
+import {
+  BrowserPoolManager,
+  createBrowserPoolManager,
+  getBrowserPoolManager,
+  initBrowserPoolManager,
+  resetBrowserPoolManager,
+} from '../pool-manager';
 import {
   createMockBrowserFactory,
   createMockBrowserDestroyer,
@@ -677,5 +683,44 @@ describe('BrowserPoolManager', () => {
       const config = manager.getConfig();
       expect(config.maxTotalBrowsers).toBe(20);
     });
+  });
+});
+
+describe('BrowserPoolManager singleton helpers', () => {
+  afterEach(async () => {
+    await resetBrowserPoolManager();
+    vi.restoreAllMocks();
+  });
+
+  it('creates independent manager instances through the factory', () => {
+    const mockServiceGetter = createMockProfileServiceGetter();
+
+    const first = createBrowserPoolManager(mockServiceGetter.getProfileService);
+    const second = createBrowserPoolManager(mockServiceGetter.getProfileService);
+
+    expect(first).toBeInstanceOf(BrowserPoolManager);
+    expect(second).toBeInstanceOf(BrowserPoolManager);
+    expect(second).not.toBe(first);
+  });
+
+  it('awaits singleton manager stop during reset', async () => {
+    const mockServiceGetter = createMockProfileServiceGetter();
+    const manager = initBrowserPoolManager(mockServiceGetter.getProfileService);
+    let stopCompleted = false;
+
+    const stopSpy = vi.spyOn(manager, 'stop').mockImplementation(async () => {
+      await Promise.resolve();
+      stopCompleted = true;
+    });
+
+    const resetPromise = resetBrowserPoolManager();
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(stopCompleted).toBe(false);
+
+    await resetPromise;
+
+    expect(stopCompleted).toBe(true);
+    expect(() => getBrowserPoolManager()).toThrow();
   });
 });
