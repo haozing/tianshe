@@ -468,7 +468,8 @@ rg -n "\bconsole\.(log|warn|error|info|debug)\s*\(" src/main src/core src/render
 - 已完成 duckdb dataset storage 小批次：`src/main/duckdb/dataset-storage-service.ts` 的 45 处直接 `console.*` 已迁移到 `createLogger('DatasetStorageService')`，覆盖 _row_id repair、smart attach、plugin table delete、snapshot table cleanup、checkpoint、detach/verify、WAL/file retry delete、attachment cleanup 和最终删除日志，并从 baseline 移除；本批不改变队列、ATTACH/DETACH、文件删除重试和元数据回调行为。
 - 已完成 main entry 小批次：`src/main/index.ts` 的 51 处直接 `console.*` 已迁移到 `createLogger('MainProcess')`，覆盖 IPC 注册、updater、资源监控、HTTP server 启停/诊断、HTTP API disabled 和初始化失败日志，并从 baseline 移除；HTTP 启动顺序、超时保护、端口诊断和 shutdown hook 行为保持不变。
 - 已完成 duckdb service facade 小批次：`src/main/duckdb/service.ts` 的 23 处直接 `console.*` 已迁移到 `createLogger('DuckDBService')`，覆盖 DuckDB 初始化、WAL replay recovery、系统表初始化、初始化 checkpoint、默认查询模板 ATTACH 和 close/final checkpoint 日志，并从 baseline 移除；本批不改变服务初始化顺序、WAL 备份/恢复、checkpoint 和 close 清理行为。
-- 截至本批，`src/main/ipc-handlers` 生产代码已无直接 `console.*`，`SchedulerService`、main service composition、main entry、query template service、duckdb service/utils/dataset storage、window manager、小 main/profile/webhook 模块，以及 webcontentsview controller 组也已清零；后续重点转向其他 duckdb dataset 子服务/facade/import-worker、profile/browser-pool integration 和 renderer 少量 direct console。
+- 已完成 duckdb dataset metadata 小批次：`src/main/duckdb/dataset-metadata-service.ts` 的 24 处直接 `console.*` 已迁移到 `createLogger('DatasetMetadataService')`，覆盖 plugin metadata checkpoint、getDatasetInfo/schema parse、metadata delete、schema update/reorder 和 type analysis 日志，并从 baseline 移除；本批不改变 metadata SQL、transaction、schema JSON 和 type analyzer 调用行为。
+- 截至本批，`src/main/ipc-handlers` 生产代码已无直接 `console.*`，`SchedulerService`、main service composition、main entry、query template service、duckdb service/utils/dataset storage/dataset metadata、window manager、小 main/profile/webhook 模块，以及 webcontentsview controller 组也已清零；后续重点转向其他 duckdb dataset 子服务/facade/import-worker、profile/browser-pool integration 和 renderer 少量 direct console。
 - 本批只做日志出口替换和结构化字段补齐，不改变 CRUD、密码加解密、profile/group/tag/saved site 业务错误语义。
 - 阶段 5 仍保留为未完成：仓内还有其他 duckdb dataset 子服务/facade/import-worker、profile/browser-pool integration、renderer 少量 direct console 等剩余热点，后续继续按模块递减，不做全仓一键替换。
 
@@ -624,7 +625,7 @@ npm run test:architecture
 - [x] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步确认 `docs/plugin-helpers-reference.md`。
 - [x] 阶段 3：ProfileService 深拆到 900 行以下。
 - [x] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
-- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag/utils/service/dataset storage、IPC wrapper、profile/browser IPC、dataset route、JS plugin route/handler、account IPC、query template IPC/service、tag/extension packages IPC、dataset folder IPC、registration-only IPC、file IPC、system IPC、scheduler service、main service composition、main entry、window manager、small main/profile/webhook、webcontentsview controller 小批次）
+- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag/utils/service/dataset storage/dataset metadata、IPC wrapper、profile/browser IPC、dataset route、JS plugin route/handler、account IPC、query template IPC/service、tag/extension packages IPC、dataset folder IPC、registration-only IPC、file IPC、system IPC、scheduler service、main service composition、main entry、window manager、small main/profile/webhook、webcontentsview controller 小批次）
 - [ ] 阶段 6：建立共享 error envelope，统一 IPC 稳定错误码。（已完成 IPC 工具层基础设施、旧错误消息兼容推断、dataset route 基础 errorDetails、JS plugin route/handler 部分 P1 code，route 业务 code 待继续收敛）
 
 ## 13. 每轮完成后必须更新

@@ -181,7 +181,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/duckdb/dataset-folder-service.ts': 13,
   'src/main/duckdb/dataset-group-tab-workflow-service.ts': 1,
   'src/main/duckdb/dataset-import-service.ts': 16,
-  'src/main/duckdb/dataset-metadata-service.ts': 24,
   'src/main/duckdb/dataset-query-service.ts': 12,
   'src/main/duckdb/dataset-record-mutation-service.ts': 10,
   'src/main/duckdb/dataset-schema-service.ts': 16,

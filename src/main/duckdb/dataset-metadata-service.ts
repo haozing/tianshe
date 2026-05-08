@@ -12,6 +12,7 @@
  */
 
 import { DuckDBConnection } from '@duckdb/node-api';
+import { createLogger } from '../../core/logger';
 import { parseRows, quoteQualifiedName, runInDuckDbTransaction } from './utils';
 import { allPrepared, runPrepared } from './statement-executor';
 import { sanitizeDatasetId, DatasetStorageService } from './dataset-storage-service';
@@ -19,6 +20,8 @@ import { getUnknownErrorMessage } from '../ipc-utils';
 import type { Dataset } from './types';
 import { SchemaMigrationEngine } from './migration-engine';
 import { DATASET_METADATA_SCHEMA_MIGRATIONS } from './schema-migrations';
+
+const logger = createLogger('DatasetMetadataService');
 
 export class DatasetMetadataService {
   constructor(
@@ -131,12 +134,14 @@ export class DatasetMetadataService {
     if (dataset.id.startsWith('plugin__')) {
       try {
         await this.conn.run('CHECKPOINT');
-        console.log(`  ✓ CHECKPOINT completed for dataset: ${dataset.id}`);
+        logger.info('CHECKPOINT completed for plugin dataset metadata save', {
+          datasetId: dataset.id,
+        });
       } catch (checkpointError: unknown) {
-        console.warn(
-          `  [WARN] CHECKPOINT failed (non-critical):`,
-          getUnknownErrorMessage(checkpointError)
-        );
+        logger.warn('CHECKPOINT failed after plugin dataset metadata save', {
+          datasetId: dataset.id,
+          errorMessage: getUnknownErrorMessage(checkpointError),
+        });
       }
     }
   }
@@ -173,19 +178,19 @@ export class DatasetMetadataService {
    * 返回单个数据集的完整元数据
    */
   async getDatasetInfo(datasetId: string): Promise<Dataset | null> {
-    console.log(`[MetadataService] getDatasetInfo called for dataset: ${datasetId}`);
+    logger.info('Getting dataset info', { datasetId });
 
     const result = await allPrepared(this.conn, 'SELECT * FROM datasets WHERE id = ?', [datasetId]);
 
     const rows = parseRows(result);
 
     if (rows.length === 0) {
-      console.log(`[MetadataService] Dataset not found: ${datasetId}`);
+      logger.info('Dataset not found while getting dataset info', { datasetId });
       return null;
     }
 
     const row: any = rows[0];
-    console.log(`[MetadataService] Raw column_count from DB:`, row.column_count);
+    logger.info('Dataset metadata row loaded', { datasetId, columnCount: row.column_count });
 
     // ✅ 解析 schema，确保至少返回空数组
     let schema: any[] = [];
@@ -193,21 +198,23 @@ export class DatasetMetadataService {
       try {
         const parsed = JSON.parse(String(row.schema));
         schema = Array.isArray(parsed) ? parsed : [];
-        console.log(
-          `[MetadataService] Parsed schema columns (${schema.length}):`,
-          schema.map((c) => c.name)
-        );
+        logger.info('Parsed dataset schema columns', {
+          datasetId,
+          columnCount: schema.length,
+          columnNames: schema.map((c) => c.name),
+        });
       } catch (error) {
-        console.error(`⚠️ Failed to parse schema for dataset ${datasetId}:`, error);
+        logger.error('Failed to parse dataset schema', { datasetId, error });
         schema = [];
       }
     }
 
     // ✅ 如果 schema 为空但 columnCount > 0，记录警告
     if (schema.length === 0 && Number(row.column_count) > 0) {
-      console.warn(
-        `⚠️ Dataset ${datasetId} has columns (count: ${row.column_count}) but no schema metadata`
-      );
+      logger.warn('Dataset has columns but no schema metadata', {
+        datasetId,
+        columnCount: row.column_count,
+      });
     }
 
     return {
@@ -279,23 +286,23 @@ export class DatasetMetadataService {
         await runPrepared(this.conn, `DELETE FROM dataset_query_templates WHERE dataset_id = ?`, [
           datasetId,
         ]);
-        console.log(`  ✓ [DeleteMeta] Deleted query templates for: ${datasetId}`);
+        logger.info('Deleted dataset query templates metadata', { datasetId });
 
         // 2. 删除操作列配置
         await runPrepared(this.conn, `DELETE FROM dataset_action_columns WHERE dataset_id = ?`, [
           datasetId,
         ]);
-        console.log(`  ✓ [DeleteMeta] Deleted action columns for: ${datasetId}`);
+        logger.info('Deleted dataset action columns metadata', { datasetId });
 
         // 3. 删除插件绑定
         await runPrepared(this.conn, `DELETE FROM dataset_plugin_bindings WHERE dataset_id = ?`, [
           datasetId,
         ]);
-        console.log(`  ✓ [DeleteMeta] Deleted plugin bindings for: ${datasetId}`);
+        logger.info('Deleted dataset plugin bindings metadata', { datasetId });
 
         // 4. 删除主记录
         await runPrepared(this.conn, 'DELETE FROM datasets WHERE id = ?', [datasetId]);
-        console.log(`  ✓ [DeleteMeta] Deleted dataset record: ${datasetId}`);
+        logger.info('Deleted dataset metadata record', { datasetId });
 
         if (tabGroupId) {
           const countResult = await allPrepared(
@@ -350,9 +357,9 @@ export class DatasetMetadataService {
           }
         }
       });
-      console.log(`✅ [DeleteMeta] All metadata deleted for: ${datasetId}`);
+      logger.info('All dataset metadata deleted', { datasetId });
     } catch (error) {
-      console.error(`❌ [DeleteMeta] Failed to delete metadata:`, error);
+      logger.error('Failed to delete dataset metadata', { datasetId, error });
       throw error;
     }
   }
@@ -362,11 +369,11 @@ export class DatasetMetadataService {
    * 🎯 所有 schema 修改的单一入口
    */
   async updateDatasetSchema(datasetId: string, schema: any[]): Promise<void> {
-    console.log(`[MetadataService] updateDatasetSchema called for dataset: ${datasetId}`);
-    console.log(
-      `[MetadataService] New schema columns (${schema.length}):`,
-      schema.map((c) => c.name)
-    );
+    logger.info('Updating dataset schema', {
+      datasetId,
+      columnCount: schema.length,
+      columnNames: schema.map((c) => c.name),
+    });
 
     const schemaJson = JSON.stringify(schema);
     await runPrepared(
@@ -379,7 +386,7 @@ export class DatasetMetadataService {
       [schemaJson, schema.length, datasetId]
     );
 
-    console.log(`[MetadataService] ✅ Schema update completed for dataset: ${datasetId}`);
+    logger.info('Dataset schema update completed', { datasetId, columnCount: schema.length });
 
     // 验证更新
     const verifyResult = await allPrepared(
@@ -388,12 +395,16 @@ export class DatasetMetadataService {
       [datasetId]
     );
     const rows = parseRows(verifyResult);
-    console.log(`[MetadataService] Verification - column_count in DB:`, rows[0]?.column_count);
+    logger.info('Dataset schema update verification column count loaded', {
+      datasetId,
+      columnCount: rows[0]?.column_count,
+    });
     const savedSchema = JSON.parse(String(rows[0]?.schema || '[]'));
-    console.log(
-      `[MetadataService] Verification - saved schema columns (${savedSchema.length}):`,
-      savedSchema.map((c: any) => c.name)
-    );
+    logger.info('Dataset schema update verification saved schema loaded', {
+      datasetId,
+      columnCount: savedSchema.length,
+      columnNames: savedSchema.map((c: any) => c.name),
+    });
   }
 
   /**
@@ -500,7 +511,7 @@ export class DatasetMetadataService {
 
     await this.updateDatasetSchema(datasetId, reorderedSchema);
 
-    console.log(`✅ 成功重排序 ${columnNames.length} 列`);
+    logger.info('Dataset columns reordered', { datasetId, columnCount: columnNames.length });
   }
 
   /**
@@ -520,7 +531,7 @@ export class DatasetMetadataService {
         throw new Error(`Dataset not found: ${sanitizedId}`);
       }
 
-      console.log('[MetadataService] Starting type analysis for dataset:', sanitizedId);
+      logger.info('Starting dataset type analysis', { datasetId: sanitizedId });
 
       // 转义路径
       const escapedPath = dataset.filePath.replace(/\\/g, '\\\\').replace(/'/g, "''");
@@ -536,16 +547,16 @@ export class DatasetMetadataService {
         // 在打包环境下，CJS 的 dynamic import 可能在 asar/unpacked 场景出现解析问题，改用 require 更稳。
         const { TypeAnalyzer } = require('./type-analyzer') as typeof import('./type-analyzer');
 
-        console.log('[MetadataService] Creating TypeAnalyzer instance...');
+        logger.info('Creating TypeAnalyzer instance', { datasetId: sanitizedId });
         const analyzer = new TypeAnalyzer();
 
-        console.log('[MetadataService] Analyzing table:', tableName);
+        logger.info('Analyzing dataset table types', { datasetId: sanitizedId, tableName });
         const enhancedSchema = await analyzer.analyzeTable(this.conn, tableName);
 
-        console.log(
-          '[MetadataService] Type analysis completed, schema length:',
-          enhancedSchema.length
-        );
+        logger.info('Dataset type analysis completed', {
+          datasetId: sanitizedId,
+          columnCount: enhancedSchema.length,
+        });
 
         // 获取样本数据（前10行）
         const result = await this.conn.runAndReadAll(`SELECT * FROM ${tableName} LIMIT 10`);
