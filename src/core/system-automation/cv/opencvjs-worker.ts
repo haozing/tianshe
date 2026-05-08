@@ -2,6 +2,9 @@ import { parentPort } from 'worker_threads';
 import path from 'path';
 import type { Box4, CropResult, FindCropsOptions, Point, RGBAImage, RotatedRect } from './types';
 import { AIRPA_RUNTIME_CONFIG } from '../../../constants/runtime-config';
+import { createLogger } from '../../logger';
+
+const logger = createLogger('OpenCVJsWorker');
 
 type WorkerRequest =
   | { id: string; op: 'ping' }
@@ -47,11 +50,7 @@ const verboseEnabled = AIRPA_RUNTIME_CONFIG.cv.workerDebugVerbose;
 
 function debugLog(message: string, ...args: unknown[]): void {
   if (!debugEnabled) return;
-  if (args.length > 0) {
-    console.log('[opencvjs-worker]', message, ...args);
-  } else {
-    console.log('[opencvjs-worker]', message);
-  }
+  logger.info('OpenCV.js worker debug', args.length > 0 ? { message, args } : { message });
 }
 
 function nowMs(): number {

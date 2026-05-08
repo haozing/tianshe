@@ -11,6 +11,9 @@
 import type { TransformContext, ViewportConfig, Point } from './types';
 import { createDefaultTransformContext, createViewportConfig } from './types';
 import { CoordinateTransformer } from './transformer';
+import { createLogger } from '../logger';
+
+const logger = createLogger('TransformContextManager');
 
 /**
  * 浏览器接口（用于获取视口信息）
@@ -191,7 +194,9 @@ export class TransformContextManager {
       this.syncTransformer();
     } catch (error) {
       // 刷新失败时保持原有上下文
-      console.warn('Failed to refresh transform context:', error);
+      logger.warn('Failed to refresh transform context', {
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

@@ -7,7 +7,10 @@
  */
 
 import { Rectangle } from 'electron';
-import { ACTIVITY_BAR_WIDTH, MIN_VIEW_SIZE, DEFAULT_SPLIT_SIZE } from '../../constants/layout';
+import { ACTIVITY_BAR_WIDTH, MIN_VIEW_SIZE } from '../../constants/layout';
+import { createLogger } from '../logger';
+
+const logger = createLogger('LayoutCalculator');
 
 export interface WindowInfo {
   width: number;
@@ -106,9 +109,11 @@ export class LayoutCalculator {
     const containerSize = isHorizontalSplit ? container.width : container.height;
 
     if (Math.abs(totalSize - containerSize) > 1) {
-      console.warn(
-        `Split layout total size mismatch: ${totalSize} vs ${containerSize} (mode: ${mode})`
-      );
+      logger.warn('Split layout total size mismatch', {
+        totalSize,
+        containerSize,
+        mode,
+      });
     }
   }
 
@@ -134,9 +139,11 @@ export class LayoutCalculator {
     const clampedValue = Math.max(MIN_VIEW_SIZE, Math.min(parsedValue, maxSize));
 
     if (clampedValue !== parsedValue) {
-      console.warn(
-        `Split size clamped: ${parsedValue}px -> ${clampedValue}px (container: ${containerSize}px)`
-      );
+      logger.warn('Split size clamped', {
+        parsedValue,
+        clampedValue,
+        containerSize,
+      });
     }
 
     return clampedValue;

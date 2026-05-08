@@ -10,6 +10,9 @@ import type {
 } from './types';
 import { createRuntimeArtifactId, createRuntimeEventId } from './types';
 import { createChildTraceContext, getCurrentTraceContext, withTraceContext } from './observation-context';
+import { createLogger } from '../logger';
+
+const logger = createLogger('ObservationService');
 
 export interface ObservationSpanHandle {
   context: TraceContext;
@@ -159,7 +162,13 @@ class ObservationService {
     try {
       await observationSink?.recordEvent(runtimeEvent);
     } catch (error) {
-      console.warn('[ObservationService] Failed to record runtime event:', error);
+      logger.warn('Failed to record runtime event', {
+        eventId: runtimeEvent.eventId,
+        event: runtimeEvent.event,
+        component: runtimeEvent.component,
+        traceId: runtimeEvent.traceId,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
     }
 
     return runtimeEvent;
@@ -192,7 +201,13 @@ class ObservationService {
     try {
       await observationSink?.recordArtifact(artifact);
     } catch (error) {
-      console.warn('[ObservationService] Failed to record runtime artifact:', error);
+      logger.warn('Failed to record runtime artifact', {
+        artifactId: artifact.artifactId,
+        type: artifact.type,
+        component: artifact.component,
+        traceId: artifact.traceId,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
     }
 
     return artifact;

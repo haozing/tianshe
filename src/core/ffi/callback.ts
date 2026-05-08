@@ -5,6 +5,9 @@
  */
 
 import { FFIError } from './errors';
+import { createLogger } from '../logger';
+
+const logger = createLogger('FFICallback');
 
 /**
  * FFI 回调函数包装器
@@ -55,7 +58,7 @@ export class FFICallback {
     if (!this._disposed) {
       this._disposed = true;
       this.callback = null;
-      console.log('[FFI] Callback disposed');
+      logger.info('FFI callback disposed');
     }
   }
 
