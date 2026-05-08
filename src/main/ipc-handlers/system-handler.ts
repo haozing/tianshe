@@ -25,11 +25,13 @@ import {
   setInternalBrowserDevToolsConfig,
 } from '../internal-browser-devtools';
 import { getAppShellConfig } from '../app-shell-config';
+import { createLogger } from '../../core/logger';
 
 // 全局 store 实例（用于读取配置）
 const store = new Store();
 const MAX_DOWNLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_DOWNLOAD_IMAGE_REDIRECTS = 5;
+const systemLogger = createLogger('SystemIPCHandler');
 
 class DownloadImageError extends Error {
   constructor(
@@ -272,12 +274,15 @@ export class SystemIPCHandler {
             enableDevModeFromConfig, // 🆕 配置中的开发模式状态
             appShell: getAppShellConfig(),
           };
-          console.log('[DEBUG][Main] app.isPackaged:', app.isPackaged);
-          console.log('[DEBUG][Main] isDevelopment:', isDevelopment);
-          console.log('[DEBUG][Main] isFromAsar:', isFromAsar);
-          console.log('[DEBUG][Main] enableDevModeFromConfig:', enableDevModeFromConfig);
-          console.log('[DEBUG][Main] shouldShowDevOptions:', shouldShowDevOptions);
-          console.log('[DEBUG][Main] app.getAppPath():', app.getAppPath());
+          systemLogger.info('Resolved app info', {
+            operation: 'get-app-info',
+            isPackaged: app.isPackaged,
+            isDevelopment,
+            isFromAsar,
+            enableDevModeFromConfig,
+            shouldShowDevOptions,
+            appPath: app.getAppPath(),
+          });
           return { success: true, info };
         } catch (error: unknown) {
           return handleIPCError(error);
@@ -309,16 +314,18 @@ export class SystemIPCHandler {
       permission: 'trusted-renderer',
       handler: async (_event: IpcMainInvokeEvent) => {
         try {
-          console.log('[DeviceFingerprint] Fetching device fingerprint...');
+          systemLogger.info('Fetching device fingerprint', {
+            operation: 'get-device-fingerprint',
+          });
           const result = await getDeviceFingerprint();
           return { success: true, ...result };
         } catch (error: unknown) {
           const errorMessage = redactSensitiveText(getUnknownErrorMessage(error));
-          console.error('[DeviceFingerprint] ❌ Failed to get device fingerprint:', errorMessage);
-          console.error(
-            '[DeviceFingerprint] Stack:',
-            error instanceof Error && error.stack ? redactSensitiveText(error.stack) : 'N/A'
-          );
+          systemLogger.error('Failed to get device fingerprint', {
+            operation: 'get-device-fingerprint',
+            error: errorMessage,
+            stack: error instanceof Error && error.stack ? redactSensitiveText(error.stack) : 'N/A',
+          });
 
           return {
             success: false,
@@ -410,13 +417,18 @@ export class SystemIPCHandler {
 
         try {
           assertMainWindowIpcSender(event, this.mainWindow, 'download-image');
-          console.log('[DownloadImage] ========================================');
-          console.log('[DownloadImage] 开始下载图片:', redactSensitiveUrl(String(url || '')));
+          systemLogger.info('Starting image download', {
+            operation: 'download-image',
+            url: redactSensitiveUrl(String(url || '')),
+          });
 
           // 验证 URL 格式
           if (!url || typeof url !== 'string' || url.trim() === '') {
             const error = 'URL 为空或无效';
-            console.error('[DownloadImage] ❌ 验证失败:', error);
+            systemLogger.warn('Image download validation failed', {
+              operation: 'download-image',
+              error,
+            });
             return {
               success: false,
               error: error,
@@ -430,21 +442,31 @@ export class SystemIPCHandler {
           const imageUrl = this.parseDownloadImageUrl(normalizedUrl);
           const redactedUrl = redactSensitiveUrl(normalizedUrl);
 
-          console.log('[DownloadImage] ✓ URL 验证通过');
-          console.log('[DownloadImage] 请求 URL:', redactedUrl);
-          console.log('[DownloadImage] 请求头: User-Agent: Mozilla/5.0...');
+          systemLogger.info('Image download URL validated', {
+            operation: 'download-image',
+            url: redactedUrl,
+          });
 
           const fetchStartTime = Date.now();
           const response = await this.fetchDownloadImage(imageUrl);
 
           const fetchDuration = Date.now() - fetchStartTime;
-          console.log(`[DownloadImage] Fetch 完成，耗时: ${fetchDuration}ms`);
-          console.log(`[DownloadImage] 响应状态: ${response.status} ${response.statusText}`);
+          systemLogger.info('Image download fetch completed', {
+            operation: 'download-image',
+            durationMs: fetchDuration,
+            status: response.status,
+            statusText: response.statusText,
+          });
 
           // 检查响应状态
           if (!response.ok) {
             const error = `HTTP ${response.status}: ${response.statusText}`;
-            console.error('[DownloadImage] ❌ HTTP 错误:', error);
+            systemLogger.warn('Image download HTTP error', {
+              operation: 'download-image',
+              error,
+              status: response.status,
+              statusText: response.statusText,
+            });
 
             // 判断是否可重试（5xx 服务器错误通常可重试）
             const retryable = response.status >= 500 && response.status < 600;
@@ -461,19 +483,29 @@ export class SystemIPCHandler {
 
           // 获取并验证 Content-Type
           const contentType = response.headers.get('content-type') || '';
-          console.log('[DownloadImage] Content-Type:', contentType);
+          systemLogger.info('Image download response metadata', {
+            operation: 'download-image',
+            contentType,
+          });
 
           // 获取 Content-Length
           const contentLength = response.headers.get('content-length');
           if (contentLength) {
             const sizeMB = parseInt(contentLength) / (1024 * 1024);
-            console.log(
-              `[DownloadImage] Content-Length: ${contentLength} bytes (${sizeMB.toFixed(2)} MB)`
-            );
+            systemLogger.info('Image download content length detected', {
+              operation: 'download-image',
+              contentLength,
+              sizeMB,
+            });
 
             if (parseInt(contentLength) > MAX_DOWNLOAD_IMAGE_BYTES) {
               const error = `文件过大: ${sizeMB.toFixed(2)} MB（限制 10MB）`;
-              console.error('[DownloadImage] ❌', error);
+              systemLogger.warn('Image download rejected due to content length', {
+                operation: 'download-image',
+                error,
+                contentLength,
+                sizeMB,
+              });
               return {
                 success: false,
                 error: error,
@@ -485,21 +517,27 @@ export class SystemIPCHandler {
           }
 
           // 下载图片数据
-          console.log('[DownloadImage] 开始下载图片数据...');
+          systemLogger.info('Reading image response body', {
+            operation: 'download-image',
+          });
           const downloadStartTime = Date.now();
           const buffer = await this.readResponseBufferWithLimit(response);
           const downloadDuration = Date.now() - downloadStartTime;
 
-          console.log(`[DownloadImage] ✅ 图片下载成功`);
-          console.log(
-            `[DownloadImage]    大小: ${buffer.length} bytes (${(buffer.length / 1024).toFixed(2)} KB)`
-          );
-          console.log(`[DownloadImage]    下载耗时: ${downloadDuration}ms`);
+          systemLogger.info('Image response body downloaded', {
+            operation: 'download-image',
+            size: buffer.length,
+            durationMs: downloadDuration,
+          });
 
           // 验证文件大小
           if (buffer.length > MAX_DOWNLOAD_IMAGE_BYTES) {
             const error = `文件过大: ${(buffer.length / (1024 * 1024)).toFixed(2)} MB（限制 10MB）`;
-            console.error('[DownloadImage] ❌', error);
+            systemLogger.warn('Image download rejected due to buffered size', {
+              operation: 'download-image',
+              error,
+              size: buffer.length,
+            });
             return {
               success: false,
               error: error,
@@ -513,8 +551,11 @@ export class SystemIPCHandler {
           const isValidImage = this.validateImageBuffer(buffer);
           if (!isValidImage) {
             const error = '下载的文件不是有效的图片格式';
-            console.warn('[DownloadImage] ⚠️', error);
-            console.warn('[DownloadImage] 文件头:', buffer.slice(0, 16).toString('hex'));
+            systemLogger.warn('Downloaded file did not match known image signatures', {
+              operation: 'download-image',
+              error,
+              fileHeader: buffer.slice(0, 16).toString('hex'),
+            });
             // 不阻止，只警告，因为某些图片格式可能无法识别
           }
 
@@ -534,23 +575,31 @@ export class SystemIPCHandler {
             } else {
               mimeType = 'image/png'; // 默认
             }
-            console.log(`[DownloadImage] Content-Type 不是图片类型，从 URL 推断: ${mimeType}`);
+            systemLogger.info('Inferred image MIME type from URL', {
+              operation: 'download-image',
+              mimeType,
+            });
           }
 
           // 转换为 Base64
-          console.log('[DownloadImage] 转换为 Base64...');
+          systemLogger.info('Converting image to Base64', {
+            operation: 'download-image',
+            mimeType,
+          });
           const base64StartTime = Date.now();
           const base64 = buffer.toString('base64');
           const dataUrl = `data:${mimeType};base64,${base64}`;
           const base64Duration = Date.now() - base64StartTime;
 
-          console.log(`[DownloadImage] ✅ Base64 转换成功`);
-          console.log(`[DownloadImage]    Base64 长度: ${dataUrl.length} 字符`);
-          console.log(`[DownloadImage]    转换耗时: ${base64Duration}ms`);
-
           const totalDuration = Date.now() - startTime;
-          console.log(`[DownloadImage] ✅ 总耗时: ${totalDuration}ms`);
-          console.log('[DownloadImage] ========================================');
+          systemLogger.info('Image download completed', {
+            operation: 'download-image',
+            size: buffer.length,
+            mimeType,
+            base64Length: dataUrl.length,
+            base64DurationMs: base64Duration,
+            durationMs: totalDuration,
+          });
 
           return {
             success: true,
@@ -560,10 +609,6 @@ export class SystemIPCHandler {
           };
         } catch (error: unknown) {
           const totalDuration = Date.now() - startTime;
-          console.error(
-            '[DownloadImage] ❌ 下载图片失败 (耗时: ' + totalDuration + 'ms):',
-            redactSensitiveValue(error)
-          );
 
           // 解析错误类型
           let errorType = 'UNKNOWN_ERROR';
@@ -593,9 +638,13 @@ export class SystemIPCHandler {
             retryable = true;
           }
 
-          console.error('[DownloadImage] 错误类型:', errorType);
-          console.error('[DownloadImage] 可重试:', retryable);
-          console.error('[DownloadImage] ========================================');
+          systemLogger.error('Image download failed', {
+            operation: 'download-image',
+            durationMs: totalDuration,
+            error: redactSensitiveValue(error),
+            errorType,
+            retryable,
+          });
 
           return {
             success: false,
@@ -878,20 +927,31 @@ export class SystemIPCHandler {
             return 'Invalid path';
           }
 
-          console.log(`[Shell] Opening path: ${redactSensitiveText(filePath)}`);
+          systemLogger.info('Opening path with system shell', {
+            operation: 'shell:openPath',
+            filePath: redactSensitiveText(filePath),
+          });
 
           // shell.openPath 返回空字符串表示成功，否则返回错误信息
           const result = await shell.openPath(filePath);
 
           if (result) {
-            console.error(`[Shell] Failed to open path: ${result}`);
+            systemLogger.warn('System shell failed to open path', {
+              operation: 'shell:openPath',
+              result: redactSensitiveText(result),
+            });
           } else {
-            console.log(`[Shell] ✅ Path opened successfully`);
+            systemLogger.info('System shell opened path successfully', {
+              operation: 'shell:openPath',
+            });
           }
 
           return result;
         } catch (error: unknown) {
-          console.error(`[Shell] Error opening path:`, redactSensitiveValue(error));
+          systemLogger.error('System shell open path failed', {
+            operation: 'shell:openPath',
+            error: redactSensitiveValue(error),
+          });
           return redactSensitiveText(getUnknownErrorMessage(error));
         }
       },

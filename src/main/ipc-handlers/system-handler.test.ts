@@ -6,9 +6,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ipcRouteRegistry } from '../ipc-route-registry';
 
 // 使用 vi.hoisted 解决 mock 提升问题
-const { mockIpcMainHandle, mockGetBounds } = vi.hoisted(() => ({
+const { mockIpcMainHandle, mockGetBounds, mockSystemLoggerInfo, mockSystemLoggerWarn, mockSystemLoggerError } = vi.hoisted(() => ({
   mockIpcMainHandle: vi.fn(),
   mockGetBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
+  mockSystemLoggerInfo: vi.fn(),
+  mockSystemLoggerWarn: vi.fn(),
+  mockSystemLoggerError: vi.fn(),
 }));
 
 // Mock electron
@@ -58,6 +61,14 @@ vi.mock('../ipc-utils', () => ({
     success: false,
     error: error instanceof Error ? error.message : String(error),
   })),
+}));
+
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    info: mockSystemLoggerInfo,
+    warn: mockSystemLoggerWarn,
+    error: mockSystemLoggerError,
+  }),
 }));
 
 import { SystemIPCHandler } from './system-handler';

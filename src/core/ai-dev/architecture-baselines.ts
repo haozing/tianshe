@@ -208,7 +208,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/index.ts': 51,
   'src/main/internal-browser-devtools.ts': 1,
   'src/main/ipc.ts': 1,
-  'src/main/ipc-handlers/system-handler.ts': 43,
   'src/main/log-storage-service.ts': 1,
   'src/main/profile/browser-launcher.ts': 2,
   'src/main/profile/browser-pool-integration-business-shared.ts': 3,
