@@ -66,13 +66,13 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     logger.info('[SchedulerService] Initializing...');
 
     const tasks = await this.taskService.getActiveTasks();
-    console.log(`[SchedulerService] Found ${tasks.length} active tasks to restore`);
+    logger.info('Found active tasks to restore', { taskCount: tasks.length });
 
     for (const task of tasks) {
       try {
         await this.scheduleTask(task);
       } catch (error) {
-        console.error(`[SchedulerService] Failed to restore task ${task.id}:`, error);
+        logger.error('Failed to restore scheduled task', { taskId: task.id, error });
       }
     }
 
@@ -95,7 +95,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   ): void {
     const key = `${pluginId}:${handlerId}`;
     this.handlers.set(key, { pluginId, handlerId, handler });
-    console.log(`[SchedulerService] Handler registered: ${key}`);
+    logger.info('Scheduler handler registered', { pluginId, handlerId, key });
   }
 
   /**
@@ -103,7 +103,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   unregisterHandler(pluginId: string, handlerId: string): void {
     const key = `${pluginId}:${handlerId}`;
     this.handlers.delete(key);
-    console.log(`[SchedulerService] Handler unregistered: ${key}`);
+    logger.info('Scheduler handler unregistered', { pluginId, handlerId, key });
   }
 
   /**
@@ -115,7 +115,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
         this.handlers.delete(key);
       }
     }
-    console.log(`[SchedulerService] All handlers unregistered for plugin: ${pluginId}`);
+    logger.info('All scheduler handlers unregistered for plugin', { pluginId });
   }
 
   /**
@@ -154,7 +154,8 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       nextRunAt = nextDate.getTime();
     } else if (params.scheduleType === 'interval' && params.interval) {
       intervalMs = parseInterval(params.interval);
-      // 如果 immediate �?true，立即执行；否则等待第一个间�?      nextRunAt = params.immediate ? now : now + intervalMs;
+      // Immediate interval tasks run as soon as possible; otherwise wait one interval.
+      nextRunAt = params.immediate ? now : now + intervalMs;
     } else if (params.scheduleType === 'once' && params.runAt) {
       runAtTimestamp = params.runAt instanceof Date ? params.runAt.getTime() : params.runAt;
       nextRunAt = runAtTimestamp;
@@ -186,9 +187,11 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     await this.scheduleTask(task);
 
     this.emit('task-scheduled', task);
-    console.log(
-      `[SchedulerService] Task created: ${task.name} (${task.id}), next run: ${nextRunAt ? new Date(nextRunAt).toLocaleString() : 'N/A'}`
-    );
+    logger.info('Scheduled task created', {
+      taskId: task.id,
+      taskName: task.name,
+      nextRunAt,
+    });
 
     return task;
   }
@@ -207,7 +210,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
 
     await this.taskService.updateTask(taskId, { status: 'paused' });
 
-    console.log(`[SchedulerService] Task paused: ${taskId}`);
+    logger.info('Scheduled task paused', { taskId });
   }
 
   /**
@@ -233,7 +236,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       await this.scheduleTask(updatedTask);
     }
 
-    console.log(`[SchedulerService] Task resumed: ${taskId}`);
+    logger.info('Scheduled task resumed', { taskId });
   }
 
   /**
@@ -258,7 +261,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       this.emit('task-cancelled', task);
     }
 
-    console.log(`[SchedulerService] Task cancelled: ${taskId}`);
+    logger.info('Scheduled task cancelled', { taskId });
   }
 
   /**
@@ -369,13 +372,13 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     // 取消所有定时器
     for (const [taskId, timer] of this.timers) {
       clearTimeout(timer);
-      console.log(`[SchedulerService] Timer cancelled: ${taskId}`);
+      logger.info('Scheduler timer cancelled', { taskId });
     }
     this.timers.clear();
 
     for (const [taskId, controller] of this.runningTasks) {
       controller.abort();
-      console.log(`[SchedulerService] Running task aborted: ${taskId}`);
+      logger.info('Scheduler running task aborted', { taskId });
     }
     this.runningTasks.clear();
 
@@ -392,7 +395,10 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
    */
   private async scheduleTask(task: ScheduledTask): Promise<void> {
     if (task.status !== 'active') {
-      console.log(`[SchedulerService] Task ${task.id} is not active, skipping schedule`);
+      logger.info('Scheduled task is not active, skipping schedule', {
+        taskId: task.id,
+        status: task.status,
+      });
       return;
     }
 
@@ -408,16 +414,20 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     }
 
     if (!nextRun) {
-      // 一次性任务已过期或无法计算下次执行时�?      console.log(`[SchedulerService] No next run time for task ${task.id}`);
+      logger.info('No next run time for scheduled task', { taskId: task.id });
       return;
     }
 
     // 检查是否错过了执行时间
     if (nextRun < now) {
-      console.log(`[SchedulerService] Task ${task.id} missed execution time`);
+      logger.info('Scheduled task missed execution time', {
+        taskId: task.id,
+        nextRun,
+        now,
+      });
 
       if (task.missedPolicy === 'run_once') {
-        // 立即执行一�?        console.log(`[SchedulerService] Running missed task: ${task.id}`);
+        logger.info('Running missed scheduled task', { taskId: task.id });
         await this.executeTask(task, 'recovery');
       }
 
@@ -447,17 +457,20 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
         this.setTimer(taskId, runAt);
       }, maxDelay);
       this.timers.set(taskId, timer);
-      console.log(
-        `[SchedulerService] Intermediate timer set for task ${taskId}, actual run at: ${new Date(runAt).toLocaleString()}`
-      );
+      logger.info('Intermediate scheduler timer set', {
+        taskId,
+        runAt,
+        delayMs: maxDelay,
+      });
     } else if (delay > 0) {
       const timer = setTimeout(() => {
         this.onTimerFired(taskId);
       }, delay);
       this.timers.set(taskId, timer);
-      console.log(
-        `[SchedulerService] Timer set for task ${taskId}, run in ${Math.round(delay / 1000)}s`
-      );
+      logger.info('Scheduler timer set', {
+        taskId,
+        delayMs: delay,
+      });
     } else {
       // 立即执行
       setImmediate(() => {
@@ -483,7 +496,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
 
     const task = await this.taskService.getTask(taskId);
     if (!task || task.status !== 'active') {
-      console.log(`[SchedulerService] Task ${taskId} no longer active, skipping execution`);
+      logger.info('Scheduled task no longer active, skipping execution', { taskId });
       return;
     }
 
@@ -510,7 +523,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     triggerType: 'scheduled' | 'manual' | 'recovery'
   ): Promise<TaskExecution> {
     if (this.runningTasks.has(task.id)) {
-      console.log(`[SchedulerService] Task ${task.id} is already running, skipping execution`);
+      logger.info('Scheduled task is already running, skipping execution', { taskId: task.id });
       throw new Error(`Task ${task.id} is already running`);
     }
 
@@ -584,9 +597,12 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       };
 
       this.emit('task-started', task, runningExecution);
-      console.log(
-        `[SchedulerService] Task started: ${task.name} (${task.id}), trigger: ${triggerType}, maxRetries: ${maxRetries}`
-      );
+      logger.info('Scheduled task started', {
+        taskId: task.id,
+        taskName: task.name,
+        triggerType,
+        maxRetries,
+      });
 
       const invokeHandler = async () => {
         const runHandler = async () =>
@@ -606,9 +622,11 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       while (attempt <= maxRetries) {
         // 检查是否已被取消（在循环开始时检查，处理重试间隔期间的取消）
         if (controller.signal.aborted) {
-          console.log(
-            `[SchedulerService] Task cancelled before attempt: ${task.name} (${task.id})`
-          );
+          logger.info('Scheduled task cancelled before attempt', {
+            taskId: task.id,
+            taskName: task.name,
+            attempt,
+          });
           break;
         }
 
@@ -619,9 +637,12 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
 
         try {
           if (attempt > 0) {
-            console.log(
-              `[SchedulerService] Retry ${attempt}/${maxRetries} for task: ${task.name} (${task.id})`
-            );
+            logger.info('Retrying scheduled task', {
+              taskId: task.id,
+              taskName: task.name,
+              attempt,
+              maxRetries,
+            });
           }
 
           // Execute handler with the current resource context
@@ -651,31 +672,42 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
           };
 
           this.emit('task-completed', task, updatedExecution, result);
-          console.log(
-            `[SchedulerService] Task completed: ${task.name} (${task.id}), duration: ${finishedAt - startTime}ms${attempt > 0 ? `, after ${attempt} retries` : ''}`
-          );
+          logger.info('Scheduled task completed', {
+            taskId: task.id,
+            taskName: task.name,
+            durationMs: finishedAt - startTime,
+            retryCount: attempt,
+          });
 
           return updatedExecution;
         } catch (err: unknown) {
           lastError = err instanceof Error ? err : new Error(String(err));
 
           if (controller.signal.aborted) {
-            console.log(`[SchedulerService] Task cancelled/timeout: ${task.name} (${task.id})`);
+            logger.info('Scheduled task cancelled or timed out', {
+              taskId: task.id,
+              taskName: task.name,
+            });
             break;
           }
 
-          console.error(
-            `[SchedulerService] Task attempt ${attempt + 1} failed: ${task.name} (${task.id}):`,
-            lastError.message
-          );
+          logger.error('Scheduled task attempt failed', {
+            taskId: task.id,
+            taskName: task.name,
+            attempt: attempt + 1,
+            error: lastError.message,
+          });
 
           attempt++;
 
           // 如果还有重试机会，等待后继续
           if (attempt <= maxRetries) {
-            console.log(
-              `[SchedulerService] Waiting ${retryDelayMs}ms before retry ${attempt}/${maxRetries}`
-            );
+            logger.info('Waiting before scheduled task retry', {
+              taskId: task.id,
+              retryDelayMs,
+              attempt,
+              maxRetries,
+            });
             await this.sleep(retryDelayMs);
           }
         } finally {
@@ -725,10 +757,12 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     };
 
     this.emit('task-failed', task, updatedExecution, lastError ?? new Error('Unknown error'));
-    console.error(
-      `[SchedulerService] Task failed after ${attempt} attempts: ${task.name} (${task.id}):`,
-      lastError?.message
-    );
+    logger.error('Scheduled task failed after attempts', {
+      taskId: task.id,
+      taskName: task.name,
+      attempt,
+      error: lastError?.message,
+    });
 
     return updatedExecution;
   }
@@ -749,9 +783,10 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       this.performCleanup();
     }, this.CLEANUP_INTERVAL_MS);
 
-    console.log(
-      `[SchedulerService] Cleanup timer started, interval: ${this.CLEANUP_INTERVAL_MS / 1000 / 60 / 60}h, keep: ${this.CLEANUP_DAYS_TO_KEEP} days`
-    );
+    logger.info('Scheduler cleanup timer started', {
+      intervalMs: this.CLEANUP_INTERVAL_MS,
+      keepDays: this.CLEANUP_DAYS_TO_KEEP,
+    });
   }
 
   /**
@@ -761,7 +796,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     try {
       const count = await this.taskService.cleanupOldExecutions(this.CLEANUP_DAYS_TO_KEEP);
       if (count > 0) {
-        console.log(`[SchedulerService] Cleaned up ${count} old execution records`);
+        logger.info('Cleaned up old scheduler execution records', { count });
       }
     } catch (error) {
       logger.error('[SchedulerService] Cleanup failed:', error);

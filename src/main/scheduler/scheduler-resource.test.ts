@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resourceCoordinator } from '../../core/resource-coordinator';
 import { SchedulerService } from './scheduler-service';
-import type { ScheduledTask, TaskExecution } from '../duckdb/scheduled-task-service';
+import type { ScheduledTask } from '../duckdb/scheduled-task-service';
+
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    debug: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  }),
+}));
 
 function createMockTaskService() {
   return {

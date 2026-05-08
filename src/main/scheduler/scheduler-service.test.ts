@@ -7,6 +7,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SchedulerService } from './scheduler-service';
 import type { ScheduledTask, TaskExecution } from '../duckdb/scheduled-task-service';
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    debug: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  }),
+}));
+
 // Mock uuid
 vi.mock('uuid', () => ({
   v4: vi.fn(() => 'mock-uuid-' + Math.random().toString(36).substr(2, 9)),

@@ -216,7 +216,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/profile/browser-pool-integration-smoke-shared.ts': 2,
   'src/main/profile/browser-pool-integration.ts': 3,
   'src/main/profile/chrome-runtime-shared.ts': 1,
-  'src/main/scheduler/scheduler-service.ts': 27,
   'src/main/sync/sync-outbox-emitter.ts': 2,
   'src/main/webcontentsview-attachment-controller.ts': 9,
   'src/main/webcontentsview-layout-controller.ts': 23,
