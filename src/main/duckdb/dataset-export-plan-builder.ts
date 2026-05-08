@@ -4,7 +4,10 @@ import {
   isSystemField,
   type DatasetColumnLike,
 } from '../../utils/dataset-column-capabilities';
+import { createLogger } from '../../core/logger';
 import { quoteIdentifier, quoteQualifiedName } from './utils';
+
+const logger = createLogger('DatasetExportPlanBuilder');
 
 const EXPORT_SYSTEM_COLUMN_NAMES = ['_row_id', 'created_at', 'updated_at'] as const;
 const EXPORT_SYSTEM_COLUMNS = new Set<string>(EXPORT_SYSTEM_COLUMN_NAMES);
@@ -99,7 +102,11 @@ export class DatasetExportPlanBuilder {
           normalizedSelectedRowIds.length > 0 || shouldDeleteRows ? ['_row_id'] : undefined,
       });
 
-      console.log('[ExportService] Rebuilding SQL without pagination for export');
+      logger.info('Rebuilding query-backed export SQL without pagination', {
+        datasetId,
+        hasSelectedRows: normalizedSelectedRowIds.length > 0,
+        shouldDeleteRows,
+      });
       let sourceSQL = await exportQuerySQLBuilder.buildExportSQL(datasetId, sourceQueryConfig);
       if (normalizedSelectedRowIds.length > 0) {
         sourceSQL = this.filterSQLBySelectedRows(sourceSQL, normalizedSelectedRowIds);
@@ -115,7 +122,10 @@ export class DatasetExportPlanBuilder {
         }
       );
 
-      console.log('[ExportService] Generated export SQL (query-backed)');
+      logger.info('Generated query-backed export SQL', {
+        datasetId,
+        hasRowIdSQL: shouldDeleteRows,
+      });
 
       return {
         exportSQL,
@@ -462,9 +472,7 @@ private excludeSystemColumnsFromExportSQL(
       );
     }
 
-    console.warn(
-      '[ExportService] Unable to exclude system columns from top-level SELECT; wrapping export query'
-    );
+    logger.warn('Unable to exclude system columns from top-level SELECT, wrapping export query');
 
     const orderBySplit = this.splitTopLevelOrderByTail(sql);
     const canHoistOrderBy =
@@ -481,8 +489,8 @@ private excludeSystemColumnsFromExportSQL(
     }
 
     if (orderBySplit.orderByTail.length > 0) {
-      console.warn(
-        '[ExportService] Unable to hoist ORDER BY while excluding system columns; result order may differ'
+      logger.warn(
+        'Unable to hoist ORDER BY while excluding system columns, result order may differ'
       );
     }
 
