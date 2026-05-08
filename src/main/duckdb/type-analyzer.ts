@@ -6,6 +6,9 @@
 import { DuckDBConnection } from '@duckdb/node-api';
 import type { EnhancedColumnSchema, ColumnStatistics, ColumnMetadata, FieldType } from './types';
 import { parseRows } from './utils';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('TypeAnalyzer');
 
 export class TypeAnalyzer {
   // ✅ 采样配置（平衡准确性和性能）
@@ -43,9 +46,12 @@ export class TypeAnalyzer {
     const totalRows = Number(parseRows(countResult)[0].cnt);
     const sampleSize = this.calculateSampleSize(totalRows);
 
-    console.log(
-      `[TypeAnalyzer] Version: ${this.VERSION}, Total rows: ${totalRows}, Sample size: ${sampleSize}`
-    );
+    logger.info('Starting table type analysis', {
+      version: this.VERSION,
+      tableName,
+      totalRows,
+      sampleSize,
+    });
     const basicSchema = await this.getBasicSchema(conn, tableName);
 
     const enhancedSchema = await Promise.all(
@@ -113,10 +119,9 @@ export class TypeAnalyzer {
     // 3. 单选检测
     if (this.isSingleSelect(stats)) {
       const options = this.extractUniqueOptions(stats);
-      console.log(
-        `[TypeAnalyzer] Detected single_select with ${options.length} options:`,
-        options.slice(0, 10)
-      );
+      logger.info('Detected single-select text column', {
+        optionCount: options.length,
+      });
       return {
         fieldType: 'single_select',
         metadata: {
@@ -171,9 +176,11 @@ export class TypeAnalyzer {
     // 提取列值到数组
     const sampleValues = sampleRows.map((row) => row[columnName]);
 
-    console.log(
-      `[TypeAnalyzer] getColumnStatistics for "${columnName}": total_rows=${statsRow.total_rows}, sample_values=${sampleValues.length}`
-    );
+    logger.info('Collected column statistics for type analysis', {
+      columnName,
+      totalRows: Number(statsRow.total_rows),
+      sampleValueCount: sampleValues.length,
+    });
 
     return {
       totalRows: Number(statsRow.total_rows),
@@ -289,25 +296,24 @@ export class TypeAnalyzer {
     fieldType: FieldType;
     metadata: ColumnMetadata;
   } | null {
-    console.log(
-      '[TypeAnalyzer] analyzeFileOrLink called, sampleValues:',
-      stats.sampleValues ? stats.sampleValues.length : 'null/undefined'
-    );
+    logger.debug('Analyzing text samples for file or link type', {
+      sampleValueCount: stats.sampleValues ? stats.sampleValues.length : 0,
+    });
 
     if (!stats.sampleValues || stats.sampleValues.length === 0) {
-      console.log('[TypeAnalyzer] analyzeFileOrLink: No sample values, returning null');
+      logger.debug('No samples available for file or link type analysis');
       return null;
     }
 
     const validSamples = stats.sampleValues.filter(
       (v) => v !== null && v !== undefined && v !== ''
     );
-    console.log('[TypeAnalyzer] analyzeFileOrLink: validSamples count:', validSamples.length);
+    logger.debug('Filtered valid samples for file or link type analysis', {
+      validSampleCount: validSamples.length,
+    });
 
     if (validSamples.length === 0) {
-      console.log(
-        '[TypeAnalyzer] analyzeFileOrLink: No valid samples after filtering, returning null'
-      );
+      logger.debug('No valid samples after filtering for file or link type analysis');
       return null;
     }
 
@@ -315,9 +321,9 @@ export class TypeAnalyzer {
     let fileCount = 0;
     const fileTypes: string[] = [];
 
-    // 调试：记录前3个样本
-    const firstSamples = validSamples.slice(0, 3).map((v) => String(v).trim());
-    console.log(`[TypeAnalyzer] Analyzing ${validSamples.length} samples, first 3:`, firstSamples);
+    logger.debug('Scanning samples for file or link type analysis', {
+      validSampleCount: validSamples.length,
+    });
 
     // 分析每个样本（可能包含多个URL，用分隔符分开）
     for (const value of validSamples) {
@@ -347,11 +353,17 @@ export class TypeAnalyzer {
     const linkRatio = totalUrls > 0 ? linkCount / validSamples.length : 0;
     const fileRatio = linkCount > 0 ? fileCount / linkCount : 0;
 
-    console.log(
-      `[TypeAnalyzer] Link detection: ${linkCount}/${validSamples.length} (${(linkRatio * 100).toFixed(1)}%), File: ${fileCount}/${linkCount} (${(fileRatio * 100).toFixed(1)}%)`
-    );
+    logger.info('Completed file or link type detection', {
+      validSampleCount: validSamples.length,
+      linkCount,
+      fileCount,
+      linkRatio,
+      fileRatio,
+    });
     if (fileTypes.length > 0) {
-      console.log(`[TypeAnalyzer] File types detected:`, fileTypes.slice(0, 5));
+      logger.info('Detected file types during type analysis', {
+        fileTypes: fileTypes.slice(0, 5),
+      });
     }
 
     // 判断：80% 以上是链接
@@ -363,7 +375,10 @@ export class TypeAnalyzer {
       if (fileRatio >= 0.8) {
         const primaryFileType = this.getMostCommonType(fileTypes);
 
-        console.log(`[TypeAnalyzer] Detected ATTACHMENT field (fileType: ${primaryFileType})`);
+        logger.info('Detected attachment field type', {
+          fileType: primaryFileType,
+          separator,
+        });
 
         return {
           fieldType: 'attachment', // 👈 独立的附件类型
@@ -380,7 +395,9 @@ export class TypeAnalyzer {
       }
       // 普通链接 → hyperlink
       else {
-        console.log(`[TypeAnalyzer] Detected HYPERLINK field`);
+        logger.info('Detected hyperlink field type', {
+          separator,
+        });
 
         return {
           fieldType: 'hyperlink', // 👈 纯链接类型

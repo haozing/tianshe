@@ -190,7 +190,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/duckdb/scheduled-task-service.ts': 1,
   'src/main/duckdb/sql-template.ts': 1,
   'src/main/duckdb/sql-validator.ts': 2,
-  'src/main/duckdb/type-analyzer.ts': 12,
   'src/main/duckdb/validation-engine.ts': 8,
   'src/main/internal-browser-devtools.ts': 1,
   'src/main/ipc.ts': 1,
