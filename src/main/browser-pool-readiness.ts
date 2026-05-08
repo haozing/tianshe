@@ -1,3 +1,5 @@
+import type { RuntimeReadinessSnapshot } from './runtime/readiness-registry';
+
 export type BrowserPoolReadinessStatus = 'not-started' | 'initializing' | 'ready' | 'failed';
 
 export interface BrowserPoolReadinessSnapshot {
@@ -49,5 +51,16 @@ export class BrowserPoolReadiness {
 
   getSnapshot(): BrowserPoolReadinessSnapshot {
     return { ...this.snapshot };
+  }
+
+  getRuntimeReadinessSnapshot(service = 'browserPool'): RuntimeReadinessSnapshot {
+    const snapshot = this.getSnapshot();
+    return {
+      service,
+      status: snapshot.status,
+      updatedAt: snapshot.readyAt ?? snapshot.failedAt ?? snapshot.startedAt,
+      error: snapshot.error,
+      details: snapshot,
+    };
   }
 }

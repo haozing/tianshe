@@ -18,30 +18,22 @@ import { DatasetImportService } from './dataset-import-service';
 import { DatasetExportService, type ExportQuerySQLBuilder } from './dataset-export-service';
 import { DatasetQueryService } from './dataset-query-service';
 import { DatasetTabGroupService, type GroupTabDataset } from './dataset-tab-group-service';
+import { DatasetRecordMutationService } from './dataset-record-mutation-service';
+import { DatasetMaterializationService } from './dataset-materialization-service';
+import { DatasetGroupTabWorkflowService } from './dataset-group-tab-workflow-service';
 import { SQLValidator } from './sql-validator';
 import { DependencyManager } from './dependency-manager';
 import { ValidationEngine } from './validation-engine';
-import fs from 'fs-extra';
-import { CleanBuilder } from '../../core/query-engine';
 import type { QueryEngine } from '../../core/query-engine/QueryEngine';
-import type { CleanConfig, SQLContext } from '../../core/query-engine/types';
+import type { CleanConfig } from '../../core/query-engine/types';
 import {
   escapeSqlStringLiteral,
   getDatasetPath,
   getFileSize,
-  parseRows,
   quoteIdentifier,
   quoteQualifiedName,
-  runInDuckDbTransaction,
 } from './utils';
-import { allPrepared, runPrepared } from './statement-executor';
 import { generateId } from '../../utils/id-generator';
-import {
-  isSystemField,
-  partitionRecordFieldsBySchema,
-  stripSystemFields,
-} from '../../utils/dataset-column-capabilities';
-import { buildMaterializedCleanColumnSpecs } from '../../utils/clean-materialization';
 import type {
   Dataset,
   DatasetPlacementOptions,
@@ -51,63 +43,10 @@ import type {
 } from './types';
 import type { ExportOptions, ExportProgress } from '../../types/electron';
 
-/**
- * 引用 schema 中已经存在的列名。
- * 新增/重命名列走 dataset column name policy；这里处理已有 metadata 列名，避免误伤导入文件中的特殊表头。
- */
-function safeQuoteColumn(name: string): string {
-  if (!name || typeof name !== 'string') {
-    throw new Error(`Invalid column name: ${name}`);
-  }
-
-  return quoteIdentifier(name);
-}
-
-/**
- * 系统字段列表
- * 这些字段由数据库自动生成和管理，插入时应该被过滤掉
- */
-
 type BaseDatasetColumnDefinition = Pick<
   EnhancedColumnSchema,
   'name' | 'duckdbType' | 'fieldType' | 'nullable' | 'metadata'
 >;
-
-/**
- * 判断是否为系统字段
- */
-
-/**
- * 过滤掉系统字段（防御性编程：后端再次过滤）
- */
-function filterSystemFields(record: DataRecord): DataRecord {
-  return stripSystemFields(record as Record<string, unknown>) as DataRecord;
-}
-
-function getWritableRecordForDataset(dataset: Dataset, record: DataRecord): DataRecord {
-  const cleanedRecord = filterSystemFields(record);
-  const schema = Array.isArray(dataset.schema) ? dataset.schema : [];
-  const { accepted, unknownColumns, nonWritableColumns } = partitionRecordFieldsBySchema(
-    cleanedRecord as Record<string, unknown>,
-    schema
-  );
-
-  if (unknownColumns.length > 0) {
-    throw new Error(`Unknown columns: ${unknownColumns.join(', ')}`);
-  }
-
-  if (nonWritableColumns.length > 0) {
-    throw new Error(`Columns are not writable: ${nonWritableColumns.join(', ')}`);
-  }
-
-  return accepted as DataRecord;
-}
-
-function hasDatasetColumn(dataset: Dataset, columnName: string): boolean {
-  return (
-    Array.isArray(dataset.schema) && dataset.schema.some((column) => column.name === columnName)
-  );
-}
 
 export class DatasetService {
   // 子服务实例
@@ -118,6 +57,9 @@ export class DatasetService {
   private exportService: DatasetExportService;
   private queryService: DatasetQueryService;
   private tabGroupService: DatasetTabGroupService;
+  private recordMutationService: DatasetRecordMutationService;
+  private materializationService: DatasetMaterializationService;
+  private groupTabWorkflowService: DatasetGroupTabWorkflowService;
 
   // 辅助服务
   private sqlValidator: SQLValidator;
@@ -144,6 +86,14 @@ export class DatasetService {
     // 🔹 数据层：元数据管理
     this.metadataService = new DatasetMetadataService(conn, this.storageService);
     this.tabGroupService = new DatasetTabGroupService(conn);
+    this.recordMutationService = new DatasetRecordMutationService({
+      conn,
+      storageService: this.storageService,
+      metadataService: this.metadataService,
+      getTableName: (safeDatasetId) => this.getTableName(safeDatasetId),
+      ensureAttached: (dataset) => this.ensureAttached(dataset),
+      hookBus: this.hookBus,
+    });
 
     // 🔹 辅助服务：验证和依赖
     this.sqlValidator = new SQLValidator(conn);
@@ -175,6 +125,24 @@ export class DatasetService {
       this.storageService,
       options.queryEngine
     );
+    this.materializationService = new DatasetMaterializationService({
+      conn,
+      metadataService: this.metadataService,
+      queryService: this.queryService,
+      schemaService: this.schemaService,
+      storageService: this.storageService,
+      getTableName: (safeDatasetId) => this.getTableName(safeDatasetId),
+      ensureAttached: (dataset) => this.ensureAttached(dataset),
+    });
+    this.groupTabWorkflowService = new DatasetGroupTabWorkflowService({
+      conn,
+      metadataService: this.metadataService,
+      storageService: this.storageService,
+      tabGroupService: this.tabGroupService,
+      ensureAttached: (dataset) => this.ensureAttached(dataset),
+      configureRowIdSequence: (attachKey, tableName, startValue) =>
+        this.configureRowIdSequence(attachKey, tableName, startValue),
+    });
 
     console.log('✅ DatasetService initialized with modular architecture');
   }
@@ -288,105 +256,6 @@ export class DatasetService {
     return schema;
   }
 
-  private getDescribeColumnName(row: Record<string, any>): string {
-    const columnName = row.column_name ?? row.column ?? row.name ?? Object.values(row)[0];
-    return String(columnName ?? '').trim();
-  }
-
-  private getDescribeColumnType(row: Record<string, any>): string {
-    const columnType = row.column_type ?? row.type ?? Object.values(row)[1];
-    return String(columnType ?? '').trim();
-  }
-
-  private getDescribeNullable(row: Record<string, any>): boolean {
-    const nullableValue = row.null ?? row.nullable ?? Object.values(row)[2];
-    return (
-      String(nullableValue ?? 'YES')
-        .trim()
-        .toUpperCase() !== 'NO'
-    );
-  }
-
-  private async createCloneTargetTable(
-    targetAttachKey: string,
-    sourceTableName: string
-  ): Promise<string[]> {
-    const describeResult = await this.conn.runAndReadAll(`DESCRIBE ${sourceTableName}`);
-    const describeRows = parseRows(describeResult);
-    if (describeRows.length === 0) {
-      throw new Error('Source dataset table has no physical columns');
-    }
-
-    const targetTableName = quoteQualifiedName(targetAttachKey, 'data');
-    const targetColumnDefinitions = describeRows.map((row: any) => {
-      const columnName = this.getDescribeColumnName(row);
-      const columnType = this.getDescribeColumnType(row);
-      const nullable = this.getDescribeNullable(row);
-
-      if (!columnName || !columnType) {
-        throw new Error('Failed to inspect source dataset table schema');
-      }
-
-      if (columnName === '_row_id') {
-        return `${quoteIdentifier(columnName)} BIGINT PRIMARY KEY`;
-      }
-      if (columnName === 'created_at' || columnName === 'updated_at') {
-        return `${quoteIdentifier(columnName)} ${columnType} DEFAULT (now())`;
-      }
-      if (columnName === 'deleted_at') {
-        return `${quoteIdentifier(columnName)} ${columnType} DEFAULT NULL`;
-      }
-
-      return `${quoteIdentifier(columnName)} ${columnType}${nullable ? '' : ' NOT NULL'}`;
-    });
-
-    await this.conn.run(`CREATE TABLE ${targetTableName} (${targetColumnDefinitions.join(', ')})`);
-    await this.configureRowIdSequence(targetAttachKey, targetTableName, 1);
-
-    return describeRows.map((row: any) => this.getDescribeColumnName(row));
-  }
-
-  private async copyRowsToCloneTable(
-    sourceTableName: string,
-    targetTableName: string,
-    columnNames: string[]
-  ): Promise<void> {
-    const quotedColumns = columnNames.map((name) => quoteIdentifier(name)).join(', ');
-    const hasRowIdColumn = columnNames.includes('_row_id');
-    const selectedColumns = columnNames
-      .map((name) =>
-        name === '_row_id'
-          ? `${quoteIdentifier('__normalized_row_id')} AS ${quoteIdentifier(name)}`
-          : quoteIdentifier(name)
-      )
-      .join(', ');
-
-    if (hasRowIdColumn) {
-      await this.conn.run(`
-        INSERT INTO ${targetTableName} (${quotedColumns})
-        WITH source_rows AS (
-          SELECT
-            *,
-            CASE
-              WHEN ${quoteIdentifier('_row_id')} IS NOT NULL THEN ${quoteIdentifier('_row_id')}
-              ELSE COALESCE(MAX(${quoteIdentifier('_row_id')}) OVER (), 0)
-                + ROW_NUMBER() OVER (ORDER BY rowid)
-            END AS ${quoteIdentifier('__normalized_row_id')}
-          FROM ${sourceTableName}
-        )
-        SELECT ${selectedColumns}
-        FROM source_rows
-      `);
-      return;
-    }
-
-    await this.conn.run(`
-      INSERT INTO ${targetTableName} (${quotedColumns})
-      SELECT ${quotedColumns}
-      FROM ${sourceTableName}
-    `);
-  }
-
   // ==================== 元数据 API（代理） ====================
 
   initTable = () => this.metadataService.initTable();
@@ -465,7 +334,11 @@ export class DatasetService {
     expression: string,
     options?: any
   ): Promise<any> {
-    return await this.queryService.validateComputeExpression(datasetId, expression, options);
+    return await this.materializationService.validateComputeExpression(
+      datasetId,
+      expression,
+      options
+    );
   }
 
   // ==================== Schema API（代理） ====================
@@ -513,70 +386,22 @@ export class DatasetService {
    *
    * 注意：该操作会直接从数据表中删除记录。
    */
-  async hardDeleteRows(datasetId: string, rowIds: number[]): Promise<number> {
-    if (!rowIds || rowIds.length === 0) {
-      throw new Error('No row IDs provided for deletion');
-    }
+  hardDeleteRows = (datasetId: string, rowIds: number[]) =>
+    this.recordMutationService.hardDeleteRows(datasetId, rowIds);
 
-    const safeDatasetId = sanitizeDatasetId(datasetId);
+  updateRecord = (datasetId: string, rowId: number, updates: DataRecord) =>
+    this.recordMutationService.updateRecord(datasetId, rowId, updates);
 
-    // 安全验证：rowIds 必须为非负整数
-    const validRowIds = rowIds.filter((id) => Number.isInteger(id) && id >= 0);
-    if (validRowIds.length !== rowIds.length) {
-      throw new Error('All row IDs must be non-negative integers');
-    }
+  batchUpdateRecords = (
+    datasetId: string,
+    updates: Array<{ rowId: number; updates: DataRecord }>
+  ) => this.recordMutationService.batchUpdateRecords(datasetId, updates);
 
-    const uniqueRowIds = Array.from(new Set(validRowIds));
-    if (uniqueRowIds.length === 0) return 0;
+  insertRecord = (datasetId: string, record: DataRecord) =>
+    this.recordMutationService.insertRecord(datasetId, record);
 
-    return this.storageService.executeInQueue(safeDatasetId, async () => {
-      const dataset = await this.metadataService.getDatasetInfo(safeDatasetId);
-      if (!dataset) throw new Error('Dataset not found');
-
-      await this.ensureAttached(dataset);
-      const tableName = this.getTableName(safeDatasetId);
-
-      console.warn(
-        `[DatasetService] PERMANENTLY deleting ${uniqueRowIds.length} rows from ${tableName}`
-      );
-
-      const BATCH_SIZE = 1000;
-      let deletedCount = 0;
-
-      await runInDuckDbTransaction(this.conn, async () => {
-        for (let i = 0; i < uniqueRowIds.length; i += BATCH_SIZE) {
-          const batch = uniqueRowIds.slice(i, i + BATCH_SIZE);
-          const placeholders = batch.map(() => '?').join(', ');
-          const countSql = `SELECT COUNT(*) AS cnt FROM ${tableName} WHERE _row_id IN (${placeholders})`;
-          const countResult = await allPrepared(this.conn, countSql, batch);
-
-          const batchDeletedCount = Number(parseRows(countResult)[0]?.cnt ?? 0);
-          if (!Number.isFinite(batchDeletedCount) || batchDeletedCount <= 0) {
-            continue;
-          }
-
-          const deleteSql = `DELETE FROM ${tableName} WHERE _row_id IN (${placeholders})`;
-          await runPrepared(this.conn, deleteSql, batch);
-
-          deletedCount += batchDeletedCount;
-        }
-      });
-
-      if (deletedCount > 0) {
-        try {
-          await this.metadataService.incrementRowCount(safeDatasetId, -deletedCount);
-        } catch (countError) {
-          console.warn(
-            `[DatasetService] Failed to decrement row_count for ${safeDatasetId}:`,
-            countError
-          );
-        }
-      }
-
-      console.warn(`[DatasetService] PERMANENTLY deleted ${deletedCount} rows`);
-      return deletedCount;
-    });
-  }
+  batchInsertRecords = (datasetId: string, records: DataRecord[]) =>
+    this.recordMutationService.batchInsertRecords(datasetId, records);
 
   executeInQueue = <T>(id: string, operation: () => Promise<T>) =>
     this.storageService.executeInQueue(id, operation);
@@ -592,499 +417,23 @@ export class DatasetService {
     return this.storageService.withDatasetAttached(datasetId, dataset.filePath, operation);
   }
 
-  // ==================== 本地 CRUD 方法 ====================
+  materializeCleanToNewColumns = (datasetId: string, cleanConfig: CleanConfig) =>
+    this.materializationService.materializeCleanToNewColumns(datasetId, cleanConfig);
 
-  /**
-   * ✏️ 更新单条记录
-   * ✅ 统一的逻辑：插件表和普通表都使用相同的 ATTACH 机制
-   */
-  async updateRecord(datasetId: string, rowId: number, updates: DataRecord): Promise<void> {
-    const safeDatasetId = sanitizeDatasetId(datasetId);
+  listGroupTabsByDataset = (datasetId: string): Promise<GroupTabDataset[]> =>
+    this.groupTabWorkflowService.listGroupTabsByDataset(datasetId);
 
-    return this.storageService.executeInQueue(safeDatasetId, async () => {
-      const dataset = await this.metadataService.getDatasetInfo(safeDatasetId);
-      if (!dataset) throw new Error('Dataset not found');
+  reorderGroupTabs = (tabGroupId: string, datasetIds: string[]): Promise<void> =>
+    this.groupTabWorkflowService.reorderGroupTabs(tabGroupId, datasetIds);
 
-      const writableUpdates = getWritableRecordForDataset(dataset, updates);
-      const columns = Object.keys(writableUpdates);
-      const values = Object.values(writableUpdates);
+  renameGroupTab = (datasetId: string, newName: string): Promise<void> =>
+    this.groupTabWorkflowService.renameGroupTab(datasetId, newName);
 
-      if (columns.length === 0) {
-        throw new Error('Updates must have at least one column');
-      }
-
-      // ✅ 统一的逻辑：ATTACH + getTableName
-      await this.ensureAttached(dataset);
-      const tableName = this.getTableName(safeDatasetId);
-
-      // 直接使用 _row_id 更新，不需要查询
-      const setExpressions = columns.map((col) => `${safeQuoteColumn(col)} = ?`);
-      if (hasDatasetColumn(dataset, 'updated_at')) {
-        setExpressions.push(`${safeQuoteColumn('updated_at')} = now()`);
-      }
-      const setClause = setExpressions.join(', ');
-      const sql = `UPDATE ${tableName} SET ${setClause} WHERE _row_id = ?`;
-
-      console.log(`🔍 Updating record with _row_id: ${rowId}`);
-
-      await runInDuckDbTransaction(this.conn, async () => {
-        await runPrepared(this.conn, sql, [...values, rowId]);
-      });
-
-      console.log(`✅ Record updated: ${safeDatasetId}, _row_id ${rowId}`);
-
-      // 触发 Webhook 回调事件（不阻塞数据库操作）
-      this.hookBus?.emit('webhook:record.updated', {
-        datasetId: safeDatasetId,
-        rowId,
-        updates: writableUpdates,
-      });
-    });
-  }
-
-  /**
-   * ✏️ 批量更新记录
-   */
-  async batchUpdateRecords(
-    datasetId: string,
-    updates: Array<{ rowId: number; updates: DataRecord }>
-  ): Promise<void> {
-    const safeDatasetId = sanitizeDatasetId(datasetId);
-
-    return this.storageService.executeInQueue(safeDatasetId, async () => {
-      const dataset = await this.metadataService.getDatasetInfo(safeDatasetId);
-      if (!dataset) throw new Error('Dataset not found');
-
-      if (updates.length === 0) return;
-
-      // ✅ 使用辅助方法（只需执行一次）
-      await this.ensureAttached(dataset);
-      const tableName = this.getTableName(safeDatasetId);
-
-      await runInDuckDbTransaction(this.conn, async () => {
-        for (const update of updates) {
-          const { rowId, updates: data } = update;
-          const writableUpdates = getWritableRecordForDataset(dataset, data);
-          const columns = Object.keys(writableUpdates);
-          const values = Object.values(writableUpdates);
-
-          if (columns.length === 0) continue;
-
-          // 直接使用 _row_id，不需要查询
-          const setExpressions = columns.map((col) => `${safeQuoteColumn(col)} = ?`);
-          if (hasDatasetColumn(dataset, 'updated_at')) {
-            setExpressions.push(`${safeQuoteColumn('updated_at')} = now()`);
-          }
-          const setClause = setExpressions.join(', ');
-          const sql = `UPDATE ${tableName} SET ${setClause} WHERE _row_id = ?`;
-          await runPrepared(this.conn, sql, [...values, rowId]);
-        }
-      });
-      console.log(`✅ Batch updated ${updates.length} records`);
-    });
-  }
-
-  /**
-   * 将清洗配置“物化”到数据表：把清洗结果写入 outputField 指定的新列。
-   *
-   * 说明：
-   * - 仅处理带 outputField 的清洗字段（用于保留原始列）
-   * - 若 outputField 不存在则自动创建为物理列
-   * - 会对全表执行一次 UPDATE（可能耗时）
-   */
-  async materializeCleanToNewColumns(
-    datasetId: string,
-    cleanConfig: CleanConfig
-  ): Promise<{
-    createdColumns: string[];
-    updatedColumns: string[];
-  }> {
-    const safeDatasetId = sanitizeDatasetId(datasetId);
-
-    const dataset = await this.metadataService.getDatasetInfo(safeDatasetId);
-    if (!dataset) throw new Error(`Dataset not found: ${safeDatasetId}`);
-    if (!dataset.schema) throw new Error(`Dataset has no schema: ${safeDatasetId}`);
-
-    const materializeTargets = (cleanConfig || [])
-      .map((c) => ({
-        ...c,
-        outputField: c.outputField?.trim(),
-      }))
-      .filter((c) => !!c.outputField);
-
-    if (materializeTargets.length === 0) {
-      throw new Error('请为至少一个清洗字段设置“输出列名”，用于写入新列');
-    }
-
-    // outputField 必须唯一，且不能是系统字段，且不能与源字段同名（避免“新增列”语义混淆）
-    const outputFields = materializeTargets.map((c) => c.outputField!) as string[];
-    const outputFieldSet = new Set<string>();
-    for (const fieldConfig of materializeTargets) {
-      const outputField = fieldConfig.outputField!;
-      if (outputFieldSet.has(outputField)) {
-        throw new Error(`输出列名重复：${outputField}`);
-      }
-      outputFieldSet.add(outputField);
-
-      if (isSystemField(outputField)) {
-        throw new Error(`输出列名不能为系统字段：${outputField}`);
-      }
-
-      if (outputField === fieldConfig.field) {
-        throw new Error(
-          `输出列名不能与源字段同名：${outputField}。如需覆盖原字段，请使用“应用清洗”（视图）或在列面板中操作。`
-        );
-      }
-    }
-
-    const existingColumns = new Set(dataset.schema.map((col) => col.name));
-    const inferredColumns = buildMaterializedCleanColumnSpecs(materializeTargets, dataset.schema);
-    const inferredColumnsByName = new Map(inferredColumns.map((column) => [column.name, column]));
-    const createdColumns: string[] = [];
-
-    // 1) 创建物理列（不存在才创建）
-    // 注意：schemaService.addColumn 内部自带队列，避免在同一队列中嵌套调用导致死锁
-    for (const outputField of outputFields) {
-      if (existingColumns.has(outputField)) continue;
-
-      const inferredColumn = inferredColumnsByName.get(outputField);
-      if (!inferredColumn) {
-        throw new Error(`无法推断清洗输出列类型：${outputField}`);
-      }
-
-      await this.schemaService.addColumn({
-        datasetId: safeDatasetId,
-        columnName: outputField,
-        fieldType: inferredColumn.fieldType,
-        duckdbTypeOverride: inferredColumn.duckdbType,
-        nullable: inferredColumn.nullable,
-        metadata: {
-          description: '清洗生成列（物化）',
-        },
-        storageMode: 'physical',
-      });
-
-      createdColumns.push(outputField);
-      existingColumns.add(outputField);
-    }
-
-    // 2) 执行写入（全表 UPDATE）
-    // 注意：避免与 addColumn 的队列嵌套，单独在队列中执行数据写入
-    await this.storageService.executeInQueue(safeDatasetId, async () => {
-      await this.ensureAttached(dataset);
-      const tableName = this.getTableName(safeDatasetId);
-
-      // 只需要 _row_id 和源字段即可让 CleanBuilder 生成可写入的表达式
-      const requiredColumns = new Set<string>(['_row_id']);
-      for (const fieldConfig of materializeTargets) {
-        requiredColumns.add(fieldConfig.field);
-      }
-
-      const context: SQLContext = {
-        datasetId: safeDatasetId,
-        currentTable: tableName,
-        ctes: [],
-        availableColumns: requiredColumns,
-      };
-
-      const cleanBuilder = new CleanBuilder();
-      const cleanSQL = cleanBuilder.build(context, materializeTargets);
-
-      const setClause = outputFields
-        .map((col) => `${safeQuoteColumn(col)} = cleaned.${safeQuoteColumn(col)}`)
-        .join(', ');
-
-      const updateSQL = `
-WITH cleaned AS (
-  ${cleanSQL}
-)
-UPDATE ${tableName} AS t
-SET ${setClause}
-FROM cleaned
-WHERE t._row_id = cleaned._row_id
-      `.trim();
-
-      await this.conn.run(updateSQL);
-    });
-
-    return { createdColumns, updatedColumns: outputFields };
-  }
-
-  /**
-   * ➕ 插入记录
-   */
-  async insertRecord(datasetId: string, record: DataRecord): Promise<void> {
-    const safeDatasetId = sanitizeDatasetId(datasetId);
-
-    return this.storageService.executeInQueue(safeDatasetId, async () => {
-      const dataset = await this.metadataService.getDatasetInfo(safeDatasetId);
-      if (!dataset) throw new Error('Dataset not found');
-
-      await this.insertRecordInCurrentQueue(safeDatasetId, dataset, record);
-      console.log(`✅ Record inserted into ${safeDatasetId}`);
-    });
-  }
-
-  private async insertRecordInCurrentQueue(
-    safeDatasetId: string,
-    dataset: Dataset,
-    record: DataRecord
-  ): Promise<DataRecord> {
-    // ✅ 过滤掉系统字段（防御性编程：后端再次过滤）
-    const cleanedRecord = getWritableRecordForDataset(dataset, record);
-    const columns = Object.keys(cleanedRecord);
-    const values = Object.values(cleanedRecord);
-
-    if (columns.length === 0) {
-      throw new Error('Record must have at least one column');
-    }
-
-    // ✅ 使用安全的列名引用
-    const columnNames = columns.map((c) => safeQuoteColumn(c)).join(', ');
-    const placeholders = values.map(() => '?').join(', ');
-
-    // ✅ 使用辅助方法
-    await this.ensureAttached(dataset);
-    const tableName = this.getTableName(safeDatasetId);
-
-    const sql = `INSERT INTO ${tableName} (${columnNames}) VALUES (${placeholders})`;
-    await runPrepared(this.conn, sql, values);
-
-    try {
-      await this.metadataService.incrementRowCount(safeDatasetId, 1);
-    } catch (countError) {
-      console.warn(
-        `[DatasetService] Failed to increment row_count for ${safeDatasetId}:`,
-        countError
-      );
-    }
-
-    // 触发 Webhook 回调事件（不阻塞数据库操作）
-    this.hookBus?.emit('webhook:record.created', {
-      datasetId: safeDatasetId,
-      record: cleanedRecord,
-    });
-
-    return cleanedRecord;
-  }
-
-  /**
-   * ➕ 批量插入记录（优化版本）
-   * 使用事务和批量INSERT VALUES语法提升性能
-   *
-   * @param datasetId 数据集ID
-   * @param records 记录数组
-   */
-  async batchInsertRecords(datasetId: string, records: DataRecord[]): Promise<void> {
-    if (records.length === 0) return;
-
-    const safeDatasetId = sanitizeDatasetId(datasetId);
-
-    return this.storageService.executeInQueue(safeDatasetId, async () => {
-      const dataset = await this.metadataService.getDatasetInfo(safeDatasetId);
-      if (!dataset) throw new Error('Dataset not found');
-
-      // 单条记录复用已在队列内的内部实现，避免嵌套队列死锁和逻辑漂移
-      if (records.length === 1) {
-        await this.insertRecordInCurrentQueue(safeDatasetId, dataset, records[0]);
-        return;
-      }
-
-      // ✅ 过滤掉所有记录中的系统字段（防御性编程）
-      const cleanedRecords = records.map((record) => getWritableRecordForDataset(dataset, record));
-
-      // 验证所有记录有相同的列
-      const firstColumns = Object.keys(cleanedRecords[0]).sort();
-      for (const record of cleanedRecords) {
-        const cols = Object.keys(record).sort();
-        if (JSON.stringify(cols) !== JSON.stringify(firstColumns)) {
-          throw new Error('所有记录必须有相同的列');
-        }
-      }
-
-      const columns = Object.keys(cleanedRecords[0]);
-      if (columns.length === 0) {
-        throw new Error('Record must have at least one column');
-      }
-
-      // ✅ 使用安全的列名引用
-      const columnNames = columns.map((c) => safeQuoteColumn(c)).join(', ');
-
-      // ✅ 使用辅助方法（只需执行一次）
-      await this.ensureAttached(dataset);
-      const tableName = this.getTableName(safeDatasetId);
-
-      // 分批插入（每批100条，避免SQL过长）
-      const BATCH_SIZE = 100;
-      await runInDuckDbTransaction(this.conn, async () => {
-        for (let i = 0; i < cleanedRecords.length; i += BATCH_SIZE) {
-          const batch = cleanedRecords.slice(i, i + BATCH_SIZE);
-
-          // 构建批量INSERT
-          const placeholders = batch.map(() => `(${columns.map(() => '?').join(', ')})`).join(', ');
-
-          // 展平所有值
-          const values: any[] = [];
-          for (const record of batch) {
-            for (const col of columns) {
-              values.push(record[col]);
-            }
-          }
-
-          // 执行插入
-          const sql = `INSERT INTO ${tableName} (${columnNames}) VALUES ${placeholders}`;
-          await runPrepared(this.conn, sql, values);
-        }
-      });
-
-      try {
-        await this.metadataService.incrementRowCount(safeDatasetId, cleanedRecords.length);
-      } catch (countError) {
-        console.warn(
-          `[DatasetService] Failed to increment row_count for ${safeDatasetId}:`,
-          countError
-        );
-      }
-
-      console.log(`✅ Batch inserted ${cleanedRecords.length} records into ${safeDatasetId}`);
-    });
-  }
-
-  async listGroupTabsByDataset(datasetId: string): Promise<GroupTabDataset[]> {
-    const safeDatasetId = sanitizeDatasetId(datasetId);
-    return this.storageService.executeInQueue(safeDatasetId, async () => {
-      return this.tabGroupService.listTabsByDataset(safeDatasetId);
-    });
-  }
-
-  async reorderGroupTabs(tabGroupId: string, datasetIds: string[]): Promise<void> {
-    await this.tabGroupService.reorderTabs(tabGroupId, datasetIds);
-  }
-
-  async renameGroupTab(datasetId: string, newName: string): Promise<void> {
-    const safeDatasetId = sanitizeDatasetId(datasetId);
-    const normalizedName = newName.trim();
-    if (!normalizedName) {
-      throw new Error('Tab name cannot be empty');
-    }
-
-    return this.storageService.executeInQueue(safeDatasetId, async () => {
-      const dataset = await this.metadataService.getDatasetInfo(safeDatasetId);
-      if (!dataset) {
-        throw new Error(`Dataset not found: ${safeDatasetId}`);
-      }
-
-      await this.metadataService.renameDataset(safeDatasetId, normalizedName);
-    });
-  }
-
-  async cloneDatasetToGroupTab(
+  cloneDatasetToGroupTab = (
     sourceDatasetId: string,
     requestedName?: string
-  ): Promise<{ datasetId: string; tabGroupId: string }> {
-    const safeSourceId = sanitizeDatasetId(sourceDatasetId);
-
-    return this.storageService.executeInQueue(safeSourceId, async () => {
-      const sourceDataset = await this.metadataService.getDatasetInfo(safeSourceId);
-      if (!sourceDataset) {
-        throw new Error(`Dataset not found: ${safeSourceId}`);
-      }
-
-      const tabGroupId = await this.tabGroupService.ensureGroupForDataset(safeSourceId);
-
-      const newDatasetId = generateId('dataset');
-      const outputPath = getDatasetPath(newDatasetId);
-      const targetAttachKey = `ds_${newDatasetId}`;
-      const sourceAttachKey = `ds_${safeSourceId}`;
-      const targetTableName = quoteQualifiedName(targetAttachKey, 'data');
-      const sourceTableName = quoteQualifiedName(sourceAttachKey, 'data');
-      const escapedTargetPath = outputPath.replace(/\\/g, '\\\\').replace(/'/g, "''");
-
-      await this.ensureAttached(sourceDataset);
-      await this.conn.run(`ATTACH '${escapedTargetPath}' AS ${quoteIdentifier(targetAttachKey)}`);
-
-      try {
-        const physicalColumnNames = await this.createCloneTargetTable(
-          targetAttachKey,
-          sourceTableName
-        );
-        await this.copyRowsToCloneTable(sourceTableName, targetTableName, physicalColumnNames);
-
-        // Re-seed future inserts after copying the existing rows.
-        if (physicalColumnNames.includes('_row_id')) {
-          const finalMaxRowIdResult = await this.conn.runAndReadAll(
-            `SELECT COALESCE(MAX(_row_id), 0) AS max_id FROM ${targetTableName}`
-          );
-
-          // 修复脏数据：给 NULL _row_id 补号，避免后续更新/删除无法定位记录
-          const finalMaxRowId = Number(parseRows(finalMaxRowIdResult)[0]?.max_id ?? 0);
-          const safeFinalMax = Number.isFinite(finalMaxRowId) ? finalMaxRowId : 0;
-          const nextRowId = safeFinalMax + 1;
-
-          await this.configureRowIdSequence(targetAttachKey, targetTableName, nextRowId);
-        }
-
-        const countResult = await this.conn.runAndReadAll(
-          `SELECT COUNT(*) AS cnt FROM ${targetTableName}`
-        );
-        const describeResult = await this.conn.runAndReadAll(`DESCRIBE ${targetTableName}`);
-        const rowCount = Number(parseRows(countResult)[0]?.cnt ?? 0);
-        const columnCount = parseRows(describeResult).length;
-
-        const nextOrder = await this.tabGroupService.getNextTabOrder(tabGroupId);
-        const newName =
-          requestedName && requestedName.trim().length > 0
-            ? requestedName.trim()
-            : `${sourceDataset.name} 副本`;
-
-        await this.metadataService.saveMetadata({
-          id: newDatasetId,
-          name: newName,
-          filePath: outputPath,
-          rowCount,
-          columnCount,
-          sizeBytes: await getFileSize(outputPath),
-          createdAt: Date.now(),
-          schema: sourceDataset.schema
-            ? (JSON.parse(JSON.stringify(sourceDataset.schema)) as any[])
-            : undefined,
-          folderId: sourceDataset.folderId ?? null,
-          tableOrder: sourceDataset.tableOrder ?? 0,
-          tabGroupId,
-          tabOrder: nextOrder,
-          isGroupDefault: false,
-          createdByPlugin: sourceDataset.createdByPlugin ?? null,
-        });
-
-        console.log(
-          `[DatasetService] Cloned dataset ${safeSourceId} -> ${newDatasetId} (group=${tabGroupId})`
-        );
-
-        return { datasetId: newDatasetId, tabGroupId };
-      } catch (error) {
-        try {
-          await this.conn.run(`DETACH ${quoteIdentifier(targetAttachKey)}`);
-        } catch {
-          // ignore detach errors in cleanup path
-        }
-        await fs.remove(outputPath).catch(() => undefined);
-        throw error;
-      } finally {
-        // 正常路径下释放目标数据库句柄
-        try {
-          const attached = await this.conn.runAndReadAll(
-            `SELECT database_name FROM duckdb_databases() WHERE database_name = ?`,
-            [targetAttachKey]
-          );
-          if (parseRows(attached).length > 0) {
-            await this.conn.run(`DETACH ${quoteIdentifier(targetAttachKey)}`);
-          }
-        } catch {
-          // non-critical
-        }
-      }
-    });
-  }
+  ): Promise<{ datasetId: string; tabGroupId: string }> =>
+    this.groupTabWorkflowService.cloneDatasetToGroupTab(sourceDatasetId, requestedName);
 
   /**
    * 🆕 创建空数据集

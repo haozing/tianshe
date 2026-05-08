@@ -526,6 +526,10 @@ SECURITY.md
 | `npm run test` | 开源版测试别名 |
 | `npm run test:open` | 运行开源版重点测试 |
 | `npm run test:open:full` | 运行完整开源版 Vitest 测试套件 |
+| `npm run test:architecture` | 运行架构护栏测试 |
+| `npm run test:main-bootstrap` | 运行主进程 runtime / bootstrap 生命周期重点测试 |
+| `npm run test:browser-pool` | 运行 browser pool acquire / release / wait queue 重点测试 |
+| `npm run test:dataset-ipc` | 运行 Dataset IPC 与 store 契约重点测试 |
 | `npm run typecheck` | 仅执行 TypeScript 类型检查，不输出文件 |
 | `npm run lint` | 运行 ESLint |
 | `npm run format:check` | 检查源码是否符合 Prettier 格式 |

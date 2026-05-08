@@ -2,6 +2,10 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import {
+  ARCHITECTURE_SIZE_REPAIR_TARGETS,
+  DIRECT_CONSOLE_CALL_BASELINE,
+} from './architecture-baselines';
 
 const HARD_SIZE_LIMIT = 900;
 const SOURCE_ROOT = 'src';
@@ -31,14 +35,10 @@ const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Existing oversized extension browser facade; ongoing plan extracts role capabilities and shared browser operation helpers.',
   'src/core/browser-pool/global-pool.ts':
     'Existing oversized global browser pool; split lifecycle, acquire queue, and diagnostics during pool refactor.',
-  'src/core/browser-pool/pool-manager.ts':
-    'Existing oversized browser pool manager; split profile acquisition, release, and stats responsibilities.',
   'src/core/browser-ruyi/ruyi-browser.ts':
     'Existing oversized Ruyi browser facade; ongoing plan extracts role capabilities and shared browser operation helpers.',
   'src/core/js-plugin/manager.test.ts':
     'Existing oversized plugin manager test; split lifecycle, install, and helper contracts when expanding coverage.',
-  'src/core/js-plugin/manager.ts':
-    'Existing oversized plugin manager; split lifecycle, registry, runtime, and UI extension responsibilities.',
   'src/core/js-plugin/namespaces/database.ts':
     'Existing oversized plugin database namespace; split import/export helpers and SQL execution adapters during plugin API cleanup.',
   'src/core/js-plugin/namespaces/profile.ts':
@@ -61,10 +61,6 @@ const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Existing oversized fingerprint manager test; split fingerprint generation, cache, and override contracts.',
   'src/core/stealth/shared-scripts.test.ts':
     'Existing oversized stealth shared scripts test; split browser surface scenarios by script family.',
-  'src/core/stealth/shared-scripts.ts':
-    'Existing oversized stealth script bundle; split into focused script modules when stealth code is next touched.',
-  'src/core/stealth/stealth-engine.ts':
-    'Existing oversized stealth engine; split fingerprint, script injection, and validation responsibilities.',
   'src/core/task-manager/pipeline/pipeline.test.ts':
     'Existing oversized task pipeline test; split queue, lifecycle, and retry contracts.',
   'src/core/task-manager/queue.test.ts':
@@ -73,30 +69,18 @@ const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Existing oversized dataset integration test; split import, schema, row, and query operation suites.',
   'src/main/duckdb/__tests__/dataset-service.integration.test.ts':
     'Existing oversized dataset service integration test; split table lifecycle and query scenarios.',
-  'src/main/duckdb/dataset-export-service.ts':
-    'Existing oversized dataset export service; split SQL planning, streaming, and format writer responsibilities.',
   'src/main/duckdb/dataset-schema-service.ts':
     'Existing oversized dataset schema service; split column metadata, schema mutation, and validation paths.',
   'src/main/duckdb/dataset-service.ts':
     'Existing oversized dataset facade; ongoing plan moves storage/query/schema/tab responsibilities to subservices.',
-  'src/main/duckdb/import-worker.ts':
-    'Existing oversized import worker; split CSV/XLSX conversion, progress, and backpressure paths.',
   'src/main/duckdb/profile-service.ts':
     'Existing oversized profile service; split profile CRUD, pool metadata, and extension association logic.',
-  'src/main/duckdb/service.ts':
-    'Existing oversized DuckDB facade; protected by facade proxy migration contract and service accessors.',
   'src/main/duckdb/utils.test.ts':
     'Existing oversized DuckDB utils test; split SQL identifier, statement, and validation contracts.',
-  'src/main/index.ts':
-    'Existing oversized main bootstrap; ongoing plan moves globals into runtime context and service containers.',
   'src/main/ipc-handlers/dataset-handler.test.ts':
     'Existing oversized dataset IPC test; split dataset CRUD, query, schema, and import IPC contracts.',
-  'src/main/ipc-handlers/dataset-handler.ts':
-    'Existing oversized dataset IPC handler; split route factories by dataset capability family.',
   'src/main/ipc-handlers/file-handler.test.ts':
     'Existing oversized file IPC test; split dialog, storage, and import route contracts.',
-  'src/main/ipc-handlers/js-plugin-handler.ts':
-    'Existing oversized JS plugin IPC handler; split plugin lifecycle, helper, and UI extension route groups.',
   'src/main/ipc-handlers/profile-ipc-handler.ts':
     'Existing oversized profile IPC handler; split profile CRUD, group, and browser pool route factories during IPC cleanup.',
   'src/main/ipc-handlers/system-handler.ts':
@@ -115,22 +99,12 @@ const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Focused split from former MCP giant test; kept under 1500 lines by split contract.',
   'src/main/mcp-server-http.transport-session.test.ts':
     'Focused split from former MCP giant test; kept under 1500 lines by split contract.',
-  'src/main/profile/extension-control-extension-background.ts':
-    'Existing oversized extension background bridge; split transport, command routing, and state sync responsibilities.',
-  'src/main/profile/extension-packages-manager.ts':
-    'Existing oversized extension package manager; split package IO, validation, and runtime install flows.',
   'src/main/profile/ruyi-firefox-client.test.ts':
     'Existing oversized Ruyi Firefox client test; split launch, connection, and protocol contracts.',
   'src/main/profile/ruyi-firefox-client.ts':
     'Existing oversized Ruyi Firefox client; split launch process, protocol client, and browser state adapter.',
   'src/main/sync/sync-local-apply-service.ts':
     'Existing oversized sync apply service; split account/site/tag/profile apply pipelines.',
-  'src/main/webcontentsview-manager.ts':
-    'Existing oversized WebContentsView manager; split pool, layout, dock, lifecycle, and diagnostics responsibilities.',
-  'src/main/window-manager.ts':
-    'Existing oversized window manager; split window lifecycle, layout, and view host integration.',
-  'src/preload/index.ts':
-    'Existing oversized preload bridge; split API domains while preserving renderer compatibility surface.',
   'src/renderer/src/components/AccountCenter/ExtensionPackagesPanel.tsx':
     'Existing oversized account-center panel; split package list, actions, and detail dialogs.',
   'src/renderer/src/components/AccountCenter/ProfileFormDialog.tsx':
@@ -259,6 +233,26 @@ function countMatches(source: string, pattern: RegExp): number {
   return source.match(pattern)?.length ?? 0;
 }
 
+function isTestSourceFile(filePath: string): boolean {
+  return (
+    filePath.includes('/__tests__/') ||
+    filePath.endsWith('.test.ts') ||
+    filePath.endsWith('.test.tsx') ||
+    filePath.endsWith('.spec.ts') ||
+    filePath.endsWith('.spec.tsx')
+  );
+}
+
+function countDirectConsoleCalls(source: string): number {
+  return source.split(/\r?\n/).reduce((total, line) => {
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) {
+      return total;
+    }
+    return total + countMatches(line, /\bconsole\.(?:log|warn|error|info|debug)\s*\(/g);
+  }, 0);
+}
+
 function getObjectPropertyName(property: ts.ObjectLiteralElementLike): string | null {
   if (!ts.isPropertyAssignment(property) && !ts.isMethodDeclaration(property)) {
     return null;
@@ -307,9 +301,47 @@ describe('architecture maintenance guardrails', () => {
     const staleNotes = Object.keys(ARCHITECTURE_SIZE_NOTES).filter(
       (filePath) => !existsSync(filePath)
     );
+    const missingRepairTargets = oversizedFiles
+      .filter((file) => {
+        const target = ARCHITECTURE_SIZE_REPAIR_TARGETS[file.filePath];
+        return !target?.owner.trim() || !target.target.trim() || !target.exitCondition.trim();
+      })
+      .map((file) => `${file.filePath} (${file.lines} lines)`);
+    const staleRepairTargets = Object.keys(ARCHITECTURE_SIZE_REPAIR_TARGETS).filter(
+      (filePath) => !existsSync(filePath)
+    );
 
     expect(undocumented).toEqual([]);
     expect(staleNotes).toEqual([]);
+    expect(missingRepairTargets).toEqual([]);
+    expect(staleRepairTargets).toEqual([]);
+  });
+
+  it('prevents direct console calls from growing while logger migration continues', () => {
+    const consoleFiles = collectSourceFiles(SOURCE_ROOT, new Set(['.ts', '.tsx']))
+      .filter((filePath) => !isTestSourceFile(filePath))
+      .map((filePath) => ({
+        filePath,
+        count: countDirectConsoleCalls(readSource(filePath)),
+      }))
+      .filter((file) => file.count > 0);
+
+    const unexpectedFiles = consoleFiles
+      .filter((file) => DIRECT_CONSOLE_CALL_BASELINE[file.filePath] === undefined)
+      .map((file) => `${file.filePath} (${file.count})`);
+    const increasedBaseline = consoleFiles
+      .filter((file) => file.count > (DIRECT_CONSOLE_CALL_BASELINE[file.filePath] ?? 0))
+      .map(
+        (file) =>
+          `${file.filePath} (${file.count}/${DIRECT_CONSOLE_CALL_BASELINE[file.filePath] ?? 0})`
+      );
+    const staleBaseline = Object.keys(DIRECT_CONSOLE_CALL_BASELINE).filter(
+      (filePath) => !existsSync(filePath)
+    );
+
+    expect(unexpectedFiles).toEqual([]);
+    expect(increasedBaseline).toEqual([]);
+    expect(staleBaseline).toEqual([]);
   });
 
   it('prevents new DuckDB prepare/destroySync statement rituals outside the migration baseline', () => {
@@ -678,20 +710,23 @@ describe('architecture maintenance guardrails', () => {
     expect(violations).toEqual([]);
   });
 
-  it('keeps dataset schema update IPC notifications behind the dataset handler helper', () => {
-    const source = readSource('src/main/ipc-handlers/dataset-handler.ts');
+  it('keeps dataset schema update IPC notifications behind the dataset route helper', () => {
+    const routeUtilsSource = readSource('src/main/ipc-handlers/dataset-routes/route-utils.ts');
+    const schemaRoutesSource = readSource('src/main/ipc-handlers/dataset-routes/schema-routes.ts');
 
-    expect(countMatches(source, /['"]dataset:schema-updated['"]/g)).toBe(1);
-    expect(source).toContain('function notifyDatasetSchemaUpdated');
-    expect(source).toContain('private registerSchemaMutationRoute');
-    expect(source).toContain("channel: 'duckdb:add-column'");
-    expect(source).not.toMatch(/\bsend\s*\(\s*['"]dataset:schema-updated['"]/);
+    expect(countMatches(routeUtilsSource, /['"]dataset:schema-updated['"]/g)).toBe(1);
+    expect(routeUtilsSource).toContain('function notifyDatasetSchemaUpdated');
+    expect(routeUtilsSource).toContain('export function registerSchemaMutationRoute');
+    expect(schemaRoutesSource).toContain("channel: 'duckdb:add-column'");
+    expect(routeUtilsSource).not.toMatch(/\bsend\s*\(\s*['"]dataset:schema-updated['"]/);
+    expect(schemaRoutesSource).not.toMatch(/\bsend\s*\(\s*['"]dataset:schema-updated['"]/);
   });
 
   it('keeps dataset delayed DuckDB dependencies behind explicit guards', () => {
     const datasetSource = readSource('src/main/duckdb/dataset-service.ts');
     const querySource = readSource('src/main/duckdb/dataset-query-service.ts');
     const exportSource = readSource('src/main/duckdb/dataset-export-service.ts');
+    const exportPlanSource = readSource('src/main/duckdb/dataset-export-plan-builder.ts');
 
     expect(datasetSource).not.toMatch(/\[['"]queryEngine['"]\]/);
     expect(datasetSource).not.toMatch(/\bsetQueryEngine\b/);
@@ -700,7 +735,7 @@ describe('architecture maintenance guardrails', () => {
     expect(querySource).not.toMatch(/\bsetQueryEngine\b/);
     expect(querySource).toContain('requireQueryEngine');
     expect(exportSource).not.toMatch(/\bsetExportQuerySQLBuilder\b/);
-    expect(exportSource).toContain('requireExportQuerySQLBuilder');
+    expect(exportPlanSource).toContain('requireExportQuerySQLBuilder');
   });
 
   it('keeps main service access inside AppRuntime instead of exported globals', () => {
@@ -728,17 +763,19 @@ describe('architecture maintenance guardrails', () => {
   });
 
   it('keeps DatasetService single-record insert logic centralized for batch reuse', () => {
-    const source = readSource('src/main/duckdb/dataset-service.ts');
-    const testSource = readSource('src/main/duckdb/__tests__/dataset-service.integration.test.ts');
+    const source = readSource('src/main/duckdb/dataset-record-mutation-service.ts');
+    const facade = readSource('src/main/duckdb/dataset-service.ts');
 
     expect(source).toContain('insertRecordInCurrentQueue');
+    expect(facade).toContain('this.recordMutationService.insertRecord');
+    expect(facade).toContain('this.materializationService.materializeCleanToNewColumns'); expect(facade).toContain('this.groupTabWorkflowService.cloneDatasetToGroupTab');
     expect(
       countMatches(
         source,
         /INSERT INTO \$\{tableName\} \(\$\{columnNames\}\) VALUES \(\$\{placeholders\}\)/g
       )
     ).toBe(1);
-    expect(testSource).not.toContain("it.skip('should use insertRecord for single record'");
+    expect(readSource('src/main/duckdb/__tests__/dataset-service.integration.test.ts')).not.toContain("it.skip('should use insertRecord for single record'");
   });
 
   it('keeps dataset local schema refresh markers inside store state', () => {
@@ -759,11 +796,11 @@ describe('architecture maintenance guardrails', () => {
   it('keeps dataset column name policy centralized and SQL quoting separate', () => {
     const schemaSource = readSource('src/main/duckdb/dataset-schema-service.ts');
     const serviceSource = readSource('src/main/duckdb/dataset-service.ts');
-    const handlerSource = readSource('src/main/ipc-handlers/dataset-handler.ts');
+    const schemaRouteSource = readSource('src/main/ipc-handlers/dataset-routes/schema-routes.ts');
     const dialogSource = readSource('src/renderer/src/components/DatasetsPage/AddColumnDialog.tsx');
 
     expect(schemaSource).toContain('assertDatasetColumnNamePolicy');
-    expect(handlerSource).toContain('validateDatasetColumnNamePolicy');
+    expect(schemaRouteSource).toContain('validateDatasetColumnNamePolicy');
     expect(dialogSource).toContain('DATASET_COLUMN_NAME_ALLOWED_PATTERN');
     expect(serviceSource).not.toMatch(/\bfunction validateColumnName\b/);
     expect(serviceSource).not.toContain('dangerousKeywords');
@@ -794,6 +831,17 @@ describe('architecture maintenance guardrails', () => {
 
     expect(source).not.toMatch(/\bexport\s+let\b/);
     expect(reintroducedBindings).toEqual([]);
+  });
+
+  it('keeps AppRuntime on the service container migration path', () => {
+    const source = readSource('src/main/app-runtime.ts');
+
+    expect(source).toContain("import { ServiceContainer } from './runtime/service-container'");
+    expect(source).toContain('readonly container = new ServiceContainer()');
+    expect(source).toContain("from './runtime/readiness-registry'");
+    expect(source).toContain('readonly readiness = new ReadinessRegistry()');
+    expect(source).toContain('getRuntimeReadiness()');
+    expect(readSource('src/main/bootstrap/shutdown-bootstrap.ts')).toContain("from '../runtime/shutdown-coordinator'");
   });
 
   it('prevents new production catch(any) sites while the legacy baseline is reduced', () => {

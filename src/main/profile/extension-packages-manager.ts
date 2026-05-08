@@ -7,7 +7,13 @@ import { app } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
 import { resolveUserDataDir } from '../../constants/runtime-config';
 import { normalizeExtensionPackageId } from '../../core/extension-packages/policy';
-import { assertSafeZipEntryPath, assertSafeZipMetadata } from '../../utils/zip-safety';
+import {
+  decodeBase64Archive,
+  findManifestRootDir,
+  packExtractDirToBase64,
+  resolveExtensionId,
+  safeExtractZip,
+} from './extension-package-file-utils';
 import type {
   ExtensionPackage,
   ExtensionPackagesMeta,
@@ -89,7 +95,7 @@ export class ExtensionPackagesManager {
       throw new Error(`Extension package not found: ${normalizedPackageId}`);
     }
 
-    const archived = await this.packExtractDirToBase64(pkg.extractDir);
+    const archived = await packExtractDirToBase64(pkg.extractDir);
     const extensionId = normalizeExtensionPackageId(String(pkg.extensionId || '').trim());
     const version = String(pkg.version || '').trim() || 'latest';
     const safeExtensionId = extensionId.replace(/[^a-zA-Z0-9._-]/g, '_') || 'extension';
@@ -239,7 +245,7 @@ export class ExtensionPackagesManager {
     const normalizedExtensionId = normalizeExtensionPackageId(
       String(input.extensionId || '').trim()
     );
-    const bytes = this.decodeBase64Archive(input.archiveBase64, normalizedExtensionId);
+    const bytes = decodeBase64Archive(input.archiveBase64, normalizedExtensionId);
 
     return this.installCloudArchiveBuffer({
       extensionId: normalizedExtensionId,
@@ -464,7 +470,7 @@ export class ExtensionPackagesManager {
       };
 
       if (!next.downloadUrl) {
-        const archived = await this.packExtractDirToBase64(pkg.extractDir);
+        const archived = await packExtractDirToBase64(pkg.extractDir);
         next.archiveBase64 = archived.archiveBase64;
         next.archiveSha256 = archived.archiveSha256;
       }
@@ -541,7 +547,7 @@ export class ExtensionPackagesManager {
     }
     if (toImportInline.length > 0) {
       for (const inlinePkg of toImportInline) {
-        const bytes = this.decodeBase64Archive(inlinePkg.archiveBase64, inlinePkg.extensionId);
+        const bytes = decodeBase64Archive(inlinePkg.archiveBase64, inlinePkg.extensionId);
         await this.installCloudArchiveBuffer({
           extensionId: inlinePkg.extensionId,
           version: inlinePkg.version,
@@ -655,7 +661,7 @@ export class ExtensionPackagesManager {
         }
         if (!entry.isDirectory()) continue;
 
-        const nestedManifest = await this.findManifestRootDir(candidatePath);
+        const nestedManifest = await findManifestRootDir(candidatePath);
         if (nestedManifest) {
           candidates.push({ path: candidatePath });
         }
@@ -689,7 +695,7 @@ export class ExtensionPackagesManager {
     await fs.ensureDir(tempDir);
     try {
       const zip = new AdmZip(params.archivePath);
-      await this.safeExtractZip(zip, tempDir);
+      await safeExtractZip(zip, tempDir);
       const payload = await this.readExtensionPayloadFromDirectory(tempDir, params.extensionIdHint);
       if (params.expectedVersion && payload.version !== params.expectedVersion) {
         throw new Error(
@@ -754,7 +760,7 @@ export class ExtensionPackagesManager {
     manifest: Record<string, unknown>;
     manifestRootDir: string;
   }> {
-    const manifestRootDir = await this.findManifestRootDir(sourceDir);
+    const manifestRootDir = await findManifestRootDir(sourceDir);
     if (!manifestRootDir) {
       throw new Error(`manifest.json not found in extension directory: ${sourceDir}`);
     }
@@ -770,7 +776,7 @@ export class ExtensionPackagesManager {
       );
     }
 
-    const extensionId = this.resolveExtensionId(manifest, extensionIdHint);
+    const extensionId = resolveExtensionId(manifest, extensionIdHint);
     const name = String(manifest.name || extensionId).trim() || extensionId;
     const version = String(manifest.version || '0.0.0').trim() || '0.0.0';
 
@@ -781,102 +787,6 @@ export class ExtensionPackagesManager {
       manifest,
       manifestRootDir,
     };
-  }
-
-  private resolveExtensionId(manifest: Record<string, unknown>, extensionIdHint?: string): string {
-    const key = typeof manifest.key === 'string' ? manifest.key.trim() : '';
-    if (key) {
-      const decoded = Buffer.from(key, 'base64');
-      if (decoded.length > 0) {
-        const digest = crypto.createHash('sha256').update(decoded).digest();
-        const id = this.hashToExtensionId(digest);
-        return normalizeExtensionPackageId(id);
-      }
-    }
-
-    const hint = String(extensionIdHint || '').trim();
-    if (hint) {
-      return normalizeExtensionPackageId(hint);
-    }
-
-    const fallbackId = this.deriveFallbackExtensionId(manifest);
-    if (fallbackId) {
-      return fallbackId;
-    }
-
-    throw new Error('Cannot resolve extensionId: key/hint/fallback are all unavailable.');
-  }
-
-  private hashToExtensionId(hash: Buffer): string {
-    const first16Bytes = hash.subarray(0, 16);
-    let out = '';
-    for (const byte of first16Bytes) {
-      out += String.fromCharCode(97 + ((byte >> 4) & 0x0f));
-      out += String.fromCharCode(97 + (byte & 0x0f));
-    }
-    return out;
-  }
-
-  private deriveFallbackExtensionId(manifest: Record<string, unknown>): string | null {
-    const sanitized = this.sanitizeManifestForId(manifest);
-    const serialized = JSON.stringify(sanitized);
-    if (!serialized || serialized === '{}') {
-      return null;
-    }
-    const digest = crypto.createHash('sha256').update(serialized).digest();
-    return normalizeExtensionPackageId(this.hashToExtensionId(digest));
-  }
-
-  private sanitizeManifestForId(value: unknown): unknown {
-    if (Array.isArray(value)) {
-      return value.map((item) => this.sanitizeManifestForId(item));
-    }
-    if (!value || typeof value !== 'object') {
-      return value;
-    }
-    const src = value as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    const keys = Object.keys(src).sort();
-    for (const key of keys) {
-      if (key === 'key' || key === 'version' || key === 'version_name') {
-        continue;
-      }
-      out[key] = this.sanitizeManifestForId(src[key]);
-    }
-    return out;
-  }
-
-  private async findManifestRootDir(rootDir: string): Promise<string | null> {
-    const directManifest = path.join(rootDir, 'manifest.json');
-    if (await fs.pathExists(directManifest)) return rootDir;
-
-    const level1 = await fs.readdir(rootDir, { withFileTypes: true });
-    for (const entry of level1) {
-      if (!entry.isDirectory()) continue;
-      const candidate = path.join(rootDir, entry.name);
-      const manifestPath = path.join(candidate, 'manifest.json');
-      if (await fs.pathExists(manifestPath)) {
-        return candidate;
-      }
-    }
-    return null;
-  }
-
-  private async safeExtractZip(zip: AdmZip, targetDir: string): Promise<void> {
-    const entries = zip.getEntries();
-    assertSafeZipMetadata(entries, 'extension package');
-
-    for (const entry of entries) {
-      const entryPath = entry.entryName;
-      const targetPath = assertSafeZipEntryPath(entryPath, targetDir);
-
-      if (entry.isDirectory) {
-        await fs.ensureDir(targetPath);
-      } else {
-        await fs.ensureDir(path.dirname(targetPath));
-        await fs.writeFile(targetPath, entry.getData());
-      }
-    }
   }
 
   private async installCloudArchiveBuffer(input: {
@@ -933,42 +843,6 @@ export class ExtensionPackagesManager {
     } finally {
       await fs.remove(archivePath);
     }
-  }
-
-  private async packExtractDirToBase64(
-    extractDir: string
-  ): Promise<{ archiveBase64: string; archiveSha256: string }> {
-    const normalizedDir = path.resolve(String(extractDir || '').trim());
-    if (!normalizedDir || !(await fs.pathExists(normalizedDir))) {
-      throw new Error(`Extension package directory not found: ${extractDir}`);
-    }
-
-    const zip = new AdmZip();
-    zip.addLocalFolder(normalizedDir);
-    const bytes = zip.toBuffer();
-    if (bytes.length === 0) {
-      throw new Error(`Packed extension archive is empty: ${normalizedDir}`);
-    }
-    const archiveSha256 = crypto.createHash('sha256').update(bytes).digest('hex');
-    return {
-      archiveBase64: bytes.toString('base64'),
-      archiveSha256,
-    };
-  }
-
-  private decodeBase64Archive(value: string, extensionId: string): Buffer {
-    const normalized = String(value || '').replace(/\s+/g, '');
-    if (!normalized) {
-      throw new Error(`archiveBase64 is empty for extension: ${extensionId}`);
-    }
-    if (!/^[A-Za-z0-9+/=]+$/.test(normalized)) {
-      throw new Error(`archiveBase64 is invalid for extension: ${extensionId}`);
-    }
-    const bytes = Buffer.from(normalized, 'base64');
-    if (bytes.length === 0) {
-      throw new Error(`archiveBase64 decoded bytes are empty for extension: ${extensionId}`);
-    }
-    return bytes;
   }
 
   private toSortOrder(value: unknown): number {

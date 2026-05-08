@@ -477,6 +477,18 @@ describe('DatasetIPCHandler', () => {
       expect(result.success).toBe(true);
       expect(mockDuckDB.insertRecord).toHaveBeenCalledWith('ds1', record);
     });
+
+    it('should return a stable error code when insert-record fails', async () => {
+      const h = handlers.get('duckdb:insert-record')!;
+      const mockEvent = createMockEvent();
+      (mockDuckDB.insertRecord as any).mockRejectedValue(new Error('Unknown column: ghost'));
+
+      const result = await h(mockEvent, 'ds1', { ghost: 'value' });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Unknown column: ghost');
+      expect(result.code).toBe('INVALID_INPUT');
+    });
   });
 
   describe('duckdb:batch-insert-records', () => {
@@ -643,6 +655,7 @@ describe('DatasetIPCHandler', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Delete failed');
+      expect(result.code).toBe('INTERNAL_ERROR');
     });
   });
 
@@ -916,6 +929,7 @@ describe('DatasetIPCHandler', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Export failed');
+      expect(result.code).toBe('INTERNAL_ERROR');
     });
   });
 
@@ -997,6 +1011,7 @@ describe('DatasetIPCHandler', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Base64 content is invalid');
+      expect(result.code).toBe('INVALID_INPUT');
       expect(mockDuckDB.importRecordsFromFile).not.toHaveBeenCalled();
     });
   });
@@ -1023,6 +1038,8 @@ describe('DatasetIPCHandler', () => {
       const result = await h(mockEvent, 'ds1', '/path/to/records.csv');
 
       expect(result.success).toBe(false);
+      expect(result.error).toBe('Import error');
+      expect(result.code).toBe('INTERNAL_ERROR');
     });
   });
 });

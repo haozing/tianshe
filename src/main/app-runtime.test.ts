@@ -18,6 +18,45 @@ describe('AppRuntime', () => {
     expect(runtime.requireLogger()).toBe(logger);
   });
 
+  it('owns a service container for incremental runtime migration', () => {
+    const runtime = new AppRuntime();
+    const token = { id: 'logger' };
+    const logger = { error: () => undefined };
+
+    runtime.container.register(token, logger);
+
+    expect(runtime.container.get(token)).toBe(logger);
+  });
+
+  it('exposes unified runtime readiness with browser pool state included', () => {
+    const runtime = new AppRuntime();
+
+    runtime.readiness.mark('mainServices', 'ready', { updatedAt: 5 });
+    runtime.browserPoolReadiness.markInitializing(10);
+
+    expect(runtime.getRuntimeReadiness()).toEqual([
+      {
+        service: 'mainServices',
+        status: 'ready',
+        updatedAt: 5,
+        error: null,
+      },
+      {
+        service: 'browserPool',
+        status: 'initializing',
+        updatedAt: 10,
+        error: null,
+        details: {
+          status: 'initializing',
+          startedAt: 10,
+          readyAt: null,
+          failedAt: null,
+          error: null,
+        },
+      },
+    ]);
+  });
+
   it('owns browser pool readiness state for the main runtime', () => {
     const runtime = new AppRuntime();
 

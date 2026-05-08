@@ -26,13 +26,15 @@ function collectTsFiles(dir: string): string[] {
 }
 
 function extractImports(filePath: string): string[] {
-  const source = readFileSync(filePath, 'utf8');
-  return Array.from(source.matchAll(IMPORT_PATTERN)).map((match) => match[1].replace(/\\/g, '/'));
+  const fileSource = readFileSync(filePath, 'utf8');
+  return Array.from(fileSource.matchAll(IMPORT_PATTERN)).map((match) =>
+    match[1].replace(/\\/g, '/'),
+  );
 }
 
 function extractRuntimeImports(filePath: string): string[] {
-  const source = readFileSync(filePath, 'utf8');
-  return Array.from(source.matchAll(RUNTIME_IMPORT_PATTERN)).map((match) =>
+  const fileSource = readFileSync(filePath, 'utf8');
+  return Array.from(fileSource.matchAll(RUNTIME_IMPORT_PATTERN)).map((match) =>
     match[1].replace(/\\/g, '/'),
   );
 }
@@ -99,10 +101,14 @@ describe('open/cloud edition boundary', () => {
       './browser-extension-cloud/service',
     ]);
 
+    const mainSource = source('src/main/index.ts');
+    const compositionSource = source('src/main/bootstrap/main-service-composition.ts');
+
     expect(imports.filter((specifier) => forbidden.has(specifier))).toEqual([]);
-    expect(source('src/main/index.ts')).toContain('resolveTiansheEdition');
-    expect(source('src/main/index.ts')).toContain('tiansheEdition.cloudSnapshot.registerMainHandlers');
-    expect(source('src/main/index.ts')).toContain('tiansheEdition.cloudCatalog.registerMainHandlers');
+    expect(mainSource).toContain('resolveTiansheEdition');
+    expect(mainSource).toContain('initializeMainServices');
+    expect(compositionSource).toContain('tiansheEdition.cloudSnapshot.registerMainHandlers');
+    expect(compositionSource).toContain('tiansheEdition.cloudCatalog.registerMainHandlers');
   });
 
   it('preload always exposes edition info and strips cloud APIs for open edition', () => {
@@ -122,6 +128,22 @@ describe('open/cloud edition boundary', () => {
   });
 
   it('preload runtime imports stay sandbox-compatible', () => {
-    expect(extractRuntimeImports('src/preload/index.ts')).toEqual(['electron']);
+    expect(extractRuntimeImports('src/preload/index.ts')).toEqual([
+      'electron',
+      './api/account',
+      './api/cloud',
+      './api/duckdb',
+      './api/extension-packages',
+      './api/file',
+      './api/folder',
+      './api/js-plugin',
+      './api/profile',
+      './api/query-template',
+      './api/runtime',
+      './api/saved-site',
+      './api/system',
+      './api/tag',
+      './api/view',
+    ]);
   });
 });

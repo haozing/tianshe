@@ -39,4 +39,25 @@ describe('BrowserPoolReadiness', () => {
       error: 'profile service unavailable',
     });
   });
+
+  it('exposes a runtime readiness compatible snapshot', () => {
+    const readiness = new BrowserPoolReadiness();
+
+    readiness.markInitializing(10);
+    readiness.markFailed('pool unavailable', 30);
+
+    expect(readiness.getRuntimeReadinessSnapshot()).toEqual({
+      service: 'browserPool',
+      status: 'failed',
+      updatedAt: 30,
+      error: 'pool unavailable',
+      details: {
+        status: 'failed',
+        startedAt: 10,
+        readyAt: null,
+        failedAt: 30,
+        error: 'pool unavailable',
+      },
+    });
+  });
 });

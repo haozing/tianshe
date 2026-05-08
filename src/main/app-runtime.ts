@@ -14,6 +14,11 @@ import type { SchedulerService } from './scheduler';
 import type { ExtensionPackagesManager } from './profile/extension-packages-manager';
 import type { AirpaHttpMcpServer } from './mcp-server-http';
 import { BrowserPoolReadiness } from './browser-pool-readiness';
+import {
+  ReadinessRegistry,
+  type RuntimeReadinessSnapshot,
+} from './runtime/readiness-registry';
+import { ServiceContainer } from './runtime/service-container';
 
 function requireInitialized<T>(value: T | null | undefined, name: string): T {
   if (!value) {
@@ -23,6 +28,8 @@ function requireInitialized<T>(value: T | null | undefined, name: string): T {
 }
 
 export class AppRuntime {
+  readonly container = new ServiceContainer();
+  readonly readiness = new ReadinessRegistry();
   mainWindow: BrowserWindowType | null = null;
   store!: Store;
   duckdbService!: DuckDBService;
@@ -84,5 +91,12 @@ export class AppRuntime {
 
   requireWebhookSender(): WebhookSender {
     return requireInitialized(this.webhookSender, 'webhookSender');
+  }
+
+  getRuntimeReadiness(): RuntimeReadinessSnapshot[] {
+    return [
+      ...this.readiness.getAll().filter((snapshot) => snapshot.service !== 'browserPool'),
+      this.browserPoolReadiness.getRuntimeReadinessSnapshot(),
+    ];
   }
 }

@@ -1,3 +1,5 @@
+import { ShutdownCoordinator, type ShutdownStep } from '../runtime/shutdown-coordinator';
+
 interface ShutdownBootstrapOptions {
   stopHttpServer: () => Promise<void>;
   disposeResourceMonitoring?: () => void;
@@ -13,6 +15,7 @@ interface ShutdownBootstrapOptions {
   getWindowCount: () => number;
   createWindow: () => void;
   platform?: string;
+  defaultStepTimeoutMs?: number;
   consoleRef?: Pick<Console, 'log' | 'error'>;
 }
 
@@ -27,33 +30,29 @@ export function createShutdownBootstrap(options: ShutdownBootstrapOptions) {
 
   const performCleanup = async () => {
     consoleRef.log('\n[CLEANUP] Cleaning up...');
-    let failed = false;
+    const steps: ShutdownStep[] = [
+      { label: 'stopHttpServer', run: options.stopHttpServer },
+      { label: 'disposeResourceMonitoring', run: () => options.disposeResourceMonitoring?.() },
+      { label: 'disposeScheduler', run: options.disposeScheduler },
+      { label: 'cleanupUpdater', run: options.cleanupUpdater },
+      { label: 'cleanupViewManager', run: options.cleanupViewManager },
+      { label: 'stopBrowserPool', run: options.stopBrowserPool },
+      { label: 'cleanupWindowManager', run: options.cleanupWindowManager },
+      { label: 'closeDuckDB', run: options.closeDuckDB },
+    ];
+    const result = await new ShutdownCoordinator({
+      steps,
+      defaultStepTimeoutMs: options.defaultStepTimeoutMs ?? 10_000,
+      consoleRef,
+    }).run();
 
-    const safeStep = async (label: string, step: () => void | Promise<void>) => {
-      try {
-        await step();
-      } catch (error) {
-        consoleRef.error(`[ERROR] ${label} failed:`, error);
-        failed = true;
-      }
-    };
-
-    await safeStep('stopHttpServer', options.stopHttpServer);
-    await safeStep('disposeResourceMonitoring', () => options.disposeResourceMonitoring?.());
-    await safeStep('disposeScheduler', options.disposeScheduler);
-    await safeStep('cleanupUpdater', options.cleanupUpdater);
-    await safeStep('cleanupViewManager', options.cleanupViewManager);
-    await safeStep('stopBrowserPool', options.stopBrowserPool);
-    await safeStep('cleanupWindowManager', options.cleanupWindowManager);
-    await safeStep('closeDuckDB', options.closeDuckDB);
-
-    if (failed) {
+    if (!result.ok) {
       consoleRef.error('[ERROR] Cleanup completed with errors');
-      return 1;
+      return result.exitCode;
     }
 
     consoleRef.log('[OK] Cleanup completed');
-    return 0;
+    return result.exitCode;
   };
 
   const finalize = (exitFn: (code: number) => void, code: number) => {

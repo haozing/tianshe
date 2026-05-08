@@ -527,6 +527,10 @@ SECURITY.md
 | `npm run test` | Alias for open-edition tests |
 | `npm run test:open` | Run focused open-edition tests |
 | `npm run test:open:full` | Run full open-edition Vitest suite |
+| `npm run test:architecture` | Run architecture guardrail tests |
+| `npm run test:main-bootstrap` | Run focused main runtime/bootstrap lifecycle tests |
+| `npm run test:browser-pool` | Run focused browser pool acquire/release/wait queue tests |
+| `npm run test:dataset-ipc` | Run focused dataset IPC and store contract tests |
 | `npm run typecheck` | Type-check TypeScript without emitting files |
 | `npm run lint` | Run ESLint |
 | `npm run format:check` | Check Prettier formatting for source files |
