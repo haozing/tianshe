@@ -1,5 +1,8 @@
 import { workspaceFacade } from './workspaceFacade';
+import { createRendererLogger } from '../../lib/logger';
 import type { DatasetCategory, TableInfo } from '../../components/DatasetsPage/types';
+
+const logger = createRendererLogger('WorkspaceCategoryService');
 
 export interface DatasetMeta {
   id: string;
@@ -117,10 +120,12 @@ export async function buildWorkspaceCategories(datasets: DatasetMeta[]): Promise
 
           customPagesByFolderId.set(folder.id, embeddedPages);
         } catch (error) {
-          console.warn(
-            `[DatasetsWorkspace] Failed to load custom pages for plugin ${folder.pluginId}:`,
-            error
-          );
+          logger.warn('Failed to load custom pages for plugin folder', {
+            operation: 'workspaceCategory.customPages.load',
+            pluginId: folder.pluginId,
+            folderId: folder.id,
+            error,
+          });
           customPagesByFolderId.set(folder.id, []);
         }
       })

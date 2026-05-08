@@ -5,8 +5,11 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { pluginFacade } from '../services/datasets/pluginFacade';
+import { createRendererLogger } from '../lib/logger';
 import type { CustomPageInfo } from '../../../types/js-plugin';
 import { getUnknownErrorMessage } from '../../../utils/error-message';
+
+const logger = createRendererLogger('UseCustomPages');
 
 /**
  * 插件页面分组数据结构
@@ -59,10 +62,12 @@ export function useCustomPages(datasetId: string | null) {
             allPages.push(...embeddedPages);
           }
         } catch (err) {
-          console.warn(
-            `[useCustomPages] Failed to load custom pages for plugin ${plugin.id}:`,
-            err
-          );
+          logger.warn('Failed to load custom pages for plugin', {
+            operation: 'customPages.loadForDataset.plugin',
+            pluginId: plugin.id,
+            datasetId,
+            error: err,
+          });
           // 继续加载其他插件的页面
         }
       }
@@ -72,7 +77,11 @@ export function useCustomPages(datasetId: string | null) {
 
       setCustomPages(allPages);
     } catch (err: unknown) {
-      console.error('[useCustomPages] Failed to load custom pages:', err);
+      logger.error('Failed to load custom pages', {
+        operation: 'customPages.loadForDataset',
+        datasetId,
+        error: err,
+      });
       setError(getUnknownErrorMessage(err));
       setCustomPages([]);
     } finally {
@@ -147,13 +156,24 @@ export function usePluginPagesGrouped(options: { datasetId?: string | null; load
             });
           }
         } catch (err) {
-          console.warn(`[useCustomPages] Failed to load pages for plugin ${plugin.id}:`, err);
+          logger.warn('Failed to load pages for plugin', {
+            operation: 'customPages.loadGrouped.plugin',
+            pluginId: plugin.id,
+            datasetId,
+            loadAll,
+            error: err,
+          });
         }
       }
 
       setPluginGroups(groups);
     } catch (err: unknown) {
-      console.error('[useCustomPages] Failed to load plugin pages:', err);
+      logger.error('Failed to load plugin pages', {
+        operation: 'customPages.loadGrouped',
+        datasetId,
+        loadAll,
+        error: err,
+      });
       setError(getUnknownErrorMessage(err));
       setPluginGroups([]);
     } finally {
@@ -209,7 +229,11 @@ export function usePopupPages() {
             allPages.push(...filteredPopupPages);
           }
         } catch (err) {
-          console.warn(`[useCustomPages] Failed to load popup pages for plugin ${plugin.id}:`, err);
+          logger.warn('Failed to load popup pages for plugin', {
+            operation: 'customPages.loadPopup.plugin',
+            pluginId: plugin.id,
+            error: err,
+          });
         }
       }
 
@@ -218,7 +242,10 @@ export function usePopupPages() {
 
       setPopupPages(allPages);
     } catch (err: unknown) {
-      console.error('[useCustomPages] Failed to load popup pages:', err);
+      logger.error('Failed to load popup pages', {
+        operation: 'customPages.loadPopup',
+        error: err,
+      });
       setError(getUnknownErrorMessage(err));
       setPopupPages([]);
     } finally {

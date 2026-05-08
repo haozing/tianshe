@@ -11,6 +11,7 @@ import { UpdateNotification } from './components/UpdateNotification';
 import { Toaster } from './components/ui/sonner';
 import { AppTitleBar } from './components/layout/AppTitleBar';
 import { isCloudWorkbenchAvailable } from './lib/edition';
+import { createRendererLogger } from './lib/logger';
 import { toast } from './lib/toast';
 import {
   DEFAULT_APP_SHELL_CONFIG,
@@ -18,6 +19,8 @@ import {
   resolveAppShellActiveView,
   type AppShellConfig,
 } from '../../shared/app-shell-config';
+
+const logger = createRendererLogger('App');
 
 const DatasetsPage = lazy(() =>
   import('./components/DatasetsPage').then((module) => ({ default: module.DatasetsPage }))
@@ -150,7 +153,11 @@ function App() {
     }
 
     setCollapsed(isActivityBarCollapsed).catch((error) => {
-      console.error('[App] Failed to sync activity bar collapsed state:', error);
+      logger.error('Failed to sync activity bar collapsed state', {
+        operation: 'app.activityBar.syncCollapsed',
+        collapsed: isActivityBarCollapsed,
+        error,
+      });
     });
   }, [isActivityBarCollapsed]);
 
@@ -170,7 +177,11 @@ function App() {
         try {
           await window.electronAPI.jsPlugin.hidePluginView(activePluginView);
         } catch (error) {
-          console.error('[App] Failed to hide plugin view:', error);
+          logger.error('Failed to hide plugin view', {
+            operation: 'app.pluginView.hide',
+            pluginViewId: activePluginView,
+            error,
+          });
         }
       };
 
@@ -194,10 +205,15 @@ function App() {
               preserveDockedRight: true,
             });
           } else {
-            console.warn('[App] View detach API is unavailable in renderer context');
+            logger.warn('View detach API is unavailable in renderer context', {
+              operation: 'app.view.detach',
+            });
           }
         } catch (error) {
-          console.error('[App] Failed to detach views:', error);
+          logger.error('Failed to detach views', {
+            operation: 'app.view.detach',
+            error,
+          });
         }
       };
 
@@ -232,7 +248,10 @@ function App() {
           break;
 
         default:
-          console.warn(`[App] Unknown activeView: ${effectiveActiveView}`);
+          logger.warn('Unknown active view', {
+            operation: 'app.view.switch',
+            activeView: effectiveActiveView,
+          });
       }
     };
 

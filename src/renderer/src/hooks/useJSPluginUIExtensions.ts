@@ -7,7 +7,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { useEventSubscription } from './useElectronAPI';
 import { pluginFacade } from '../services/datasets/pluginFacade';
 import { pluginEvents } from '../services/datasets/pluginEvents';
+import { createRendererLogger } from '../lib/logger';
 import { getUnknownErrorMessage } from '../../../utils/error-message';
+
+const logger = createRendererLogger('ToolbarButtons');
 
 export interface ToolbarButton {
   id: string;
@@ -53,7 +56,11 @@ export function useToolbarButtons(datasetId: string | null) {
           setToolbarButtons([]);
         }
       } catch (err: unknown) {
-        console.error('[ToolbarButtons] Failed to load toolbar buttons:', err);
+        logger.error('Failed to load toolbar buttons', {
+          operation: 'toolbarButtons.load',
+          datasetId,
+          error: err,
+        });
         setError(getUnknownErrorMessage(err));
         setToolbarButtons([]);
       } finally {
@@ -112,7 +119,13 @@ export function useToolbarButtons(datasetId: string | null) {
 
         return result;
       } catch (err: unknown) {
-        console.error('[ToolbarButtons] Failed to execute toolbar button:', err);
+        logger.error('Failed to execute toolbar button', {
+          operation: 'toolbarButtons.execute',
+          pluginId: button.pluginId,
+          commandId: button.commandId,
+          selectedRowCount: selectedRows.length,
+          error: err,
+        });
         return {
           success: false,
           error: getUnknownErrorMessage(err),

@@ -6,6 +6,9 @@
 import React, { Component, ReactNode } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
+import { createRendererLogger } from '../lib/logger';
+
+const logger = createRendererLogger('ErrorBoundary');
 
 interface Props {
   children: ReactNode;
@@ -37,7 +40,11 @@ class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('[ErrorBoundary] Caught an error:', error, errorInfo);
+    logger.error('Caught render error', {
+      operation: 'react.errorBoundary.catch',
+      error,
+      componentStack: errorInfo.componentStack,
+    });
     this.setState({
       error,
       errorInfo,

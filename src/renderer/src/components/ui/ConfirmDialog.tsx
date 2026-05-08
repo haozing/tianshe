@@ -18,6 +18,9 @@
 import React, { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { createRendererLogger } from '../../lib/logger';
+
+const logger = createRendererLogger('ConfirmDialog');
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -91,7 +94,11 @@ export function ConfirmDialog({
     try {
       await onConfirm();
     } catch (error) {
-      console.error('[ConfirmDialog] Confirm action failed:', error);
+      logger.error('Confirm action failed', {
+        operation: 'confirmDialog.confirm',
+        title,
+        error,
+      });
     }
   };
 

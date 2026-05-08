@@ -10,7 +10,10 @@
 import { useState, useEffect } from 'react';
 import { X, Download, RefreshCw } from 'lucide-react';
 import { ForceUpdateModal } from './ForceUpdateModal';
+import { createRendererLogger } from '../../lib/logger';
 import { formatBytes, formatSpeed } from '../../utils/format';
+
+const logger = createRendererLogger('UpdateNotification');
 
 type UpdateState =
   | 'idle'
@@ -76,7 +79,10 @@ export function UpdateNotification() {
 
         // 如果是强制更新，不允许关闭
         if (info.isForceUpdate) {
-          console.warn('[UpdateNotification] Force update detected, notification cannot be closed');
+          logger.warn('Force update detected; notification cannot be closed', {
+            operation: 'updater.available',
+            version: info.version,
+          });
         }
       })
     );
