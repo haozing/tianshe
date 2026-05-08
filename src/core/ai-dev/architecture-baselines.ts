@@ -226,7 +226,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/ipc-handlers/js-plugin-routes/view-routes.ts': 3,
   'src/main/ipc-handlers/observation-handler.ts': 1,
   'src/main/ipc-handlers/ocr-pool-handler.ts': 1,
-  'src/main/ipc-handlers/profile-ipc-handler.ts': 36,
   'src/main/ipc-handlers/query-template-handler.ts': 22,
   'src/main/ipc-handlers/scheduler-handler.ts': 1,
   'src/main/ipc-handlers/sync-engine-ipc-handler.ts': 1,

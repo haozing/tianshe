@@ -442,6 +442,7 @@ rg -n "\bconsole\.(log|warn|error|info|debug)\s*\(" src/main src/core src/render
 - 已完成 Logger A/B 的延伸小批次：`src/core/js-plugin/namespaces/account.ts`、`src/core/js-plugin/namespaces/saved-site.ts`、`src/main/duckdb/account-service.ts`、`src/main/duckdb/profile-group-service.ts`、`src/main/duckdb/saved-site-service.ts`、`src/main/duckdb/tag-service.ts` 已迁移到 `createLogger()`。
 - 已从 `DIRECT_CONSOLE_CALL_BASELINE` 移除上述 6 个文件，baseline 减少 23 处直接 `console.*` 预算；JS account namespace 剩余的 `console.log` 仅存在于 JSDoc 示例，不计入架构护栏。
 - 已完成 IPC wrapper 小批次：`src/main/ipc-handlers/utils.ts` 的 2 处 `console.error` 已迁移到 `createLogger('IPCHandler')`，并从 baseline 移除。
+- 已完成 profile/browser IPC 小批次：`src/main/ipc-handlers/profile-ipc-handler.ts` 的 36 处直接 `console.*` 已迁移到 `createLogger('ProfileIPCHandler')`，并从 baseline 移除；同时清理了该文件的 shadow lint warning。
 - 本批只做日志出口替换和结构化字段补齐，不改变 CRUD、密码加解密、profile/group/tag/saved site 业务错误语义。
 - 阶段 5 仍保留为未完成：仓内还有 main bootstrap、dataset、file/system handler 等高频热点，后续继续按模块递减，不做全仓一键替换。
 
@@ -594,7 +595,7 @@ npm run test:architecture
 - [x] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步确认 `docs/plugin-helpers-reference.md`。
 - [x] 阶段 3：ProfileService 深拆到 900 行以下。
 - [x] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
-- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag、IPC wrapper 小批次）
+- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag、IPC wrapper、profile/browser IPC 小批次）
 - [ ] 阶段 6：建立共享 error envelope，统一 IPC 稳定错误码。（已完成 IPC 工具层基础设施和旧错误消息兼容推断，route 业务 code 待继续收敛）
 
 ## 13. 每轮完成后必须更新

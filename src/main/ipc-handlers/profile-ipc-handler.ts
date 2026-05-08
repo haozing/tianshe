@@ -39,13 +39,26 @@ import {
 } from '../../core/browser-pool/profile-live-session-lease';
 import { fingerprintManager } from '../../core/stealth';
 import { createIpcHandler, handleIPCError, IpcError, type IpcSenderGuard } from './utils';
+import { createLogger } from '../../core/logger';
 import type { WebContentsViewManager } from '../webcontentsview-manager';
 import type { WindowManager } from '../window-manager';
+
+const logger = createLogger('ProfileIPCHandler');
 
 // 用于持久化浏览器池配置的 electron-store 实例
 const poolConfigStore = new Store<{ browserPoolConfig?: Partial<BrowserPoolConfig> }>({
   name: 'browser-pool-config',
 });
+
+function logProfileIpcError(channel: string, error: unknown): void {
+  logger.error('Profile IPC handler failed', {
+    channel,
+    error:
+      error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : { raw: String(error) },
+  });
+}
 
 function isPersistentBrowserClosedError(error: unknown): boolean {
   const message =
@@ -129,9 +142,10 @@ export function registerProfileHandlers(
           const poolManager = getBrowserPoolManager();
           const destroyedCount = await poolManager.destroyProfileBrowsers(id);
           if (destroyedCount > 0) {
-            console.log(
-              `[IPC] profile:update: runtime fields changed, destroyed ${destroyedCount} browser(s) for profile: ${id}`
-            );
+            logger.info('Destroyed profile browsers after runtime profile update', {
+              profileId: id,
+              destroyedCount,
+            });
           }
         } catch {
           // ignore
@@ -162,9 +176,10 @@ export function registerProfileHandlers(
           const poolManager = getBrowserPoolManager();
           const destroyedCount = await poolManager.destroyProfileBrowsers(id);
           if (destroyedCount > 0) {
-            console.log(
-              `[IPC] profile:delete: Destroyed ${destroyedCount} browser(s) for profile: ${id}`
-            );
+            logger.info('Destroyed profile browsers before profile delete', {
+              profileId: id,
+              destroyedCount,
+            });
           }
         } catch {
           // 池可能未初始化，忽略
@@ -175,7 +190,7 @@ export function registerProfileHandlers(
         await profileService.deleteWithCascade(id);
         return { success: true };
       } catch (error) {
-        console.error('[IPC] profile:delete error:', error);
+        logProfileIpcError('profile:delete', error);
         return handleIPCError(error, '删除浏览器配置失败');
       }
     },
@@ -195,7 +210,7 @@ export function registerProfileHandlers(
         await profileService.updateStatus(id, status, error);
         return { success: true };
       } catch (err) {
-        console.error('[IPC] profile:update-status error:', err);
+        logProfileIpcError('profile:update-status', err);
         return handleIPCError(err, '更新状态失败');
       }
     },
@@ -245,7 +260,7 @@ export function registerProfileHandlers(
         await groupService.delete(id, { recursive });
         return { success: true };
       } catch (error) {
-        console.error('[IPC] profile-group:delete error:', error);
+        logProfileIpcError('profile-group:delete', error);
         return handleIPCError(error, '删除分组失败');
       }
     },
@@ -273,11 +288,11 @@ export function registerProfileHandlers(
         // 释放浏览器回池（默认销毁，因为是 UI 主动关闭）
         await poolManager.release(browserId, { destroy: true });
 
-        console.log(`[Profile:Close] Browser released via pool: ${browserId} for profile: ${id}`);
+        logger.info('Browser released via pool on profile close', { browserId, profileId: id });
 
         return { success: true };
       } catch (error) {
-        console.error('[IPC] profile:close error:', error);
+        logProfileIpcError('profile:close', error);
         return handleIPCError(error, '关闭浏览器失败');
       }
     },
@@ -311,7 +326,7 @@ export function registerProfileHandlers(
     handler: async (
       event,
       profileId: string,
-      options?: {
+      launchOptions?: {
         pluginId?: string;
         timeout?: number;
         strategy?: 'any' | 'fresh' | 'reuse' | 'specific';
@@ -322,15 +337,15 @@ export function registerProfileHandlers(
       try {
         assertSender(event, 'profile:pool-launch');
         const poolManager = getBrowserPoolManager();
-        const strategy = options?.strategy || 'any';
+        const strategy = launchOptions?.strategy || 'any';
 
-        if (strategy === 'specific' && !options?.browserId) {
+        if (strategy === 'specific' && !launchOptions?.browserId) {
           return { success: false, error: 'strategy=specific requires browserId' };
         }
 
         // 获取浏览器（可能复用空闲的，或创建新的，或进入等待队列）
         const profileLease = await acquireProfileLiveSessionLease(profileId, {
-          timeoutMs: options?.timeout || 30000,
+          timeoutMs: launchOptions?.timeout || 30000,
         });
         let handle: BrowserHandle;
         try {
@@ -339,12 +354,12 @@ export function registerProfileHandlers(
               profileId,
               {
                 strategy,
-                browserId: options?.browserId,
-                timeout: options?.timeout || 30000,
-                engine: options?.engine,
+                browserId: launchOptions?.browserId,
+                timeout: launchOptions?.timeout || 30000,
+                engine: launchOptions?.engine,
               },
               'ipc',
-              options?.pluginId
+              launchOptions?.pluginId
             ),
             profileLease
           );
@@ -354,9 +369,11 @@ export function registerProfileHandlers(
         }
         launchedPoolHandles.set(handle.browserId, handle);
 
-        console.log(
-          `[Profile:PoolLaunch] Browser acquired: ${handle.browserId} for profile: ${profileId}`
-        );
+        logger.info('Browser acquired from profile pool', {
+          browserId: handle.browserId,
+          profileId,
+          engine: handle.engine,
+        });
 
         return {
           success: true,
@@ -368,7 +385,7 @@ export function registerProfileHandlers(
           },
         };
       } catch (error) {
-        console.error('[IPC] profile:pool-launch error:', error);
+        logProfileIpcError('profile:pool-launch', error);
         return handleIPCError(error, '获取浏览器失败');
       }
     },
@@ -388,7 +405,7 @@ export function registerProfileHandlers(
     handler: async (
       _,
       browserId: string,
-      options?: {
+      releaseOptions?: {
         destroy?: boolean;
         navigateTo?: string;
         clearStorage?: boolean;
@@ -400,17 +417,17 @@ export function registerProfileHandlers(
 
         if (trackedHandle) {
           launchedPoolHandles.delete(browserId);
-          await trackedHandle.release(options);
+          await trackedHandle.release(releaseOptions);
         } else {
           // 释放浏览器回池；Profile 状态由浏览器池统一维护
-          await poolManager.release(browserId, options);
+          await poolManager.release(browserId, releaseOptions);
         }
 
-        console.log(`[Profile:PoolRelease] Browser released: ${browserId}`);
+        logger.info('Browser released from profile pool', { browserId });
 
         return { success: true };
       } catch (error) {
-        console.error('[IPC] profile:pool-release error:', error);
+        logProfileIpcError('profile:pool-release', error);
         return handleIPCError(error, '释放浏览器失败');
       }
     },
@@ -429,7 +446,7 @@ export function registerProfileHandlers(
         const stats = await poolManager.getStats();
         return { success: true, data: stats };
       } catch (error) {
-        console.error('[IPC] profile:pool-stats error:', error);
+        logProfileIpcError('profile:pool-stats', error);
         return handleIPCError(error, '获取池统计失败');
       }
     },
@@ -463,7 +480,7 @@ export function registerProfileHandlers(
 
         return { success: true, data };
       } catch (error) {
-        console.error('[IPC] profile:pool-list-browsers error:', error);
+        logProfileIpcError('profile:pool-list-browsers', error);
         return handleIPCError(error, '获取浏览器列表失败');
       }
     },
@@ -494,7 +511,7 @@ export function registerProfileHandlers(
     handler: async (
       event,
       browserId: string,
-      options?: { title?: string; width?: number; height?: number }
+      showOptions?: { title?: string; width?: number; height?: number }
     ) => {
       try {
         assertSender(event, 'profile:pool-show-browser');
@@ -526,9 +543,11 @@ export function registerProfileHandlers(
               throw error;
             }
 
-            console.warn(
-              `[IPC] profile:pool-show-browser detected closed browser, destroying stale instance: ${browserId}`
-            );
+            logger.warn('Detected closed persistent browser; destroying stale instance', {
+              browserId,
+              profileId: pooled.sessionId,
+              engine: pooled.engine,
+            });
             await poolManager.destroyBrowser(browserId).catch(() => undefined);
 
             const profileLease = await acquireProfileLiveSessionLease(pooled.sessionId, {
@@ -548,9 +567,9 @@ export function registerProfileHandlers(
                 ),
                 profileLease
               );
-            } catch (error) {
+            } catch (acquireError) {
               await profileLease?.release().catch(() => undefined);
-              throw error;
+              throw acquireError;
             }
 
             try {
@@ -560,16 +579,21 @@ export function registerProfileHandlers(
             } finally {
               // 仅为前置窗口临时 acquire，立即 release 避免锁泄漏（实例保留在池中）
               await relaunched.release().catch((releaseError) => {
-                console.warn(
-                  '[IPC] profile:pool-show-browser failed to release relaunched persistent handle:',
-                  releaseError
-                );
+                logger.warn('Failed to release relaunched persistent handle', {
+                  browserId: relaunched.browserId,
+                  error:
+                    releaseError instanceof Error
+                      ? { name: releaseError.name, message: releaseError.message }
+                      : { raw: String(releaseError) },
+                });
               });
             }
 
-            console.log(
-              `[IPC] profile:pool-show-browser relaunched ${pooled.engine} browser: ${relaunched.browserId} for profile: ${pooled.sessionId}`
-            );
+            logger.info('Relaunched persistent browser for profile pool show', {
+              browserId: relaunched.browserId,
+              profileId: pooled.sessionId,
+              engine: pooled.engine,
+            });
             return {
               success: true,
               data: {
@@ -600,7 +624,7 @@ export function registerProfileHandlers(
           }
         }
 
-        let title = options?.title;
+        let title = showOptions?.title;
         if (!title) {
           try {
             const profile = await profileService.get(pooled.sessionId);
@@ -612,8 +636,8 @@ export function registerProfileHandlers(
 
         const popupId = showBrowserViewInPopup(viewId, viewManager, windowManager, {
           title,
-          width: options?.width || 1200,
-          height: options?.height || 800,
+          width: showOptions?.width || 1200,
+          height: showOptions?.height || 800,
         });
 
         if (!popupId) {
@@ -629,7 +653,7 @@ export function registerProfileHandlers(
 
         return { success: true, data: { popupId, viewId, popupWindowId } };
       } catch (error) {
-        console.error('[IPC] profile:pool-show-browser error:', error);
+        logProfileIpcError('profile:pool-show-browser', error);
         return handleIPCError(error, '打开浏览器失败');
       }
     },
@@ -645,7 +669,7 @@ export function registerProfileHandlers(
         const stats = await poolManager.getProfileStats(profileId);
         return { success: true, data: stats };
       } catch (error) {
-        console.error('[IPC] profile:pool-profile-stats error:', error);
+        logProfileIpcError('profile:pool-profile-stats', error);
         return handleIPCError(error, '获取 Profile 统计失败');
       }
     },
@@ -673,7 +697,7 @@ export function registerProfileHandlers(
 
         return { success: true, data: { destroyed } };
       } catch (error) {
-        console.error('[IPC] profile:pool-destroy-profile-browsers error:', error);
+        logProfileIpcError('profile:pool-destroy-profile-browsers', error);
         return handleIPCError(error, '重启浏览器失败');
       }
     },
@@ -695,14 +719,14 @@ export function registerProfileHandlers(
         const success = await poolManager.renewLock(browserId, extensionMs);
 
         if (success) {
-          console.log(`[Profile:PoolRenewLock] Lock renewed: ${browserId}`);
+          logger.info('Profile pool lock renewed', { browserId, extensionMs });
         } else {
-          console.warn(`[Profile:PoolRenewLock] Failed to renew lock: ${browserId}`);
+          logger.warn('Profile pool lock renewal returned false', { browserId, extensionMs });
         }
 
         return { success, data: { renewed: success } };
       } catch (error) {
-        console.error('[IPC] profile:pool-renew-lock error:', error);
+        logProfileIpcError('profile:pool-renew-lock', error);
         return handleIPCError(error, '续期锁定失败');
       }
     },
@@ -722,13 +746,15 @@ export function registerProfileHandlers(
         const poolManager = getBrowserPoolManager();
         const result = await poolManager.releaseByPlugin(pluginId);
 
-        console.log(
-          `[Profile:PoolReleaseByPlugin] Released ${result.browsers} browsers, cancelled ${result.requests} requests for plugin: ${pluginId}`
-        );
+        logger.info('Released profile pool resources by plugin', {
+          pluginId,
+          releasedBrowsers: result.browsers,
+          cancelledRequests: result.requests,
+        });
 
         return { success: true, data: result };
       } catch (error) {
-        console.error('[IPC] profile:pool-release-by-plugin error:', error);
+        logProfileIpcError('profile:pool-release-by-plugin', error);
         return handleIPCError(error, '释放插件资源失败');
       }
     },
@@ -752,7 +778,7 @@ export function registerProfileHandlers(
         };
         return { success: true, data: config };
       } catch (error) {
-        console.error('[IPC] browser-pool:get-config error:', error);
+        logProfileIpcError('browser-pool:get-config', error);
         return handleIPCError(error, '获取配置失败');
       }
     },
@@ -822,17 +848,15 @@ export function registerProfileHandlers(
         try {
           const poolManager = getBrowserPoolManager();
           poolManager.setConfig(fullConfig);
-          console.log('[IPC] browser-pool:set-config: Applied to runtime', fullConfig);
+          logger.info('Applied browser pool config to runtime', { config: fullConfig });
         } catch {
           // 池可能未初始化，配置将在下次启动时生效
-          console.log(
-            '[IPC] browser-pool:set-config: Pool not initialized, config saved for next start'
-          );
+          logger.info('Browser pool not initialized; config saved for next start');
         }
 
         return { success: true, data: fullConfig };
       } catch (error) {
-        console.error('[IPC] browser-pool:set-config error:', error);
+        logProfileIpcError('browser-pool:set-config', error);
         return handleIPCError(error, '保存配置失败');
       }
     },
@@ -868,16 +892,14 @@ export function registerProfileHandlers(
         try {
           const poolManager = getBrowserPoolManager();
           poolManager.setConfig(newConfig);
-          console.log(`[IPC] browser-pool:apply-preset: ${preset} applied to runtime`, newConfig);
+          logger.info('Applied browser pool preset to runtime', { preset, config: newConfig });
         } catch {
-          console.log(
-            `[IPC] browser-pool:apply-preset: Pool not initialized, preset saved for next start`
-          );
+          logger.info('Browser pool not initialized; preset saved for next start', { preset });
         }
 
         return { success: true, data: newConfig };
       } catch (error) {
-        console.error('[IPC] browser-pool:apply-preset error:', error);
+        logProfileIpcError('browser-pool:apply-preset', error);
         return handleIPCError(error, '应用预设失败');
       }
     },
@@ -898,7 +920,7 @@ export function registerProfileHandlers(
           },
         };
       } catch (error) {
-        console.error('[IPC] browser-pool:get-presets error:', error);
+        logProfileIpcError('browser-pool:get-presets', error);
         return handleIPCError(error, '获取预设失败');
       }
     },
@@ -923,20 +945,18 @@ export function registerProfileHandlers(
         try {
           const poolManager = getBrowserPoolManager();
           poolManager.setConfig(DEFAULT_BROWSER_POOL_CONFIG);
-          console.log('[IPC] browser-pool:reset-config: Reset to defaults and applied to runtime');
+          logger.info('Reset browser pool config to defaults at runtime');
         } catch {
-          console.log(
-            '[IPC] browser-pool:reset-config: Pool not initialized, reset saved for next start'
-          );
+          logger.info('Browser pool not initialized; reset saved for next start');
         }
 
         return { success: true, data: DEFAULT_BROWSER_POOL_CONFIG };
       } catch (error) {
-        console.error('[IPC] browser-pool:reset-config error:', error);
+        logProfileIpcError('browser-pool:reset-config', error);
         return handleIPCError(error, '重置配置失败');
       }
     },
   });
 
-  console.log('[ProfileIPC] Profile, ProfileGroup, and BrowserPool handlers registered');
+  logger.info('Profile, profile group, and browser pool IPC handlers registered');
 }

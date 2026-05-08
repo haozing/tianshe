@@ -41,6 +41,14 @@ vi.mock('../../core/stealth', () => ({
   },
 }));
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 describe('registerProfileHandlers - pool IPC lease behavior', () => {
   const registeredHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 
