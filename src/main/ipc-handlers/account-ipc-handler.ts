@@ -30,8 +30,23 @@ import {
 import { createIpcHandler, createIpcVoidHandler } from './utils';
 import type { IpcSenderGuard } from './utils';
 import { handleIPCError } from '../ipc-utils';
+import { createLogger } from '../../core/logger';
 import type { WebContentsViewManager } from '../webcontentsview-manager';
 import type { WindowManager } from '../window-manager';
+
+const logger = createLogger('AccountIPCHandler');
+
+function normalizeAccountIpcError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+
+  return { raw: String(error) };
+}
 
 /**
  * 登录选项
@@ -71,7 +86,9 @@ export function registerAccountHandlers(
     try {
       await handlerOptions.onOwnedBundleChanged();
     } catch (error) {
-      console.warn('[AccountIPC] Failed to mark owned account bundle dirty:', error);
+      logger.warn('Failed to mark owned account bundle dirty', {
+        error: normalizeAccountIpcError(error),
+      });
     }
   };
   const guarded = (errorMessage: string) => ({
@@ -171,10 +188,10 @@ export function registerAccountHandlers(
         try {
           await acquiredHandle.release();
         } catch (releaseError) {
-          console.warn(
-            '[Account:Login] Failed to release browser after login error:',
-            releaseError
-          );
+          logger.warn('Failed to release browser after login error', {
+            browserId: acquiredHandle.browserId,
+            error: normalizeAccountIpcError(releaseError),
+          });
         }
       };
 
@@ -256,7 +273,12 @@ export function registerAccountHandlers(
             await handle.browser.goto(targetUrl);
           }
         } catch (navError) {
-          console.warn('[Account:Login] Navigation warning:', navError);
+          logger.warn('Account login navigation failed; continuing', {
+            accountId,
+            browserId: handle.browserId,
+            hasTargetUrl: Boolean(targetUrl),
+            error: normalizeAccountIpcError(navError),
+          });
           // 导航失败不阻止登录流程，用户可以手动输入 URL
         }
 
@@ -276,7 +298,11 @@ export function registerAccountHandlers(
           try {
             await handle.browser.show();
           } catch (showError) {
-            console.warn('[Account:Login] Failed to show persistent browser window:', showError);
+            logger.warn('Failed to show persistent browser window', {
+              accountId,
+              browserId: handle.browserId,
+              error: normalizeAccountIpcError(showError),
+            });
           }
         }
 
@@ -305,13 +331,18 @@ export function registerAccountHandlers(
               });
             },
             onClose: () => {
-              console.log(`[Account:Login] Popup closed for account: ${accountId}`);
+              logger.info('Account login popup closed', { accountId, popupId });
               // 弹窗关闭时释放浏览器；Profile 状态由浏览器池统一维护
               void (async () => {
                 try {
                   await handle.release();
                 } catch (err) {
-                  console.warn(`[Account:Login] Failed to release browser on popup close:`, err);
+                  logger.warn('Failed to release browser on popup close', {
+                    accountId,
+                    browserId: handle.browserId,
+                    popupId,
+                    error: normalizeAccountIpcError(err),
+                  });
                 }
               })();
             },
@@ -326,7 +357,11 @@ export function registerAccountHandlers(
           }
 
           popupOwnsHandle = true;
-          console.log(`[Account:Login] Browser shown in popup: ${popupId}`);
+          logger.info('Account login browser shown in popup', {
+            accountId,
+            browserId: handle.browserId,
+            popupId,
+          });
         }
 
         // 没有弹窗接管句柄时，立即释放避免浏览器锁泄漏
@@ -334,9 +369,12 @@ export function registerAccountHandlers(
           await safeReleaseHandle();
         }
 
-        console.log(
-          `[Account:Login] Browser acquired via pool: ${handle.browserId} for account: ${accountId}`
-        );
+        logger.info('Account login browser acquired via pool', {
+          accountId,
+          browserId: handle.browserId,
+          profileId: effectiveProfileId,
+          popupOwnsHandle,
+        });
 
         return {
           success: true,
@@ -356,7 +394,10 @@ export function registerAccountHandlers(
         };
       } catch (error) {
         await safeReleaseHandle();
-        console.error('[IPC] account:login error:', error);
+        logger.error('Account login failed', {
+          accountId,
+          error: normalizeAccountIpcError(error),
+        });
         return handleIPCError(error);
       }
     },
@@ -437,11 +478,14 @@ export function registerAccountHandlers(
         windowManager.closeWindowById(`popup-${popupId}`);
         return { success: true };
       } catch (error) {
-        console.error('[IPC] popup:close error:', error);
+        logger.error('Popup close failed', {
+          popupId,
+          error: normalizeAccountIpcError(error),
+        });
         return handleIPCError(error);
       }
     },
   });
 
-  console.log('[AccountIPC] Account and SavedSite handlers registered');
+  logger.info('Account and saved site IPC handlers registered');
 }

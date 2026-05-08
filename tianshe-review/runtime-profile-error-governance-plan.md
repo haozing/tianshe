@@ -446,6 +446,7 @@ rg -n "\bconsole\.(log|warn|error|info|debug)\s*\(" src/main src/core src/render
 - 已完成 dataset route 小批次：`src/main/ipc-handlers/dataset-routes/{route-utils,import-export-routes,metadata-routes,query-preview-routes,record-routes}.ts` 的 13 处直接 `console.*` 已迁移到 `createLogger('DatasetIPCRoutes')`，并从 baseline 移除。
 - 已完成 JS plugin route 小批次：`src/main/ipc-handlers/js-plugin-routes/{config-routes,lifecycle-routes,ui-extension-routes,view-routes}.ts` 的 14 处直接 `console.*` 已迁移到 `createLogger('JSPluginIPCRoutes')`，并从 baseline 移除。
 - 已完成 JS plugin handler 小批次：`src/main/ipc-handlers/js-plugin-handler.ts` 的 21 处直接 `console.*` 已迁移到 `createLogger('JSPluginIPCHandler')`，并从 baseline 移除。
+- 已完成 account IPC 小批次：`src/main/ipc-handlers/account-ipc-handler.ts` 的 11 处直接 `console.*` 已迁移到 `createLogger('AccountIPCHandler')`，并从 baseline 移除；本批只迁日志，不改变登录/popup 返回语义。
 - 本批只做日志出口替换和结构化字段补齐，不改变 CRUD、密码加解密、profile/group/tag/saved site 业务错误语义。
 - 阶段 5 仍保留为未完成：仓内还有 main bootstrap、dataset、file/system handler 等高频热点，后续继续按模块递减，不做全仓一键替换。
 
@@ -601,7 +602,7 @@ npm run test:architecture
 - [x] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步确认 `docs/plugin-helpers-reference.md`。
 - [x] 阶段 3：ProfileService 深拆到 900 行以下。
 - [x] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
-- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag、IPC wrapper、profile/browser IPC、dataset route、JS plugin route/handler 小批次）
+- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag、IPC wrapper、profile/browser IPC、dataset route、JS plugin route/handler、account IPC 小批次）
 - [ ] 阶段 6：建立共享 error envelope，统一 IPC 稳定错误码。（已完成 IPC 工具层基础设施、旧错误消息兼容推断、dataset route 基础 errorDetails、JS plugin route/handler 部分 P1 code，route 业务 code 待继续收敛）
 
 ## 13. 每轮完成后必须更新

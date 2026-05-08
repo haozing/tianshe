@@ -27,6 +27,14 @@ vi.mock('../../core/browser-pool/profile-live-session-lease', () => ({
   attachProfileLiveSessionLease: vi.fn((handle) => handle),
 }));
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 interface BrowserHandle {
   browserId: string;
   sessionId: string;
