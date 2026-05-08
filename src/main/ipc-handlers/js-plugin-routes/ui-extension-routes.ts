@@ -4,6 +4,7 @@ import type { DuckDBService } from '../../duckdb/service';
 import { handleIPCError } from '../../ipc-utils';
 import type { JSPluginManager } from '../../../core/js-plugin/manager';
 import type { ButtonExecutor } from '../../../core/js-plugin/button-executor';
+import { logPluginRouteInfo, logPluginRouteWarning } from './plugin-route-logger';
 
 type PluginRouteHandler<T extends any[]> = (
   event: IpcMainInvokeEvent,
@@ -151,8 +152,12 @@ function registerExecuteActionColumn({
       try {
         await ensurePluginLoaded(pluginId);
 
-        console.log(`⚡ Executing button field command: ${pluginId}:${commandId}`);
-        console.log(`📦 rowid: ${rowid}, datasetId: ${datasetId}`);
+        logPluginRouteInfo('Executing button field command', {
+          pluginId,
+          commandId,
+          rowId: rowid,
+          datasetId,
+        });
 
         const queryResult = await duckdb.queryDataset(
           datasetId,
@@ -241,15 +246,24 @@ function registerExecuteToolbarButton({
             } else if (mappingValue === '$count') {
               params[paramKey] = selectedRows.length;
             } else if (typeof mappingValue === 'string' && mappingValue.startsWith('$')) {
-              console.warn(`Unknown parameter mapping variable: ${mappingValue}`);
+              logPluginRouteWarning('Unknown parameter mapping variable', {
+                pluginId,
+                commandId,
+                mappingValue,
+              });
             } else {
               params[paramKey] = mappingValue;
             }
           }
         }
 
-        console.log(`⚡ Executing toolbar button command: ${pluginId}:${commandId}`);
-        console.log(`📦 Params:`, params);
+        logPluginRouteInfo('Executing toolbar button command', {
+          pluginId,
+          commandId,
+          datasetId,
+          selectedRowCount: selectedRows.length,
+          hasParameterMapping: Boolean(parameterMapping),
+        });
 
         const result = await pluginManager.executeCommand(pluginId, commandId, params);
         return { success: true, result };

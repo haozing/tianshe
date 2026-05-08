@@ -3,6 +3,7 @@ import { ipcRouteRegistry } from '../../ipc-route-registry';
 import { handleIPCError } from '../../ipc-utils';
 import type { WebContentsViewManager } from '../../webcontentsview-manager';
 import { DEFAULT_VIEW_BOUNDS } from '../../../constants/layout';
+import { logPluginRouteInfo, logPluginRouteWarning } from './plugin-route-logger';
 
 export function registerJSPluginViewRoutes(viewManager: WebContentsViewManager): void {
   registerShowPluginView(viewManager);
@@ -38,10 +39,16 @@ function registerShowPluginView(viewManager: WebContentsViewManager): void {
 
           if (calculatedBounds) {
             viewBounds = calculatedBounds;
-            console.log(`✅ Using layout from manifest for plugin ${pluginId}:`, viewBounds);
+            logPluginRouteInfo('Using plugin view layout from manifest', {
+              pluginId,
+              bounds: viewBounds,
+            });
           } else {
             viewBounds = DEFAULT_VIEW_BOUNDS;
-            console.log(`⚠️ Using default bounds for plugin ${pluginId}:`, viewBounds);
+            logPluginRouteWarning('Using default plugin view bounds', {
+              pluginId,
+              bounds: viewBounds,
+            });
           }
         }
 
@@ -135,7 +142,10 @@ function registerSetPluginViewBounds(viewManager: WebContentsViewManager): void 
 
         viewManager.updateBounds(viewInfo.pageViewId, fullBounds);
 
-        console.log(`✅ Updated plugin view bounds for ${pluginId}:`, fullBounds);
+        logPluginRouteInfo('Updated plugin view bounds', {
+          pluginId,
+          bounds: fullBounds,
+        });
 
         return { success: true };
       } catch (error: unknown) {

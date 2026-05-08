@@ -444,6 +444,7 @@ rg -n "\bconsole\.(log|warn|error|info|debug)\s*\(" src/main src/core src/render
 - 已完成 IPC wrapper 小批次：`src/main/ipc-handlers/utils.ts` 的 2 处 `console.error` 已迁移到 `createLogger('IPCHandler')`，并从 baseline 移除。
 - 已完成 profile/browser IPC 小批次：`src/main/ipc-handlers/profile-ipc-handler.ts` 的 36 处直接 `console.*` 已迁移到 `createLogger('ProfileIPCHandler')`，并从 baseline 移除；同时清理了该文件的 shadow lint warning。
 - 已完成 dataset route 小批次：`src/main/ipc-handlers/dataset-routes/{route-utils,import-export-routes,metadata-routes,query-preview-routes,record-routes}.ts` 的 13 处直接 `console.*` 已迁移到 `createLogger('DatasetIPCRoutes')`，并从 baseline 移除。
+- 已完成 JS plugin route 小批次：`src/main/ipc-handlers/js-plugin-routes/{config-routes,lifecycle-routes,ui-extension-routes,view-routes}.ts` 的 14 处直接 `console.*` 已迁移到 `createLogger('JSPluginIPCRoutes')`，并从 baseline 移除。
 - 本批只做日志出口替换和结构化字段补齐，不改变 CRUD、密码加解密、profile/group/tag/saved site 业务错误语义。
 - 阶段 5 仍保留为未完成：仓内还有 main bootstrap、dataset、file/system handler 等高频热点，后续继续按模块递减，不做全仓一键替换。
 
@@ -550,6 +551,7 @@ npm run test:architecture
 - 已增强 `createIpcHandler()` / `createIpcVoidHandler()` / `handleIPCError()`：保留旧 `error` 字符串字段，同时附加 `code` 和 `errorDetails`，renderer 旧调用方可继续显示 `error`。
 - 已新增 `inferErrorCodeFromMessage()` 兼容层：旧 route 抛出的普通 Error 会按 timeout、permission denied、not found、already exists/conflict、resource busy、invalid input 等常见语义推断稳定 code；无法识别时仍落到 `OPERATION_FAILED`。
 - 已增强 dataset route error result：dataset mutation/import/export/schema 路径返回 `code` 的同时附加 `errorDetails: StructuredError`；`get-dataset-info` 和 `validate-column-name` 的 dataset-not-found 手写返回已补稳定 `NOT_FOUND`。
+- 已增强 JS plugin route 的手写 not-found 返回：`js-plugin:get`、`js-plugin:get-runtime-status` 现在返回稳定 `PLUGIN_NOT_FOUND` code。
 - 已补充 `src/main/ipc-utils.test.ts`、`src/main/ipc-handlers/utils.test.ts` 对普通 Error、IpcError、未知错误、脱敏和稳定 code 的断言。
 - 阶段 6 仍保留为未完成：还需要继续把 dataset/profile/plugin/file/system 等高风险 route 的业务错误显式改为稳定 code，而不是仅依赖兜底 `OPERATION_FAILED`。
 
@@ -597,8 +599,8 @@ npm run test:architecture
 - [x] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步确认 `docs/plugin-helpers-reference.md`。
 - [x] 阶段 3：ProfileService 深拆到 900 行以下。
 - [x] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
-- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag、IPC wrapper、profile/browser IPC、dataset route 小批次）
-- [ ] 阶段 6：建立共享 error envelope，统一 IPC 稳定错误码。（已完成 IPC 工具层基础设施、旧错误消息兼容推断、dataset route 基础 errorDetails，route 业务 code 待继续收敛）
+- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag、IPC wrapper、profile/browser IPC、dataset route、JS plugin route 小批次）
+- [ ] 阶段 6：建立共享 error envelope，统一 IPC 稳定错误码。（已完成 IPC 工具层基础设施、旧错误消息兼容推断、dataset route 基础 errorDetails、JS plugin route not-found code，route 业务 code 待继续收敛）
 
 ## 13. 每轮完成后必须更新
 

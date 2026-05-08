@@ -3,6 +3,7 @@ import { ipcRouteRegistry } from '../../ipc-route-registry';
 import type { DuckDBService } from '../../duckdb/service';
 import type { JSPluginManager } from '../../../core/js-plugin/manager';
 import { readManifest } from '../../../core/js-plugin/loader';
+import { logPluginRouteError, logPluginRouteWarning } from './plugin-route-logger';
 
 export function registerJSPluginConfigRoutes(
   pluginManager: JSPluginManager,
@@ -35,14 +36,18 @@ function registerGetConfig(pluginManager: JSPluginManager, duckdb: DuckDBService
             const manifest = await readManifest(info.path);
             return manifest.configuration?.properties?.[key]?.default;
           } catch (error) {
-            console.warn(`Failed to read manifest for default value:`, error);
+            logPluginRouteWarning('Failed to read manifest for default config value', {
+              pluginId,
+              key,
+              error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+            });
             return undefined;
           }
         }
 
         return JSON.parse(result[0].value);
       } catch (error: unknown) {
-        console.error(`Failed to get config "${key}" for plugin "${pluginId}":`, error);
+        logPluginRouteError('Failed to get plugin config', error, { pluginId, key });
         throw error;
       }
     },
@@ -78,7 +83,7 @@ function registerSetConfig(pluginManager: JSPluginManager, duckdb: DuckDBService
 
         return { success: true };
       } catch (error: unknown) {
-        console.error(`Failed to set config "${key}" for plugin "${pluginId}":`, error);
+        logPluginRouteError('Failed to set plugin config', error, { pluginId, key });
         throw error;
       }
     },

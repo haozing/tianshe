@@ -2,8 +2,10 @@ import { type IpcMainInvokeEvent } from 'electron';
 import { ipcRouteRegistry } from '../../ipc-route-registry';
 import type { DuckDBService } from '../../duckdb/service';
 import { handleIPCError } from '../../ipc-utils';
+import { IpcError } from '../errors';
 import type { JSPluginManager } from '../../../core/js-plugin/manager';
 import { readManifest } from '../../../core/js-plugin/loader';
+import { logPluginRouteError, logPluginRouteInfo, logPluginRouteWarning } from './plugin-route-logger';
 
 export function registerJSPluginLifecycleRoutes(
   pluginManager: JSPluginManager,
@@ -48,7 +50,7 @@ function registerGet(pluginManager: JSPluginManager): void {
         const plugin = await pluginManager.getPluginInfo(pluginId);
 
         if (!plugin) {
-          return { success: false, error: 'Plugin not found' };
+          return handleIPCError(new IpcError('PLUGIN_NOT_FOUND', 'Plugin not found', { pluginId }));
         }
 
         try {
@@ -61,7 +63,10 @@ function registerGet(pluginManager: JSPluginManager): void {
             },
           };
         } catch (error) {
-          console.warn(`Failed to read manifest for plugin ${pluginId}:`, error);
+          logPluginRouteWarning('Failed to read plugin manifest', {
+            pluginId,
+            error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+          });
           return { success: true, plugin };
         }
       } catch (error: unknown) {
@@ -96,7 +101,7 @@ function registerGetRuntimeStatus(pluginManager: JSPluginManager): void {
       try {
         const status = await pluginManager.getRuntimeStatus(pluginId);
         if (!status) {
-          return { success: false, error: 'Plugin not found' };
+          return handleIPCError(new IpcError('PLUGIN_NOT_FOUND', 'Plugin not found', { pluginId }));
         }
         return { success: true, status };
       } catch (error: unknown) {
@@ -211,7 +216,7 @@ function registerRepair(pluginManager: JSPluginManager): void {
     permission: 'trusted-renderer',
     handler: async (event: IpcMainInvokeEvent, pluginId: string) => {
       try {
-        console.log(`[IPC] Repairing plugin: ${pluginId}`);
+        logPluginRouteInfo('Repairing plugin', { pluginId });
 
         const result = await pluginManager.repairPlugin(pluginId);
 
@@ -224,7 +229,7 @@ function registerRepair(pluginManager: JSPluginManager): void {
 
         return { success: true, result };
       } catch (error: unknown) {
-        console.error(`[IPC] Repair failed:`, error);
+        logPluginRouteError('Plugin repair failed', error, { pluginId });
         return handleIPCError(error);
       }
     },
