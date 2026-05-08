@@ -7,6 +7,9 @@ import type {
 } from '../sync/sync-metadata-service';
 import type { SyncDomain, SyncEntityType } from '../../types/sync-contract';
 import { createIpcHandler, createIpcVoidHandler } from './utils';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('SyncMetadataIPCHandler');
 
 export function registerSyncMetadataHandlers(syncMetadataService: SyncMetadataService): void {
   createIpcHandler(
@@ -101,5 +104,5 @@ export function registerSyncMetadataHandlers(syncMetadataService: SyncMetadataSe
     'Failed to delete sync domain state'
   );
 
-  console.log('[SyncMetadataIPC] Sync metadata handlers registered');
+  logger.info('Sync metadata handlers registered');
 }

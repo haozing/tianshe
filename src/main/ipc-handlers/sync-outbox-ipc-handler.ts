@@ -5,6 +5,9 @@ import type {
   SyncOutboxService,
 } from '../sync/sync-outbox-service';
 import { createIpcHandler, createIpcVoidHandler } from './utils';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('SyncOutboxIPCHandler');
 
 export function registerSyncOutboxHandlers(syncOutboxService: SyncOutboxService): void {
   createIpcHandler(
@@ -69,5 +72,5 @@ export function registerSyncOutboxHandlers(syncOutboxService: SyncOutboxService)
     'Failed to delete acked sync outbox events'
   );
 
-  console.log('[SyncOutboxIPC] Sync outbox handlers registered');
+  logger.info('Sync outbox handlers registered');
 }

@@ -14,6 +14,9 @@ import {
   type OCRPoolConfig,
 } from '../../constants/ocr-pool';
 import { setOcrPoolConfig } from '../../core/system-automation/ocr';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('OCRPoolIPCHandler');
 
 export function createOcrPoolRoutes(store: Store): IpcRouteDefinition[] {
   return [
@@ -64,6 +67,6 @@ export class OCRPoolIPCHandler {
 
   register(): void {
     ipcRouteRegistry.registerAll(createOcrPoolRoutes(this.store));
-    console.log('  [OK] OCRPoolIPCHandler registered');
+    logger.info('OCR pool IPC handlers registered');
   }
 }

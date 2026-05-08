@@ -6,6 +6,9 @@ import { app } from 'electron';
 import type { UpdateManager } from '../updater';
 import { handleIPCError } from '../ipc-utils';
 import type { IpcRouteDefinition } from '../ipc-route-registry';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('UpdaterIPCHandler');
 
 export function createUpdaterRoutes(updateManager: UpdateManager): IpcRouteDefinition[] {
   return [
@@ -60,5 +63,5 @@ import { ipcRouteRegistry } from '../ipc-route-registry';
 /** @deprecated 使用 createUpdaterRoutes + ipcRouteRegistry.registerAll */
 export function registerUpdaterHandlers(updateManager: UpdateManager): void {
   ipcRouteRegistry.registerAll(createUpdaterRoutes(updateManager));
-  console.log('✅ Updater IPC handlers registered');
+  logger.info('Updater IPC handlers registered');
 }

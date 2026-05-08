@@ -26,6 +26,14 @@ vi.mock('../ipc-utils', () => ({
   }),
 }));
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 import { ipcMain } from 'electron';
 import { handleIPCError } from '../ipc-utils';
 import { ipcRouteRegistry } from '../ipc-route-registry';

@@ -1,5 +1,8 @@
 import type { DuckDBService } from '../duckdb/service';
 import { createIpcHandler } from './utils';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('ObservationIPCHandler');
 
 export function registerObservationHandlers(
   duckdbService: Pick<
@@ -44,5 +47,5 @@ export function registerObservationHandlers(
     '搜索最近失败 Trace 失败'
   );
 
-  console.log('[ObservationIPC] Observation handlers registered');
+  logger.info('Observation handlers registered');
 }

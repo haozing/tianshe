@@ -31,6 +31,14 @@ vi.mock('../ipc-utils', () => ({
   })),
 }));
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 import { registerUpdaterHandlers } from './updater-handler';
 import type { UpdateManager } from '../updater';
 import { ipcRouteRegistry } from '../ipc-route-registry';

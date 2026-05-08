@@ -4,6 +4,9 @@ import type {
   SyncLegacyCloudMappingMigrationRunInfo,
 } from '../sync/sync-legacy-cloud-mapping-migrator';
 import { createIpcHandler } from './utils';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('SyncEngineIPCHandler');
 
 interface SyncEngineIpcExtras {
   migrateLegacyCloudMappings?: () => Promise<SyncLegacyCloudMappingMigrationResult>;
@@ -85,5 +88,5 @@ export function registerSyncEngineHandlers(
     '获取旧 cloud-sync 映射迁移状态失败'
   );
 
-  console.log('[SyncEngineIPC] Sync engine handlers registered');
+  logger.info('Sync engine handlers registered');
 }

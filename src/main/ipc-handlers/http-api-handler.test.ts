@@ -20,6 +20,14 @@ vi.mock('../ipc-utils', () => ({
   })),
 }));
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 import { HttpApiIPCHandler } from './http-api-handler';
 import { DEFAULT_HTTP_API_CONFIG } from '../../constants/http-api';
 import * as httpApiConstants from '../../constants/http-api';

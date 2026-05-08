@@ -11,6 +11,14 @@ vi.mock('electron', () => ({
   },
 }));
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 describe('registerObservationHandlers', () => {
   const registeredHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 

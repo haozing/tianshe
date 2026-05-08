@@ -8,6 +8,9 @@ import { handleIPCError } from '../ipc-utils';
 import type { SchedulerService } from '../scheduler';
 import type { IpcRouteDefinition } from '../ipc-route-registry';
 import { ipcRouteRegistry } from '../ipc-route-registry';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('SchedulerIPCHandler');
 
 export class SchedulerIPCHandler {
   constructor(private schedulerService: SchedulerService) {}
@@ -149,6 +152,6 @@ export class SchedulerIPCHandler {
 
   register(): void {
     ipcRouteRegistry.registerAll(this.createRoutes());
-    console.log('  ✓ SchedulerIPCHandler registered');
+    logger.info('Scheduler IPC handlers registered');
   }
 }

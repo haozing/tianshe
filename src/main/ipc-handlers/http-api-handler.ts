@@ -20,6 +20,9 @@ import {
 import { probeLocalHttpRuntime } from '../http-runtime-diagnostics';
 import { assertValidHttpApiConfig } from '../http-api-config-guard';
 import { assertPublicHttpTarget } from '../network-target-policy';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('HttpApiIPCHandler');
 
 const sameStringArray = (left: string[], right: string[]): boolean =>
   left.length === right.length && left.every((value, index) => value === right[index]);
@@ -46,7 +49,7 @@ export class HttpApiIPCHandler {
     this.registerGetRuntimeStatus();
     this.registerRepairRuntime();
 
-    console.log('  ✓ HttpApiIPCHandler registered');
+    logger.info('HTTP API IPC handlers registered');
   }
 
   private getStoredConfig(): HttpApiConfig {
@@ -157,7 +160,24 @@ export class HttpApiIPCHandler {
                 oldEffectiveConfig.orchestrationIdempotencyStore;
 
             if (needsRestart) {
-              console.log('[HTTP] Configuration changed, restarting server...');
+              logger.info('HTTP API configuration changed; restarting server', {
+                enableMcpChanged: nextEffectiveConfig.enableMcp !== oldEffectiveConfig.enableMcp,
+                enableAuthChanged:
+                  nextEffectiveConfig.enableAuth !== oldEffectiveConfig.enableAuth,
+                tokenChanged: nextEffectiveConfig.token !== oldEffectiveConfig.token,
+                mcpRequireAuthChanged:
+                  nextEffectiveConfig.mcpRequireAuth !== oldEffectiveConfig.mcpRequireAuth,
+                mcpAllowedOriginsChanged: !sameStringArray(
+                  nextEffectiveConfig.mcpAllowedOrigins,
+                  oldEffectiveConfig.mcpAllowedOrigins
+                ),
+                enforceOrchestrationScopesChanged:
+                  nextEffectiveConfig.enforceOrchestrationScopes !==
+                  oldEffectiveConfig.enforceOrchestrationScopes,
+                orchestrationIdempotencyStoreChanged:
+                  nextEffectiveConfig.orchestrationIdempotencyStore !==
+                  oldEffectiveConfig.orchestrationIdempotencyStore,
+              });
               await this.stopHttpServer();
               await this.startHttpServer();
             }
