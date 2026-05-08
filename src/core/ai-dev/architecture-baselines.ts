@@ -211,7 +211,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/profile/browser-pool-integration-smoke-shared.ts': 2,
   'src/main/profile/browser-pool-integration.ts': 3,
   'src/main/webcontentsview-plugin-page-controller.ts': 17,
-  'src/main/webcontentsview-stealth-controller.ts': 19,
   'src/preload/index.ts': 1,
   'src/renderer/src/App.tsx': 5,
   'src/renderer/src/components/AccountCenter/ProfileFormDialog.tsx': 1,

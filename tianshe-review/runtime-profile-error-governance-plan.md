@@ -463,9 +463,10 @@ rg -n "\bconsole\.(log|warn|error|info|debug)\s*\(" src/main src/core src/render
 - 已完成 webcontentsview lifecycle 小批次：`src/main/webcontentsview-lifecycle-controller.ts` 的 33 处直接 `console.*` 已迁移到 `createLogger('WebContentsViewLifecycleController')`，覆盖 preload、bounds reapply、background throttling、权限拦截、导航、view cleanup、debugger detach 和 webContents destroy 日志，并从 baseline 移除；本批不改变视图创建/关闭顺序、权限策略和 delayed destroy 行为。
 - 已完成 webcontentsview state 小批次：`src/main/webcontentsview-state-controller.ts` 的 27 处直接 `console.*` 已迁移到 `createLogger('WebContentsViewStateController')`，覆盖 batch close、oldest close、plugin view activation、reserve/release、mark busy/idle/error 和 GC 日志，并从 baseline 移除；本批不改变 view state、reservation 和 GC 行为。
 - 已完成 webcontentsview layout 小批次：`src/main/webcontentsview-layout-controller.ts` 的 23 处直接 `console.*` 已迁移到 `createLogger('WebContentsViewLayoutController')`，覆盖 plugin dock restore、right dock bounds、window resize、page/temp/pool bounds 更新和 displayMode 日志，并从 baseline 移除；本批不改变 dock/resize/layout 计算行为。
-- 截至本批，`src/main/ipc-handlers` 生产代码已无直接 `console.*`，`SchedulerService`、main service composition、query template service、duckdb utils、window manager、小 main/profile/webhook 模块，以及 webcontentsview manager/attachment/viewport/lifecycle/state/layout 也已清零；后续重点转向 duckdb dataset storage、webcontentsview stealth/plugin-page 等非 IPC 热点。
+- 已完成 webcontentsview stealth 小批次：`src/main/webcontentsview-stealth-controller.ts` 的 19 处直接 `console.*` 已迁移到 `createLogger('WebContentsViewStealthController')`，覆盖 navigation guard、UA/header debug、CDP attach/command/script injection、fallback navigation injection 和 debugger detach 日志，并从 baseline 移除；`stealth-debug.log` 文件写入和 debug 开关行为保持不变。
+- 截至本批，`src/main/ipc-handlers` 生产代码已无直接 `console.*`，`SchedulerService`、main service composition、query template service、duckdb utils、window manager、小 main/profile/webhook 模块，以及 webcontentsview manager/attachment/viewport/lifecycle/state/layout/stealth 也已清零；后续重点转向 duckdb dataset storage、webcontentsview plugin-page 等非 IPC 热点。
 - 本批只做日志出口替换和结构化字段补齐，不改变 CRUD、密码加解密、profile/group/tag/saved site 业务错误语义。
-- 阶段 5 仍保留为未完成：仓内还有 duckdb dataset storage、webcontentsview stealth/plugin-page 等高频热点，后续继续按模块递减，不做全仓一键替换。
+- 阶段 5 仍保留为未完成：仓内还有 duckdb dataset storage、webcontentsview plugin-page 等高频热点，后续继续按模块递减，不做全仓一键替换。
 
 ## 9. 阶段 6：共享错误 envelope 与 IPC 稳定错误码
 
@@ -619,7 +620,7 @@ npm run test:architecture
 - [x] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步确认 `docs/plugin-helpers-reference.md`。
 - [x] 阶段 3：ProfileService 深拆到 900 行以下。
 - [x] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
-- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag/utils、IPC wrapper、profile/browser IPC、dataset route、JS plugin route/handler、account IPC、query template IPC/service、tag/extension packages IPC、dataset folder IPC、registration-only IPC、file IPC、system IPC、scheduler service、main service composition、window manager、small main/profile/webhook、webcontentsview manager/attachment/viewport/lifecycle/state/layout 小批次）
+- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag/utils、IPC wrapper、profile/browser IPC、dataset route、JS plugin route/handler、account IPC、query template IPC/service、tag/extension packages IPC、dataset folder IPC、registration-only IPC、file IPC、system IPC、scheduler service、main service composition、window manager、small main/profile/webhook、webcontentsview manager/attachment/viewport/lifecycle/state/layout/stealth 小批次）
 - [ ] 阶段 6：建立共享 error envelope，统一 IPC 稳定错误码。（已完成 IPC 工具层基础设施、旧错误消息兼容推断、dataset route 基础 errorDetails、JS plugin route/handler 部分 P1 code，route 业务 code 待继续收敛）
 
 ## 13. 每轮完成后必须更新

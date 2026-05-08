@@ -4,6 +4,7 @@ import path from 'path';
 import { AIRPA_RUNTIME_CONFIG } from '../constants/runtime-config';
 import { attachNavigationGuards } from '../core/browser-core/navigation-guard';
 import { getSessionWebRequestHub } from '../core/browser-core/web-request-hub';
+import { createLogger } from '../core/logger';
 import {
   fingerprintManager,
   generateFullStealthScript,
@@ -19,6 +20,8 @@ import {
 } from '../core/stealth';
 import type { ViewMetadata } from './webcontentsview-manager';
 
+const logger = createLogger('WebContentsViewStealthController');
+
 const stealthDebugLogPath = path.join(app.getPath('userData'), 'stealth-debug.log');
 
 const getErrorMessage = (error: unknown): string =>
@@ -27,7 +30,7 @@ const getErrorMessage = (error: unknown): string =>
 function stealthDebug(message: string): void {
   if (!AIRPA_RUNTIME_CONFIG.webview.debugStealthHeaders) return;
   try {
-    console.log(message);
+    logger.info(message);
   } catch {
     // ignore
   }
@@ -271,9 +274,12 @@ export class WebContentsViewStealthController {
       viewId,
       attachNavigationGuards(webContents, {
         onBlocked: ({ eventName, protocol, url }) => {
-          console.warn(
-            `  ⛔ [NavigationGuard] Blocked ${eventName} for unsupported protocol ${protocol}: ${url}`
-          );
+          logger.warn('Blocked navigation for unsupported protocol', {
+            viewId,
+            eventName,
+            protocol,
+            url,
+          });
         },
       })
     );
@@ -322,7 +328,11 @@ export class WebContentsViewStealthController {
       highEntropyByOrigin: new Map(),
     });
     this.ensureStealthNetworkHooks(webContents.session, partition);
-    console.log(`  🥷 [Stealth] HTTP User-Agent set: ${fingerprint.userAgent.substring(0, 50)}...`);
+    logger.info('HTTP User-Agent set for stealth view', {
+      viewId,
+      partition,
+      userAgentPreview: fingerprint.userAgent.substring(0, 50),
+    });
 
     // 🎯 CDP-first: 使用 CDP 命令 + JS 脚本注入（确保 JS/网络层一致）
     // 注意：Electron 启动参数 --disable-blink-features=AutomationControlled 已在 index.ts 中设置
@@ -392,7 +402,7 @@ export class WebContentsViewStealthController {
     // 先加载 about:blank 确保渲染进程完全初始化
     // 否则 CDP 命令可能永远挂起（渲染进程未就绪无法响应）
     await webContents.loadURL('about:blank');
-    console.log(`  📄 [Stealth] Loaded about:blank to initialize renderer for view: ${viewId}`);
+    logger.info('Loaded about:blank to initialize renderer for stealth view', { viewId });
 
     // 立即尝试 CDP 注入（同步执行，不使用 setTimeout）
     let cdpInjected = false;
@@ -413,11 +423,11 @@ export class WebContentsViewStealthController {
       // 1. 附加调试器（允许复用已被其他地方占用的 debugger）
       try {
         debuggerApi.attach('1.3');
-        console.log(`  🔌 [Stealth] CDP debugger attached for view: ${viewId}`);
+        logger.info('CDP debugger attached for stealth view', { viewId });
       } catch (attachError) {
         const msg = getErrorMessage(attachError);
         if (msg.toLowerCase().includes('already attached')) {
-          console.log(`  🔌 [Stealth] CDP debugger already attached, reusing for view: ${viewId}`);
+          logger.info('CDP debugger already attached, reusing for stealth view', { viewId });
         } else {
           throw attachError;
         }
@@ -460,13 +470,15 @@ export class WebContentsViewStealthController {
             source: script,
           });
           if (debugStealth) {
-            console.log(
-              `  ✅ [Stealth] Subtarget injected: ${targetLabel} (failures=${commandFailures})`
-            );
+            logger.info('Stealth subtarget injected', {
+              viewId,
+              targetLabel,
+              commandFailures,
+            });
           }
         } catch (error) {
           if (debugStealth) {
-            console.warn(`  ⚠️ [Stealth] Subtarget injection failed: ${targetLabel}`, error);
+            logger.warn('Stealth subtarget injection failed', { viewId, targetLabel, error });
           }
         }
       };
@@ -509,13 +521,13 @@ export class WebContentsViewStealthController {
         });
       } catch (error) {
         if (debugStealth) {
-          console.warn(`  ⚠️ [Stealth] Target auto-attach failed:`, error);
+          logger.warn('Stealth target auto-attach failed', { viewId, error });
         }
       }
 
       // 2. 启用 Page 和 Emulation 域
       await debuggerApi.sendCommand('Page.enable');
-      console.log(`  📄 [Stealth] Page domain enabled for view: ${viewId}`);
+      logger.info('CDP Page domain enabled for stealth view', { viewId });
 
       // 3. 🎯 CDP-first: 执行 CDP 伪装命令（时区、UA+Client Hints、地理位置、设备指标）
       let cdpSuccessCount = 0;
@@ -528,20 +540,26 @@ export class WebContentsViewStealthController {
         } catch (err) {
           cdpFailCount++;
           // 某些 CDP 命令可能不支持，静默处理
-          console.log(`  ⚠️ [Stealth] CDP command ${command.method} failed: ${err}`);
+          logger.info('Stealth CDP command failed', {
+            viewId,
+            method: command.method,
+            error: err,
+          });
         }
       }
 
-      console.log(
-        `  🎯 [Stealth] CDP commands executed: ${cdpSuccessCount} succeeded, ${cdpFailCount} failed`
-      );
+      logger.info('Stealth CDP commands executed', {
+        viewId,
+        succeededCount: cdpSuccessCount,
+        failedCount: cdpFailCount,
+      });
 
       // 4. 注入 JS 脚本到每个新文档（补充 CDP 无法实现的功能）
       await debuggerApi.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
         source: script,
       });
       cdpInjected = true;
-      console.log(`  ✅ [Stealth] CDP script injection configured for view: ${viewId}`);
+      logger.info('Stealth CDP script injection configured', { viewId });
     } catch (cdpError) {
       const cdpErrorMessage = getErrorMessage(cdpError);
       const cdpErrorLower = cdpErrorMessage.toLowerCase();
@@ -550,12 +568,13 @@ export class WebContentsViewStealthController {
         cdpErrorLower.includes('another debugger') ||
         (cdpErrorLower.includes('debugger') && cdpErrorLower.includes('attach'))
       ) {
-        console.log(
-          `  [Stealth] CDP attach failed (debugger occupied). Close DevTools/other debugger and retry.`
-        );
+        logger.warn('Stealth CDP attach failed because debugger is occupied', {
+          viewId,
+          error: cdpErrorMessage,
+        });
       }
       // CDP 失败不影响视图创建，回退方案会在导航时生效
-      console.log(`  ⚠️ [Stealth] CDP injection failed, using fallback: ${cdpError}`);
+      logger.warn('Stealth CDP injection failed, using fallback', { viewId, error: cdpError });
     }
 
     if (!cdpInjected) {
@@ -565,7 +584,7 @@ export class WebContentsViewStealthController {
 
         try {
           await webContents.executeJavaScript(script);
-          console.log(`  ✅ [Stealth] Script injected on will-navigate for view: ${viewId}`);
+          logger.info('Stealth script injected on will-navigate', { viewId });
         } catch (_error) {
           // will-navigate 可能太早导致失败，静默处理
         }
@@ -578,9 +597,9 @@ export class WebContentsViewStealthController {
 
         try {
           await webContents.executeJavaScript(script);
-          console.log(`  ✅ [Stealth] Script injected on navigation for view: ${viewId}`);
+          logger.info('Stealth script injected on navigation', { viewId });
         } catch (error) {
-          console.error(`  ❌ [Stealth] Navigation injection failed for view ${viewId}:`, error);
+          logger.error('Stealth navigation injection failed', { viewId, error });
         }
       });
     }
@@ -611,11 +630,11 @@ export class WebContentsViewStealthController {
         webContents.debugger.detach();
       } catch (error: unknown) {
         const message = getErrorMessage(error);
-        console.warn(
-          '  ?? Failed to detach debugger (non-critical):',
+        logger.warn('Failed to detach debugger during stealth cleanup', {
+          viewId,
           message,
-          error
-        );
+          error,
+        });
       }
     }
   }
