@@ -16,6 +16,9 @@ import { allPrepared, runPrepared } from './statement-executor';
 import { v4 as uuidv4 } from 'uuid';
 import { DatasetMetadataService } from './dataset-metadata-service';
 import { DatasetStorageService } from './dataset-storage-service';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('DatasetFolderService');
 
 export interface DatasetFolder {
   id: string;
@@ -107,7 +110,7 @@ export class DatasetFolderService {
     const folderId = uuidv4();
     const now = Date.now();
 
-    const result = await allPrepared(
+    await allPrepared(
       this.conn,
       `
       INSERT INTO dataset_folders (
@@ -118,7 +121,12 @@ export class DatasetFolderService {
       [folderId, name, parentId, pluginId, options?.description || '', options?.icon || '📁', now]
     );
 
-    console.log(`[DatasetFolderService] Created folder: ${name} (${folderId})`);
+    logger.info('Created dataset folder', {
+      folderId,
+      name,
+      parentId,
+      pluginId,
+    });
     return folderId;
   }
 
@@ -246,7 +254,10 @@ export class DatasetFolderService {
       datasetId,
     ]);
 
-    console.log(`[DatasetFolderService] Moved dataset ${datasetId} to folder ${folderId}`);
+    logger.info('Moved dataset to folder', {
+      datasetId,
+      folderId,
+    });
   }
 
   /**
@@ -255,14 +266,14 @@ export class DatasetFolderService {
   async deleteFolder(folderId: string, deleteContents: boolean = false): Promise<void> {
     if (deleteContents) {
       await this.deleteFolderWithContents(folderId);
-      console.log(`[DatasetFolderService] Deleted folder ${folderId} with contents`);
+      logger.info('Deleted dataset folder with contents', { folderId });
       return;
     }
 
     await runInDuckDbTransaction(this.conn, async () => {
       await this.deleteFolderRecursive(folderId);
     });
-    console.log(`[DatasetFolderService] Deleted folder ${folderId}`);
+    logger.info('Deleted dataset folder', { folderId });
   }
 
   private async deleteFolderWithContents(folderId: string): Promise<void> {
@@ -392,7 +403,7 @@ export class DatasetFolderService {
     await runPrepared(this.conn, `UPDATE datasets SET folder_id = NULL WHERE folder_id = ?`, [
       folderId,
     ]);
-    console.log(`[DatasetFolderService] Moved datasets out of folder ${folderId}`);
+    logger.info('Moved datasets out of folder before folder deletion', { folderId });
 
     const childResult = await allPrepared(
       this.conn,
@@ -430,7 +441,10 @@ export class DatasetFolderService {
       values
     );
 
-    console.log(`[DatasetFolderService] Reordered ${tableIds.length} tables in folder ${folderId}`);
+    logger.info('Reordered tables in dataset folder', {
+      folderId,
+      tableCount: tableIds.length,
+    });
   }
 
   /**
@@ -453,7 +467,9 @@ export class DatasetFolderService {
       values
     );
 
-    console.log(`[DatasetFolderService] Reordered ${folderIds.length} folders`);
+    logger.info('Reordered dataset folders', {
+      folderCount: folderIds.length,
+    });
   }
 
   /**
@@ -496,7 +512,10 @@ export class DatasetFolderService {
       values
     );
 
-    console.log(`[DatasetFolderService] Updated folder ${folderId}`);
+    logger.info('Updated dataset folder', {
+      folderId,
+      updatedFields: Object.keys(updates),
+    });
   }
 
   /**
@@ -510,7 +529,7 @@ export class DatasetFolderService {
         parseRows(tableInfo).map((row: any) => String(row.name ?? row.column_name ?? '').trim())
       );
       if (!datasetColumns.has('folder_id')) {
-        console.log('ℹ️  [DatasetFolderService] folder_id column does not exist yet, skipping');
+        logger.info('Skipping plugin folder bootstrap because dataset folder_id column is missing');
         return;
       }
 
@@ -555,19 +574,30 @@ export class DatasetFolderService {
               );
 
               createdCount++;
-              console.log(`✅ Created folder for existing plugin: ${pluginName}`);
+              logger.info('Created dataset folder for existing plugin', {
+                pluginId,
+                pluginName,
+                folderId,
+              });
             }
           }
         } catch (error) {
-          console.error(`❌ Failed to create folder for plugin ${String(plugin.id)}:`, error);
+          logger.warn('Failed to create dataset folder for plugin', {
+            pluginId: String(plugin.id),
+            errorMessage: error instanceof Error ? error.message : String(error),
+          });
         }
       }
 
       if (createdCount > 0) {
-        console.log(`✅ Created ${createdCount} folders for existing plugins`);
+        logger.info('Created dataset folders for existing plugins', {
+          createdCount,
+        });
       }
     } catch (error) {
-      console.error('❌ Failed to create folders for existing plugins:', error);
+      logger.error('Failed to create dataset folders for existing plugins', {
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
       // 不抛出错误，让应用继续运行
     }
   }
