@@ -35,12 +35,21 @@ describe('ipc-utils', () => {
   describe('handleIPCError', () => {
     it('returns success false with error message', () => {
       const result = handleIPCError(new Error('something failed'));
-      expect(result).toEqual({ success: false, error: 'something failed' });
+      expect(result).toMatchObject({
+        success: false,
+        error: 'something failed',
+        code: 'OPERATION_FAILED',
+        errorDetails: {
+          code: 'OPERATION_FAILED',
+          message: 'something failed',
+        },
+      });
     });
 
     it('redacts sensitive tokens from error message', () => {
       const result = handleIPCError(new Error('token=secret123 failed'));
       expect(result.error).toBe('token=[REDACTED] failed');
+      expect(result.errorDetails.message).toBe('token=[REDACTED] failed');
     });
 
     it('redacts filesystem paths and SQL from error message', () => {
@@ -48,6 +57,7 @@ describe('ipc-utils', () => {
         new Error('Failed at C:\\Users\\alice\\data.duckdb: SELECT * FROM accounts')
       );
       expect(result.error).toBe('Failed at [REDACTED_PATH]: [REDACTED_SQL]');
+      expect(result.code).toBe('OPERATION_FAILED');
     });
   });
 
@@ -58,6 +68,11 @@ describe('ipc-utils', () => {
 
       expect(result.success).toBe(false);
       expect(result.userError).toBe('password=[REDACTED]');
+      expect(result.code).toBe('OPERATION_FAILED');
+      expect(result.errorDetails).toMatchObject({
+        code: 'OPERATION_FAILED',
+        message: 'password=[REDACTED]',
+      });
       expect(result.logContext).toMatchObject({
         name: 'Error',
         message: 'password=12345',
@@ -68,6 +83,7 @@ describe('ipc-utils', () => {
     it('returns logContext for non-Error values', () => {
       const result = createIPCErrorResult('plain error');
       expect(result.userError).toBe('plain error');
+      expect(result.code).toBe('OPERATION_FAILED');
       expect(result.logContext).toEqual({ raw: 'plain error' });
     });
   });

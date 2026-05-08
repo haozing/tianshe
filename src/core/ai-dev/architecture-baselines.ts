@@ -235,7 +235,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/ipc-handlers/system-handler.ts': 43,
   'src/main/ipc-handlers/tag-ipc-handler.ts': 2,
   'src/main/ipc-handlers/updater-handler.ts': 1,
-  'src/main/ipc-handlers/utils.ts': 2,
   'src/main/log-storage-service.ts': 1,
   'src/main/profile/browser-launcher.ts': 2,
   'src/main/profile/browser-pool-integration-business-shared.ts': 3,

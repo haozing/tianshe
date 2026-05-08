@@ -4,7 +4,7 @@
  * 测试 IPC 处理器创建、错误处理和批量注册功能
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ipcMain, type IpcMainInvokeEvent } from 'electron';
 import {
   createIpcHandler,
@@ -15,6 +15,10 @@ import {
 } from './utils';
 import { ipcRouteRegistry } from '../ipc-route-registry';
 
+const { loggerError } = vi.hoisted(() => ({
+  loggerError: vi.fn(),
+}));
+
 // Mock electron 模块
 vi.mock('electron', () => ({
   ipcMain: {
@@ -24,20 +28,18 @@ vi.mock('electron', () => ({
   },
 }));
 
-describe('IPC Handler 工具函数', () => {
-  // Mock console.error 避免测试输出污染
-  const originalConsoleError = console.error;
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    error: loggerError,
+  }),
+}));
 
+describe('IPC Handler 工具函数', () => {
   beforeEach(() => {
-    console.error = vi.fn();
     vi.clearAllMocks();
+    loggerError.mockClear();
     ipcRouteRegistry.unregisterAll();
   });
-
-  afterEach(() => {
-    console.error = originalConsoleError;
-  });
-
   describe('createIpcHandler', () => {
     it('应该成功创建 IPC Handler 并处理成功的调用', async () => {
       // Arrange: 准备测试数据
@@ -81,11 +83,19 @@ describe('IPC Handler 工具函数', () => {
       const response = await registeredHandler(mockEvent);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: errorMessage,
+        code: 'OPERATION_FAILED',
       });
-      expect(console.error).toHaveBeenCalledWith(`[IPC] ${channel} error:`, expect.any(Error));
+      expect(loggerError).toHaveBeenCalledWith('IPC handler failed', {
+        channel,
+        code: 'OPERATION_FAILED',
+        error: expect.objectContaining({
+          name: 'Error',
+          message: errorMessage,
+        }),
+      });
     });
 
     it('应该处理 IpcError 错误并包含错误码', async () => {
@@ -105,12 +115,16 @@ describe('IPC Handler 工具函数', () => {
       const response = await registeredHandler(mockEvent);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: 'Resource not found',
         code: 'NOT_FOUND',
+        errorDetails: expect.objectContaining({
+          code: 'NOT_FOUND',
+          message: 'Resource not found',
+        }),
       });
-      expect(console.error).toHaveBeenCalled();
+      expect(loggerError).toHaveBeenCalled();
     });
 
     it('应该处理非 Error 对象的错误，使用默认错误消息', async () => {
@@ -127,9 +141,10 @@ describe('IPC Handler 工具函数', () => {
       const response = await registeredHandler(mockEvent);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: 'string error',
+        code: 'OPERATION_FAILED',
       });
     });
 
@@ -146,9 +161,10 @@ describe('IPC Handler 工具函数', () => {
       const response = await registeredHandler(mockEvent);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: 'request failed token=[REDACTED]',
+        code: 'OPERATION_FAILED',
       });
     });
 
@@ -181,9 +197,10 @@ describe('IPC Handler 工具函数', () => {
       const response = await registeredHandler(mockEvent);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: '操作失败',
+        code: 'OPERATION_FAILED',
       });
     });
 
@@ -202,9 +219,10 @@ describe('IPC Handler 工具函数', () => {
 
       expect(senderGuard).toHaveBeenCalledWith(mockEvent, channel);
       expect(handler).not.toHaveBeenCalled();
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: 'Unauthorized sender',
+        code: 'OPERATION_FAILED',
       });
     });
   });
@@ -245,11 +263,19 @@ describe('IPC Handler 工具函数', () => {
       const response = await registeredHandler(mockEvent);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: errorMessage,
+        code: 'OPERATION_FAILED',
       });
-      expect(console.error).toHaveBeenCalledWith(`[IPC] ${channel} error:`, expect.any(Error));
+      expect(loggerError).toHaveBeenCalledWith('IPC handler failed', {
+        channel,
+        code: 'OPERATION_FAILED',
+        error: expect.objectContaining({
+          name: 'Error',
+          message: errorMessage,
+        }),
+      });
     });
 
     it('应该处理 IpcError 错误', async () => {
@@ -266,10 +292,14 @@ describe('IPC Handler 工具函数', () => {
       const response = await registeredHandler(mockEvent);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: 'Browser is busy: Already in use',
         code: 'RESOURCE_BUSY',
+        errorDetails: expect.objectContaining({
+          code: 'RESOURCE_BUSY',
+          message: 'Browser is busy: Already in use',
+        }),
       });
     });
 
@@ -287,9 +317,10 @@ describe('IPC Handler 工具函数', () => {
       const response = await registeredHandler(mockEvent);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: defaultMessage,
+        code: 'OPERATION_FAILED',
       });
     });
   });
@@ -400,9 +431,10 @@ describe('IPC Handler 工具函数', () => {
       const response = await registeredHandler(mockEvent);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: customErrorMsg,
+        code: 'OPERATION_FAILED',
       });
     });
   });
@@ -418,10 +450,14 @@ describe('IPC Handler 工具函数', () => {
       const response = handleIPCError(ipcError);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: '输入参数无效',
         code: 'INVALID_INPUT',
+        errorDetails: expect.objectContaining({
+          code: 'INVALID_INPUT',
+          message: '输入参数无效',
+        }),
       });
     });
 
@@ -433,10 +469,14 @@ describe('IPC Handler 工具函数', () => {
       const response = handleIPCError(notFoundError);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: 'Profile not found: abc123',
         code: 'NOT_FOUND',
+        errorDetails: expect.objectContaining({
+          code: 'NOT_FOUND',
+          message: 'Profile not found: abc123',
+        }),
       });
     });
 
@@ -448,9 +488,10 @@ describe('IPC Handler 工具函数', () => {
       const response = handleIPCError(error);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: '普通错误消息',
+        code: 'OPERATION_FAILED',
       });
     });
 
@@ -462,22 +503,25 @@ describe('IPC Handler 工具函数', () => {
       const response = handleIPCError(unknownError, '默认错误');
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: 'not an error object',
+        code: 'OPERATION_FAILED',
       });
     });
 
     it('应该处理 null 或 undefined', () => {
       // Act & Assert
-      expect(handleIPCError(null)).toEqual({
+      expect(handleIPCError(null)).toMatchObject({
         success: false,
         error: '操作失败',
+        code: 'OPERATION_FAILED',
       });
 
-      expect(handleIPCError(undefined)).toEqual({
+      expect(handleIPCError(undefined)).toMatchObject({
         success: false,
         error: '操作失败',
+        code: 'OPERATION_FAILED',
       });
     });
 
@@ -489,9 +533,10 @@ describe('IPC Handler 工具函数', () => {
       const response = handleIPCError('some error', customDefault);
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: 'some error',
+        code: 'OPERATION_FAILED',
       });
     });
 
@@ -500,9 +545,10 @@ describe('IPC Handler 工具函数', () => {
       const response = handleIPCError(new Error('Bearer abc.def.ghi failed'));
 
       // Assert
-      expect(response).toEqual({
+      expect(response).toMatchObject({
         success: false,
         error: 'Bearer [REDACTED] failed',
+        code: 'OPERATION_FAILED',
       });
     });
 

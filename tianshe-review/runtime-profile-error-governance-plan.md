@@ -441,8 +441,9 @@ rg -n "\bconsole\.(log|warn|error|info|debug)\s*\(" src/main src/core src/render
 
 - 已完成 Logger A/B 的延伸小批次：`src/core/js-plugin/namespaces/account.ts`、`src/core/js-plugin/namespaces/saved-site.ts`、`src/main/duckdb/account-service.ts`、`src/main/duckdb/profile-group-service.ts`、`src/main/duckdb/saved-site-service.ts`、`src/main/duckdb/tag-service.ts` 已迁移到 `createLogger()`。
 - 已从 `DIRECT_CONSOLE_CALL_BASELINE` 移除上述 6 个文件，baseline 减少 23 处直接 `console.*` 预算；JS account namespace 剩余的 `console.log` 仅存在于 JSDoc 示例，不计入架构护栏。
+- 已完成 IPC wrapper 小批次：`src/main/ipc-handlers/utils.ts` 的 2 处 `console.error` 已迁移到 `createLogger('IPCHandler')`，并从 baseline 移除。
 - 本批只做日志出口替换和结构化字段补齐，不改变 CRUD、密码加解密、profile/group/tag/saved site 业务错误语义。
-- 阶段 5 仍保留为未完成：仓内还有 IPC、main bootstrap、dataset 等高频热点，后续继续按模块递减，不做全仓一键替换。
+- 阶段 5 仍保留为未完成：仓内还有 main bootstrap、dataset、file/system handler 等高频热点，后续继续按模块递减，不做全仓一键替换。
 
 ## 9. 阶段 6：共享错误 envelope 与 IPC 稳定错误码
 
@@ -539,6 +540,15 @@ npm run test:architecture
 
 如果当前没有 `src/main/ipc-handlers/errors.test.ts`，应在阶段 6 新增。
 
+### 完成情况（2026-05-08）
+
+- 已把 IPC 局部 `IpcErrorCode` 对齐为共享 `ErrorCode` 类型，并向 `src/types/error-codes.ts` 补齐 IPC 已公开使用的稳定 code：`INVALID_INPUT`、`ALREADY_EXISTS`、`RESOURCE_BUSY`、`UNKNOWN`。
+- 已为 `IpcError` 增加 `toStructuredError()`，并新增 `isStructuredError()` 类型守卫；没有引入新的平行错误模型。
+- 已增强 `createIPCErrorResult()`：返回 `code`、`errorDetails: StructuredError`、`userError`、`logContext`；普通 Error、字符串错误、unknown/null 都会稳定落到 `OPERATION_FAILED`。
+- 已增强 `createIpcHandler()` / `createIpcVoidHandler()` / `handleIPCError()`：保留旧 `error` 字符串字段，同时附加 `code` 和 `errorDetails`，renderer 旧调用方可继续显示 `error`。
+- 已补充 `src/main/ipc-utils.test.ts`、`src/main/ipc-handlers/utils.test.ts` 对普通 Error、IpcError、未知错误、脱敏和稳定 code 的断言。
+- 阶段 6 仍保留为未完成：还需要继续把 dataset/profile/plugin/file/system 等高风险 route 的业务错误显式改为稳定 code，而不是仅依赖兜底 `OPERATION_FAILED`。
+
 ## 10. 推荐总执行顺序
 
 ### 第一批：低风险拆分和契约补强
@@ -583,8 +593,8 @@ npm run test:architecture
 - [x] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步确认 `docs/plugin-helpers-reference.md`。
 - [x] 阶段 3：ProfileService 深拆到 900 行以下。
 - [x] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
-- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace 与 DuckDB account/profile-group/saved-site/tag 小批次）
-- [ ] 阶段 6：建立共享 error envelope，统一 IPC 稳定错误码。
+- [ ] 阶段 5：按模块递减 logger baseline。（已完成 account/saved-site namespace、DuckDB account/profile-group/saved-site/tag、IPC wrapper 小批次）
+- [ ] 阶段 6：建立共享 error envelope，统一 IPC 稳定错误码。（已完成 IPC 工具层基础设施，route 业务 code 待继续收敛）
 
 ## 13. 每轮完成后必须更新
 

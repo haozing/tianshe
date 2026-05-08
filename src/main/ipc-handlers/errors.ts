@@ -4,20 +4,18 @@
  * 提供结构化的错误处理机制
  */
 
+import {
+  createStructuredError,
+  type ErrorCode,
+  type StructuredError,
+} from '../../types/error-codes';
+
 /**
  * IPC 错误码
  *
- * 用于区分不同类型的错误，便于前端针对性处理
+ * 复用共享 ErrorCode，便于 IPC、HTTP、MCP 错误语义对齐。
  */
-export type IpcErrorCode =
-  | 'NOT_FOUND' // 资源不存在
-  | 'ALREADY_EXISTS' // 资源已存在
-  | 'INVALID_INPUT' // 输入参数无效
-  | 'PERMISSION_DENIED' // 权限不足
-  | 'RESOURCE_BUSY' // 资源被占用
-  | 'TIMEOUT' // 操作超时
-  | 'INTERNAL_ERROR' // 内部错误
-  | 'UNKNOWN'; // 未知错误
+export type IpcErrorCode = ErrorCode;
 
 /**
  * 结构化 IPC 错误
@@ -35,6 +33,12 @@ export class IpcError extends Error {
   ) {
     super(message);
     this.name = 'IpcError';
+  }
+
+  toStructuredError(): StructuredError {
+    return createStructuredError(this.code, this.message, {
+      context: this.details,
+    });
   }
 
   /** 资源不存在 */
@@ -61,4 +65,13 @@ export class IpcError extends Error {
       : 'Invalid input: ' + field;
     return new IpcError('INVALID_INPUT', msg, { field, reason });
   }
+}
+
+export function isStructuredError(value: unknown): value is StructuredError {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<StructuredError>;
+  return typeof candidate.code === 'string' && typeof candidate.message === 'string';
 }

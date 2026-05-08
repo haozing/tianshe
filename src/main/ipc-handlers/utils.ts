@@ -1,17 +1,21 @@
 import { IpcMainInvokeEvent } from 'electron';
-import { IpcError, type IpcErrorCode } from './errors';
+import type { IpcErrorCode } from './errors';
 import type { IpcRouteDefinition, IpcRoutePermission, IpcRouteSchema } from '../ipc-route-registry';
 import { ipcRouteRegistry } from '../ipc-route-registry';
-import { getUnknownErrorMessage } from '../ipc-utils';
-import { redactSensitiveText } from '../../utils/redaction';
+import { createIPCErrorResult } from '../ipc-utils';
+import { createLogger } from '../../core/logger';
+import type { StructuredError } from '../../types/error-codes';
 
 export { IpcError, type IpcErrorCode } from './errors';
+
+const logger = createLogger('IPCHandler');
 
 export interface IPCResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
   code?: IpcErrorCode;
+  errorDetails?: StructuredError;
 }
 
 export type IpcSenderGuard = (event: IpcMainInvokeEvent, channel: string) => void;
@@ -41,17 +45,31 @@ function normalizeIpcHandlerOptions(
 }
 
 function createErrorResponse(error: unknown, defaultMessage: string): IPCResponse<never> {
-  if (error instanceof IpcError) {
-    return {
-      success: false,
-      error: redactSensitiveText(error.message),
-      code: error.code,
-    };
-  }
-
+  const result = createIPCErrorResult(error, defaultMessage);
   return {
     success: false,
-    error: redactSensitiveText(getUnknownErrorMessage(error, defaultMessage)),
+    error: result.userError,
+    code: result.code,
+    errorDetails: result.errorDetails,
+  };
+}
+
+function createLoggedErrorResponse(
+  channel: string,
+  error: unknown,
+  defaultMessage: string
+): IPCResponse<never> {
+  const result = createIPCErrorResult(error, defaultMessage);
+  logger.error('IPC handler failed', {
+    channel,
+    code: result.code,
+    error: result.logContext,
+  });
+  return {
+    success: false,
+    error: result.userError,
+    code: result.code,
+    errorDetails: result.errorDetails,
   };
 }
 
@@ -72,8 +90,7 @@ export function createIpcHandler<TArgs extends unknown[], TResult>(
         const result = await handler(...args);
         return { success: true, data: result };
       } catch (error) {
-        console.error(`[IPC] ${channel} error:`, error);
-        return createErrorResponse(error, options.errorMessage);
+        return createLoggedErrorResponse(channel, error, options.errorMessage);
       }
     },
   };
@@ -98,8 +115,7 @@ export function createIpcVoidHandler<TArgs extends unknown[]>(
         await handler(...args);
         return { success: true };
       } catch (error) {
-        console.error(`[IPC] ${channel} error:`, error);
-        return createErrorResponse(error, options.errorMessage);
+        return createLoggedErrorResponse(channel, error, options.errorMessage);
       }
     },
   };
