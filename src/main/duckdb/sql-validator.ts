@@ -6,6 +6,9 @@
 import type { DuckDBConnection } from '@duckdb/node-api';
 import { parseRows, quoteQualifiedName } from './utils';
 import { getUnknownErrorMessage } from '../ipc-utils';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('SQLValidator');
 
 export interface ValidationResult {
   valid: boolean;
@@ -164,7 +167,10 @@ export class SQLValidator {
       return 'UNKNOWN';
     } catch (error) {
       // 如果表为空或其他错误，返回UNKNOWN
-      console.warn('[SQLValidator] Failed to infer expression type:', error);
+      logger.warn('Failed to infer SQL expression type', {
+        tableName,
+        errorMessage: getUnknownErrorMessage(error),
+      });
       return 'UNKNOWN';
     }
   }
@@ -212,7 +218,10 @@ export class SQLValidator {
 
       return referencedColumns;
     } catch (error) {
-      console.warn('Failed to extract referenced columns:', error);
+      logger.warn('Failed to extract referenced columns from SQL expression', {
+        datasetId: params.datasetId,
+        errorMessage: getUnknownErrorMessage(error),
+      });
       return [];
     }
   }

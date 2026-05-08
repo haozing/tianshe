@@ -5,6 +5,9 @@
 
 import type { EnhancedColumnSchema } from './types';
 import { extractDependenciesFromComputeConfig } from '../../utils/computed-schema-helpers';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('DependencyManager');
 
 export interface ColumnDependency {
   columnName: string;
@@ -214,7 +217,9 @@ export class DependencyManager {
       }
     }
 
-    console.log(`✅ Rebuilt dependency graph with ${this.dependencies.size} computed columns`);
+    logger.info('Rebuilt dependency graph', {
+      computedColumnCount: this.dependencies.size,
+    });
   }
 
   /**

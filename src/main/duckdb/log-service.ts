@@ -9,6 +9,9 @@ import type { LogEntry } from './types';
 import { parseRows } from './utils';
 import { runPrepared, allPrepared } from './statement-executor';
 import { getUnknownErrorMessage } from '../ipc-utils';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('LogService');
 
 export class LogService {
   private lastIdTimestamp = 0;
@@ -82,7 +85,9 @@ export class LogService {
           await this.conn.run(`DROP TABLE logs`);
           await this.conn.run(`ALTER TABLE logs__migrate RENAME TO logs`);
         } catch (migrateError) {
-          console.warn('[WARN] Failed to migrate logs.id to BIGINT (non-critical):', migrateError);
+          logger.warn('Failed to migrate logs.id to BIGINT', {
+            errorMessage: getUnknownErrorMessage(migrateError),
+          });
         }
       }
     }
@@ -114,7 +119,11 @@ export class LogService {
         data,
       ]);
     } catch (error) {
-      console.error('Failed to log:', error);
+      logger.error('Failed to persist log entry', {
+        taskId: entry.taskId,
+        level: entry.level,
+        errorMessage: getUnknownErrorMessage(error),
+      });
     }
   }
 

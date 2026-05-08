@@ -15,6 +15,9 @@ import type {
   CreateScheduledTaskParams,
   TaskStats,
 } from '../../types/scheduler';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('ScheduledTaskServiceStorage');
 
 // 重新导出类型供其他模块使用
 export type { ScheduledTask, TaskExecution, CreateScheduledTaskParams, TaskStats };
@@ -109,7 +112,7 @@ export class ScheduledTaskService {
       `CREATE INDEX IF NOT EXISTS idx_task_executions_started ON task_executions(started_at)`
     );
 
-    console.log('[ScheduledTaskService] Tables initialized');
+    logger.info('Scheduled task tables initialized');
   }
 
   // ========== 定时任务 CRUD ==========

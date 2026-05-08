@@ -6,6 +6,9 @@
 import type { DuckDBConnection } from '@duckdb/node-api';
 import { parseRows, quoteIdentifier, quoteQualifiedName } from './utils';
 import { getUnknownErrorMessage } from '../ipc-utils';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('ValidationEngine');
 
 export interface ValidationRule {
   type: 'required' | 'unique' | 'regex' | 'range' | 'length' | 'check' | 'enum';
@@ -58,7 +61,11 @@ export class ValidationEngine {
     const { datasetId, columnName, rules } = params;
     const safeDatasetId = this.sanitizeIdentifier(datasetId);
 
-    console.log(`Applying ${rules.length} validation rules to ${columnName}...`);
+    logger.info('Applying validation rules to dataset column', {
+      datasetId: safeDatasetId,
+      columnName,
+      ruleCount: rules.length,
+    });
 
     for (const rule of rules) {
       try {
@@ -66,7 +73,10 @@ export class ValidationEngine {
           case 'required':
             // NOT NULL约束通常在创建列时已处理
             // 这里只是验证
-            console.log(`  ✓ Required constraint (handled during column creation)`);
+            logger.info('Required validation is handled during column creation', {
+              datasetId: safeDatasetId,
+              columnName,
+            });
             break;
 
           case 'unique':
@@ -109,16 +119,29 @@ export class ValidationEngine {
           }
 
           default:
-            console.warn(`  ⚠ Unknown validation rule type: ${rule.type}`);
+            logger.warn('Unknown validation rule type', {
+              datasetId: safeDatasetId,
+              columnName,
+              ruleType: rule.type,
+            });
         }
       } catch (error: unknown) {
         const errorMessage = getUnknownErrorMessage(error);
-        console.error(`  ✗ Failed to apply ${rule.type} validation:`, errorMessage);
+        logger.error('Failed to apply validation rule', {
+          datasetId: safeDatasetId,
+          columnName,
+          ruleType: rule.type,
+          errorMessage,
+        });
         throw new Error(`验证规则应用失败 (${rule.type}): ${errorMessage}`);
       }
     }
 
-    console.log(`✅ All validation rules applied to ${columnName}`);
+    logger.info('Applied all validation rules to dataset column', {
+      datasetId: safeDatasetId,
+      columnName,
+      ruleCount: rules.length,
+    });
   }
 
   /**
@@ -135,7 +158,11 @@ export class ValidationEngine {
     `;
 
     await this.conn.run(sql);
-    console.log(`  ✓ Added UNIQUE constraint: ${constraintName}`);
+    logger.info('Added UNIQUE validation constraint', {
+      datasetId,
+      columnName,
+      constraintName,
+    });
   }
 
   /**
@@ -156,7 +183,11 @@ export class ValidationEngine {
     `;
 
     await this.conn.run(sql);
-    console.log(`  ✓ Added CHECK constraint: ${constraintName}`);
+    logger.info('Added CHECK validation constraint', {
+      datasetId,
+      columnName,
+      constraintName,
+    });
   }
 
   /**
@@ -200,7 +231,12 @@ export class ValidationEngine {
           }
         }
       } catch (error: unknown) {
-        console.error(`Error validating rule ${rule.type}:`, error);
+        logger.warn('Failed to validate existing data against rule', {
+          datasetId: safeDatasetId,
+          columnName,
+          ruleType: rule.type,
+          errorMessage: getUnknownErrorMessage(error),
+        });
       }
     }
 

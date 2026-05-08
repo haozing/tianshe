@@ -2,6 +2,9 @@ import type { DuckDBConnection } from '@duckdb/node-api';
 import { SchemaMigrationEngine } from './migration-engine';
 import { PLUGIN_TABLE_SCHEMA_MIGRATIONS } from './schema-migrations';
 import { runInDuckDbTransaction } from './utils';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('PluginTableBootstrap');
 
 const PLUGIN_TABLE_CREATE_STATEMENTS = [
   `
@@ -335,9 +338,11 @@ export async function initPluginTables(conn: DuckDBConnection): Promise<void> {
 
       await new SchemaMigrationEngine(conn).migrate(PLUGIN_TABLE_SCHEMA_MIGRATIONS);
     });
-    console.log('[OK] Plugin tables created in transaction');
+    logger.info('Plugin tables created in transaction');
   } catch (error) {
-    console.error('[ERROR] Plugin tables creation failed:', error);
+    logger.error('Plugin tables creation failed', {
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
     throw error;
   }
 
@@ -347,10 +352,12 @@ export async function initPluginTables(conn: DuckDBConnection): Promise<void> {
         await conn.run(statement);
       }
     });
-    console.log('[OK] Indexes created in transaction');
+    logger.info('Plugin table indexes created in transaction');
   } catch (error) {
-    console.warn('[WARN] Index creation failed (non-critical):', error);
+    logger.warn('Plugin table index creation failed', {
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
   }
 
-  console.log('[OK] Plugin tables initialized');
+  logger.info('Plugin tables initialized');
 }

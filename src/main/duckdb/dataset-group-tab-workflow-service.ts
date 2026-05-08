@@ -7,6 +7,9 @@ import type { DatasetStorageService } from './dataset-storage-service';
 import { sanitizeDatasetId } from './dataset-storage-service';
 import { DatasetTabGroupService, type GroupTabDataset } from './dataset-tab-group-service';
 import { getDatasetPath, getFileSize, parseRows, quoteIdentifier, quoteQualifiedName } from './utils';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('DatasetGroupTabWorkflowService');
 
 interface DatasetGroupTabWorkflowServiceOptions {
   conn: DuckDBConnection;
@@ -162,9 +165,11 @@ export class DatasetGroupTabWorkflowService {
           createdByPlugin: sourceDataset.createdByPlugin ?? null,
         });
 
-        console.log(
-          `[DatasetService] Cloned dataset ${safeSourceId} -> ${newDatasetId} (group=${tabGroupId})`
-        );
+        logger.info('Cloned dataset into group tab', {
+          sourceDatasetId: safeSourceId,
+          datasetId: newDatasetId,
+          tabGroupId,
+        });
 
         return { datasetId: newDatasetId, tabGroupId };
       } catch (error) {

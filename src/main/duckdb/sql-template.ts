@@ -9,6 +9,9 @@
  */
 
 import Handlebars from 'handlebars';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('SQLTemplateParameterizer');
 
 /**
  * SQL模板解析结果
@@ -141,7 +144,7 @@ export class SQLTemplateParameterizer {
     if (!hasPlaceholders) {
       // 警告：没有占位符可能意味着SQL是硬编码的
       // 这不是错误，但值得注意
-      console.warn('SQL template contains no Handlebars placeholders');
+      logger.warn('SQL template contains no Handlebars placeholders');
     }
 
     return {
