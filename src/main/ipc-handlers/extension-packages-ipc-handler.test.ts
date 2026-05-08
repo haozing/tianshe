@@ -24,6 +24,14 @@ vi.mock('../../core/browser-pool', () => ({
   getBrowserPoolManager: vi.fn(),
 }));
 
+vi.mock('../../core/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 vi.mock('../sync/sync-outbox-emitter', () => ({
   emitSyncOutboxDelete: vi.fn().mockResolvedValue(undefined),
   emitSyncOutboxUpsert: vi.fn().mockResolvedValue(undefined),

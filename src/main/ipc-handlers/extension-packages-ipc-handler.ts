@@ -9,6 +9,9 @@ import type { SyncOutboxService } from '../sync/sync-outbox-service';
 import type { BrowserExtensionInstallPackage } from '../../edition/types';
 import { getUnknownErrorMessage } from '../ipc-utils';
 import { redactSensitiveText } from '../../utils/redaction';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('ExtensionPackagesIPCHandler');
 
 interface RestartRunningBrowsersResult {
   affectedProfiles: string[];
@@ -55,13 +58,14 @@ async function restartRunningProfileBrowsers(
         destroyedBrowsers += destroyedCount;
       }
     } catch (error) {
-      console.warn(
-        `[ExtensionPackagesManagerIPC] Failed to destroy running browsers for profile ${profileId}:`,
-        error
-      );
+      const errorMessage = redactSensitiveText(getUnknownErrorMessage(error, 'unknown_error'));
+      logger.warn('Failed to destroy running browsers for extension profile', {
+        profileId,
+        error: errorMessage,
+      });
       restartFailures.push({
         profileId,
-        error: redactSensitiveText(getUnknownErrorMessage(error, 'unknown_error')),
+        error: errorMessage,
       });
     }
   }

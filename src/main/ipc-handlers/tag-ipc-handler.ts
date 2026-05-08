@@ -7,6 +7,21 @@ import type { TagService } from '../duckdb/tag-service';
 import type { AccountService } from '../duckdb/account-service';
 import type { CreateTagParams, UpdateTagParams } from '../../types/profile';
 import { createIpcHandler, createIpcVoidHandler } from './utils';
+import { createLogger } from '../../core/logger';
+
+const logger = createLogger('TagIPCHandler');
+
+function normalizeTagIpcError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+
+  return { raw: String(error) };
+}
 
 interface RegisterTagHandlersOptions {
   onOwnedBundleChanged?: () => Promise<void> | void;
@@ -25,7 +40,9 @@ export function registerTagHandlers(
     try {
       await options.onOwnedBundleChanged();
     } catch (error) {
-      console.warn('[TagIPC] Failed to mark owned account bundle dirty:', error);
+      logger.warn('Failed to mark owned account bundle dirty', {
+        error: normalizeTagIpcError(error),
+      });
     }
   };
 
@@ -102,5 +119,5 @@ export function registerTagHandlers(
 
   createIpcHandler('tag:exists', (name: string) => tagService.exists(name), '检查标签失败');
 
-  console.log('[TagIPC] Tag handlers registered');
+  logger.info('Tag handlers registered');
 }
