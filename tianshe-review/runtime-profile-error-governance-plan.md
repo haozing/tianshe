@@ -22,7 +22,7 @@
 | `src/main/profile/ruyi-firefox-client.ts` | 884 | 0 | 已退出 `main-runtime` 大文件目标 | 已拆出 active context tracker、dialog、emulation、window、storage/cookie、capture、input、tab、navigation、network controllers，client 保留 lifecycle、dispatch 和兼容薄入口 |
 | `src/core/js-plugin/namespaces/profile.ts` | 737 | 12 raw docs / 0 guard baseline | 已退出 `js-plugin-runtime` 大文件目标 | 已拆出 browser facade、CRUD/stat/group、fingerprint、launch/lease/popup/visibility；namespace 保留公开 helper facade 和 engine 描述 |
 | `src/main/duckdb/profile-service.ts` | 869 | 0 | 已退出 `duckdb-core` 大文件目标 | 已拆出 row mapper、fingerprint persistence、schema bootstrap、partition cleanup；service 保留 CRUD/status/observation/cascade transaction facade |
-| `src/main/sync/sync-local-apply-service.ts` | 1201 | 0 | `main-runtime` | apply dispatcher、各实体 apply、metadata mapping、跨实体 local id resolution、payload normalization 混在一起 |
+| `src/main/sync/sync-local-apply-service.ts` | 810 | 0 | 已退出 `main-runtime` 大文件目标 | 已拆出 normalizers、metadata mapping resolver、tag/savedSite/profileGroup apply；service 保留 router、account/profile/extension 高风险跨实体逻辑 |
 | `src/core/logger.ts` | 327 | 0 | logger 基础设施 | 已有 `createLogger()`、字段清洗和 redaction，可作为迁移目标 |
 | `src/main/ipc-utils.ts` | 34 | 0 | IPC 错误工具 | `createIPCErrorResult()` 返回 `userError/logContext`，尚未带稳定 code |
 | `src/main/ipc-handlers/errors.ts` | 59 | 0 | IPC 错误工具 | 已有 `IpcErrorCode` 和 `IpcError`，但 code 集合较小，未和共享 `ErrorCode` 打通 |
@@ -372,6 +372,16 @@ npm run typecheck
 npm run test:architecture
 ```
 
+完成情况：2026-05-08
+
+- 已新增 `sync-apply-normalizers.ts`，承接 scope normalization、payload/object/string/number/boolean/array 规整、fallback name、profile engine normalization。
+- 已新增 `sync-apply-mapping-resolver.ts`，统一 metadata mapping 的 scoped/any-scope/globalUid/remoteUid/listAll/upsert/delete 包装。
+- 已新增 `sync-common-entity-apply-service.ts`，承接 tag、savedSite、profileGroup 三类相对简单实体的 create/update/delete apply。
+- `SyncLocalApplyService` 保留 `applyChange()` router，以及 account/profile/extensionPackage/profileExtensionBinding 这些跨实体、高风险逻辑；本轮没有改变 `applyChange(domain, change, options)` 的公开契约。
+- `src/main/sync/sync-local-apply-service.ts` 已从 1201 行降到 810 行，低于 900 行护栏；`src/core/ai-dev/architecture-baselines.ts` 已移除该文件的大文件目标。
+- 暂不继续拆 account/profile/extension binding：这些路径依赖跨 scope mapping、profile/savedSite local id resolution、extension package/binding 联动，适合作为后续高风险小批次。
+- 已验证：`npm run typecheck`、`npx vitest run src/main/sync/sync-local-apply-service.test.ts src/main/sync/sync-metadata-service.scope.test.ts src/main/sync/sync-contract-validator.boundary.test.ts src/main/sync/sync-outbox-service.test.ts`、相关 eslint 均通过。
+
 ## 8. 阶段 5：logger baseline 递减
 
 ### 当前判断
@@ -565,7 +575,7 @@ npm run test:architecture
 - [x] 阶段 1：Ruyi client 深拆到 900 行以下。
 - [x] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步确认 `docs/plugin-helpers-reference.md`。
 - [x] 阶段 3：ProfileService 深拆到 900 行以下。
-- [ ] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
+- [x] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
 - [ ] 阶段 5：按模块递减 logger baseline。
 - [ ] 阶段 6：建立共享 error envelope，统一 IPC 稳定错误码。
 

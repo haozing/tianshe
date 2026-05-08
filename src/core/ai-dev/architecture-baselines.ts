@@ -109,7 +109,6 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
     'Index/bootstrap code only wires services and each runtime file has a single owner.',
     [
       'src/main/profile/ruyi-firefox-client.test.ts',
-      'src/main/sync/sync-local-apply-service.ts',
     ]
   ),
   ...createSizeRepairTargets(

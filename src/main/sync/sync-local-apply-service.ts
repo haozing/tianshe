@@ -1,15 +1,9 @@
-﻿import { UNBOUND_PROFILE_ID } from '../../types/profile';
+import { UNBOUND_PROFILE_ID } from '../../types/profile';
 import type {
   CreateAccountParams,
-  CreateGroupParams,
   CreateProfileParams,
-  CreateSavedSiteParams,
-  CreateTagParams,
   UpdateAccountParams,
-  UpdateGroupParams,
   UpdateProfileParams,
-  UpdateSavedSiteParams,
-  UpdateTagParams,
 } from '../../types/profile';
 import type { AccountService } from '../duckdb/account-service';
 import type { ProfileGroupService } from '../duckdb/profile-group-service';
@@ -17,13 +11,23 @@ import type { ProfileService } from '../duckdb/profile-service';
 import type { SavedSiteService } from '../duckdb/saved-site-service';
 import type { TagService } from '../duckdb/tag-service';
 import type { ExtensionPackagesManager } from '../profile/extension-packages-manager';
-import type {
-  ListSyncEntityMappingsOptions,
-  SyncEntityMapping,
-  SyncMetadataService,
-  SyncScopeContext,
-} from './sync-metadata-service';
-import type { SyncDomain, SyncEntityType, SyncPullChange } from '../../types/sync-contract';
+import type { SyncEntityMapping, SyncMetadataService } from './sync-metadata-service';
+import type { SyncDomain, SyncPullChange } from '../../types/sync-contract';
+import {
+  DEFAULT_SCOPE_KEY,
+  fallbackName,
+  hasOwn,
+  normalizeProfileEngine,
+  normalizeScopeKey,
+  toNullableString,
+  toOptionalBoolean,
+  toOptionalNumber,
+  toOptionalString,
+  toPayloadObject,
+  toStringArray,
+} from './sync-apply-normalizers';
+import { SyncApplyMappingResolver } from './sync-apply-mapping-resolver';
+import { SyncCommonEntityApplyService } from './sync-common-entity-apply-service';
 
 interface SyncLocalApplyDeps {
   metadataService: SyncMetadataService;
@@ -46,73 +50,23 @@ interface SyncLocalApplyOptions {
   scopeKey?: string;
 }
 
-const DEFAULT_SCOPE_KEY = 'company:0';
-
-function normalizeScopeKey(value: unknown): string {
-  const normalized = String(value || '').trim().toLowerCase();
-  return normalized || DEFAULT_SCOPE_KEY;
-}
-
-function toPayloadObject(value: unknown): Record<string, unknown> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return {};
-}
-
-function hasOwn(payload: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(payload, key);
-}
-
-function toOptionalString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const normalized = value.trim();
-  return normalized || undefined;
-}
-
-function toNullableString(value: unknown): string | null | undefined {
-  if (value === null) return null;
-  return toOptionalString(value);
-}
-
-function toOptionalBoolean(value: unknown): boolean | undefined {
-  if (typeof value === 'boolean') return value;
-  return undefined;
-}
-
-function toOptionalNumber(value: unknown): number | undefined {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return undefined;
-  return Math.trunc(numeric);
-}
-
-function toStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const items = value
-    .map((item) => String(item ?? '').trim())
-    .filter((item) => item.length > 0);
-  return items;
-}
-
-function fallbackName(prefix: string, globalUid: string): string {
-  const suffix = String(globalUid || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) || 'unknown';
-  return `${prefix}-${suffix}`;
-}
-
-function normalizeProfileEngine(
-  value: string | undefined
-): 'electron' | 'extension' | 'ruyi' | undefined {
-  if (!value) return undefined;
-  if (value === 'electron' || value === 'extension' || value === 'ruyi') {
-    return value;
-  }
-  throw new Error(`Unsupported profile engine from sync payload: ${value}`);
-}
-
 export class SyncLocalApplyService {
   private activeScopeKey = DEFAULT_SCOPE_KEY;
+  private readonly mappingResolver: SyncApplyMappingResolver;
+  private readonly commonEntityApply: SyncCommonEntityApplyService;
 
-  constructor(private readonly deps: SyncLocalApplyDeps) {}
+  constructor(private readonly deps: SyncLocalApplyDeps) {
+    this.mappingResolver = new SyncApplyMappingResolver({
+      metadataService: deps.metadataService,
+      getScopeKey: () => this.activeScopeKey,
+    });
+    this.commonEntityApply = new SyncCommonEntityApplyService({
+      tagService: deps.tagService,
+      savedSiteService: deps.savedSiteService,
+      profileGroupService: deps.profileGroupService,
+      mappingResolver: this.mappingResolver,
+    });
+  }
 
   async applyChange(
     domain: SyncDomain,
@@ -126,9 +80,9 @@ export class SyncLocalApplyService {
             case 'account':
               return this.applyAccount(domain, change);
             case 'savedSite':
-              return this.applySavedSite(domain, change);
+              return this.commonEntityApply.applySavedSite(domain, change);
             case 'tag':
-              return this.applyTag(domain, change);
+              return this.commonEntityApply.applyTag(domain, change);
             default:
               return {
                 applied: false,
@@ -141,7 +95,7 @@ export class SyncLocalApplyService {
             case 'profile':
               return this.applyProfile(domain, change);
             case 'profileGroup':
-              return this.applyProfileGroup(domain, change);
+              return this.commonEntityApply.applyProfileGroup(domain, change);
             default:
               return {
                 applied: false,
@@ -172,146 +126,11 @@ export class SyncLocalApplyService {
     });
   }
 
-  private async applyTag(domain: SyncDomain, change: SyncPullChange): Promise<SyncLocalApplyResult> {
-    const mapping = await this.metadataGetEntityMappingByGlobalUid(
-      domain,
-      change.entityType,
-      change.globalUid
-    );
-
-    if (change.deletedAt) {
-      if (!mapping) {
-        return { applied: false, skipped: true, reason: 'mapping_not_found_for_delete' };
-      }
-      try {
-        await this.deps.tagService.delete(mapping.localId);
-      } catch {
-        // if local missing, still clear mapping
-      }
-      await this.metadataDeleteEntityMapping(domain, change.entityType, mapping.localId);
-      return { applied: true, skipped: false, localId: mapping.localId };
-    }
-
-    const payload = toPayloadObject(change.payload);
-    const hasNameField = hasOwn(payload, 'name');
-    const hasColorField = hasOwn(payload, 'color');
-    const nameFromPayload = hasNameField ? toOptionalString(payload.name) : undefined;
-    const color = hasColorField ? toNullableString(payload.color) : undefined;
-
-    let localId = mapping?.localId;
-    if (mapping) {
-      const updates: UpdateTagParams = {
-        ...(hasNameField && nameFromPayload ? { name: nameFromPayload } : {}),
-        ...(color !== undefined ? { color } : {}),
-      };
-      try {
-        const updated = await this.deps.tagService.update(mapping.localId, updates);
-        localId = updated.id;
-      } catch {
-        localId = undefined;
-      }
-    }
-
-    if (!localId) {
-      const name = nameFromPayload || fallbackName('tag', change.globalUid);
-      const created = await this.deps.tagService.create({
-        name,
-        ...(color !== undefined ? { color } : {}),
-      } as CreateTagParams);
-      localId = created.id;
-    }
-
-    await this.metadataUpsertEntityMapping({
-      domain,
-      entityType: change.entityType,
-      localId,
-      globalUid: change.globalUid,
-      version: change.version,
-      contentHash: change.contentHash || null,
-      updatedAt: Date.now(),
-    });
-
-    return { applied: true, skipped: false, localId };
-  }
-
-  private async applySavedSite(
-    domain: SyncDomain,
-    change: SyncPullChange
-  ): Promise<SyncLocalApplyResult> {
-    const mapping = await this.metadataGetEntityMappingByGlobalUid(
-      domain,
-      change.entityType,
-      change.globalUid
-    );
-
-    if (change.deletedAt) {
-      if (!mapping) {
-        return { applied: false, skipped: true, reason: 'mapping_not_found_for_delete' };
-      }
-      try {
-        await this.deps.savedSiteService.delete(mapping.localId);
-      } catch {
-        // ignore
-      }
-      await this.metadataDeleteEntityMapping(domain, change.entityType, mapping.localId);
-      return { applied: true, skipped: false, localId: mapping.localId };
-    }
-
-    const payload = toPayloadObject(change.payload);
-    const hasNameField = hasOwn(payload, 'name');
-    const hasUrlField = hasOwn(payload, 'url') || hasOwn(payload, 'loginUrl');
-    const hasIconField = hasOwn(payload, 'icon');
-    const nameFromPayload = hasNameField ? toOptionalString(payload.name) : undefined;
-    const urlFromPayload =
-      hasUrlField
-        ? toOptionalString(payload.url) || toOptionalString(payload.loginUrl)
-        : undefined;
-    const icon = hasIconField ? toNullableString(payload.icon) : undefined;
-
-    let localId = mapping?.localId;
-    if (mapping) {
-      const updates: UpdateSavedSiteParams = {
-        ...(hasNameField && nameFromPayload ? { name: nameFromPayload } : {}),
-        ...(hasUrlField && urlFromPayload ? { url: urlFromPayload } : {}),
-        ...(icon !== undefined ? { icon } : {}),
-      };
-      try {
-        const updated = await this.deps.savedSiteService.update(mapping.localId, updates);
-        localId = updated.id;
-      } catch {
-        localId = undefined;
-      }
-    }
-
-    if (!localId) {
-      const name = nameFromPayload || fallbackName('site', change.globalUid);
-      const url = urlFromPayload || `https://invalid.local/${change.globalUid}`;
-      const created = await this.deps.savedSiteService.create({
-        name,
-        url,
-        ...(icon !== undefined ? { icon } : {}),
-      } as CreateSavedSiteParams);
-      localId = created.id;
-    }
-
-    await this.metadataUpsertEntityMapping({
-      domain,
-      entityType: change.entityType,
-      localId,
-      globalUid: change.globalUid,
-      version: change.version,
-      contentHash: change.contentHash || null,
-      updatedAt: Date.now(),
-    });
-
-    return { applied: true, skipped: false, localId };
-  }
-
   private async applyAccount(
     domain: SyncDomain,
     change: SyncPullChange
   ): Promise<SyncLocalApplyResult> {
-    const mapping = await this.metadataGetEntityMappingByGlobalUid(
+    const mapping = await this.mappingResolver.getByGlobalUid(
       domain,
       change.entityType,
       change.globalUid
@@ -326,7 +145,7 @@ export class SyncLocalApplyService {
       } catch {
         // ignore
       }
-      await this.metadataDeleteEntityMapping(domain, change.entityType, mapping.localId);
+      await this.mappingResolver.delete(domain, change.entityType, mapping.localId);
       return { applied: true, skipped: false, localId: mapping.localId };
     }
 
@@ -413,89 +232,7 @@ export class SyncLocalApplyService {
       localId = created.id;
     }
 
-    await this.metadataUpsertEntityMapping({
-      domain,
-      entityType: change.entityType,
-      localId,
-      globalUid: change.globalUid,
-      version: change.version,
-      contentHash: change.contentHash || null,
-      updatedAt: Date.now(),
-    });
-
-    return { applied: true, skipped: false, localId };
-  }
-
-  private async applyProfileGroup(
-    domain: SyncDomain,
-    change: SyncPullChange
-  ): Promise<SyncLocalApplyResult> {
-    const mapping = await this.metadataGetEntityMappingByGlobalUid(
-      domain,
-      change.entityType,
-      change.globalUid
-    );
-
-    if (change.deletedAt) {
-      if (!mapping) {
-        return { applied: false, skipped: true, reason: 'mapping_not_found_for_delete' };
-      }
-      try {
-        await this.deps.profileGroupService.delete(mapping.localId, { recursive: true });
-      } catch {
-        // ignore
-      }
-      await this.metadataDeleteEntityMapping(domain, change.entityType, mapping.localId);
-      return { applied: true, skipped: false, localId: mapping.localId };
-    }
-
-    const payload = toPayloadObject(change.payload);
-    const hasNameField = hasOwn(payload, 'name');
-    const hasParentField =
-      hasOwn(payload, 'parentId') ||
-      hasOwn(payload, 'parentGlobalUid') ||
-      hasOwn(payload, 'parentGroupUid');
-    const hasColorField = hasOwn(payload, 'color');
-    const hasIconField = hasOwn(payload, 'icon');
-    const hasDescriptionField = hasOwn(payload, 'description');
-    const nameFromPayload = hasNameField ? toOptionalString(payload.name) : undefined;
-    const parentId = hasParentField
-      ? await this.resolveProfileGroupParentLocalId(payload)
-      : undefined;
-    const color = hasColorField ? toNullableString(payload.color) : undefined;
-    const icon = hasIconField ? toNullableString(payload.icon) : undefined;
-    const description = hasDescriptionField ? toNullableString(payload.description) : undefined;
-
-    let localId = mapping?.localId;
-    if (mapping) {
-      const updates: UpdateGroupParams = {
-        ...(hasNameField && nameFromPayload ? { name: nameFromPayload } : {}),
-        ...(hasParentField && parentId !== undefined ? { parentId } : {}),
-        ...(color !== undefined ? { color } : {}),
-        ...(icon !== undefined ? { icon } : {}),
-        ...(description !== undefined ? { description } : {}),
-      };
-      try {
-        const updated = await this.deps.profileGroupService.update(mapping.localId, updates);
-        localId = updated.id;
-      } catch {
-        localId = undefined;
-      }
-    }
-
-    if (!localId) {
-      const name = nameFromPayload || fallbackName('group', change.globalUid);
-      const created = await this.deps.profileGroupService.create({
-        name,
-        ...(parentId !== undefined ? { parentId } : {}),
-        ...(color !== undefined ? { color } : {}),
-        ...(icon !== undefined ? { icon } : {}),
-        ...(description !== undefined ? { description } : {}),
-      } as CreateGroupParams);
-      localId = created.id;
-    }
-
-    await this.metadataUpsertEntityMapping({
+    await this.mappingResolver.upsert({
       domain,
       entityType: change.entityType,
       localId,
@@ -512,7 +249,7 @@ export class SyncLocalApplyService {
     domain: SyncDomain,
     change: SyncPullChange
   ): Promise<SyncLocalApplyResult> {
-    const mapping = await this.metadataGetEntityMappingByGlobalUid(
+    const mapping = await this.mappingResolver.getByGlobalUid(
       domain,
       change.entityType,
       change.globalUid
@@ -527,7 +264,7 @@ export class SyncLocalApplyService {
       } catch {
         // ignore
       }
-      await this.metadataDeleteEntityMapping(domain, change.entityType, mapping.localId);
+      await this.mappingResolver.delete(domain, change.entityType, mapping.localId);
       return { applied: true, skipped: false, localId: mapping.localId };
     }
 
@@ -593,7 +330,7 @@ export class SyncLocalApplyService {
       localId = created.id;
     }
 
-    await this.metadataUpsertEntityMapping({
+    await this.mappingResolver.upsert({
       domain,
       entityType: change.entityType,
       localId,
@@ -619,7 +356,7 @@ export class SyncLocalApplyService {
       };
     }
 
-    const mapping = await this.metadataGetEntityMappingByGlobalUid(
+    const mapping = await this.mappingResolver.getByGlobalUid(
       domain,
       change.entityType,
       change.globalUid
@@ -652,14 +389,14 @@ export class SyncLocalApplyService {
         }
         await extensionManager.pruneUnusedPackagesByExtensionIds([extensionId]);
 
-        const bindingMappings = await this.listAllEntityMappings({
+        const bindingMappings = await this.mappingResolver.listAll({
           domain,
           entityType: 'profileExtensionBinding',
         });
         for (const binding of bindingMappings) {
           const bindingExtensionId = this.resolveExtensionIdFromBindingLocalId(binding.localId);
           if (bindingExtensionId !== extensionId) continue;
-          await this.metadataDeleteEntityMapping(
+          await this.mappingResolver.delete(
             domain,
             'profileExtensionBinding',
             binding.localId
@@ -668,7 +405,7 @@ export class SyncLocalApplyService {
       }
 
       if (mapping) {
-        await this.metadataDeleteEntityMapping(domain, change.entityType, mapping.localId);
+        await this.mappingResolver.delete(domain, change.entityType, mapping.localId);
       }
       return {
         applied: true,
@@ -743,7 +480,7 @@ export class SyncLocalApplyService {
       };
     }
 
-    await this.metadataUpsertEntityMapping({
+    await this.mappingResolver.upsert({
       domain,
       entityType: change.entityType,
       localId: resolvedLocalId,
@@ -769,7 +506,7 @@ export class SyncLocalApplyService {
       };
     }
 
-    const mapping = await this.metadataGetEntityMappingByGlobalUid(
+    const mapping = await this.mappingResolver.getByGlobalUid(
       domain,
       change.entityType,
       change.globalUid
@@ -794,7 +531,7 @@ export class SyncLocalApplyService {
         });
       }
       if (localBindingId) {
-        await this.metadataDeleteEntityMapping(domain, change.entityType, localBindingId);
+        await this.mappingResolver.delete(domain, change.entityType, localBindingId);
       }
       return { applied: true, skipped: false, localId: localBindingId };
     }
@@ -879,7 +616,7 @@ export class SyncLocalApplyService {
     });
     const resolvedLocalBindingId = localBindingId || `${profileLocalId}:${extensionId}`;
 
-    await this.metadataUpsertEntityMapping({
+    await this.mappingResolver.upsert({
       domain,
       entityType: change.entityType,
       localId: resolvedLocalBindingId,
@@ -946,117 +683,6 @@ export class SyncLocalApplyService {
     }
   }
 
-  private getMetadataScopeContext(): SyncScopeContext {
-    return {
-      scopeKey: this.activeScopeKey,
-    };
-  }
-
-  private async metadataGetEntityMappingByGlobalUid(
-    domain: SyncDomain,
-    entityType: SyncEntityType,
-    globalUid: string
-  ): Promise<SyncEntityMapping | null> {
-    return this.deps.metadataService.getEntityMappingByGlobalUid(
-      domain,
-      entityType,
-      globalUid,
-      this.getMetadataScopeContext()
-    );
-  }
-
-  private async metadataGetEntityMappingByGlobalUidAnyScope(
-    domain: SyncDomain,
-    entityType: SyncEntityType,
-    globalUid: string
-  ): Promise<SyncEntityMapping | null> {
-    return this.deps.metadataService.getEntityMappingByGlobalUidAnyScope(
-      domain,
-      entityType,
-      globalUid
-    );
-  }
-
-  private async metadataGetEntityMappingByRemoteUidAnyScope(
-    domain: SyncDomain,
-    entityType: SyncEntityType,
-    remoteUid: string
-  ): Promise<SyncEntityMapping | null> {
-    return this.deps.metadataService.getEntityMappingByRemoteUidAnyScope(
-      domain,
-      entityType,
-      remoteUid
-    );
-  }
-
-  private async metadataGetEntityMapping(
-    domain: SyncDomain,
-    entityType: SyncEntityType,
-    localId: string
-  ): Promise<SyncEntityMapping | null> {
-    return this.deps.metadataService.getEntityMapping(
-      domain,
-      entityType,
-      localId,
-      this.getMetadataScopeContext()
-    );
-  }
-
-  private async metadataDeleteEntityMapping(
-    domain: SyncDomain,
-    entityType: SyncEntityType,
-    localId: string
-  ): Promise<void> {
-    await this.deps.metadataService.deleteEntityMapping(
-      domain,
-      entityType,
-      localId,
-      this.getMetadataScopeContext()
-    );
-  }
-
-  private async metadataUpsertEntityMapping(
-    input: Parameters<SyncMetadataService['upsertEntityMapping']>[0]
-  ): Promise<SyncEntityMapping> {
-    return this.deps.metadataService.upsertEntityMapping(input, this.getMetadataScopeContext());
-  }
-
-  private async metadataListEntityMappings(
-    options: ListSyncEntityMappingsOptions
-  ): Promise<SyncEntityMapping[]> {
-    return this.deps.metadataService.listEntityMappings({
-      ...options,
-      scopeKey: this.activeScopeKey,
-    });
-  }
-
-  private async listAllEntityMappings(options: {
-    domain: SyncDomain;
-    entityType: SyncEntityType;
-  }): Promise<SyncEntityMapping[]> {
-    const pageSize = 500;
-    let offset = 0;
-    const out: SyncEntityMapping[] = [];
-
-    while (true) {
-      const page = await this.metadataListEntityMappings({
-        ...options,
-        limit: pageSize,
-        offset,
-      });
-      if (page.length === 0) {
-        break;
-      }
-      out.push(...page);
-      if (page.length < pageSize) {
-        break;
-      }
-      offset += page.length;
-    }
-
-    return out;
-  }
-
   private async findProfileExtensionBinding(
     profileLocalId: string,
     extensionId: string,
@@ -1094,7 +720,7 @@ export class SyncLocalApplyService {
     const profileCloudUid =
       toOptionalString(payload.profileCloudUid) || toOptionalString(payload.profileGlobalUid);
     if (profileCloudUid) {
-      const scopedMapping = await this.metadataGetEntityMappingByGlobalUid(
+      const scopedMapping = await this.mappingResolver.getByGlobalUid(
         'profile',
         'profile',
         profileCloudUid
@@ -1103,7 +729,7 @@ export class SyncLocalApplyService {
         return scopedMapping.localId;
       }
 
-      const anyScopeMapping = await this.metadataGetEntityMappingByGlobalUidAnyScope(
+      const anyScopeMapping = await this.mappingResolver.getByGlobalUidAnyScope(
         'profile',
         'profile',
         profileCloudUid
@@ -1116,7 +742,7 @@ export class SyncLocalApplyService {
     const profileUid = toOptionalString(payload.profileUid);
     if (!profileUid) return undefined;
 
-    const anyScopeByProfileUid = await this.metadataGetEntityMappingByRemoteUidAnyScope(
+    const anyScopeByProfileUid = await this.mappingResolver.getByRemoteUidAnyScope(
       'profile',
       'profile',
       profileUid
@@ -1137,7 +763,7 @@ export class SyncLocalApplyService {
       toOptionalString(payload.savedSiteGlobalUid);
     if (!possibleGlobalUid) return undefined;
 
-    const mapping = await this.metadataGetEntityMappingByGlobalUid(
+    const mapping = await this.mappingResolver.getByGlobalUid(
       'account',
       'savedSite',
       possibleGlobalUid
@@ -1173,7 +799,7 @@ export class SyncLocalApplyService {
       toOptionalString(payload.groupGlobalUid) || toOptionalString(payload.groupUid);
     if (!possibleGlobalUid) return undefined;
 
-    const mapping = await this.metadataGetEntityMappingByGlobalUid(
+    const mapping = await this.mappingResolver.getByGlobalUid(
       'profile',
       'profileGroup',
       possibleGlobalUid
@@ -1181,21 +807,4 @@ export class SyncLocalApplyService {
     return mapping?.localId ?? null;
   }
 
-  private async resolveProfileGroupParentLocalId(
-    payload: Record<string, unknown>
-  ): Promise<string | null | undefined> {
-    const direct = toNullableString(payload.parentId);
-    if (direct !== undefined) return direct;
-
-    const possibleGlobalUid =
-      toOptionalString(payload.parentGlobalUid) || toOptionalString(payload.parentGroupUid);
-    if (!possibleGlobalUid) return undefined;
-
-    const mapping = await this.metadataGetEntityMappingByGlobalUid(
-      'profile',
-      'profileGroup',
-      possibleGlobalUid
-    );
-    return mapping?.localId ?? null;
-  }
 }
