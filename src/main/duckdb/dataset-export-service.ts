@@ -16,11 +16,14 @@ import { DatasetMetadataService } from './dataset-metadata-service';
 import { DatasetStorageService, sanitizeDatasetId } from './dataset-storage-service';
 import { quoteQualifiedName } from './utils';
 import type { ExportOptions, ExportProgress, ExportResult } from '../../types/electron';
+import { createLogger } from '../../core/logger';
 import {
   DatasetExportPlanBuilder,
   type ExportQuerySQLBuilder,
 } from './dataset-export-plan-builder';
 import { DatasetExportWriter } from './dataset-export-writer';
+
+const logger = createLogger('DatasetExportService');
 
 export type { ExportQuerySQLBuilder } from './dataset-export-plan-builder';
 
@@ -73,7 +76,12 @@ export class DatasetExportService {
       const normalizedPostExportAction: 'keep' | 'delete' =
         postExportAction === 'delete' ? 'delete' : 'keep';
 
-      console.log('[ExportService] Starting export:', { datasetId, format, mode, outputPath });
+      logger.info('Starting dataset export', {
+        datasetId: sanitizedId,
+        format,
+        mode,
+        outputPath,
+      });
 
       // 发送初始进度
       onProgress?.({
@@ -117,7 +125,10 @@ export class DatasetExportService {
         });
         const { exportSQL } = exportPlan;
 
-        console.log('[ExportService] Export SQL:', exportSQL);
+        logger.info('Built dataset export SQL', {
+          datasetId: sanitizedId,
+          sqlPreview: exportSQL.substring(0, 500),
+        });
 
         // 4. 执行导出（根据格式）
         onProgress?.({
@@ -163,7 +174,12 @@ export class DatasetExportService {
         });
 
         const executionTime = Date.now() - startTime;
-        console.log('[ExportService] Export completed:', { files, totalRows, executionTime });
+        logger.info('Dataset export completed', {
+          datasetId: sanitizedId,
+          files,
+          totalRows,
+          executionTime,
+        });
 
         return {
           success: true,
@@ -175,7 +191,10 @@ export class DatasetExportService {
           message: `成功导出 ${totalRows.toLocaleString()} 行数据`,
         };
       } catch (error) {
-        console.error('[ExportService] Export failed:', error);
+        logger.error('Dataset export failed', {
+          datasetId: sanitizedId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
         return {
           success: false,
           files: [],
@@ -207,7 +226,11 @@ export class DatasetExportService {
     const { datasetId, rowIdSQL, action, batchSize } = params;
     const tableName = quoteQualifiedName(`ds_${datasetId}`, 'data');
 
-    console.log('[ExportService] Handling post-export action:', action);
+    logger.info('Handling dataset post-export action', {
+      datasetId,
+      action,
+      batchSize,
+    });
     if (!rowIdSQL) {
       throw new Error('Row-id SQL is required when postExportAction is delete');
     }
@@ -232,7 +255,11 @@ export class DatasetExportService {
     }
 
     const result = await this.conn.run(deleteSQL);
-    console.warn(`[ExportService] PERMANENTLY DELETED rows from ${tableName}`);
+    logger.warn('Permanently deleted rows after dataset export', {
+      datasetId,
+      tableName,
+      rowsChanged: result.rowsChanged,
+    });
     return result.rowsChanged;
   }
   }
