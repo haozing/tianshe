@@ -10,6 +10,9 @@ import * as Module from 'module';
 import AdmZip from 'adm-zip';
 import type { JSPluginManifest, JSPluginModule } from '../../types/js-plugin';
 import { assertSafeZipEntryPath, assertSafeZipMetadata } from '../../utils/zip-safety';
+import { createLogger } from '../logger';
+
+const logger = createLogger('JSPluginLoader');
 
 function isLikelyBrowserExtensionManifest(manifest: any): boolean {
   if (!manifest || typeof manifest !== 'object') return false;
@@ -206,11 +209,20 @@ export function loadPluginModule(pluginDir: string, mainFile: string): JSPluginM
     }
 
     if (deleted.size > 0) {
-      console.log(`  🧹 Cleared cache for main file:`);
-      deleted.forEach((p) => console.log(`    - ${p}`));
+      logger.info('Cleared plugin module cache', {
+        operation: 'plugin.module.cache.clear',
+        pluginDir,
+        mainFile,
+        deletedCachePaths: Array.from(deleted),
+      });
     }
   } catch (error) {
-    console.warn(`  ⚠️  Failed to clear cache:`, error);
+    logger.warn('Failed to clear plugin module cache', {
+      operation: 'plugin.module.cache.clear',
+      pluginDir,
+      mainFile,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
   // 直接 require - 无沙箱隔离
@@ -279,7 +291,13 @@ export async function packPlugin(pluginDir: string, outputPath?: string): Promis
 
   // 2. 读取并验证 manifest
   const manifest = await readManifest(pluginDir);
-  console.log(`[PACK] Packing plugin: ${manifest.name} (${manifest.id}) v${manifest.version}`);
+  logger.info('Packing plugin package', {
+    operation: 'plugin.package.pack',
+    pluginId: manifest.id,
+    pluginName: manifest.name,
+    version: manifest.version,
+    pluginDir,
+  });
 
   // 3. 确定输出路径
   const tsaiFileName = `${manifest.id}.tsai`;
@@ -313,7 +331,14 @@ export async function packPlugin(pluginDir: string, outputPath?: string): Promis
   await fs.ensureDir(path.dirname(finalOutputPath));
   zip.writeZip(finalOutputPath);
 
-  console.log(`[PACK] Plugin packed successfully: ${finalOutputPath}`);
+  logger.info('Plugin package packed', {
+    operation: 'plugin.package.pack',
+    outcome: 'success',
+    pluginId: manifest.id,
+    pluginName: manifest.name,
+    version: manifest.version,
+    outputPath: finalOutputPath,
+  });
   return finalOutputPath;
 }
 
@@ -363,7 +388,11 @@ export async function unpackPlugin(tsaiPath: string, extractDir: string): Promis
     throw new Error(`Expected a file, got a directory: ${tsaiPath}`);
   }
 
-  console.log(`[UNPACK] Extracting plugin from: ${tsaiPath}`);
+  logger.info('Extracting plugin package', {
+    operation: 'plugin.package.unpack',
+    tsaiPath,
+    extractDir,
+  });
 
   // 2. 创建临时解压目录
   const tempDir = path.join(extractDir, `_temp_${Date.now()}`);
@@ -379,7 +408,10 @@ export async function unpackPlugin(tsaiPath: string, extractDir: string): Promis
 
     if (!(await fs.pathExists(manifestPath))) {
       // manifest.json 不在根目录，检查是否有嵌套目录
-      console.log(`[UNPACK] manifest.json not found in root, checking for nested directory...`);
+      logger.info('Plugin manifest not found at package root; checking nested directory', {
+        operation: 'plugin.package.unpack',
+        tempDir,
+      });
 
       const entries = await fs.readdir(tempDir, { withFileTypes: true });
       const subdirs = entries.filter((entry) => entry.isDirectory());
@@ -390,7 +422,11 @@ export async function unpackPlugin(tsaiPath: string, extractDir: string): Promis
         const nestedManifestPath = path.join(subDirPath, 'manifest.json');
 
         if (await fs.pathExists(nestedManifestPath)) {
-          console.log(`[UNPACK] Found manifest.json in nested directory: ${subdirs[0].name}`);
+          logger.info('Found plugin manifest in nested directory', {
+            operation: 'plugin.package.unpack',
+            nestedDirectory: subdirs[0].name,
+            tempDir,
+          });
           // 将子目录的内容移到临时目录
           const files = await fs.readdir(subDirPath);
           for (const file of files) {
@@ -400,7 +436,11 @@ export async function unpackPlugin(tsaiPath: string, extractDir: string): Promis
           }
           // 删除空的子目录
           await fs.remove(subDirPath);
-          console.log(`[UNPACK] Flattened nested directory structure`);
+          logger.info('Flattened nested plugin directory structure', {
+            operation: 'plugin.package.unpack',
+            nestedDirectory: subdirs[0].name,
+            tempDir,
+          });
         } else {
           throw new Error(
             `Invalid plugin structure: manifest.json not found in root or nested directory`
@@ -421,22 +461,37 @@ export async function unpackPlugin(tsaiPath: string, extractDir: string): Promis
 
     // 5. 读取 manifest 获取插件 ID
     const manifest = await readManifest(tempDir);
-    console.log(
-      `[UNPACK] Plugin identified: ${manifest.name} (${manifest.id}) v${manifest.version}`
-    );
+    logger.info('Plugin package identified', {
+      operation: 'plugin.package.unpack',
+      pluginId: manifest.id,
+      pluginName: manifest.name,
+      version: manifest.version,
+      tempDir,
+    });
 
     // 6. 移动到最终目录
     const targetDir = path.join(extractDir, manifest.id);
 
     // 如果目标目录已存在，先删除
     if (await fs.pathExists(targetDir)) {
-      console.log(`[UNPACK] Removing existing plugin directory: ${targetDir}`);
+      logger.info('Removing existing plugin directory before unpack', {
+        operation: 'plugin.package.unpack',
+        pluginId: manifest.id,
+        targetDir,
+      });
       await fs.remove(targetDir);
     }
 
     await fs.move(tempDir, targetDir);
 
-    console.log(`[UNPACK] Plugin extracted successfully to: ${targetDir}`);
+    logger.info('Plugin package extracted', {
+      operation: 'plugin.package.unpack',
+      outcome: 'success',
+      pluginId: manifest.id,
+      pluginName: manifest.name,
+      version: manifest.version,
+      targetDir,
+    });
     return targetDir;
   } catch (error) {
     // 清理临时目录
