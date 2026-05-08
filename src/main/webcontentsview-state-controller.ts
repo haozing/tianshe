@@ -1,4 +1,7 @@
 import type { ViewMetadata, WebContentsViewInfo } from './webcontentsview-manager';
+import { createLogger } from '../core/logger';
+
+const logger = createLogger('WebContentsViewStateController');
 
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -95,11 +98,14 @@ export class WebContentsViewStateController {
       } catch (error: unknown) {
         const message = getErrorMessage(error);
         failed.push({ id, error: message });
-        console.error(`Failed to close view ${id}:`, error);
+        logger.error('Failed to close view during batch close', { viewId: id, error });
       }
     }
 
-    console.log(`✅ Batch close completed: ${closed.length} succeeded, ${failed.length} failed`);
+    logger.info('Batch close completed', {
+      closedCount: closed.length,
+      failedCount: failed.length,
+    });
     return { closed, failed };
   }
 
@@ -124,11 +130,11 @@ export class WebContentsViewStateController {
         await this.deps.closeView(viewInfo.id);
         closed.push(viewInfo.id);
       } catch (error) {
-        console.error(`Failed to close oldest view ${viewInfo.id}:`, error);
+        logger.error('Failed to close oldest view', { viewId: viewInfo.id, error });
       }
     }
 
-    console.log(`✅ Closed ${closed.length} oldest view(s): [${closed.join(', ')}]`);
+    logger.info('Closed oldest views', { closedCount: closed.length, viewIds: closed });
     return closed;
   }
 
@@ -198,26 +204,31 @@ export class WebContentsViewStateController {
    * @param pluginId 插件ID
    */
   async activatePluginViews(pluginId: string): Promise<void> {
-    console.log(`🚀 Activating all views for plugin: ${pluginId}`);
+    logger.info('Activating all views for plugin', { pluginId });
 
     const views = this.deps.listRegisteredViews().filter((v) => v.metadata?.pluginId === pluginId);
 
     if (views.length === 0) {
-      console.warn(`⚠️  No views found for plugin: ${pluginId}`);
+      logger.warn('No views found for plugin', { pluginId });
       return;
     }
 
-    console.log(`  📊 Found ${views.length} view(s) to activate`);
+    logger.info('Found plugin views to activate', { pluginId, viewCount: views.length });
 
     for (const view of views) {
       try {
         await this.deps.activateView(view.id);
         // 初始化视图状态为 idle
         this.viewStates.set(view.id, { status: 'idle' });
-        console.log(`  ✅ Activated and marked as idle: ${view.id}`);
+        logger.info('Plugin view activated and marked idle', { pluginId, viewId: view.id });
       } catch (error: unknown) {
         const message = getErrorMessage(error);
-        console.error(`  ❌ Failed to activate view ${view.id}:`, message, error);
+        logger.error('Failed to activate plugin view', {
+          pluginId,
+          viewId: view.id,
+          message,
+          error,
+        });
         // 标记为错误状态
         this.viewStates.set(view.id, {
           status: 'error',
@@ -226,7 +237,7 @@ export class WebContentsViewStateController {
       }
     }
 
-    console.log(`✅ Plugin views activation completed for: ${pluginId}`);
+    logger.info('Plugin views activation completed', { pluginId });
   }
 
   /**
@@ -236,21 +247,27 @@ export class WebContentsViewStateController {
    * @returns 是否成功保留所有视图
    */
   reserveViews(viewIds: string[], datasetId: string): boolean {
-    console.log(`🔒 Attempting to reserve ${viewIds.length} view(s) for dataset: ${datasetId}`);
+    logger.info('Attempting to reserve views for dataset', {
+      datasetId,
+      viewCount: viewIds.length,
+    });
 
     // 第一步：检查所有视图是否可用
     for (const viewId of viewIds) {
       const state = this.viewStates.get(viewId);
 
       if (!state) {
-        console.warn(`  ❌ View ${viewId} has no state (not activated)`);
+        logger.warn('View has no state while reserving', { datasetId, viewId });
         return false;
       }
 
       if (state.status !== 'idle') {
-        console.warn(
-          `  ❌ View ${viewId} is not idle (current: ${state.status}, reserved by: ${state.reservedBy})`
-        );
+        logger.warn('View is not idle while reserving', {
+          datasetId,
+          viewId,
+          status: state.status,
+          reservedBy: state.reservedBy,
+        });
         return false;
       }
     }
@@ -263,10 +280,13 @@ export class WebContentsViewStateController {
         reservedBy: datasetId,
         reservedAt: now,
       });
-      console.log(`  ✅ Reserved: ${viewId}`);
+      logger.info('View reserved for dataset', { datasetId, viewId });
     }
 
-    console.log(`✅ Successfully reserved ${viewIds.length} view(s) for dataset: ${datasetId}`);
+    logger.info('Successfully reserved views for dataset', {
+      datasetId,
+      viewCount: viewIds.length,
+    });
     return true;
   }
 
@@ -275,18 +295,18 @@ export class WebContentsViewStateController {
    * @param datasetId 数据集ID
    */
   releaseViews(datasetId: string): void {
-    console.log(`🔓 Releasing views for dataset: ${datasetId}`);
+    logger.info('Releasing views for dataset', { datasetId });
 
     let releasedCount = 0;
     for (const [viewId, state] of this.viewStates) {
       if (state.reservedBy === datasetId) {
         this.viewStates.set(viewId, { status: 'idle' });
-        console.log(`  ✅ Released: ${viewId}`);
+        logger.info('View released for dataset', { datasetId, viewId });
         releasedCount++;
       }
     }
 
-    console.log(`✅ Released ${releasedCount} view(s) for dataset: ${datasetId}`);
+    logger.info('Released views for dataset', { datasetId, releasedCount });
   }
 
   /**
@@ -322,7 +342,7 @@ export class WebContentsViewStateController {
   markViewBusy(viewId: string): void {
     const state = this.viewStates.get(viewId);
     if (!state) {
-      console.warn(`⚠️  Cannot mark busy: view ${viewId} has no state`);
+      logger.warn('Cannot mark view busy because it has no state', { viewId });
       return;
     }
 
@@ -330,7 +350,7 @@ export class WebContentsViewStateController {
       ...state,
       status: 'busy',
     });
-    console.log(`⏳ View marked as busy: ${viewId}`);
+    logger.info('View marked as busy', { viewId });
   }
 
   /**
@@ -340,7 +360,7 @@ export class WebContentsViewStateController {
   markViewIdle(viewId: string): void {
     const state = this.viewStates.get(viewId);
     if (!state) {
-      console.warn(`⚠️  Cannot mark idle: view ${viewId} has no state`);
+      logger.warn('Cannot mark view idle because it has no state', { viewId });
       return;
     }
 
@@ -350,7 +370,10 @@ export class WebContentsViewStateController {
       status: state.reservedBy ? 'reserved' : 'idle',
       errorMessage: undefined, // 清除错误信息
     });
-    console.log(`✅ View marked as ${state.reservedBy ? 'reserved' : 'idle'}: ${viewId}`);
+    logger.info('View marked as idle or reserved', {
+      viewId,
+      status: state.reservedBy ? 'reserved' : 'idle',
+    });
   }
 
   /**
@@ -361,7 +384,7 @@ export class WebContentsViewStateController {
   markViewError(viewId: string, errorMessage: string): void {
     const state = this.viewStates.get(viewId);
     if (!state) {
-      console.warn(`⚠️  Cannot mark error: view ${viewId} has no state`);
+      logger.warn('Cannot mark view error because it has no state', { viewId, errorMessage });
       return;
     }
 
@@ -370,7 +393,7 @@ export class WebContentsViewStateController {
       status: 'error',
       errorMessage,
     });
-    console.error(`❌ View marked as error: ${viewId} - ${errorMessage}`);
+    logger.error('View marked as error', { viewId, errorMessage });
   }
 
   /**
@@ -436,11 +459,11 @@ export class WebContentsViewStateController {
    */
   async forceGarbageCollection(): Promise<void> {
     if (global.gc) {
-      console.log('🗑️  Forcing garbage collection...');
+      logger.info('Forcing garbage collection');
       global.gc();
-      console.log('✅ Garbage collection completed');
+      logger.info('Garbage collection completed');
     } else {
-      console.warn('⚠️  Garbage collection not available (run with --expose-gc flag)');
+      logger.warn('Garbage collection not available');
     }
   }
 
