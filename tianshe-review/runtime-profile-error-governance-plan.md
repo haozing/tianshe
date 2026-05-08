@@ -19,7 +19,7 @@
 
 | 文件 | 当前行数 | 直接 `console.*` | 架构护栏目标组 | 当前判断 |
 | --- | ---: | ---: | --- | --- |
-| `src/main/profile/ruyi-firefox-client.ts` | 2127 | 0 | `main-runtime` | 已抽出 page scripts，但 client 仍聚合连接、上下文、tab、emulation、network、storage、capture、dialog、input、窗口策略等能力 |
+| `src/main/profile/ruyi-firefox-client.ts` | 884 | 0 | 已退出 `main-runtime` 大文件目标 | 已拆出 active context tracker、dialog、emulation、window、storage/cookie、capture、input、tab、navigation、network controllers，client 保留 lifecycle、dispatch 和兼容薄入口 |
 | `src/core/js-plugin/namespaces/profile.ts` | 1831 | 33 raw / 21 guard baseline | `js-plugin-runtime` | helpers.profile 同时承担 CRUD、launch、lease、popup、browser facade、fingerprint、visibility、engine 能力包装 |
 | `src/main/duckdb/profile-service.ts` | 1509 | 15 | `duckdb-core` | Profile CRUD、fingerprint 持久化、schema bootstrap、partition cleanup、cascade delete、observation 仍集中在单一服务 |
 | `src/main/sync/sync-local-apply-service.ts` | 1201 | 0 | `main-runtime` | apply dispatcher、各实体 apply、metadata mapping、跨实体 local id resolution、payload normalization 混在一起 |
@@ -176,6 +176,13 @@ npx vitest run src/main/profile/browser-pool-integration-ruyi.smoke.test.ts src/
 npm run typecheck
 npm run test:architecture
 ```
+
+完成情况：2026-05-08
+
+- 已新增 `ruyi-firefox-active-context-tracker.ts`、`ruyi-firefox-dialog-controller.ts`、`ruyi-firefox-emulation-controller.ts`、`ruyi-firefox-window-controller.ts`、`ruyi-firefox-storage-cookie-controller.ts`、`ruyi-firefox-capture-controller.ts`、`ruyi-firefox-input-controller.ts`、`ruyi-firefox-tab-controller.ts`、`ruyi-firefox-navigation-controller.ts`、`ruyi-firefox-network-controller.ts`。
+- `src/main/profile/ruyi-firefox-client.ts` 已从 2127 行降到 884 行，低于 900 行护栏。
+- 已保持 `RuyiFirefoxClient` facade、`dispatch()` remote command surface、dialog/native/evaluate/network 等现有测试可替换入口。
+- 已从 `src/core/ai-dev/architecture-baselines.ts` 的 `main-runtime` size repair target 中移除 `ruyi-firefox-client.ts`。
 
 ## 5. 阶段 2：JS plugin ProfileNamespace 深拆
 
@@ -534,7 +541,7 @@ npm run test:architecture
 ## 12. 后续任务列表
 
 - [x] 阶段 0：补契约清单和测试基线。
-- [ ] 阶段 1：Ruyi client 深拆到 900 行以下。
+- [x] 阶段 1：Ruyi client 深拆到 900 行以下。
 - [ ] 阶段 2：JS plugin ProfileNamespace 深拆到 900 行以下，并同步 `docs/plugin-helpers-reference.md`。
 - [ ] 阶段 3：ProfileService 深拆到 900 行以下。
 - [ ] 阶段 4：SyncLocalApplyService 深拆到 900 行以下。
