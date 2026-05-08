@@ -2,9 +2,12 @@ import { app } from 'electron';
 import fs from 'fs';
 import * as path from 'path';
 import { loadWebContentsURL } from './webcontents-navigation';
+import { createLogger } from '../core/logger';
 import type { JSPluginManager } from '../core/js-plugin/manager';
 import type { ActivityBarViewContribution } from '../types/js-plugin';
 import type { ViewRegistration, WebContentsViewInfo } from './webcontentsview-manager';
+
+const logger = createLogger('WebContentsViewPluginPageController');
 
 const SHARED_PLUGIN_PAGE_VIEW_ID = 'plugin-page:shared';
 const SHARED_PLUGIN_PAGE_PARTITION = 'persist:plugin-page-shared';
@@ -108,12 +111,8 @@ export class WebContentsViewPluginPageController {
   private buildPluginPageInjectionScript(pluginId: string, apiList: string[]): string {
     return `
       (function() {
-        console.log('🚀 [Plugin Page] Injecting plugin API for: ${pluginId}');
-        console.log('📋 [Plugin Page] API list:', ${JSON.stringify(apiList)});
-
         // 确保 pluginAPI 对象存在
         if (!window.pluginAPI) {
-          console.warn('⚠️ window.pluginAPI not found, creating it');
           window.pluginAPI = { datasetId: null };
         }
 
@@ -135,9 +134,6 @@ export class WebContentsViewPluginPageController {
             }
           };
         }
-
-        console.log('✅ [Plugin Page] Plugin API injected successfully');
-        console.log('📦 [Plugin Page] API namespace:', Object.keys(window.pluginAPI['${pluginId}']));
 
         // 触发自定义事件，通知页面 API 已就绪
         window.dispatchEvent(new CustomEvent('pluginAPIReady', {
@@ -182,9 +178,11 @@ export class WebContentsViewPluginPageController {
         throw new Error(`Plugin ${pluginId} does not have an activityBarView contribution`);
       }
       if (expectedActivityBarViewId && viewConfig.id !== expectedActivityBarViewId) {
-        console.warn(
-          `⚠️  Plugin page view id mismatch for ${pluginId}: expected=${viewConfig.id}, got=${expectedActivityBarViewId}`
-        );
+        logger.warn('Plugin page view id mismatch', {
+          pluginId,
+          expectedActivityBarViewId: viewConfig.id,
+          actualActivityBarViewId: expectedActivityBarViewId,
+        });
       }
 
       if (!viewInfo.metadata) {
@@ -204,24 +202,24 @@ export class WebContentsViewPluginPageController {
         registration.metadata.order = viewConfig.order;
       }
 
-      console.log(`🌐 Loading plugin page view: ${viewId} (plugin=${pluginId})`);
+      logger.info('Loading plugin page view', { viewId, pluginId });
 
       let apiList: string[] = [];
       try {
         apiList = this.pluginManager?.getExposedAPIs(pluginId) || [];
       } catch (error) {
-        console.warn(`⚠️ Failed to read exposed APIs for plugin ${pluginId}:`, error);
+        logger.warn('Failed to read exposed APIs for plugin', { pluginId, error });
       }
 
       const injectionScript = this.buildPluginPageInjectionScript(pluginId, apiList);
 
       const onFinishLoad = async () => {
         try {
-          console.log(`📡 Injecting plugin API for ${pluginId}:`, apiList);
+          logger.info('Injecting plugin API into plugin page', { pluginId, apiList });
           await viewInfo.view.webContents.executeJavaScript(injectionScript);
-          console.log(`✅ Plugin API injected for ${pluginId}`);
+          logger.info('Plugin API injected into plugin page', { pluginId });
         } catch (error) {
-          console.error(`❌ Failed to inject plugin API for ${pluginId}:`, error);
+          logger.error('Failed to inject plugin API into plugin page', { pluginId, error });
         }
       };
 
@@ -239,9 +237,11 @@ export class WebContentsViewPluginPageController {
           await loadWebContentsURL(viewInfo.view.webContents, viewConfig.source.path, {
             waitUntil: 'domcontentloaded',
             onRecoverableAbort: (targetUrl) => {
-              console.log(
-                `ℹ [loadPluginPageView] Ignoring recoverable ERR_ABORTED for ${targetUrl}`
-              );
+              logger.info('Ignoring recoverable plugin page load abort', {
+                viewId,
+                pluginId,
+                targetUrl,
+              });
             },
           });
         }
@@ -251,7 +251,7 @@ export class WebContentsViewPluginPageController {
       }
 
       this.pluginPageViewCurrentPluginByView.set(viewId, pluginId);
-      console.log(`✅ Plugin page view loaded: ${viewId} (plugin=${pluginId})`);
+      logger.info('Plugin page view loaded', { viewId, pluginId });
     })();
 
     this.pluginPageViewLoads.set(loadKey, task);
@@ -274,7 +274,7 @@ export class WebContentsViewPluginPageController {
   ): Promise<string> {
     const viewId = this.registerPluginPageView(pluginId, viewConfig);
 
-    console.log(`🆕 Creating plugin page view: ${viewId}`);
+    logger.info('Creating plugin page view', { viewId, pluginId });
 
     // 激活视图（创建实际的 WebContentsView）
     await this.deps.activateView(viewId);
@@ -282,7 +282,7 @@ export class WebContentsViewPluginPageController {
     // 确保页面已加载（createPluginPageView 保持旧语义：创建即加载）
     await this.loadPluginPageView(viewId, pluginId);
 
-    console.log(`✅ Plugin page view created: ${viewId}`);
+    logger.info('Plugin page view created', { viewId, pluginId });
     return viewId;
   }
 
@@ -353,7 +353,7 @@ export class WebContentsViewPluginPageController {
    * ✨ 清理插件的所有视图
    */
   async cleanupPluginViews(pluginId: string): Promise<void> {
-    console.log(`🧹 Cleaning up views for plugin: ${pluginId}`);
+    logger.info('Cleaning up plugin page views', { pluginId });
 
     this.pluginPageViewContributions.delete(pluginId);
 
@@ -395,7 +395,11 @@ export class WebContentsViewPluginPageController {
       }
     }
 
-    console.log(`✅ Cleaned up ${viewsToCleanup.length} view(s) for plugin: ${pluginId}`);
+    logger.info('Cleaned up plugin page views', {
+      pluginId,
+      closedViewCount: viewsToCleanup.length,
+      deletedRegistrationCount: registeredViewsToDelete.length,
+    });
   }
 
 
