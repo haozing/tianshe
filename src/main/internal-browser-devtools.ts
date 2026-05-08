@@ -2,6 +2,9 @@ import Store from 'electron-store';
 import type { WebContents } from 'electron';
 import { AIRPA_RUNTIME_CONFIG, isDevelopmentMode } from '../constants/runtime-config';
 import type { InternalBrowserDevToolsConfig } from '../types/internal-browser';
+import { createLogger } from '../core/logger';
+
+const logger = createLogger('InternalBrowserDevTools');
 
 type InternalBrowserDevToolsStore = {
   internalBrowserDevTools?: Partial<InternalBrowserDevToolsConfig>;
@@ -82,7 +85,9 @@ export function maybeOpenInternalBrowserDevTools(
     }
     return true;
   } catch (error) {
-    console.warn('[InternalBrowserDevTools] Failed to open DevTools:', error);
+    logger.warn('Failed to open internal browser DevTools', {
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
     return false;
   }
 }

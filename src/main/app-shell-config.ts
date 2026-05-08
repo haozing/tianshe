@@ -7,6 +7,9 @@ import {
   normalizeAppShellConfig,
   type AppShellConfig,
 } from '../shared/app-shell-config';
+import { createLogger } from '../core/logger';
+
+const logger = createLogger('AppShellConfig');
 
 function uniqueExistingConfigCandidates(): string[] {
   const candidates: string[] = [];
@@ -44,10 +47,10 @@ export function getAppShellConfig(): AppShellConfig {
         source: candidate,
       };
     } catch (error) {
-      console.warn(
-        `[AppShellConfig] Failed to read ${candidate}:`,
-        error instanceof Error ? error.message : String(error)
-      );
+      logger.warn('Failed to read app shell config candidate', {
+        configPath: candidate,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

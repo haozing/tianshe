@@ -10,6 +10,9 @@ import { session, DownloadItem, app } from 'electron';
 import path from 'path';
 import fs from 'fs-extra';
 import { EventEmitter } from 'events';
+import { createLogger } from '../core/logger';
+
+const logger = createLogger('DownloadManager');
 
 export interface DownloadInfo {
   id: string;
@@ -52,7 +55,10 @@ export class DownloadManager extends EventEmitter {
       this.handleDownload(partition, item);
     });
 
-    console.log(`✅ Download path set for ${partition}: ${finalPath}`);
+    logger.info('Download path configured for partition', {
+      partition,
+      downloadPath: finalPath,
+    });
   }
 
   /**
@@ -100,21 +106,21 @@ export class DownloadManager extends EventEmitter {
 
       if (state === 'completed') {
         info.state = 'completed';
-        console.log(`✅ Download completed: ${filename}`);
+        logger.info('Download completed', { partition, downloadId, filename });
         this.emit('download:completed', info);
       } else if (state === 'cancelled') {
         info.state = 'cancelled';
-        console.log(`⚠️ Download cancelled: ${filename}`);
+        logger.warn('Download cancelled', { partition, downloadId, filename });
         this.emit('download:cancelled', info);
       } else if (state === 'interrupted') {
         info.state = 'interrupted';
-        console.error(`❌ Download interrupted: ${filename}`);
+        logger.error('Download interrupted', { partition, downloadId, filename });
         this.emit('download:interrupted', info);
       }
     });
 
     this.emit('download:started', info);
-    console.log(`📥 Download started: ${filename}`);
+    logger.info('Download started', { partition, downloadId, filename });
   }
 
   /**
@@ -159,7 +165,10 @@ export class DownloadManager extends EventEmitter {
 
     toDelete.forEach((id) => this.downloads.delete(id));
 
-    console.log(`✅ Cleared ${toDelete.length} download records for ${partition}`);
+    logger.info('Cleared download records for partition', {
+      partition,
+      count: toDelete.length,
+    });
   }
 
   /**
@@ -173,11 +182,20 @@ export class DownloadManager extends EventEmitter {
       if (fs.existsSync(info.savePath)) {
         await fs.remove(info.savePath);
         this.downloads.delete(id);
-        console.log(`✅ Deleted download file: ${info.filename}`);
+        logger.info('Deleted download file', {
+          partition: info.partition,
+          downloadId: id,
+          filename: info.filename,
+        });
         return true;
       }
     } catch (err) {
-      console.error(`Failed to delete download file: ${info.filename}`, err);
+      logger.error('Failed to delete download file', {
+        partition: info.partition,
+        downloadId: id,
+        filename: info.filename,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
     }
 
     return false;
@@ -192,9 +210,12 @@ export class DownloadManager extends EventEmitter {
 
     try {
       await fs.emptyDir(downloadDir);
-      console.log(`✅ Cleared download directory for ${partition}`);
+      logger.info('Cleared download directory for partition', { partition });
     } catch (err) {
-      console.error(`Failed to clear download directory for ${partition}`, err);
+      logger.error('Failed to clear download directory for partition', {
+        partition,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

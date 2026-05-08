@@ -12,8 +12,11 @@
 
 import type { DuckDBService } from './duckdb/service';
 import type { LogEntry } from './duckdb/types';
+import { createLogger } from '../core/logger';
 
 export type { LogEntry };
+
+const logger = createLogger('LogStorageService');
 
 /**
  * 日志存储服务
@@ -28,7 +31,12 @@ export class LogStorageService {
    */
   log(entry: Omit<LogEntry, 'id' | 'timestamp'>): void {
     this.duckdbService.log(entry).catch((error) => {
-      console.error('Failed to log:', error);
+      logger.error('Failed to persist log entry', {
+        taskId: entry.taskId,
+        level: entry.level,
+        stepIndex: entry.stepIndex,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
     });
   }
 

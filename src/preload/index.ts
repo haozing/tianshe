@@ -198,5 +198,3 @@ export type ElectronAPI = PreloadElectronAPI;
 
 // 注意：Window.electronAPI 的类型声明在 src/types/electron.d.ts 中
 // 这里不需要重复声明，避免类型冲突
-
-console.log('✅ Preload script loaded');

@@ -14,6 +14,9 @@ import { DownloadManager } from './download';
 import { DuckDBService } from './duckdb/service';
 import { WindowManager } from './window-manager';
 import { WebContentsViewManager } from './webcontentsview-manager';
+import { createLogger } from '../core/logger';
+
+const ipcLogger = createLogger('IPCHandlerCoordinator');
 
 // 导入专门处理器
 import { DatasetIPCHandler } from './ipc-handlers/dataset-handler';
@@ -69,7 +72,7 @@ export class IPCHandler {
     // 注意：registerDatasetFolderHandlers 已在 main/index.ts 的 initializeServices() 中提前调用
     // 这是为了让 JSPluginManager 能够在初始化时获取 folderManager
 
-    console.log('✅ All IPC handlers registered');
+    ipcLogger.info('All IPC handlers registered');
   }
 
   /**
