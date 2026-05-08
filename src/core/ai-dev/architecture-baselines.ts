@@ -177,7 +177,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/download.ts': 10,
   'src/main/duckdb/dataset-export-plan-builder.ts': 4,
   'src/main/duckdb/dataset-export-service.ts': 6,
-  'src/main/duckdb/dataset-export-writer.ts': 17,
   'src/main/duckdb/dataset-folder-service.ts': 13,
   'src/main/duckdb/dataset-group-tab-workflow-service.ts': 1,
   'src/main/duckdb/dataset-import-service.ts': 16,

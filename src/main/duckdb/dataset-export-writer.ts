@@ -2,7 +2,10 @@ import { DuckDBConnection } from '@duckdb/node-api';
 import fs from 'fs-extra';
 import path from 'path';
 import type { ExportOptions, ExportProgress } from '../../types/electron';
+import { createLogger } from '../../core/logger';
 import { escapeSqlStringLiteral, parseRows } from './utils';
+
+const logger = createLogger('DatasetExportWriter');
 
 export interface DatasetExportWriteParams {
   format: ExportOptions['format'];
@@ -100,10 +103,10 @@ private async exportToCSV(
       (FORMAT CSV, HEADER ${header}, DELIMITER '${delimiter}');
     `;
 
-    console.log('[ExportService] Exporting to CSV:', outputPath);
+    logger.info('Exporting dataset to CSV', { outputPath });
     await this.conn.run(copySQL);
     await this.rewriteTextFileEncoding(outputPath, options.encoding);
-    console.log('[ExportService] CSV export completed');
+    logger.info('Dataset CSV export completed', { outputPath });
   }
 
 private async exportToExcel(
@@ -116,12 +119,12 @@ private async exportToExcel(
 
     // 1. 获取总行数
     const totalRows = await this.getRowCount(sql);
-    console.log('[ExportService] Total rows to export:', totalRows);
+    logger.info('Counted rows for dataset export', { totalRows });
 
     // 2. 判断是否需要拆分
     if (totalRows <= maxRowsPerFile) {
       // 无需拆分，直接导出
-      console.log('[ExportService] Exporting single Excel file');
+      logger.info('Exporting single Excel file', { outputPath, totalRows });
       onProgress?.({
         current: 0,
         total: 1,
@@ -146,7 +149,12 @@ private async exportToExcel(
     const { dir, name, ext } = path.parse(outputPath);
     const files: string[] = [];
 
-    console.log('[ExportService] Splitting into', filesCount, 'Excel files');
+    logger.info('Splitting dataset export into Excel parts', {
+      outputPath,
+      filesCount,
+      totalRows,
+      maxRowsPerFile,
+    });
 
     for (let i = 0; i < filesCount; i++) {
       const offset = i * maxRowsPerFile;
@@ -167,7 +175,11 @@ private async exportToExcel(
       await this.exportSingleExcel(pagedSQL, filePath);
 
       files.push(filePath);
-      console.log(`[ExportService] Excel part ${i + 1}/${filesCount} completed: ${filePath}`);
+      logger.info('Dataset Excel export part completed', {
+        outputPath: filePath,
+        part: i + 1,
+        totalParts: filesCount,
+      });
     }
 
     // 所有文件导出完成
@@ -201,7 +213,7 @@ private async exportSingleExcel(sql: string, outputPath: string): Promise<void> 
     });
     const worksheet = workbook.addWorksheet('Data');
 
-    console.log('[ExportService] Streaming data for Excel export');
+    logger.info('Streaming data for Excel export', { outputPath });
     const result = await this.conn.stream(sql);
     const columns = result.columnNames();
     worksheet.columns = columns.map((col: string) => ({
@@ -227,15 +239,21 @@ private async exportSingleExcel(sql: string, outputPath: string): Promise<void> 
       }
     }
 
-    console.log(`[ExportService] Streamed ${streamedRows} rows into Excel`);
+    logger.info('Streamed rows into Excel export', {
+      outputPath,
+      rowCount: streamedRows,
+    });
 
-    console.log('[ExportService] Writing Excel file:', outputPath);
+    logger.info('Writing Excel export file', { outputPath });
     try {
       worksheet.commit();
       await workbook.commit();
-      console.log('[ExportService] Excel file written successfully');
+      logger.info('Excel export file written successfully', { outputPath });
     } catch (writeError) {
-      console.error('[ExportService] Failed to write Excel file:', writeError);
+      logger.error('Failed to write Excel export file', {
+        outputPath,
+        errorMessage: writeError instanceof Error ? writeError.message : String(writeError),
+      });
       throw new Error(
         `Failed to write Excel file: ${writeError instanceof Error ? writeError.message : String(writeError)}\n` +
           `Please check if the file path is valid and you have write permissions.`
@@ -258,10 +276,10 @@ private async exportToTXT(
       (FORMAT CSV, HEADER false, DELIMITER '', QUOTE '');
     `;
 
-    console.log('[ExportService] Exporting to TXT:', outputPath);
+    logger.info('Exporting dataset to TXT', { outputPath });
     await this.conn.run(copySQL);
     await this.rewriteTextFileEncoding(outputPath, options.encoding);
-    console.log('[ExportService] TXT export completed');
+    logger.info('Dataset TXT export completed', { outputPath });
   }
 
 private async exportToParquet(sql: string, outputPath: string): Promise<void> {
@@ -273,9 +291,9 @@ private async exportToParquet(sql: string, outputPath: string): Promise<void> {
       (FORMAT PARQUET, COMPRESSION 'SNAPPY');
     `;
 
-    console.log('[ExportService] Exporting to Parquet:', outputPath);
+    logger.info('Exporting dataset to Parquet', { outputPath });
     await this.conn.run(copySQL);
-    console.log('[ExportService] Parquet export completed');
+    logger.info('Dataset Parquet export completed', { outputPath });
   }
 
 private async exportToJSON(
@@ -291,10 +309,10 @@ private async exportToJSON(
       (FORMAT JSON, ARRAY true);
     `;
 
-    console.log('[ExportService] Exporting to JSON:', outputPath);
+    logger.info('Exporting dataset to JSON', { outputPath });
     await this.conn.run(copySQL);
     await this.rewriteTextFileEncoding(outputPath, options.encoding);
-    console.log('[ExportService] JSON export completed');
+    logger.info('Dataset JSON export completed', { outputPath });
   }
 
 private async rewriteTextFileEncoding(
