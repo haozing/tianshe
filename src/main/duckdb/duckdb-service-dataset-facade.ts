@@ -6,12 +6,15 @@ import {
   getCurrentTraceContext,
   withTraceContext,
 } from '../../core/observability/observation-context';
+import { createLogger } from '../../core/logger';
 import { attachErrorContextArtifact } from '../../core/observability/error-context-artifact';
 import { observationService } from '../../core/observability/observation-service';
 import type { Dataset, DatasetPlacementOptions, ImportProgress, QueryResult } from './types';
 import type { DatasetService } from './dataset-service';
 import type { QueryTemplateService } from './query-template-service';
 import { quoteQualifiedName } from './utils';
+
+const logger = createLogger('DuckDBServiceDatasetFacade');
 
 export interface DuckDBServiceDatasetFacade {
   importDatasetFile(
@@ -112,6 +115,10 @@ function getQueryKind(sql?: string): 'custom_sql' | 'default_dataset_query' {
   return String(sql || '').trim() ? 'custom_sql' : 'default_dataset_query';
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 const duckDBServiceDatasetFacadeMethods: DuckDBServiceDatasetFacade &
   ThisType<DuckDBServiceDatasetFacadeThis> = {
 async importDatasetFile(
@@ -158,22 +165,30 @@ async importDatasetFile(
           // 新模型：确保导入数据集被归入一个内容区 Tab 组
           await this.datasetService.listGroupTabsByDataset(progress.datasetId);
         } catch (error) {
-          console.error(`[DuckDB] Failed to ensure dataset tab group:`, error);
+          logger.warn('Failed to ensure dataset tab group after import', {
+            datasetId: progress.datasetId,
+            errorMessage: getErrorMessage(error),
+          });
         }
       }
 
       // 导入完成后确保默认查询模板存在
       if (progress.status === 'completed' && this.queryTemplateService && this.datasetService) {
         try {
-          console.log(
-            `[DuckDB] Auto-creating default query template for dataset: ${progress.datasetId}`
-          );
+          logger.info('Auto-creating default query template for imported dataset', {
+            datasetId: progress.datasetId,
+          });
           await this.datasetService.withDatasetAttached(progress.datasetId, async () => {
             await this.queryTemplateService!.getOrCreateDefaultQueryTemplate(progress.datasetId);
           });
-          console.log(`[DuckDB] Default query template created successfully`);
+          logger.info('Default query template created for imported dataset', {
+            datasetId: progress.datasetId,
+          });
         } catch (error) {
-          console.error(`[DuckDB] Failed to create default query template:`, error);
+          logger.warn('Failed to create default query template for imported dataset', {
+            datasetId: progress.datasetId,
+            errorMessage: getErrorMessage(error),
+          });
           // 不要阻止导入流程，只记录错误
         }
       }
@@ -235,7 +250,7 @@ async listDatasets(): Promise<Dataset[]> {
 
 async getDatasetInfo(datasetId: string): Promise<Dataset | null> {
   if (!this.datasetService) {
-    console.error('[DuckDBService] datasetService is not initialized');
+    logger.error('Dataset service is not initialized when getting dataset info', { datasetId });
     return null;
   }
   return await this.datasetService.getDatasetInfo(datasetId);
@@ -669,10 +684,7 @@ async deleteColumn(datasetId: string, columnName: string, force: boolean = false
 async analyzeDatasetTypes(datasetId: string): Promise<{ schema: any[]; sampleData: any[] }> {
   if (!this.datasetService) throw new Error('Dataset service not initialized');
 
-  console.log(
-    '[DuckDBService] Delegating type analysis to DatasetService for dataset:',
-    datasetId
-  );
+  logger.info('Delegating type analysis to DatasetService', { datasetId });
 
   // ?? 使用 DatasetService 的方法，避免文件锁定冲突
   // DatasetService 使用主连接和已 attached 的数据库，而不是连接池
