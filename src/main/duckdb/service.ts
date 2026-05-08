@@ -13,6 +13,7 @@ import type { LogEntry } from './types';
 import { ensureDirectories, getMainDBPath } from './utils';
 import fs from 'fs-extra';
 import path from 'path';
+import { createLogger } from '../../core/logger';
 import { QueryEngine } from '../../core/query-engine';
 import type { IDatasetResolver } from '../../core/query-engine/interfaces/IDatasetResolver';
 import { getUnknownErrorMessage } from '../ipc-utils';
@@ -46,6 +47,8 @@ import { RuntimeObservationService } from './runtime-observation-service';
 import { ObservationQueryService } from '../observation-query-service';
 import { setObservationSink, getObservationSink } from '../../core/observability/observation-service';
 // import { getGlobalConnectionPool } from './connection-pool';  // ? 已移除：统一使用主连接（方案A）
+
+const logger = createLogger('DuckDBService');
 
 /**
  * DuckDB 服务协调器
@@ -100,7 +103,7 @@ export class DuckDBService implements IDatasetResolver {
       // 尝试正常初始化（含 WAL replay）
       this.db = await DuckDBInstance.create(dbPath);
       this.conn = await DuckDBConnection.create(this.db);
-      console.log(`[OK] DuckDB initialized at: ${dbPath}`);
+      logger.info('DuckDB initialized at database path', { dbPath });
     } catch (initError: unknown) {
       const initErrorMessage = getUnknownErrorMessage(initError);
       // 检测 WAL replay 失败的特征错误
@@ -109,8 +112,10 @@ export class DuckDBService implements IDatasetResolver {
         initErrorMessage.includes('DatabaseManager::GetDefaultDatabase') ||
         initErrorMessage.includes('INTERNAL Error')
       ) {
-        console.error('[ERROR] WAL replay failed:', initErrorMessage);
-        console.log('[RECOVERY] Removing incompatible WAL file...');
+        logger.error('DuckDB WAL replay failed; removing incompatible WAL file', {
+          dbPath,
+          errorMessage: initErrorMessage,
+        });
 
         // 清理部分打开的连接
         if (this.conn) {
@@ -133,23 +138,27 @@ export class DuckDBService implements IDatasetResolver {
         if (await fs.pathExists(walPath)) {
           const backup = `${walPath}.corrupted.${Date.now()}`;
           await fs.move(walPath, backup);
-          console.log(`[BACKUP] Corrupted WAL backed up to: ${path.basename(backup)}`);
+          logger.info('Corrupted DuckDB WAL backed up', {
+            dbPath,
+            backupFileName: path.basename(backup),
+          });
         }
 
         // 重新初始化（不带 WAL）
         this.db = await DuckDBInstance.create(dbPath);
         this.conn = await DuckDBConnection.create(this.db);
-        console.log('[OK] Database recovered successfully');
-        console.warn('[WARN] Data from the previous session may be incomplete');
+        logger.info('DuckDB database recovered successfully', { dbPath });
+        logger.warn('Data from the previous DuckDB session may be incomplete', { dbPath });
       } else {
         // 其他错误，继续抛出
         throw initError;
       }
     }
 
-    console.log(`[OK] DuckDB initialized`);
-    console.log(`[INFO] Database file location: ${dbPath}`);
-    console.log(`   (Delete this file if you need to reset the database)`);
+    logger.info('DuckDB initialized', {
+      dbPath,
+      resetHint: 'Delete this file if you need to reset the database',
+    });
 
     // 初始化 QueryEngine
     this.queryEngine = new QueryEngine(this);
@@ -181,7 +190,7 @@ export class DuckDBService implements IDatasetResolver {
     // 初始化所有表（DuckDB 默认使用 WAL 模式）
     await this.initSystemTables();
 
-    console.log('[OK] All services initialized');
+    logger.info('All DuckDB services initialized');
   }
 
   /**
@@ -231,14 +240,14 @@ export class DuckDBService implements IDatasetResolver {
     await initPluginTables(this.conn);
     await this.extensionPackagesService.initTable();
 
-    console.log('[OK] System tables initialized');
+    logger.info('DuckDB system tables initialized');
 
     // Force CHECKPOINT to merge WAL into main file
     try {
       await this.conn!.run('CHECKPOINT');
-      console.log('[OK] WAL checkpoint completed after initialization');
+      logger.info('DuckDB WAL checkpoint completed after initialization');
     } catch (error) {
-      console.warn('[WARN] WAL checkpoint failed (non-critical):', error);
+      logger.warn('DuckDB WAL checkpoint failed after initialization', { error });
     }
   }  // ========== 日志服务代理方法 ==========
   // ?? 设计说明：以下代理方法是 Facade 模式的实现
@@ -573,7 +582,10 @@ export class DuckDBService implements IDatasetResolver {
 
     // 在创建默认模板快照前，必须先 ATTACH 主数据集数据库
     return await this.datasetService.withDatasetAttached(datasetId, async () => {
-      console.log(`[Service] Database attached for query template creation: ds_${datasetId}`);
+      logger.info('Database attached for query template creation', {
+        datasetId,
+        attachKey: `ds_${datasetId}`,
+      });
       return await queryTemplateService.getOrCreateDefaultQueryTemplate(datasetId);
     });
   }
@@ -582,24 +594,26 @@ export class DuckDBService implements IDatasetResolver {
 
   async close(): Promise<void> {
     if (!this.conn) {
-      console.log('[WARN] DuckDB connection already closed');
+      logger.warn('DuckDB connection already closed');
       return;
     }
 
     try {
-      console.log('[CLEANUP] Closing DuckDB service...');
+      logger.info('Closing DuckDB service');
       const activeObservationSink = this.runtimeObservationService;
 
       // 0. Force CHECKPOINT - merge all WAL content into main file
       // Important: Must execute before closing connection, or WAL replay may fail on next startup
-      console.log('[CHECKPOINT] Performing final checkpoint...');
+      logger.info('Performing final DuckDB checkpoint');
       try {
         await this.conn.run('CHECKPOINT');
-        console.log('[OK] Final checkpoint completed - all data persisted to main database');
+        logger.info('Final DuckDB checkpoint completed');
       } catch (checkpointError) {
-        console.error('[ERROR] CHECKPOINT FAILED:', checkpointError);
-        console.warn('[WARN] Data from current session may not be fully persisted!');
-        console.warn('[WARN] WAL file will remain and may cause issues on next startup.');
+        logger.error('Final DuckDB checkpoint failed', {
+          error: checkpointError,
+          dataPersistenceWarning: 'Data from current session may not be fully persisted',
+          walWarning: 'WAL file will remain and may cause issues on next startup',
+        });
         // 不阻止关闭流程，继续执行
       }
 
@@ -632,9 +646,9 @@ export class DuckDBService implements IDatasetResolver {
         setObservationSink(null);
       }
 
-      console.log('[OK] DuckDB service closed (all services cleaned up)');
+      logger.info('DuckDB service closed and services cleaned up');
     } catch (error) {
-      console.error('[ERROR] Error closing DuckDB service:', error);
+      logger.error('Error closing DuckDB service', { error });
       const activeObservationSink = this.runtimeObservationService;
       if (activeObservationSink && getObservationSink() === activeObservationSink) {
         setObservationSink(null);
