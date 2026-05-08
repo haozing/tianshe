@@ -11,6 +11,8 @@ import { JSPluginManager } from '../../core/js-plugin/manager';
 import { readManifest } from '../../core/js-plugin/loader';
 import { ButtonExecutor } from '../../core/js-plugin/button-executor';
 import { handleIPCError } from '../ipc-utils';
+import { IpcError } from './errors';
+import { createLogger } from '../../core/logger';
 import type { DuckDBService } from '../duckdb/service';
 import type { WebContentsViewManager } from '../webcontentsview-manager';
 import type { WindowManager } from '../window-manager';
@@ -31,6 +33,30 @@ import { registerJSPluginUIExtensionRoutes } from './js-plugin-routes/ui-extensi
 import { registerJSPluginViewRoutes } from './js-plugin-routes/view-routes';
 
 const store = new Store();
+const logger = createLogger('JSPluginIPCHandler');
+
+function normalizeErrorForLog(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+
+  return { raw: String(error) };
+}
+
+function logPluginIpcError(
+  message: string,
+  error: unknown,
+  fields: Record<string, unknown> = {}
+): void {
+  logger.error(message, {
+    ...fields,
+    error: normalizeErrorForLog(error),
+  });
+}
 
 export class JSPluginIPCHandler {
   private buttonExecutor: ButtonExecutor;
@@ -102,9 +128,10 @@ export class JSPluginIPCHandler {
         sourcePath?: string,
         options?: { devMode?: boolean }
       ) => {
-        console.log(`[IPC] js-plugin:import called`);
-        console.log(`[IPC] sourcePath provided: ${sourcePath ? 'YES' : 'NO'}`);
-        console.log(`[IPC] devMode: ${options?.devMode}`);
+        logger.info('Plugin import requested', {
+          hasSourcePath: Boolean(sourcePath),
+          devMode: options?.devMode === true,
+        });
 
         try {
           const httpApiConfig = store.get(
@@ -124,19 +151,21 @@ export class JSPluginIPCHandler {
 
           // 如果没有提供路径，打开文件选择对话框
           if (!pluginPath) {
-            console.log(`[IPC] Opening file dialog...`);
+            logger.info('Opening plugin import file dialog', {
+              devMode: options?.devMode === true,
+            });
 
             let dialogConfig: any;
             if (options?.devMode) {
               // 开发模式导入固定要求选择目录，打包版也允许本地目录调试。
-              console.log(`[IPC] Development mode import: allowing directory selection`);
+              logger.info('Plugin development import allows directory selection');
               dialogConfig = {
                 title: '选择插件目录',
                 properties: ['openDirectory'],
                 // 注意：Windows 上 openDirectory 不支持 filters
               };
             } else {
-              console.log(`[IPC] Archive import: allowing file selection`);
+              logger.info('Plugin archive import allows file selection');
               dialogConfig = {
                 title: '选择插件压缩包',
                 properties: ['openFile'],
@@ -149,29 +178,32 @@ export class JSPluginIPCHandler {
 
             const result = await dialog.showOpenDialog(dialogConfig);
 
-            console.log(`[IPC] Dialog closed. Canceled: ${result.canceled}`);
+            logger.info('Plugin import dialog closed', {
+              canceled: result.canceled,
+              selectedPathCount: result.filePaths.length,
+            });
 
             if (result.canceled || result.filePaths.length === 0) {
-              console.log(`[IPC] User canceled or no selection`);
+              logger.info('Plugin import canceled by user');
               return { success: false, error: 'User canceled' };
             }
 
-            console.log(`[IPC] Selected paths count: ${result.filePaths.length}`);
-            console.log(`[IPC] First path: ${result.filePaths[0]}`);
-
             pluginPath = result.filePaths[0];
 
-            console.log(`[IPC] Waiting 150ms for file handles to release...`);
+            logger.info('Plugin import path selected', {
+              selectedPathCount: result.filePaths.length,
+              extension: pluginPath ? pluginPath.split('.').pop() || '' : '',
+            });
+
             // 🆕 添加短暂延迟，确保文件系统句柄完全释放（Windows 特有问题）
             // 这可以防止在文件选择对话框关闭后立即访问文件时发生崩溃
             await new Promise((resolve) => setTimeout(resolve, 150));
-            console.log(`[IPC] Delay completed`);
           }
 
-          console.log(`[IPC] About to import plugin from: ${pluginPath}`);
-          if (options?.devMode) {
-            console.log(`[IPC] Development mode requested`);
-          }
+          logger.info('Importing plugin from selected source', {
+            hasPluginPath: Boolean(pluginPath),
+            devMode: options?.devMode === true,
+          });
 
           const importResult = await this.pluginManager.import(pluginPath, {
             ...options,
@@ -188,7 +220,7 @@ export class JSPluginIPCHandler {
 
           return importResult;
         } catch (error: unknown) {
-          console.error(`[IPC] Import failed:`, error);
+          logPluginIpcError('Plugin import failed', error);
           return handleIPCError(error);
         }
       },
@@ -213,7 +245,7 @@ export class JSPluginIPCHandler {
         try {
           const pluginCode = String(params?.pluginCode || '').trim();
           if (!pluginCode) {
-            throw new Error('pluginCode 不能为空');
+            throw new IpcError('INVALID_INPUT', 'pluginCode 不能为空', { field: 'pluginCode' });
           }
 
           const cloudRuntimePluginProvider = this.requireCloudRuntimePluginProvider();
@@ -236,7 +268,11 @@ export class JSPluginIPCHandler {
             }
           );
           if (!importResult.success || !importResult.pluginId) {
-            throw new Error(importResult.error || '安装云端插件失败');
+            throw new IpcError(
+              'PLUGIN_LOAD_ERROR',
+              importResult.error || '安装云端插件失败',
+              { pluginCode }
+            );
           }
 
           event.sender.send('js-plugin:state-changed', {
@@ -262,7 +298,12 @@ export class JSPluginIPCHandler {
             try {
               await fs.remove(tempZipPath);
             } catch (cleanupError) {
-              console.warn('[CloudPluginInstall] Failed to cleanup temp zip:', cleanupError);
+              logger.warn('Failed to cleanup cloud plugin temp zip', {
+                error:
+                  cleanupError instanceof Error
+                    ? { name: cleanupError.name, message: cleanupError.message }
+                    : { raw: String(cleanupError) },
+              });
             }
           }
         }
@@ -401,7 +442,13 @@ export class JSPluginIPCHandler {
         manifestAny?.cloudRuntime?.authRequired === true ||
         manifestAny?.cloud?.authRequired === true;
     } catch (error) {
-      console.warn(`[CloudPluginGuard] Failed to read manifest for ${pluginId}:`, error);
+      logger.warn('Failed to read plugin manifest for cloud runtime guard', {
+        pluginId,
+        error:
+          error instanceof Error
+            ? { name: error.name, message: error.message }
+            : { raw: String(error) },
+      });
     }
 
     const authRequired =
@@ -437,24 +484,30 @@ export class JSPluginIPCHandler {
       return; // 已激活，直接返回
     }
 
-    console.log(`⚠️  Plugin ${pluginId} is not activated, attempting to load...`);
+    logger.warn('Plugin is not activated; attempting to load', { pluginId });
 
     // 检查插件是否在数据库中
     const pluginInfo = await this.pluginManager.getPluginInfo(pluginId);
     if (!pluginInfo) {
-      throw new Error(`Plugin ${pluginId} is not installed. Please install it first.`);
+      throw new IpcError(
+        'PLUGIN_NOT_FOUND',
+        `Plugin ${pluginId} is not installed. Please install it first.`,
+        { pluginId }
+      );
     }
 
     // 尝试加载插件（会自动调用 activate）
     try {
       await this.pluginManager.load(pluginId);
-      console.log(`✅ Plugin ${pluginId} loaded successfully`);
+      logger.info('Plugin loaded successfully', { pluginId });
     } catch (error: unknown) {
-      console.error(`❌ Failed to load plugin ${pluginId}:`, error);
-      const errorMessage = handleIPCError(error).error;
-      throw new Error(
-        `Failed to activate plugin ${pluginId}: ${errorMessage}. ` +
-          `Please check the plugin code or try reinstalling it.`
+      logPluginIpcError('Failed to load plugin', error, { pluginId });
+      const errorResult = handleIPCError(error);
+      throw new IpcError(
+        'PLUGIN_LOAD_ERROR',
+        `Failed to activate plugin ${pluginId}: ${errorResult.error}. ` +
+          `Please check the plugin code or try reinstalling it.`,
+        { pluginId, causeCode: errorResult.code }
       );
     }
   }
@@ -478,7 +531,7 @@ export class JSPluginIPCHandler {
       const mainWindow = this.windowManager.getMainWindowV3();
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('js-plugin:reloaded', payload);
-        console.log(`[IPC] Plugin reloaded event forwarded: ${payload.pluginId}`);
+        logger.info('Plugin reloaded event forwarded', { pluginId: payload.pluginId });
       }
     });
 

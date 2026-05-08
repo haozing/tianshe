@@ -214,7 +214,6 @@ export const DIRECT_CONSOLE_CALL_BASELINE: Record<string, number> = {
   'src/main/ipc-handlers/extension-packages-ipc-handler.ts': 1,
   'src/main/ipc-handlers/file-handler.ts': 12,
   'src/main/ipc-handlers/http-api-handler.ts': 2,
-  'src/main/ipc-handlers/js-plugin-handler.ts': 21,
   'src/main/ipc-handlers/observation-handler.ts': 1,
   'src/main/ipc-handlers/ocr-pool-handler.ts': 1,
   'src/main/ipc-handlers/query-template-handler.ts': 22,
