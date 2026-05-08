@@ -6,6 +6,7 @@ import type { ChildProcess } from 'node:child_process';
 import type { BrowserFactory } from '../../core/browser-pool/global-pool';
 import type { SessionConfig } from '../../core/browser-pool/types';
 import { getOcrPool } from '../../core/system-automation/ocr';
+import { createLogger } from '../../core/logger';
 import { AIRPA_RUNTIME_CONFIG } from '../../constants/runtime-config';
 import { ExtensionBrowser } from '../../core/browser-extension';
 import {
@@ -46,6 +47,8 @@ const REQUIRED_NATIVE_FINGERPRINT_ARGS = [
   '--ignore-gpu-blocklist',
   '--enable-unsafe-webgl',
 ] as const;
+
+const logger = createLogger('ExtensionBrowserFactory');
 
 export function buildExtensionLaunchArgs(options: ExtensionLaunchArgsOptions): string[] {
   const { session, userDataDir, managedExtensionArgs, ruyiArg } = options;
@@ -175,7 +178,11 @@ export function createExtensionBrowserFactory(options?: ExtensionFactoryOptions)
       if (strictFingerprintGate) {
         throw new Error(message);
       }
-      console.warn(message);
+      logger.warn('Fingerprint preflight issues detected for extension browser session', {
+        sessionId: session.id,
+        issues: preflightIssues,
+        strictFingerprintGate,
+      });
     }
 
     const chromePath = resolveChromeExecutablePath();
@@ -220,9 +227,11 @@ export function createExtensionBrowserFactory(options?: ExtensionFactoryOptions)
       managedExtensionArgs,
       ruyiArg: preparedRuyi.arg,
     });
-    console.log(
-      `[ExtensionFactory] session=${session.id} ruyi=${preparedRuyi.source} file=${preparedRuyi.filePath}`
-    );
+    logger.info('Launching extension browser session', {
+      sessionId: session.id,
+      ruyiSource: preparedRuyi.source,
+      ruyiFilePath: preparedRuyi.filePath,
+    });
 
     const chromeProcess = spawn(chromePath, launchArgs, {
       stdio: ['ignore', 'ignore', 'pipe'],

@@ -13,11 +13,14 @@ import { SimpleBrowser } from '../../core/browser-core';
 import { IntegratedBrowser } from '../../core/browser-automation';
 import type { BrowserFactory, BrowserDestroyer } from '../../core/browser-pool/global-pool';
 import { getOcrPool } from '../../core/system-automation/ocr';
+import { createLogger } from '../../core/logger';
 import { buildStealthConfigFromFingerprint } from '../../core/fingerprint/fingerprint-projections';
 import { getDefaultFingerprint } from './presets';
 import { mergeFingerprintConfig } from '../../constants/fingerprint-defaults';
 import type { ProxyConfig as ProfileProxyConfig } from '../../types/profile';
 import { clearProxyCredentials, setProxyCredentials } from './browser-launcher';
+
+const logger = createLogger('BrowserPoolIntegration');
 
 /**
  * 离屏坐标常量
@@ -92,7 +95,10 @@ export function createBrowserFactory(
     try {
       await applyProxyToSession(viewInfo.view.webContents.session, session.proxy);
     } catch (error) {
-      console.warn('[BrowserPool] Failed to apply proxy for session:', session.id, error);
+      logger.warn('Failed to apply proxy for pooled browser session', {
+        sessionId: session.id,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
     }
 
     // 附加到主窗口（离屏位置，避免闪烁）
@@ -112,7 +118,10 @@ export function createBrowserFactory(
       },
     });
 
-    console.log(`[BrowserPool] Browser created: ${viewId}`);
+    logger.info('Browser created for pool session', {
+      sessionId: session.id,
+      viewId,
+    });
 
     return { browser, viewId, engine: 'electron' };
   };
@@ -139,6 +148,6 @@ export function createBrowserDestroyer(viewManager: WebContentsViewManager): Bro
         // ignore
       }
     }
-    console.log(`[BrowserPool] Browser destroyed: ${viewId}`);
+    logger.info('Browser destroyed for pool session', { viewId });
   };
 }
