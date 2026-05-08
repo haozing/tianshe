@@ -1,5 +1,8 @@
 import type { QueryConfig } from '../../../../core/query-engine/types';
 import { datasetFacade } from '../../services/datasets/datasetFacade';
+import { createRendererLogger } from '../../lib/logger';
+
+const logger = createRendererLogger('DatasetStore');
 
 let querySessionSerial = 0;
 
@@ -434,7 +437,11 @@ export function createDatasetQueryRuntimeSlice<TState extends DatasetQueryRuntim
       if (!isActiveQuerySession(sessionId, id)) {
         return;
       }
-      console.error('[datasetStore] Load more error:', error);
+      logger.error('Failed to load more dataset rows', {
+        operation: 'dataset.query.loadMore',
+        datasetId: id,
+        error,
+      });
       set({
         error: error instanceof Error ? error.message : String(error),
         loadingMore: false,

@@ -1,6 +1,7 @@
 import type { QueryConfig } from '../../../../core/query-engine/types';
 import { normalizeRuntimeSQL } from '../../../../utils/query-runtime';
 import { datasetFacade } from '../../services/datasets/datasetFacade';
+import { createRendererLogger } from '../../lib/logger';
 import {
   bindActiveQueryTemplateState,
   getActiveQueryTemplateFromState,
@@ -8,6 +9,8 @@ import {
   type DatasetQueryRuntimeHelpers,
   type DatasetQueryRuntimeState,
 } from './queryRuntimeSlice';
+
+const logger = createRendererLogger('DatasetStore');
 
 export interface DatasetQueryTemplateState extends DatasetQueryRuntimeState {
   currentDataset: { id: string; rowCount: number } | null;
@@ -158,11 +161,19 @@ export function createDatasetQueryTemplateSlice<TState extends DatasetQueryTempl
         return templateId;
       }
 
-      console.error('[datasetStore] Failed to create query template:', response.error);
+      logger.error('Failed to create query template', {
+        operation: 'dataset.queryTemplate.create',
+        datasetId: params.datasetId,
+        error: response.error,
+      });
       set({ error: response.error || '创建查询模板失败' } as Partial<TState>);
       return null;
     } catch (error) {
-      console.error('[datasetStore] Error creating query template:', error);
+      logger.error('Error creating query template', {
+        operation: 'dataset.queryTemplate.create',
+        datasetId: params.datasetId,
+        error,
+      });
       set({ error: '创建查询模板失败' } as Partial<TState>);
       return null;
     }
@@ -189,7 +200,11 @@ export function createDatasetQueryTemplateSlice<TState extends DatasetQueryTempl
         generatedSQL: sqlResponse.sql,
       });
     } catch (error) {
-      console.error('[datasetStore] Error generating query template SQL:', error);
+      logger.error('Error generating query template SQL', {
+        operation: 'dataset.queryTemplate.generateSQL',
+        datasetId: params.datasetId,
+        error,
+      });
       set({ error: 'Failed to create query template' } as Partial<TState>);
       return null;
     }
@@ -206,7 +221,11 @@ export function createDatasetQueryTemplateSlice<TState extends DatasetQueryTempl
       if (!isActiveQuerySession(sessionId)) {
         return;
       }
-      console.error('[datasetStore] Error applying query template:', error);
+      logger.error('Error applying query template', {
+        operation: 'dataset.queryTemplate.apply',
+        templateId,
+        error,
+      });
       set({
         error: error instanceof Error ? error.message : '应用查询模板失败',
         loading: false,
@@ -246,7 +265,12 @@ export function createDatasetQueryTemplateSlice<TState extends DatasetQueryTempl
         if (!isActiveQuerySession(sessionId, datasetId)) {
           return;
         }
-        console.error('[datasetStore] Failed to refresh active query template:', error);
+        logger.error('Failed to refresh active query template', {
+          operation: 'dataset.queryTemplate.refreshActive',
+          datasetId,
+          templateId: activeQueryTemplate.id,
+          error,
+        });
         set({
           error: error instanceof Error ? error.message : '刷新数据失败',
           loading: false,
@@ -278,7 +302,11 @@ export function createDatasetQueryTemplateSlice<TState extends DatasetQueryTempl
       if (!isActiveQuerySession(sessionId, datasetId)) {
         return;
       }
-      console.error('[datasetStore] Failed to load default query template:', error);
+      logger.error('Failed to load default query template', {
+        operation: 'dataset.queryTemplate.loadDefault',
+        datasetId,
+        error,
+      });
       set({
         error: error instanceof Error ? error.message : String(error),
         loading: false,
@@ -334,7 +362,11 @@ export function createDatasetQueryTemplateSlice<TState extends DatasetQueryTempl
       if (!isActiveQuerySession(sessionId, datasetId)) {
         return;
       }
-      console.error('[datasetStore] Failed to update active query template:', error);
+      logger.error('Failed to update active query template', {
+        operation: 'dataset.queryTemplate.updateActive',
+        datasetId,
+        error,
+      });
       set({
         error: error instanceof Error ? error.message : String(error),
         loading: false,
@@ -358,7 +390,11 @@ export function createDatasetQueryTemplateSlice<TState extends DatasetQueryTempl
 
       await updateActiveQueryTemplate(datasetId, emptyConfig);
     } catch (error) {
-      console.error('[datasetStore] Failed to clear processing:', error);
+      logger.error('Failed to clear dataset processing', {
+        operation: 'dataset.queryTemplate.clearProcessing',
+        datasetId,
+        error,
+      });
       set({
         error: error instanceof Error ? error.message : String(error),
         loading: false,

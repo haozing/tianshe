@@ -4,6 +4,7 @@
  */
 
 import { create } from 'zustand';
+import { createRendererLogger } from '../lib/logger';
 import type {
   Account,
   SavedSite,
@@ -16,6 +17,8 @@ import type {
   CreateTagParams,
   UpdateTagParams,
 } from '../../../types/profile';
+
+const logger = createRendererLogger('AccountStore');
 
 // === 分类类型定义 ===
 export type CategoryMode = 'site' | 'tag';
@@ -385,7 +388,10 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
         errors: { savedSites: result.error || '加载平台列表失败' },
       });
     } catch (err) {
-      console.error('[AccountStore] Failed to load saved sites:', err);
+      logger.error('Failed to load saved sites', {
+        operation: 'account.savedSite.list',
+        error: err,
+      });
       applyAccountPatch(set, {
         loading: { savedSites: false },
         errors: { savedSites: err instanceof Error ? err.message : '加载平台列表失败' },
@@ -411,7 +417,10 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
       });
       return null;
     } catch (err) {
-      console.error('[AccountStore] Failed to create saved site:', err);
+      logger.error('Failed to create saved site', {
+        operation: 'account.savedSite.create',
+        error: err,
+      });
       applyAccountPatch(set, {
         loading: { mutation: false },
         errors: { mutation: err instanceof Error ? err.message : '创建平台失败' },
@@ -438,7 +447,11 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
       });
       return null;
     } catch (err) {
-      console.error('[AccountStore] Failed to update saved site:', err);
+      logger.error('Failed to update saved site', {
+        operation: 'account.savedSite.update',
+        siteId: id,
+        error: err,
+      });
       applyAccountPatch(set, {
         loading: { mutation: false },
         errors: { mutation: err instanceof Error ? err.message : '更新平台失败' },
@@ -465,7 +478,11 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
       });
       return false;
     } catch (err) {
-      console.error('[AccountStore] Failed to delete saved site:', err);
+      logger.error('Failed to delete saved site', {
+        operation: 'account.savedSite.delete',
+        siteId: id,
+        error: err,
+      });
       applyAccountPatch(set, {
         loading: { mutation: false },
         errors: { mutation: err instanceof Error ? err.message : '删除平台失败' },
@@ -483,7 +500,11 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
         ),
       });
     } catch (err) {
-      console.error('[AccountStore] Failed to increment site usage:', err);
+      logger.error('Failed to increment saved site usage', {
+        operation: 'account.savedSite.incrementUsage',
+        siteId: id,
+        error: err,
+      });
     }
   },
 
@@ -506,7 +527,10 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
         errors: { tags: result.error || '加载标签失败' },
       });
     } catch (err) {
-      console.error('[AccountStore] Failed to load tags:', err);
+      logger.error('Failed to load tags', {
+        operation: 'account.tag.list',
+        error: err,
+      });
       applyAccountPatch(set, {
         loading: { tags: false },
         errors: { tags: err instanceof Error ? err.message : '加载标签失败' },
@@ -532,7 +556,10 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
       });
       return null;
     } catch (err) {
-      console.error('[AccountStore] Failed to create tag:', err);
+      logger.error('Failed to create tag', {
+        operation: 'account.tag.create',
+        error: err,
+      });
       applyAccountPatch(set, {
         loading: { mutation: false },
         errors: { mutation: err instanceof Error ? err.message : '创建标签失败' },
@@ -559,7 +586,11 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
       });
       return null;
     } catch (err) {
-      console.error('[AccountStore] Failed to update tag:', err);
+      logger.error('Failed to update tag', {
+        operation: 'account.tag.update',
+        tagId: id,
+        error: err,
+      });
       applyAccountPatch(set, {
         loading: { mutation: false },
         errors: { mutation: err instanceof Error ? err.message : '更新标签失败' },
@@ -586,7 +617,11 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
       });
       return false;
     } catch (err) {
-      console.error('[AccountStore] Failed to delete tag:', err);
+      logger.error('Failed to delete tag', {
+        operation: 'account.tag.delete',
+        tagId: id,
+        error: err,
+      });
       applyAccountPatch(set, {
         loading: { mutation: false },
         errors: { mutation: err instanceof Error ? err.message : '删除标签失败' },

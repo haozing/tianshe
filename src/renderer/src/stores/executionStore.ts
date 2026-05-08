@@ -4,7 +4,10 @@
  */
 
 import { create } from 'zustand';
+import { createRendererLogger } from '../lib/logger';
 import { getUnknownErrorMessage } from '../../../utils/error-message';
+
+const logger = createRendererLogger('ExecutionStore');
 
 interface ExecutionInfo {
   executionId: string;
@@ -107,7 +110,11 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
       // 统计失败的执行
       const failures = results.filter((r) => r.status === 'rejected');
       if (failures.length > 0) {
-        console.error('[ExecutionStore] Some executions failed to stop:', failures);
+        logger.error('Some executions failed to stop', {
+          operation: 'execution.stopAll',
+          failureCount: failures.length,
+          failures,
+        });
       }
 
       // 清空活跃执行列表
@@ -134,7 +141,10 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
         set({ activeExecutions: newMap });
       }
     } catch (error: unknown) {
-      console.error('[ExecutionStore] Failed to sync active executions:', error);
+      logger.error('Failed to sync active executions', {
+        operation: 'execution.syncActive',
+        error,
+      });
     }
   },
 

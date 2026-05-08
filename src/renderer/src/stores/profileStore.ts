@@ -4,6 +4,7 @@
  */
 
 import { create } from 'zustand';
+import { createRendererLogger } from '../lib/logger';
 import type {
   BrowserProfile,
   ProfileGroup,
@@ -12,6 +13,8 @@ import type {
   CreateGroupParams,
   UpdateGroupParams,
 } from '../../../types/profile';
+
+const logger = createRendererLogger('ProfileStore');
 
 export const UNGROUPED_GROUP_ID = '__ungrouped__';
 
@@ -362,7 +365,10 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
         });
       }
     } catch (err) {
-      console.error('[ProfileStore] Failed to load profile stats:', err);
+      logger.error('Failed to load profile stats', {
+        operation: 'profile.stats.load',
+        error: err,
+      });
       applyProfilePatch(set, {
         loading: { stats: false },
         errors: { stats: err instanceof Error ? err.message : '加载环境统计失败' },

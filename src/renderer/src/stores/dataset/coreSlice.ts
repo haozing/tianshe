@@ -1,4 +1,5 @@
 import { datasetFacade } from '../../services/datasets/datasetFacade';
+import { createRendererLogger } from '../../lib/logger';
 import {
   bindActiveQueryTemplateState,
   getActiveQueryTemplateFromState,
@@ -7,6 +8,8 @@ import {
 } from './queryRuntimeSlice';
 import { clearGroupTabState, type GroupTabInfo } from './workspaceSlice';
 import type { DatasetInfo } from './types';
+
+const logger = createRendererLogger('DatasetStore');
 
 let datasetInfoRequestSerial = 0;
 
@@ -91,18 +94,27 @@ export function createDatasetCoreSlice<TState extends DatasetCoreState>(
         if (dataset.schema && Array.isArray(dataset.schema)) {
           const missingFieldType = dataset.schema.filter((col) => !col.fieldType);
           if (missingFieldType.length > 0) {
-            console.warn(
-              `[datasetStore] ${missingFieldType.length} columns missing fieldType:`,
-              missingFieldType.map((col) => col.name)
-            );
+            logger.warn('Dataset columns are missing fieldType', {
+              operation: 'dataset.info.load',
+              datasetId: id,
+              missingColumnCount: missingFieldType.length,
+              columnNames: missingFieldType.map((col) => col.name),
+            });
           }
         } else {
-          console.warn('[datasetStore] Dataset has no valid schema');
+          logger.warn('Dataset has no valid schema', {
+            operation: 'dataset.info.load',
+            datasetId: id,
+          });
         }
 
         set({ currentDataset: dataset, loading: false } as Partial<TState>);
       } else {
-        console.error('[datasetStore] Failed to get dataset info:', response.error);
+        logger.error('Failed to get dataset info', {
+          operation: 'dataset.info.load',
+          datasetId: id,
+          error: response.error,
+        });
         set({
           error: response.error || 'Dataset not found',
           loading: false,
@@ -112,7 +124,11 @@ export function createDatasetCoreSlice<TState extends DatasetCoreState>(
       if (!isLatestDatasetInfoRequest(requestId)) {
         return;
       }
-      console.error('[datasetStore] Exception in getDatasetInfo:', error);
+      logger.error('Exception while loading dataset info', {
+        operation: 'dataset.info.load',
+        datasetId: id,
+        error,
+      });
       set({ error: getErrorMessage(error, 'Dataset not found'), loading: false } as Partial<TState>);
     }
   };

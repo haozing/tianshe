@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { createRendererLogger } from '../lib/logger';
 import { normalizeCloudScope, normalizeCloudScopeList } from '../../../utils/cloud-sync-scope';
 import type {
   CloudAuthPublicSession,
@@ -7,6 +8,8 @@ import type {
   CloudSyncCapabilities,
   CloudSyncDomainCapability,
 } from '../../../types/cloud-sync';
+
+const logger = createRendererLogger('CloudAuthStore');
 
 export interface CloudSyncScope {
   scopeType: string;
@@ -268,7 +271,10 @@ export const useCloudAuthStore = create<CloudAuthStore>((set, get) => ({
       });
       return normalized;
     } catch (error) {
-      console.warn('[CloudAuthStore] Failed to load cloud sync capabilities:', error);
+      logger.warn('Failed to load cloud sync capabilities', {
+        operation: 'cloudAuth.capabilities.load',
+        error,
+      });
       set(clearDerivedState({ isCapabilitiesLoading: false }));
       return null;
     }
@@ -311,7 +317,10 @@ export const useCloudAuthStore = create<CloudAuthStore>((set, get) => ({
         availableScopes,
       };
     } catch (error) {
-      console.warn('[CloudAuthStore] Failed to load active cloud scope:', error);
+      logger.warn('Failed to load active cloud scope', {
+        operation: 'cloudAuth.scope.loadActive',
+        error,
+      });
       set(clearDerivedState({ isScopeLoading: false }));
       return null;
     }

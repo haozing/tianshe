@@ -1,4 +1,7 @@
 import { datasetFacade } from '../../services/datasets/datasetFacade';
+import { createRendererLogger } from '../../lib/logger';
+
+const logger = createRendererLogger('DatasetStore');
 
 export interface ImportProgress {
   datasetId: string;
@@ -73,7 +76,11 @@ export function createDatasetImportSlice<TState extends DatasetImportState>(
           return { importProgress: nextProgress } as Partial<TState>;
         });
       } catch (error: unknown) {
-        console.error('[datasetStore] Failed to cancel import:', error);
+        logger.error('Failed to cancel dataset import', {
+          operation: 'dataset.import.cancel',
+          datasetId,
+          error,
+        });
       }
     },
 

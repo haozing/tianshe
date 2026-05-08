@@ -4,8 +4,11 @@
  */
 
 import { create } from 'zustand';
+import { createRendererLogger } from '../lib/logger';
 import { toast } from '../lib/toast';
 import { getUnknownErrorMessage } from '../../../utils/error-message';
+
+const logger = createRendererLogger('PluginStore');
 
 // JS插件信息
 export interface JSPlugin {
@@ -364,7 +367,10 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
         set({ poolStatus: result.status });
       }
     } catch (error) {
-      console.error('[PluginStore] Failed to update pool status:', error);
+      logger.error('Failed to update pool status', {
+        operation: 'plugin.poolStatus.update',
+        error,
+      });
     }
   },
 
@@ -376,7 +382,10 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
         set({ memoryUsage: result.usage });
       }
     } catch (error) {
-      console.error('[PluginStore] Failed to update memory usage:', error);
+      logger.error('Failed to update memory usage', {
+        operation: 'plugin.memoryUsage.update',
+        error,
+      });
     }
   },
 

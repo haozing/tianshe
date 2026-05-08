@@ -3,7 +3,10 @@
  */
 
 import { create } from 'zustand';
+import { createRendererLogger } from '../lib/logger';
 import type { ScheduledTask, TaskExecution, TaskStats } from '../../../types/scheduler';
+
+const logger = createRendererLogger('SchedulerStore');
 
 // 重新导出类型供组件使用
 export type { ScheduledTask, TaskExecution, TaskStats };
@@ -64,7 +67,10 @@ export const useSchedulerStore = create<SchedulerStore>((set, get) => ({
         set({ stats: result.stats });
       }
     } catch (error) {
-      console.error('[SchedulerStore] 获取统计信息失败:', error);
+      logger.error('Failed to fetch scheduler stats', {
+        operation: 'scheduler.stats.fetch',
+        error,
+      });
     }
   },
 
@@ -76,7 +82,11 @@ export const useSchedulerStore = create<SchedulerStore>((set, get) => ({
         set({ recentExecutions: result.executions });
       }
     } catch (error) {
-      console.error('[SchedulerStore] 获取执行记录失败:', error);
+      logger.error('Failed to fetch recent scheduler executions', {
+        operation: 'scheduler.executions.fetchRecent',
+        limit,
+        error,
+      });
     }
   },
 
@@ -129,7 +139,12 @@ export const useSchedulerStore = create<SchedulerStore>((set, get) => ({
       }
       return [];
     } catch (error) {
-      console.error('[SchedulerStore] 获取执行历史失败:', error);
+      logger.error('Failed to fetch scheduler task history', {
+        operation: 'scheduler.taskHistory.fetch',
+        taskId,
+        limit,
+        error,
+      });
       return [];
     }
   },

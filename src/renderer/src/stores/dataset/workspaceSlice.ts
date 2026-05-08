@@ -1,5 +1,6 @@
 import type { DatasetCategory } from '../../components/DatasetsPage/types';
 import { datasetFacade } from '../../services/datasets/datasetFacade';
+import { createRendererLogger } from '../../lib/logger';
 import {
   getDatasetIdFromTableId,
   syncWorkspaceCategoryMetadata as syncWorkspaceCategoriesWithDatasets,
@@ -8,6 +9,8 @@ import {
   type WorkspaceSnapshot,
   shouldShowInSidebar,
 } from '../../services/datasets/workspaceCategoryService';
+
+const logger = createRendererLogger('DatasetStore');
 
 export type { WorkspaceSnapshot };
 
@@ -147,7 +150,11 @@ export function createDatasetWorkspaceSlice<TState extends DatasetWorkspaceState
           selectedTabDatasetId: nextSelectedId,
         } as Partial<TState>);
       } catch (error: unknown) {
-        console.error('[datasetStore] Failed to load group tabs:', error);
+        logger.error('Failed to load group tabs', {
+          operation: 'dataset.groupTabs.load',
+          datasetId,
+          error,
+        });
         set(
           toPartial<TState>({
             ...clearGroupTabState(),
