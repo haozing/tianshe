@@ -22,12 +22,15 @@ Tianshe 不是一个提示词外壳。它是面向真实工作流的桌面执行
 
 ## 预览
 
-截图会后续补充。当前桌面端主要包含：
+![Tianshe hero](docs/assets/hero/tianshe-hero.png)
 
-- 本地数据工作台：导入、查询、修改、文件夹和元数据管理。
-- 插件市场和运行状态视图：面向可信一方插件。
-- 账号和浏览器配置管理：服务于自动化会话。
-- 设置、日志、诊断，以及本地 HTTP/MCP 编排控制。
+| 数据工作台 | 插件运行时 |
+| --- | --- |
+| ![数据工作台](docs/assets/screenshots/datasets.png) | ![插件市场](docs/assets/screenshots/plugin-market.png) |
+
+| 账号中心 | 系统设置 |
+| --- | --- |
+| ![账号中心](docs/assets/screenshots/account-center.png) | ![系统设置](docs/assets/screenshots/settings.png) |
 
 ---
 
@@ -69,6 +72,8 @@ Tianshe 有几条很明确的产品判断：
 ---
 
 ## 架构
+
+![Tianshe 架构图](docs/assets/diagrams/architecture.png)
 
 ```text
 React Renderer

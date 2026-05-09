@@ -22,12 +22,15 @@ Tianshe is not a prompt wrapper. It is a desktop execution base for workflows th
 
 ## Preview
 
-Screenshots are coming soon. The current desktop surfaces include:
+![Tianshe hero](docs/assets/hero/tianshe-hero.png)
 
-- Dataset workspace for local import, query, mutation, folders, and metadata.
-- Plugin market and runtime status views for trusted first-party plugins.
-- Account and browser profile management for automation sessions.
-- Settings, logs, diagnostics, and local HTTP/MCP orchestration controls.
+| Dataset workspace | Plugin runtime |
+| --- | --- |
+| ![Dataset workspace](docs/assets/screenshots/datasets.png) | ![Plugin market](docs/assets/screenshots/plugin-market.png) |
+
+| Account center | Settings |
+| --- | --- |
+| ![Account center](docs/assets/screenshots/account-center.png) | ![Settings](docs/assets/screenshots/settings.png) |
 
 ---
 
@@ -69,6 +72,8 @@ If you are building internal automation, data enrichment, browser-assisted opera
 ---
 
 ## Architecture
+
+![Tianshe architecture](docs/assets/diagrams/architecture.png)
 
 ```text
 React Renderer
