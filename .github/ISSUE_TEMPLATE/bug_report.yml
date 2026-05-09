@@ -1,0 +1,79 @@
+name: Bug report
+description: Report a reproducible problem in the open Tianshe client.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Tianshe. Please remove tokens, cookies, local profile data, and private logs before sharing details.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+      placeholder: The app crashes when...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: List the smallest steps that reproduce the issue.
+      placeholder: |
+        1. Run npm run dev
+        2. Open ...
+        3. Click ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include concise error text if available.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.1.0-alpha or git commit hash
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Desktop startup
+        - Renderer UI
+        - Preload / IPC
+        - Dataset / DuckDB
+        - Browser automation
+        - Plugin runtime
+        - HTTP / MCP
+        - Packaging
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node.js version, npm version, and whether you used dev or packaged mode.
+      placeholder: Windows 11, Node 22.x, npm 10.x, npm run dev
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste only the relevant part. Redact secrets, cookies, tokens, and local private data.
+      render: shell

@@ -4,15 +4,30 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-339933.svg)](package.json)
 [![Desktop](https://img.shields.io/badge/desktop-Electron-47848f.svg)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/language-TypeScript-3178c6.svg)](tsconfig.json)
+[![Open CI](https://github.com/haozing/tianshe/actions/workflows/ci.yml/badge.svg)](https://github.com/haozing/tianshe/actions/workflows/ci.yml)
 
 [English README](README.md)
 
-Tianshe Client Open 是一个本地优先的桌面工作台，用于数据处理、浏览器自动化，以及可信一方 JavaScript 插件开发。
+Tianshe Client Open 是一个本地优先的桌面运行时，用于 AI 驱动的浏览器自动化、数据工作流，以及可信一方 JavaScript 插件开发。
 
-它把 Electron 桌面外壳、安全的 preload 桥接层、DuckDB 本地数据集、浏览器配置、账号管理、插件运行时、可观测能力，以及可选的 HTTP/MCP 编排接口放在同一个客户端里。目标很直接：让自动化系统更容易看见、更容易扩展、更容易测试，也更容易在本地稳定运行。
+它给 Agent 和开发者提供真实、可检查的工具：浏览器配置、本地数据集、插件自有存储、任务编排、可观测能力，以及 HTTP/MCP 自动化 API，同时把私有数据留在用户自己的机器上。
+
+Tianshe 不是一个提示词外壳。它是面向真实工作流的桌面执行底座：可以操作真实浏览器、真实文件、真实本地表格和经过审查的产品插件，同时不把用户电脑变成无法解释的黑盒。
+
+> **当前状态**
+> 本仓库仍在积极开发中。第一个稳定版本之前，API 和插件契约仍可能调整。
 
 > **开源版边界**
 > 本仓库只包含开放的本地客户端核心。云登录、云快照、云插件目录、私有服务集成和私有部署端点不会放进开源版；如果代码里保留兼容入口，也必须是惰性桩实现，不能连接真实私有服务。
+
+## 预览
+
+截图会后续补充。当前桌面端主要包含：
+
+- 本地数据工作台：导入、查询、修改、文件夹和元数据管理。
+- 插件市场和运行状态视图：面向可信一方插件。
+- 账号和浏览器配置管理：服务于自动化会话。
+- 设置、日志、诊断，以及本地 HTTP/MCP 编排控制。
 
 ---
 
@@ -105,8 +120,8 @@ Electron Main Process
 ## 快速开始
 
 ```bash
-git clone https://github.com/tianshe-ai/tianshe-client-open.git
-cd tianshe-client-open
+git clone https://github.com/haozing/tianshe.git
+cd tianshe
 npm ci
 npm run dev
 ```
@@ -141,14 +156,14 @@ npm run dev:electron
 测试时建议使用独立的 Electron userData：
 
 ```powershell
-$env:TIANSHEAI_USER_DATA_DIR="C:\tmp\tianshe-client-open-dev"
+$env:TIANSHEAI_USER_DATA_DIR="C:\tmp\tianshe-dev"
 npm run dev
 ```
 
 也可以直接传运行时参数：
 
 ```bash
-npx electron . --airpa-user-data-dir="C:\tmp\tianshe-client-open-dev"
+npx electron . --airpa-user-data-dir="C:\tmp\tianshe-dev"
 ```
 
 `airpa` 参数名是为了兼容历史本地运行方式。新的产品文案和包信息应优先使用 Tianshe 命名。
@@ -644,6 +659,7 @@ npm run verify:ci
 相关文档：
 
 ```text
+ROADMAP.md
 CONTRIBUTING.md
 SECURITY.md
 CHANGELOG.md

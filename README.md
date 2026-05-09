@@ -4,15 +4,30 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-339933.svg)](package.json)
 [![Desktop](https://img.shields.io/badge/desktop-Electron-47848f.svg)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/language-TypeScript-3178c6.svg)](tsconfig.json)
+[![Open CI](https://github.com/haozing/tianshe/actions/workflows/ci.yml/badge.svg)](https://github.com/haozing/tianshe/actions/workflows/ci.yml)
 
 [中文说明](README.zh-CN.md)
 
-Tianshe Client Open is a local-first desktop workbench for data operations, browser automation, and trusted first-party JavaScript plugins.
+Tianshe Client Open is a local-first desktop runtime for AI-driven browser automation, data workflows, and trusted first-party JavaScript plugins.
 
-It brings an Electron desktop shell, a secure preload bridge, DuckDB-backed datasets, browser profiles, account management, a plugin runtime, observability, and optional HTTP/MCP orchestration into one client. The goal is simple: make automation systems easier to see, extend, test, and run locally.
+It gives agents and developers real, inspectable tools: browser profiles, local datasets, plugin-owned storage, task orchestration, observability, and HTTP/MCP automation APIs, while keeping private data on the user's machine.
+
+Tianshe is not a prompt wrapper. It is a desktop execution base for workflows that need to touch real browsers, real files, real local tables, and reviewed product plugins without turning the user's machine into a black box.
+
+> **Status**
+> This repository is in active development. APIs and plugin contracts can still evolve before the first stable release.
 
 > **Open edition boundary**
 > This repository contains the open local client core. Cloud login, cloud snapshots, cloud plugin catalogs, private server integrations, and private deployment endpoints are intentionally absent or represented only by inert compatibility stubs.
+
+## Preview
+
+Screenshots are coming soon. The current desktop surfaces include:
+
+- Dataset workspace for local import, query, mutation, folders, and metadata.
+- Plugin market and runtime status views for trusted first-party plugins.
+- Account and browser profile management for automation sessions.
+- Settings, logs, diagnostics, and local HTTP/MCP orchestration controls.
 
 ---
 
@@ -105,8 +120,8 @@ This project uses native dependencies such as DuckDB, ONNX Runtime, Sharp, Koffi
 ## Quick Start
 
 ```bash
-git clone https://github.com/tianshe-ai/tianshe-client-open.git
-cd tianshe-client-open
+git clone https://github.com/haozing/tianshe.git
+cd tianshe
 npm ci
 npm run dev
 ```
@@ -141,14 +156,14 @@ Use `npm run dev` for normal work. The split commands are useful when debugging 
 Use a separate Electron user data directory when testing:
 
 ```powershell
-$env:TIANSHEAI_USER_DATA_DIR="C:\tmp\tianshe-client-open-dev"
+$env:TIANSHEAI_USER_DATA_DIR="C:\tmp\tianshe-dev"
 npm run dev
 ```
 
 Or pass the runtime flag directly:
 
 ```bash
-npx electron . --airpa-user-data-dir="C:\tmp\tianshe-client-open-dev"
+npx electron . --airpa-user-data-dir="C:\tmp\tianshe-dev"
 ```
 
 The `airpa` runtime flag names are kept for legacy local compatibility. New product-facing text should use the Tianshe name.
@@ -644,6 +659,7 @@ Contribution rules:
 See also:
 
 ```text
+ROADMAP.md
 CONTRIBUTING.md
 SECURITY.md
 CHANGELOG.md

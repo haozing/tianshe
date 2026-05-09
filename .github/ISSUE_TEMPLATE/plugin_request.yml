@@ -1,0 +1,45 @@
+name: Plugin request
+description: Propose a first-party plugin example, helper, or runtime capability.
+title: "[Plugin]: "
+labels:
+  - plugin
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: What should the plugin or helper enable?
+    validations:
+      required: true
+  - type: textarea
+    id: capabilities
+    attributes:
+      label: Needed capabilities
+      description: List the helper APIs, storage, UI, dataset, browser, scheduler, webhook, or model capabilities involved.
+    validations:
+      required: true
+  - type: dropdown
+    id: request_type
+    attributes:
+      label: Request type
+      options:
+        - New example plugin
+        - New helper API
+        - Plugin documentation
+        - Plugin packaging / validation
+        - Runtime bug or compatibility issue
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: trust
+    attributes:
+      label: Trust model
+      options:
+        - label: I understand the current open client only supports reviewed first-party plugins with `trustModel` set to `first_party`.
+          required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Optional links, sketches, or examples.

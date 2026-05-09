@@ -1,7 +1,7 @@
 {
   "name": "@tianshe/client-open",
   "version": "1.0.0",
-  "description": "Open-source Tianshe client edition",
+  "description": "Local-first Electron client for AI-driven browser automation, data workflows, and trusted first-party plugins",
   "author": "tiansheai",
   "license": "MIT",
   "main": "index.js",
@@ -131,12 +131,12 @@
   "private": false,
   "repository": {
     "type": "git",
-    "url": "https://github.com/tianshe-ai/tianshe-client-open.git"
+    "url": "https://github.com/haozing/tianshe.git"
   },
   "bugs": {
-    "url": "https://github.com/tianshe-ai/tianshe-client-open/issues"
+    "url": "https://github.com/haozing/tianshe/issues"
   },
-  "homepage": "https://github.com/tianshe-ai/tianshe-client-open#readme",
+  "homepage": "https://github.com/haozing/tianshe#readme",
   "files": [
     "assets",
     "build",
