@@ -114,6 +114,24 @@ afterEach(() => {
 });
 
 describe('UpdateManager', () => {
+  it('returns a user-facing message when update config is missing', async () => {
+    const resourcesPath = fs.mkdtempSync(path.join(os.tmpdir(), 'updater-missing-config-'));
+    setResourcesPath(resourcesPath);
+
+    try {
+      const { UpdateManager } = await import('./updater');
+      const logger = createLogger();
+      const manager = new UpdateManager(logger as any, createWindow() as any);
+
+      await expect(manager.checkForUpdates()).rejects.toThrow(
+        '当前版本未配置自动更新渠道，请到发布页手动下载安装包。'
+      );
+      expect(mockAutoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(resourcesPath, { recursive: true, force: true });
+    }
+  });
+
   it('disables update checks when packaged update config is missing', async () => {
     const resourcesPath = fs.mkdtempSync(path.join(os.tmpdir(), 'updater-missing-config-'));
     setResourcesPath(resourcesPath);
@@ -124,7 +142,7 @@ describe('UpdateManager', () => {
       const manager = new UpdateManager(logger as any, createWindow() as any);
 
       expect(manager.isUpdateConfigured()).toBe(false);
-      await expect(manager.checkForUpdates()).rejects.toThrow('Update config not found');
+      await expect(manager.checkForUpdates()).rejects.toThrow('当前版本未配置自动更新渠道');
       expect(mockAutoUpdater.checkForUpdates).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(resourcesPath, { recursive: true, force: true });
@@ -144,6 +162,41 @@ describe('UpdateManager', () => {
       expect(manager.isUpdateConfigured()).toBe(true);
       await expect(manager.checkForUpdates()).resolves.toBeUndefined();
       expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(resourcesPath, { recursive: true, force: true });
+    }
+  });
+
+  it('sanitizes GitHub update feed failures before notifying the renderer', async () => {
+    const resourcesPath = fs.mkdtempSync(path.join(os.tmpdir(), 'updater-config-'));
+    fs.writeFileSync(
+      path.join(resourcesPath, 'app-update.yml'),
+      'provider: github\nowner: tianshe-ai\nrepo: tianshe-client-open\n'
+    );
+    setResourcesPath(resourcesPath);
+
+    try {
+      const { UpdateManager } = await import('./updater');
+      const window = createWindow();
+      new UpdateManager(createLogger() as any, window as any);
+
+      mockAutoUpdater.emit(
+        'error',
+        new Error(
+          '404 "method: GET url: https://github.com/tianshe-ai/tianshe-client-open/releases.atom\\nPlease double check that your authentication token is correct. Headers: {"set-cookie":["token=secret"],"x-github-request-id":"abc"}'
+        )
+      );
+
+      expect(window.webContents.send).toHaveBeenCalledWith('updater:error', {
+        message: '未找到可用的更新发布源，请检查更新地址或到发布页手动下载最新版。',
+        isForceUpdate: false,
+      });
+      expect(JSON.stringify((window.webContents.send as any).mock.calls)).not.toContain(
+        'set-cookie'
+      );
+      expect(JSON.stringify((window.webContents.send as any).mock.calls)).not.toContain(
+        'releases.atom'
+      );
     } finally {
       fs.rmSync(resourcesPath, { recursive: true, force: true });
     }

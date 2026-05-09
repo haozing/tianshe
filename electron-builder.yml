@@ -1,5 +1,6 @@
 productName: tiansheai-open
 appId: com.tiansheai.client.open
+publish: null
 # ✅ 使用 open 版专属可执行文件名，避免和 private/cloud 发行包冲突
 executableName: tiansheai-open
 electronDist: node_modules/electron/dist

@@ -14,9 +14,105 @@ import { LogStorageService } from './log-storage-service';
 import fs from 'node:fs';
 import path from 'path';
 import { AIRPA_RUNTIME_CONFIG, isDevelopmentMode } from '../constants/runtime-config';
+import { getUnknownErrorMessage } from '../utils/error-message';
+import { redactSensitiveText } from '../utils/redaction';
 
 // 强制更新的最低版本（低于此版本必须更新）
 const MINIMUM_VERSION = '1.0.0';
+type UpdateErrorOperation = 'check' | 'download' | 'update';
+
+const UPDATE_CONFIG_MISSING_PATTERN = /update config not found/i;
+const AUTH_FAILURE_PATTERN =
+  /authentication token|unauthori[sz]ed|forbidden|permission denied|access denied|bad credentials/i;
+const NETWORK_FAILURE_PATTERN =
+  /\b(ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|network|timeout|timed out)\b/i;
+
+function readStatusCode(error: unknown): number | null {
+  const fromValue = (value: unknown): number | null => {
+    const status = typeof value === 'string' ? Number.parseInt(value, 10) : value;
+    return typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
+      ? status
+      : null;
+  };
+
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>;
+    const directStatus =
+      fromValue(record.statusCode) ?? fromValue(record.status) ?? fromValue(record.code);
+    if (directStatus !== null) {
+      return directStatus;
+    }
+
+    const response = record.response;
+    if (response && typeof response === 'object') {
+      const responseRecord = response as Record<string, unknown>;
+      const responseStatus = fromValue(responseRecord.statusCode) ?? fromValue(responseRecord.status);
+      if (responseStatus !== null) {
+        return responseStatus;
+      }
+    }
+  }
+
+  const message = getUnknownErrorMessage(error, '');
+  const statusMatch =
+    /^\s*(\d{3})\b/.exec(message) ?? /["']?statusCode["']?\s*:\s*(\d{3})/.exec(message);
+  return statusMatch ? fromValue(statusMatch[1]) : null;
+}
+
+export function getUserFacingUpdateErrorMessage(
+  error: unknown,
+  operation: UpdateErrorOperation = 'update'
+): string {
+  const rawMessage = getUnknownErrorMessage(error, '');
+  const statusCode = readStatusCode(error);
+
+  if (UPDATE_CONFIG_MISSING_PATTERN.test(rawMessage)) {
+    return '当前版本未配置自动更新渠道，请到发布页手动下载安装包。';
+  }
+
+  if (statusCode === 404 || /\b404\b/.test(rawMessage)) {
+    return '未找到可用的更新发布源，请检查更新地址或到发布页手动下载最新版。';
+  }
+
+  if (statusCode === 401 || statusCode === 403 || AUTH_FAILURE_PATTERN.test(rawMessage)) {
+    return '更新发布源需要授权或当前无权访问，请检查更新源配置。';
+  }
+
+  if (statusCode !== null && statusCode >= 500) {
+    return '更新服务器暂时不可用，请稍后重试。';
+  }
+
+  if (NETWORK_FAILURE_PATTERN.test(rawMessage)) {
+    return '无法连接更新服务器，请检查网络后重试。';
+  }
+
+  if (operation === 'download') {
+    return '下载更新失败，请稍后重试或手动下载最新版。';
+  }
+
+  if (operation === 'check') {
+    return '检查更新失败，请稍后重试或手动下载最新版。';
+  }
+
+  return '更新失败，请稍后重试或手动下载最新版。';
+}
+
+function sanitizeUpdaterDiagnosticText(value: string, maxLength = 500): string {
+  return redactSensitiveText(String(value || '').split(/\bHeaders:\s*/i)[0].trim()).slice(
+    0,
+    maxLength
+  );
+}
+
+function buildUpdateErrorLogContext(error: unknown): Record<string, unknown> {
+  return {
+    message: sanitizeUpdaterDiagnosticText(getUnknownErrorMessage(error, '')),
+    statusCode: readStatusCode(error),
+    ...(error instanceof Error && error.stack
+      ? { stack: sanitizeUpdaterDiagnosticText(error.stack, 1200) }
+      : {}),
+  };
+}
 
 export class UpdateManager {
   private logger: LogStorageService;
@@ -155,13 +251,14 @@ export class UpdateManager {
     });
 
     autoUpdater.on('error', (error: Error) => {
+      const userMessage = getUserFacingUpdateErrorMessage(error, 'update');
       this.logger.error('updater', 'Update error', {
-        message: error.message,
-        stack: error.stack,
+        ...buildUpdateErrorLogContext(error),
+        userMessage,
       });
 
       this.sendToRenderer('error', {
-        message: error.message,
+        message: userMessage,
         isForceUpdate: this.isForceUpdate,
       });
 
@@ -212,11 +309,12 @@ export class UpdateManager {
       this.logger.info('updater', 'Manually checking for updates');
       await autoUpdater.checkForUpdates();
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = getUserFacingUpdateErrorMessage(error, 'check');
       this.logger.error('updater', 'Failed to check for updates', {
-        message,
+        ...buildUpdateErrorLogContext(error),
+        userMessage: message,
       });
-      throw error;
+      throw new Error(message);
     }
   }
 
@@ -232,11 +330,12 @@ export class UpdateManager {
       this.logger.info('updater', 'Manually downloading update');
       await autoUpdater.downloadUpdate();
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = getUserFacingUpdateErrorMessage(error, 'download');
       this.logger.error('updater', 'Failed to download update', {
-        message,
+        ...buildUpdateErrorLogContext(error),
+        userMessage: message,
       });
-      throw error;
+      throw new Error(message);
     }
   }
 
