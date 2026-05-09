@@ -155,6 +155,14 @@ async function main() {
     waitForChildExitBeforeReady(renderer, 'renderer'),
   ]);
 
+  const { writeMainBuildStamp } = require('./main-build-stamp');
+  const { bundlePreloadEntries } = require('./build-main-with-stamp');
+  bundlePreloadEntries();
+  const stamp = writeMainBuildStamp();
+  process.stdout.write(
+    `[main] wrote dev build stamp at ${stamp.builtAt} for ${stamp.entryPoint}\n`
+  );
+
   process.stdout.write('[electron] renderer and main build are ready; launching Electron\n');
   const { buildLaunchConfig } = require('./launch-electron');
   const launchConfig = buildLaunchConfig({

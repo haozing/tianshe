@@ -83,6 +83,7 @@ const getFirefoxExecutablePathOverride = (): string =>
 const getHttpPortOverride = (): number | null => readProcessArgInteger('--airpa-http-port');
 const getHttpEnabledOverride = (): boolean | null => readProcessArgBoolean('--airpa-enable-http');
 const getMcpEnabledOverride = (): boolean | null => readProcessArgBoolean('--airpa-enable-mcp');
+const getE2eCdpPortOverride = (): number | null => readProcessArgInteger('--airpa-e2e-cdp-port');
 const getAllowNoSandbox = (): boolean =>
   readProcessArgBoolean('--tianshe-allow-no-sandbox') ??
   readProcessArgBoolean('--airpa-allow-no-sandbox') ??
@@ -210,7 +211,7 @@ export const AIRPA_RUNTIME_CONFIG: AirpaRuntimeConfig = {
     debugProdMenu: false,
   },
   e2e: {
-    cdpPort: null,
+    cdpPort: getE2eCdpPortOverride(),
   },
   paths: {
     userDataDirOverride: getUserDataDirOverride(),

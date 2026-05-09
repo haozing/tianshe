@@ -3,7 +3,10 @@ const path = require('node:path');
 const {
   USER_DATA_FLAG,
   HTTP_PORT_FLAG,
+  HTTP_ENABLE_FLAG,
+  MCP_ENABLE_FLAG,
   ISOLATE_USER_DATA_FLAG,
+  E2E_CDP_PORT_FLAG,
   hasAppEntryArg,
   shouldIsolateUserDataDir,
   resolveIsolatedUserDataDir,
@@ -33,6 +36,29 @@ describe('launch-electron', () => {
         '--trace-warnings',
         `${USER_DATA_FLAG}=${OPEN_USER_DATA_DIR}`,
         `${HTTP_PORT_FLAG}=39090`,
+      ])
+    );
+  });
+
+  it('maps e2e and HTTP environment overrides to launch flags', () => {
+    const { args } = buildLaunchConfig({
+      args: ['.'],
+      env: {
+        AIRPA_HTTP_PORT: '49334',
+        AIRPA_ENABLE_HTTP: 'true',
+        AIRPA_ENABLE_MCP: '1',
+        AIRPA_E2E_CDP_PORT: '49333',
+      },
+      platform: 'win32',
+    });
+
+    expect(args).toEqual(
+      expect.arrayContaining([
+        '.',
+        `${HTTP_PORT_FLAG}=49334`,
+        HTTP_ENABLE_FLAG,
+        MCP_ENABLE_FLAG,
+        `${E2E_CDP_PORT_FLAG}=49333`,
       ])
     );
   });

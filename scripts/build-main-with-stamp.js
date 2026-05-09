@@ -50,11 +50,18 @@ function run() {
   );
 }
 
-try {
-  run();
-} catch (error) {
-  process.stderr.write(
-    `[build:main] ${error instanceof Error ? error.message : String(error)}\n`
-  );
-  process.exit(1);
+module.exports = {
+  bundlePreloadEntries,
+  run,
+};
+
+if (require.main === module) {
+  try {
+    run();
+  } catch (error) {
+    process.stderr.write(
+      `[build:main] ${error instanceof Error ? error.message : String(error)}\n`
+    );
+    process.exit(1);
+  }
 }

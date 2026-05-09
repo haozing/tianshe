@@ -10,6 +10,7 @@ const HTTP_PORT_FLAG = '--airpa-http-port';
 const HTTP_ENABLE_FLAG = '--airpa-enable-http';
 const MCP_ENABLE_FLAG = '--airpa-enable-mcp';
 const ISOLATE_USER_DATA_FLAG = '--airpa-isolate-user-data';
+const E2E_CDP_PORT_FLAG = '--airpa-e2e-cdp-port';
 
 const hasArg = (args, flagName) =>
   args.some(
@@ -119,6 +120,22 @@ const buildLaunchConfig = (options = {}) => {
     }
   }
 
+  if (!hasArg(args, HTTP_ENABLE_FLAG) && isTruthyEnvValue(env.AIRPA_ENABLE_HTTP)) {
+    args.push(HTTP_ENABLE_FLAG);
+  }
+
+  if (!hasArg(args, MCP_ENABLE_FLAG) && isTruthyEnvValue(env.AIRPA_ENABLE_MCP)) {
+    args.push(MCP_ENABLE_FLAG);
+  }
+
+  if (!hasArg(args, E2E_CDP_PORT_FLAG)) {
+    const cdpPort =
+      typeof env.AIRPA_E2E_CDP_PORT === 'string' ? env.AIRPA_E2E_CDP_PORT.trim() : '';
+    if (/^\d+$/.test(cdpPort)) {
+      args.push(`${E2E_CDP_PORT_FLAG}=${cdpPort}`);
+    }
+  }
+
   return { args, env };
 };
 
@@ -155,6 +172,7 @@ module.exports = {
   HTTP_ENABLE_FLAG,
   MCP_ENABLE_FLAG,
   ISOLATE_USER_DATA_FLAG,
+  E2E_CDP_PORT_FLAG,
   hasArg,
   getArgValue,
   isTruthyEnvValue,

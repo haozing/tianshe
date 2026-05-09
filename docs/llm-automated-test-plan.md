@@ -63,6 +63,52 @@
 
 真实测试也直接由 Codex 执行，不写专门的 LLM runner。
 
+### npm run dev + Playwright/CDP 真实客户端方案
+
+可以用 `npm run dev` 启动完整 Electron 软件，再由 Playwright 通过 Electron 的 CDP 调试端口操控真实窗口。这个方式比只打开 Vite 页面更接近用户真实使用方式，因为它同时覆盖主进程、preload、IPC、renderer、真实窗口尺寸、菜单/弹窗、日志和本地 userData。
+
+启动规则：
+
+```powershell
+$env:TIANSHEAI_USER_DATA_DIR='.tmp-test-userdata-run/codex-dev-e2e'
+$env:AIRPA_E2E_CDP_PORT='49333'
+$env:AIRPA_ENABLE_HTTP='true'
+$env:AIRPA_ENABLE_MCP='true'
+$env:AIRPA_HTTP_PORT='49334'
+npm run dev
+```
+
+说明：
+
+- `npm run dev:open` 等价于开放版完整 dev 启动链路：Vite renderer、main watch、Electron 主程序。
+- `TIANSHEAI_USER_DATA_DIR` 必须使用隔离目录，避免污染真实账号、插件和数据表。
+- `AIRPA_E2E_CDP_PORT` 会被 dev 启动器转成 `--airpa-e2e-cdp-port`，打开 Electron 远程调试端口，Playwright 可通过 `chromium.connectOverCDP()` 接入真实窗口。
+- `AIRPA_ENABLE_HTTP`、`AIRPA_ENABLE_MCP`、`AIRPA_HTTP_PORT` 会被 dev 启动器转成应用启动参数，同时打开 HTTP/MCP，方便把 UI 操作和后端状态互相校验。
+- 每轮测试结束必须关闭 Electron/dev 进程，并删除隔离 userData。
+
+Playwright/CDP 操控原则：
+
+- 首先等待 CDP `/json/version` 和 HTTP `/health` 可用。
+- 连接 CDP 后选择标题为 `TiansheAI` 或 URL 指向 `127.0.0.1:5273`/`dist/renderer/index.html` 的主页面。
+- 每个页面切换后检查：`window.electronAPI` 是否存在、页面是否非空、是否出现 ErrorBoundary、控制台 error 数。
+- 对关键用户路径保存截图，截图必须非空且没有明显错位、乱码、遮挡。
+- UI 操作优先用可访问名称、文本、按钮角色；找不到时再用 DOM/CSS 兜底。
+- 对数据表、插件、HTTP/MCP 等业务状态，用 preload API 或 HTTP capability 做二次确认。
+
+首轮真实客户端自动化测试矩阵：
+
+| 编号 | 类型 | 自动化动作 | 通过标准 |
+| --- | --- | --- | --- |
+| D1 | 启动健康 | `npm run dev:open` 启动完整 Electron，等待 Vite/main/Electron 就绪 | CDP 可连接，HTTP `/health` 为 ok，主窗口非空 |
+| D2 | Preload | 在主窗口执行 `window.electronAPI.getAppInfo()` | `success=true`，`isPackaged=false`，无 `getAppInfo` 崩溃 |
+| D3 | 主导航 | 依次点击 数据表、插件市场、账号中心、设置 | 页面切换成功，无 ErrorBoundary，无 console error |
+| D4 | 数据表 UI | 创建测试数据表，确认列表展示，再删除 | UI 出现目标表名；删除后目标表消失；preload 列表同步 |
+| D5 | 插件市场 | 打开插件市场和已安装区域 | 页面可渲染，开发/本地插件入口状态符合 dev 模式 |
+| D6 | 设置页 | 打开设置页，读取 HTTP/MCP 相关区域 | 页面可渲染，HTTP `/health` 与 UI 状态不冲突 |
+| D7 | 响应式 | 1366x900、900x700、390x844 三种视口各访问主页面 | 无横向溢出、无明显重叠、截图非空 |
+| D8 | 错误恢复 | 构造一次可控失败，如删除已被后台移除的数据表 | UI 显示可理解错误，不崩溃 |
+| D9 | 清理 | 关闭进程、删除 userData、检查端口 | 无测试进程和端口残留 |
+
 ### 启动方式
 
 每次测试使用独立用户数据目录，避免污染真实环境：
@@ -272,3 +318,18 @@ artifacts/codex-test-report.md
 - 2026-05-09 13:35：任务 24 通过。使用重打包后的 `release-build/win-unpacked/tiansheai-open.exe`、隔离 userData 和 CDP `Emulation.setDeviceMetricsOverride` 自动模拟 1366x900 桌面、900x700 平板、390x844 手机视口；逐一点击真实主导航 `数据表/插件市场/账号中心/设置`，保存 12 张截图到 `artifacts/ui-screenshots/task24-*-1778304412021.png`，并生成 `artifacts/ui-screenshots/task24-responsive-report-1778304412021.json`。所有页面 body 非空，截图非空，`consoleErrorCount=0`，无 ErrorBoundary/崩溃标记，`maxOverflowX=0`，`maxClippedControls=0`；隔离 userData 已删除。启动 stderr 中出现一次 `resources/app-update.yml` 缺失日志，未影响 UI 渲染，作为打包目录更新配置的非阻断风险留到收尾项核对。
 - 2026-05-09 13:31：任务 25 通过。使用真实 packaged 应用、隔离 userData 和 CDP 调用 preload `jsPlugin` API，临时开启隔离配置中的 `httpApiConfig.enableDevMode=true` 后，对 `examples/minimal-plugin` / `minimal_plugin` 执行完整生命周期：安装、详情读取、运行状态读取、`listRuntimeStatuses`、插件配置 `setConfig/getConfig` 往返、工具栏按钮读取、热重载状态读取、禁用、启用、连续 3 次 `reload`、重复安装并确认列表中仍只有 1 个同 id 插件、卸载、卸载后状态读取返回结构化 `PLUGIN_NOT_FOUND`、再安装、最终卸载。报告写入 `artifacts/plugin-lifecycle/task25-plugin-lifecycle-1778304684767.json`：`consoleErrorCount=0`，事件计数为 state 7 / runtime 32 / reload 3 / notification 7，HTTP 配置已恢复，隔离 userData 已删除，最终 `plugin_list` 不含 `minimal_plugin`。
 - 2026-05-09 13:47：任务 26 通过。收尾检查确认本轮 `task24-*`、`task25-*`、`task26-*` 隔离 userData 均已删除，未发现 `tiansheai-open.exe` 测试进程残留；39080-64050 范围内监听端口对应系统、VS Code、Docker、Apifox 等既有进程，不属于测试应用残留。`git diff --check` 无空白错误，仅有 Windows 行尾提示；工作区中 `tianshe-review/runtime-profile-contract-baseline.md` 和 `tianshe-review/runtime-profile-error-governance-plan.md` 的删除是既有脏改，未处理。收尾过程中将任务 24 发现的 packaged 自动更新噪声修复：`UpdateManager` 现在检测 `app-update.yml`/`dev-app-update.yml` 是否存在，缺失时注册 updater IPC 但跳过自动更新检查，避免 10 秒后产生 `app-update.yml` / `ENOENT` 错误；新增 `src/main/updater.test.ts` 覆盖缺失配置和存在配置两条路径。最终验证：`npx vitest run src/main/updater.test.ts src/constants/runtime-config.test.ts` 2 文件 / 7 测试通过，`npm run typecheck` 通过，`npm run lint` 0 error / 154 既有 warning，`npm run verify:open-source-boundary` 通过（1158 文件），`npm run build:open` 通过，`npm run package:open:dir` 通过，packaged exe 启动等待 13 秒后未再出现更新配置缺失错误。
+
+## 第四轮：`npm run dev` 完整 Electron 模拟人工测试
+
+- [x] 27. 让 `npm run dev` 支持隔离 userData、HTTP/MCP 和 CDP 调试端口，用于连接真实 Electron 主窗口。（已通过）
+- [x] 28. 修复 dev watch 覆盖 preload bundle 导致 `window.electronAPI` 缺失的问题。（已通过）
+- [x] 29. 使用完整 `npm run dev` 启动的真实 Electron 窗口执行 CDP 模拟人工测试。（已通过）
+
+### 第四轮执行记录
+
+- 2026-05-09 14:10：补齐 dev 自动化入口。`scripts/launch-electron.js` 新增 `AIRPA_E2E_CDP_PORT`、`AIRPA_ENABLE_HTTP`、`AIRPA_ENABLE_MCP` 到应用启动参数的映射；`src/constants/runtime-config.ts` 新增 `--airpa-e2e-cdp-port` 读取逻辑。验证：`npx vitest run scripts/launch-electron.test.js src/constants/runtime-config.test.ts` 2 文件 / 15 测试通过，`npm run typecheck` 通过，`npm run test:open` 8 文件 / 26 测试通过。
+- 2026-05-09 14:15：首次按方案启动 `npm run dev`，真实 Electron、HTTP 和 CDP 均就绪，但 CDP 检查发现主窗口 `window.electronAPI=false`，页面显示 `客户端桥接未加载`。`startup-diagnostic.log` 记录 `Unable to load preload script: dist/preload/index.js` 和 `Error: module not found: ./api/account`。根因：`predev` 先生成了 bundle preload，但 `run-dev-base` 里的 `tsc --watch` 首次编译又把 `dist/preload/index.js` 覆盖成未 bundle 版本；Electron sandbox preload 无法加载这些相对模块。
+- 2026-05-09 14:18：修复 dev preload 链路。`scripts/build-main-with-stamp.js` 导出 `bundlePreloadEntries()`，`scripts/run-dev-base.js` 在 main watch 首次成功后、启动 Electron 前重新 bundle `src/preload/index.ts` 和 `src/preload/webcontents-view.ts`。验证：`npx vitest run scripts/launch-electron.test.js src/constants/runtime-config.test.ts src/main/main-build-freshness.test.ts` 3 文件 / 18 测试通过，`npm run typecheck` 通过，`npm run build:main` 通过。
+- 2026-05-09 14:20：重启 `npm run dev` 后真实 Electron UI 自动化通过。使用隔离 userData `.tmp-test-userdata-run/codex-dev-e2e-49334`、CDP 端口 `49333`、HTTP 端口 `49334`，原生 CDP 控制标题为 `TiansheAI` 的主窗口。验证 `window.electronAPI=true`，`getAppInfo().info.isPackaged=false`，无 ErrorBoundary；真实点击主导航 `数据表/插件市场/账号中心/设置`；通过 preload 创建并删除数据表 `dataset_1778307704192_ae40569e`；模拟 1366x900、900x700、390x844 三种视口；生成 9 张非空截图和报告 `artifacts/dev-e2e/dev-e2e-report-1778307699427.json`，`consoleErrorCount=0`。该轮 `/health` 为 `success=true` 但 `data.status=degraded`，原因是 dev watch 编译后 main build stamp 未刷新。
+- 2026-05-09 14:26：修复 dev build stamp 健康状态。`scripts/run-dev-base.js` 在 bundle preload 后调用 `writeMainBuildStamp()`，避免 `/health` 因 `build_stamp_out_of_sync` 降级。验证：`npx vitest run scripts/launch-electron.test.js src/constants/runtime-config.test.ts src/main/main-build-freshness.test.ts` 3 文件 / 18 测试通过，`npm run typecheck` 通过，`npm run test:open` 8 文件 / 26 测试通过；重新启动完整 `npm run dev` 后 `/health` 返回 `data.status=ok`。
+- 2026-05-09 14:26：最终真实客户端模拟人工测试通过。使用完整 `npm run dev` 启动真实 Electron 软件，CDP 控制真实主窗口完成启动健康、preload、主导航、数据表创建/删除、响应式截图检查。最终报告 `artifacts/dev-e2e/dev-e2e-report-1778307920538.json`，截图 9 张，`consoleErrorCount=0`，测试数据表 `dataset_1778307925019_37b3ede3` 已删除。
