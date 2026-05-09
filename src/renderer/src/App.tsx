@@ -60,6 +60,23 @@ const TabErrorFallback = ({ tabName }: { tabName: string }) => (
 );
 
 const ViewLoadingFallback = () => <div className="h-full w-full bg-background" />;
+const BridgeUnavailableFallback = () => (
+  <div className="flex min-h-full items-center justify-center bg-background p-6">
+    <Card className="w-full max-w-xl">
+      <CardHeader>
+        <CardTitle className="text-destructive">客户端桥接未加载</CardTitle>
+        <CardDescription>
+          当前页面缺少 Electron preload 注入，桌面客户端能力暂不可用。
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-muted-foreground">
+          请通过 Electron 客户端窗口打开应用，或重新启动开发环境后再试。
+        </p>
+      </CardContent>
+    </Card>
+  </div>
+);
 
 type AppInfoResult = {
   success?: boolean;
@@ -77,6 +94,9 @@ function App() {
   const [showUpdateNotification, setShowUpdateNotification] = useState(false);
   const [appPlatform, setAppPlatform] = useState<string>('');
   const [appShellConfig, setAppShellConfig] = useState<AppShellConfig>(DEFAULT_APP_SHELL_CONFIG);
+  const [isElectronBridgeAvailable, setIsElectronBridgeAvailable] = useState(
+    () => typeof window.electronAPI?.getAppInfo === 'function'
+  );
   const cloudWorkbenchAvailable = isCloudWorkbenchAvailable();
   const effectiveActiveView = resolveAppShellActiveView(activeView, appShellConfig, {
     workbenchAvailable: cloudWorkbenchAvailable,
@@ -84,12 +104,18 @@ function App() {
 
   useEffect(() => {
     let mounted = true;
+    const getAppInfo = window.electronAPI?.getAppInfo;
+    if (typeof getAppInfo !== 'function') {
+      return () => {
+        mounted = false;
+      };
+    }
 
-    window.electronAPI
-      .getAppInfo()
+    getAppInfo()
       .then((result: AppInfoResult) => {
         if (!mounted) return;
         const isPackaged = result?.success === true && result?.info?.isPackaged === true;
+        setIsElectronBridgeAvailable(true);
         setShowUpdateNotification(isPackaged);
         setAppPlatform(result?.info?.platform || '');
         setAppShellConfig(
@@ -100,6 +126,7 @@ function App() {
       })
       .catch(() => {
         if (!mounted) return;
+        setIsElectronBridgeAvailable(true);
         setShowUpdateNotification(false);
         setAppPlatform('');
         setAppShellConfig(DEFAULT_APP_SHELL_CONFIG);
@@ -169,13 +196,19 @@ function App() {
 
   // ✅ 统一管理视图切换时的清理逻辑
   useEffect(() => {
+    if (!isElectronBridgeAvailable) {
+      return;
+    }
+
     const handleViewSwitch = async () => {
       const { activePluginView } = useUIStore.getState();
 
       const hideActivePluginView = async () => {
         if (!activePluginView) return;
+        const hidePluginView = window.electronAPI?.jsPlugin?.hidePluginView;
+        if (typeof hidePluginView !== 'function') return;
         try {
-          await window.electronAPI.jsPlugin.hidePluginView(activePluginView);
+          await hidePluginView(activePluginView);
         } catch (error) {
           logger.error('Failed to hide plugin view', {
             operation: 'app.pluginView.hide',
@@ -256,7 +289,11 @@ function App() {
     };
 
     handleViewSwitch();
-  }, [effectiveActiveView]);
+  }, [effectiveActiveView, isElectronBridgeAvailable]);
+
+  if (!isElectronBridgeAvailable) {
+    return <BridgeUnavailableFallback />;
+  }
 
   return (
     <>

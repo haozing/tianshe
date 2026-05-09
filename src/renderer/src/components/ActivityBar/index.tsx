@@ -191,9 +191,17 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
 
   // 加载有 activityBarView 的插件
   useEffect(() => {
+    const jsPlugin = window.electronAPI?.jsPlugin;
+    if (
+      typeof jsPlugin?.list !== 'function' ||
+      typeof jsPlugin?.onPluginStateChanged !== 'function'
+    ) {
+      return;
+    }
+
     async function loadPlugins() {
       try {
-        const result = await window.electronAPI.jsPlugin.list();
+        const result = await jsPlugin.list();
         if (result.success && result.plugins) {
           // 🆕 过滤出已启用且有 activityBarView 配置的插件
           const pluginList = Array.isArray(result.plugins)
@@ -206,7 +214,10 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
 
           // 预加载插件视图信息
           for (const plugin of pluginsWithViews) {
-            const viewInfo = await window.electronAPI.jsPlugin.getPluginViewInfo(plugin.id);
+            const viewInfo =
+              typeof jsPlugin.getPluginViewInfo === 'function'
+                ? await jsPlugin.getPluginViewInfo(plugin.id)
+                : { success: false };
             if (viewInfo.success && viewInfo.viewInfo) {
               const normalized: PluginViewInfoSummary = {
                 hasPageView: Boolean(viewInfo.viewInfo.hasPageView),
@@ -239,7 +250,7 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
     loadPlugins();
 
     // 监听插件状态变化，重新加载列表
-    const unsubscribe = window.electronAPI.jsPlugin.onPluginStateChanged(() => {
+    const unsubscribe = jsPlugin.onPluginStateChanged(() => {
       loadPlugins();
     });
 
@@ -252,8 +263,13 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
   const handlePluginClick = useCallback(async (pluginId: string) => {
     try {
       // 1. 先隐藏之前的插件视图（如果有）
-      if (activePluginView && activePluginView !== pluginId) {
-        await window.electronAPI.jsPlugin.hidePluginView(activePluginView);
+      const jsPlugin = window.electronAPI?.jsPlugin;
+      if (
+        activePluginView &&
+        activePluginView !== pluginId &&
+        typeof jsPlugin?.hidePluginView === 'function'
+      ) {
+        await jsPlugin.hidePluginView(activePluginView);
       }
 
       // 2. 清理所有临时浏览器窗口（避免遗留之前插件创建的临时窗口）
@@ -290,7 +306,9 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
       setActivePluginView(pluginId);
 
       // 4. 显示插件视图（布局自动从 manifest 计算）
-      await window.electronAPI.jsPlugin.showPluginView(pluginId);
+      if (typeof jsPlugin?.showPluginView === 'function') {
+        await jsPlugin.showPluginView(pluginId);
+      }
     } catch (error) {
       logger.error('Failed to show plugin view', {
         operation: 'activityBar.pluginView.show',

@@ -311,9 +311,19 @@ export function PluginMarket() {
 
   useEffect(() => {
     let mounted = true;
+    const getAppInfo = window.electronAPI?.getAppInfo;
+    if (typeof getAppInfo !== 'function') {
+      setAppInfo({
+        loading: false,
+        shouldShowDevOptions: false,
+        isPackaged: false,
+      });
+      return () => {
+        mounted = false;
+      };
+    }
 
-    window.electronAPI
-      .getAppInfo()
+    getAppInfo()
       .then((result) => {
         if (!mounted) return;
         setAppInfo({

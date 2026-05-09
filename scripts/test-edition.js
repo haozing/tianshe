@@ -9,6 +9,7 @@ const OPEN_TEST_FILES = [
   'src/edition/edition-boundary.test.ts',
   'src/core/js-plugin/namespaces/ui.test.ts',
   'src/preload/electron-api.contract.ts',
+  'src/renderer/src/__tests__/App.preload-missing.test.tsx',
   'src/renderer/src/lib/edition.test.tsx',
   'src/renderer/src/components/SettingsPage/__tests__/SettingsPage.test.tsx',
   'src/renderer/src/components/AccountCenter/__tests__/AccountCenterPage.tab-smoke.test.tsx',
