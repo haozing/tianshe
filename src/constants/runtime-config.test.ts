@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const originalProcess = globalThis.process;
@@ -101,5 +104,35 @@ describe('runtime-config', () => {
       '/tmp/firefox-bin'
     );
     expect(runtimeConfig.resolveFirefoxExecutablePathOverride()).toBe('/tmp/firefox-bin');
+  });
+
+  it('detects packaged worker mode from resourcesPath app.asar', async () => {
+    const resourcesPath = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-config-resources-'));
+    fs.writeFileSync(path.join(resourcesPath, 'app.asar'), '');
+
+    try {
+      Object.defineProperty(globalThis, 'process', {
+        configurable: true,
+        value: {
+          ...originalProcess,
+          argv: ['node', 'runtime-config.test.ts'],
+          versions: {
+            ...originalProcess.versions,
+            electron: '35.7.5',
+            node: '20.0.0',
+          },
+          resourcesPath,
+          type: 'worker',
+        },
+      });
+
+      const runtimeConfig = await import('./runtime-config');
+
+      expect(runtimeConfig.AIRPA_RUNTIME_CONFIG.app.mode).toBe('production');
+      expect(runtimeConfig.isProductionMode()).toBe(true);
+      expect(runtimeConfig.isDevelopmentMode()).toBe(false);
+    } finally {
+      fs.rmSync(resourcesPath, { recursive: true, force: true });
+    }
   });
 });

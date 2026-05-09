@@ -289,7 +289,7 @@ A minimal plugin looks like this:
 
 ```json
 {
-  "id": "minimal-plugin",
+  "id": "minimal_plugin",
   "name": "Minimal Plugin",
   "version": "1.0.0",
   "author": "tiansheai",

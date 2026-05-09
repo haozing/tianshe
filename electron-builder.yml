@@ -9,6 +9,14 @@ asarUnpack:
   # Worker 脚本解包（worker_threads 入口脚本从 asar 加载可能失败）
   # 需要把 import-worker 及其同目录依赖一起解包
   - dist/main/duckdb/**/*
+  - dist/core/logger.js
+  - dist/constants/runtime-config.js
+  - dist/main/ipc-utils.js
+  - dist/main/ipc-handlers/errors.js
+  - dist/types/error-codes.js
+  - dist/utils/data-paths.js
+  - dist/utils/error-message.js
+  - dist/utils/redaction.js
   - dist/core/system-automation/cv/opencvjs-worker.js
 
   # Worker 依赖（让 worker 在 app.asar.unpacked 内部即可解析到 node_modules）
@@ -16,6 +24,19 @@ asarUnpack:
   - node_modules/graceful-fs/**/*
   - node_modules/jsonfile/**/*
   - node_modules/universalify/**/*
+  - node_modules/pino/**/*
+  - node_modules/@pinojs/**/*
+  - node_modules/atomic-sleep/**/*
+  - node_modules/on-exit-leak-free/**/*
+  - node_modules/pino-abstract-transport/**/*
+  - node_modules/pino-std-serializers/**/*
+  - node_modules/process-warning/**/*
+  - node_modules/quick-format-unescaped/**/*
+  - node_modules/real-require/**/*
+  - node_modules/safe-stable-stringify/**/*
+  - node_modules/sonic-boom/**/*
+  - node_modules/thread-stream/**/*
+  - node_modules/split2/**/*
 
   # .xls 转换（xlsx + 依赖）
   - node_modules/xlsx/**/*

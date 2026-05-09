@@ -11,6 +11,7 @@ import { autoUpdater } from 'electron-updater';
 import { BrowserWindow } from 'electron';
 import type { UpdateInfo, ProgressInfo } from 'electron-updater';
 import { LogStorageService } from './log-storage-service';
+import fs from 'node:fs';
 import path from 'path';
 import { AIRPA_RUNTIME_CONFIG, isDevelopmentMode } from '../constants/runtime-config';
 
@@ -22,6 +23,7 @@ export class UpdateManager {
   private mainWindow: BrowserWindow;
   private updateCheckInterval: NodeJS.Timeout | null = null;
   private isForceUpdate: boolean = false;
+  private updateConfigAvailable: boolean = false;
 
   constructor(logger: LogStorageService, mainWindow: BrowserWindow) {
     this.logger = logger;
@@ -33,12 +35,13 @@ export class UpdateManager {
    * 配置 autoUpdater
    */
   private setupAutoUpdater(): void {
+    const updateConfigPath = this.resolveUpdateConfigPath();
     // 开发环境：使用本地配置文件（用于测试）
     if (isDevelopmentMode()) {
-      const devConfigPath = path.join(__dirname, '../../dev-app-update.yml');
-      autoUpdater.updateConfigPath = devConfigPath;
-      this.logger.info('updater', `Using dev config: ${devConfigPath}`);
+      autoUpdater.updateConfigPath = updateConfigPath;
+      this.logger.info('updater', `Using dev config: ${updateConfigPath}`);
     }
+    this.updateConfigAvailable = fs.existsSync(updateConfigPath);
 
     // 生产环境：自动下载更新
     autoUpdater.autoDownload = true;
@@ -54,7 +57,33 @@ export class UpdateManager {
       autoDownload: autoUpdater.autoDownload,
       autoInstall: autoUpdater.autoInstallOnAppQuit,
       env: AIRPA_RUNTIME_CONFIG.app.mode,
+      updateConfigAvailable: this.updateConfigAvailable,
+      updateConfigPath,
     });
+
+    if (!this.updateConfigAvailable) {
+      this.logger.warn('updater', 'Update config not found; update checks disabled', {
+        updateConfigPath,
+        env: AIRPA_RUNTIME_CONFIG.app.mode,
+      });
+    }
+  }
+
+  private resolveUpdateConfigPath(): string {
+    if (isDevelopmentMode()) {
+      return path.join(__dirname, '../../dev-app-update.yml');
+    }
+
+    const resourcesPath = (process as typeof process & { resourcesPath?: string }).resourcesPath;
+    if (resourcesPath) {
+      return path.join(resourcesPath, 'app-update.yml');
+    }
+
+    return path.join(process.cwd(), 'app-update.yml');
+  }
+
+  isUpdateConfigured(): boolean {
+    return this.updateConfigAvailable;
   }
 
   /**
@@ -176,6 +205,10 @@ export class UpdateManager {
    */
   async checkForUpdates(): Promise<void> {
     try {
+      if (!this.updateConfigAvailable) {
+        throw new Error('Update config not found; update checks are disabled for this build');
+      }
+
       this.logger.info('updater', 'Manually checking for updates');
       await autoUpdater.checkForUpdates();
     } catch (error: unknown) {
@@ -192,6 +225,10 @@ export class UpdateManager {
    */
   async downloadUpdate(): Promise<void> {
     try {
+      if (!this.updateConfigAvailable) {
+        throw new Error('Update config not found; update downloads are disabled for this build');
+      }
+
       this.logger.info('updater', 'Manually downloading update');
       await autoUpdater.downloadUpdate();
     } catch (error: unknown) {

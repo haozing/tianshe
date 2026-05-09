@@ -131,7 +131,7 @@ describe('GroupBuilder', () => {
         field: 'nonexistent_field',
       };
 
-      await expect(builder.build(context, config)).rejects.toThrow();
+      expect(() => builder.build(context, config)).toThrow();
     });
 
     it('错误消息应该包含字段名', async () => {

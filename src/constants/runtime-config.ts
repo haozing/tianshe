@@ -180,8 +180,22 @@ const detectRuntimeMode = (): RuntimeMode => {
   }
 
   const resourcesPath = (runtimeProcess as unknown as { resourcesPath?: unknown }).resourcesPath;
-  if (typeof resourcesPath === 'string' && resourcesPath.includes('app.asar')) {
-    return 'production';
+  if (typeof resourcesPath === 'string' && resourcesPath.length > 0) {
+    if (resourcesPath.includes('app.asar')) {
+      return 'production';
+    }
+
+    if (typeof require === 'function') {
+      try {
+        const fs = require('node:fs') as typeof import('node:fs');
+        const path = require('node:path') as typeof import('node:path');
+        if (fs.existsSync(path.join(resourcesPath, 'app.asar'))) {
+          return 'production';
+        }
+      } catch {
+        // ignore: renderer-like contexts may not expose node builtins.
+      }
+    }
   }
 
   return 'development';

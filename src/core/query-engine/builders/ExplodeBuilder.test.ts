@@ -114,7 +114,7 @@ describe('ExplodeBuilder', () => {
         },
       ];
 
-      await expect(builder.build(context, config)).rejects.toThrow('columnNames');
+      expect(() => builder.build(context, config)).toThrow('columnNames');
     });
 
     it('应该保留原有列', async () => {
@@ -188,7 +188,7 @@ describe('ExplodeBuilder', () => {
         },
       ];
 
-      await expect(builder.build(context, config)).rejects.toThrow('outputColumn');
+      expect(() => builder.build(context, config)).toThrow('outputColumn');
     });
   });
 
@@ -246,7 +246,7 @@ describe('ExplodeBuilder', () => {
         },
       ];
 
-      await expect(builder.build(context, config)).rejects.toThrow('Only one unnest');
+      expect(() => builder.build(context, config)).toThrow('Only one unnest');
     });
 
     it('可以有多个 split_columns 操作', async () => {
@@ -263,7 +263,7 @@ describe('ExplodeBuilder', () => {
         },
       ];
 
-      await expect(builder.build(context, config)).resolves.toBeDefined();
+      expect(builder.build(context, config)).toBeDefined();
     });
   });
 
@@ -278,7 +278,7 @@ describe('ExplodeBuilder', () => {
         },
       ];
 
-      await expect(builder.build(context, config)).rejects.toThrow('field');
+      expect(() => builder.build(context, config)).toThrow('field');
     });
 
     it('不支持的类型应该返回 SELECT *', async () => {

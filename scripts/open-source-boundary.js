@@ -948,7 +948,7 @@ Use it as a starting point for local data and browser automation plugins.
     'examples/minimal-plugin/manifest.json',
     `
 {
-  "id": "minimal-plugin",
+  "id": "minimal_plugin",
   "name": "Minimal Plugin",
   "version": "1.0.0",
   "description": "A minimal local plugin example for Tianshe Client Open.",

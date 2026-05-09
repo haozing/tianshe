@@ -209,6 +209,11 @@ async function initializeUpdater(): Promise<void> {
     // 注册更新相关的 IPC 处理器
     registerUpdaterHandlers(updateManager);
 
+    if (!updateManager.isUpdateConfigured()) {
+      logger.warn('Update config not found, skipping automatic update checks');
+      return;
+    }
+
     // 延迟10秒后首次检查更新（避免影响启动速度）
     setTimeout(() => {
       logger.info('Running first update check');
