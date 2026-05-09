@@ -163,6 +163,7 @@
     "index.js",
     "src/edition/index.ts",
     "src/edition/open/index.ts",
+    "src/edition/preload.ts",
     "src/preload/index.ts",
     "src/main/index.ts",
     "src/renderer/src/lib/edition.ts"

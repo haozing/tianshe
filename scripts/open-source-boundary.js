@@ -1145,18 +1145,25 @@ describe('open/cloud edition boundary', () => {
     ]);
 
     expect(imports.filter((specifier) => forbidden.has(specifier))).toEqual([]);
-    expect(source('src/main/index.ts')).toContain('resolveTiansheEdition');
-    expect(source('src/main/index.ts')).toContain('tiansheEdition.cloudSnapshot.registerMainHandlers');
-    expect(source('src/main/index.ts')).toContain('tiansheEdition.cloudCatalog.registerMainHandlers');
+    const mainSource = source('src/main/index.ts');
+    const compositionSource = source('src/main/bootstrap/main-service-composition.ts');
+
+    expect(mainSource).toContain('resolveTiansheEdition');
+    expect(mainSource).toContain('initializeMainServices');
+    expect(compositionSource).toContain('tiansheEdition.cloudSnapshot.registerMainHandlers');
+    expect(compositionSource).toContain('tiansheEdition.cloudCatalog.registerMainHandlers');
   });
 
   it('preload always exposes edition info and strips cloud APIs for open edition', () => {
     const preload = source('src/preload/index.ts');
+    const preloadEdition = source('src/edition/preload.ts');
 
-    expect(preload).toContain("import type { TiansheEditionName, TiansheEditionPublicInfo } from '../edition/types';");
-    expect(preload).toContain('const resolveTiansheEditionPublicInfo = (): TiansheEditionPublicInfo => {');
-    expect(preload).toContain("process.env.TIANSHE_EDITION || process.env.AIRPA_EDITION || ''");
-    expect(preload).not.toContain("name: 'open' as const");
+    expect(preloadEdition).toContain("import { getTiansheEditionPublicInfo } from './selection';");
+    expect(preloadEdition).toContain('resolveTiansheEditionPreloadInfo');
+    expect(preload).toContain("import { resolveTiansheEditionPreloadInfo } from '../edition/preload';");
+    expect(preload).toContain('const tiansheEdition = resolveTiansheEditionPreloadInfo();');
+    expect(preload).not.toContain('process.env');
+    expect(preload).not.toContain("const name: TiansheEditionName = 'open';");
     expect(preload).toContain('edition: tiansheEdition');
     expect(preload).toContain("if (tiansheEdition.name === 'open')");
     expect(preload).toContain('delete exposed.cloudAuth');
@@ -1167,7 +1174,24 @@ describe('open/cloud edition boundary', () => {
   });
 
   it('preload runtime imports stay sandbox-compatible', () => {
-    expect(extractRuntimeImports('src/preload/index.ts')).toEqual(['electron']);
+    expect(extractRuntimeImports('src/preload/index.ts')).toEqual([
+      'electron',
+      '../edition/preload',
+      './api/account',
+      './api/cloud',
+      './api/duckdb',
+      './api/extension-packages',
+      './api/file',
+      './api/folder',
+      './api/js-plugin',
+      './api/profile',
+      './api/query-template',
+      './api/runtime',
+      './api/saved-site',
+      './api/system',
+      './api/tag',
+      './api/view',
+    ]);
   });
 });
 `

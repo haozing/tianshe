@@ -113,11 +113,14 @@ describe('open/cloud edition boundary', () => {
 
   it('preload always exposes edition info and strips cloud APIs for open edition', () => {
     const preload = source('src/preload/index.ts');
+    const preloadEdition = source('src/edition/preload.ts');
 
-    expect(preload).toContain("import type { TiansheEditionName, TiansheEditionPublicInfo } from '../edition/types';");
-    expect(preload).toContain('const resolveTiansheEditionPublicInfo = (): TiansheEditionPublicInfo => {');
-    expect(preload).toContain("const name: TiansheEditionName = 'open';");
+    expect(preloadEdition).toContain("import { getTiansheEditionPublicInfo } from './selection';");
+    expect(preloadEdition).toContain('resolveTiansheEditionPreloadInfo');
+    expect(preload).toContain("import { resolveTiansheEditionPreloadInfo } from '../edition/preload';");
+    expect(preload).toContain('const tiansheEdition = resolveTiansheEditionPreloadInfo();');
     expect(preload).not.toContain('process.env');
+    expect(preload).not.toContain("const name: TiansheEditionName = 'open';");
     expect(preload).toContain('edition: tiansheEdition');
     expect(preload).toContain("if (tiansheEdition.name === 'open')");
     expect(preload).toContain('delete exposed.cloudAuth');
@@ -130,6 +133,7 @@ describe('open/cloud edition boundary', () => {
   it('preload runtime imports stay sandbox-compatible', () => {
     expect(extractRuntimeImports('src/preload/index.ts')).toEqual([
       'electron',
+      '../edition/preload',
       './api/account',
       './api/cloud',
       './api/duckdb',

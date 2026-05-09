@@ -7,7 +7,7 @@
  */
 
 import { contextBridge, ipcRenderer, IpcRendererEvent, webUtils } from 'electron';
-import type { TiansheEditionName, TiansheEditionPublicInfo } from '../edition/types';
+import { resolveTiansheEditionPreloadInfo } from '../edition/preload';
 import type { DownloadInfo } from '../main/download';
 import { createAccountAPI } from './api/account';
 import { createCloudAPI } from './api/cloud';
@@ -24,21 +24,7 @@ import { createSystemAPI } from './api/system';
 import { createTagAPI } from './api/tag';
 import { createViewAPI } from './api/view';
 
-const resolveTiansheEditionPublicInfo = (): TiansheEditionPublicInfo => {
-  const name: TiansheEditionName = 'open';
-  const cloudEnabled = false;
-
-  return {
-    name,
-    capabilities: {
-      cloudAuth: cloudEnabled,
-      cloudSnapshot: cloudEnabled,
-      cloudCatalog: cloudEnabled,
-    },
-  };
-};
-
-const tiansheEdition = resolveTiansheEditionPublicInfo();
+const tiansheEdition = resolveTiansheEditionPreloadInfo();
 
 const allowedPreloadEventChannels = [
   'cloud-auth:session-changed',
