@@ -23,40 +23,50 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="shell-content-surface flex h-full flex-col">
-      <PageFrameHeader title="系统设置" subtitle={text.subtitle} />
+    <div className="settings-page shell-content-surface flex h-full flex-col">
+      <PageFrameHeader className="settings-page-header" title="系统设置" subtitle={text.subtitle} />
 
-      <div className="shell-content-muted flex-1 overflow-auto p-6">
+      <div className="settings-page-scroll shell-content-muted flex-1 overflow-auto p-3">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="h-10 rounded-xl border bg-white/80">
-            <TabsTrigger value="scheduler">{text.scheduler}</TabsTrigger>
-            <TabsTrigger value="http-api">HTTP API</TabsTrigger>
+          <TabsList className="settings-page-tabs-list h-auto rounded-lg border bg-white/80 p-1">
+            <TabsTrigger className="h-8 rounded-md px-3 py-0" value="scheduler">
+              {text.scheduler}
+            </TabsTrigger>
+            <TabsTrigger className="h-8 rounded-md px-3 py-0" value="http-api">
+              HTTP API
+            </TabsTrigger>
             {cloudSnapshotAvailable ? (
-              <TabsTrigger value="cloud-snapshot">{text.cloudSnapshot}</TabsTrigger>
+              <TabsTrigger className="h-8 rounded-md px-3 py-0" value="cloud-snapshot">
+                {text.cloudSnapshot}
+              </TabsTrigger>
             ) : null}
-            <TabsTrigger value="ocr">OCR</TabsTrigger>
-            <TabsTrigger value="internal-browser">内置浏览器</TabsTrigger>
+            <TabsTrigger className="h-8 rounded-md px-3 py-0" value="ocr">
+              OCR
+            </TabsTrigger>
+            <TabsTrigger className="h-8 rounded-md px-3 py-0" value="internal-browser">
+              内置浏览器
+            </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="scheduler" className="mt-4">
+          <TabsContent value="scheduler" className="mt-3">
             <SchedulerPanel />
           </TabsContent>
 
-          <TabsContent value="http-api" className="mt-4">
+          <TabsContent value="http-api" className="mt-3">
             <HttpApiPanel />
           </TabsContent>
 
           {cloudSnapshotAvailable ? (
-            <TabsContent value="cloud-snapshot" className="mt-4">
+            <TabsContent value="cloud-snapshot" className="mt-3">
               <CloudSnapshotPanel />
             </TabsContent>
           ) : null}
 
-          <TabsContent value="ocr" className="mt-4">
+          <TabsContent value="ocr" className="mt-3">
             <OcrPoolPanel />
           </TabsContent>
 
-          <TabsContent value="internal-browser" className="mt-4">
+          <TabsContent value="internal-browser" className="mt-3">
             <InternalBrowserPanel />
           </TabsContent>
         </Tabs>

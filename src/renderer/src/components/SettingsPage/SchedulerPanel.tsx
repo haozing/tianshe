@@ -111,17 +111,17 @@ function HistoryDialog({
 
         <div className="flex-1 overflow-auto">
           {loading ? (
-            <div className="flex items-center justify-center py-8">
+            <div className="flex items-center justify-center py-6">
               <RefreshCw className="w-6 h-6 animate-spin text-muted-foreground" />
             </div>
           ) : executions.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">暂无执行记录</div>
+            <div className="text-center py-6 text-muted-foreground">暂无执行记录</div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {executions.map((exec) => (
                 <div
                   key={exec.id}
-                  className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
+                  className="settings-section settings-section--muted flex items-center justify-between px-3 py-2"
                 >
                   <div className="flex items-center gap-3">
                     <span className="text-sm text-muted-foreground">
@@ -178,8 +178,8 @@ function TaskCard({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <Card className="overflow-hidden">
-      <div className="p-4">
+    <div className="settings-section overflow-hidden">
+      <div className="p-3">
         {/* 任务头部 */}
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0">
@@ -227,7 +227,13 @@ function TaskCard({
             >
               <History className="w-4 h-4" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" title="彻底删除" onClick={onDelete}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              title="彻底删除"
+              onClick={onDelete}
+            >
               <Trash2 className="w-4 h-4 text-destructive" />
             </Button>
             <Button
@@ -242,7 +248,7 @@ function TaskCard({
         </div>
 
         {/* 基本信息 */}
-        <div className="flex items-center gap-4 mt-3 text-sm text-muted-foreground">
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
           <span className="flex items-center gap-1">
             <Calendar className="w-4 h-4" />
             {getScheduleDescription(task)}
@@ -261,7 +267,7 @@ function TaskCard({
 
         {/* 展开详情 */}
         {expanded && (
-          <div className="mt-4 pt-4 border-t space-y-2 text-sm">
+          <div className="mt-3 space-y-1.5 border-t pt-3 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">插件 ID</span>
               <span className="font-mono">{task.pluginId}</span>
@@ -285,7 +291,7 @@ function TaskCard({
           </div>
         )}
       </div>
-    </Card>
+    </div>
   );
 }
 
@@ -349,42 +355,42 @@ export function SchedulerPanel() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       {/* 统计卡片 */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
+        <div className="grid grid-cols-2 gap-2.5 md:grid-cols-4">
+          <Card className="settings-page-panel">
+            <CardHeader className="settings-card-header pb-1">
               <CardDescription>总任务数</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="settings-card-content">
               <div className="text-2xl font-bold">{stats.total}</div>
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader className="pb-2">
+          <Card className="settings-page-panel">
+            <CardHeader className="settings-card-header pb-1">
               <CardDescription>运行中</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="settings-card-content">
               <div className="text-2xl font-bold text-green-600">{stats.active}</div>
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader className="pb-2">
+          <Card className="settings-page-panel">
+            <CardHeader className="settings-card-header pb-1">
               <CardDescription>今日执行</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="settings-card-content">
               <div className="text-2xl font-bold">{stats.todayExecutions}</div>
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader className="pb-2">
+          <Card className="settings-page-panel">
+            <CardHeader className="settings-card-header pb-1">
               <CardDescription>今日失败</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="settings-card-content">
               <div className={cn('text-2xl font-bold', stats.todayFailed > 0 && 'text-red-600')}>
                 {stats.todayFailed}
               </div>
@@ -394,8 +400,8 @@ export function SchedulerPanel() {
       )}
 
       {/* 任务列表 */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+      <Card className="settings-page-panel">
+        <CardHeader className="settings-card-header flex flex-row items-center justify-between">
           <div>
             <CardTitle>定时任务</CardTitle>
           </div>
@@ -404,21 +410,21 @@ export function SchedulerPanel() {
             刷新
           </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent className="settings-card-content">
           {error && (
-            <div className="flex items-center gap-2 text-destructive mb-4">
+            <div className="mb-3 flex items-center gap-2 text-destructive">
               <AlertCircle className="w-4 h-4" />
               {error}
             </div>
           )}
 
           {tasks.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Clock className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <div className="settings-section settings-section--muted py-6 text-center text-muted-foreground">
+              <Clock className="w-10 h-10 mx-auto mb-2 opacity-50" />
               <p>暂无定时任务</p>
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-2">
               {tasks.map((task) => (
                 <TaskCard
                   key={task.id}
@@ -436,17 +442,17 @@ export function SchedulerPanel() {
 
       {/* 最近执行记录 */}
       {recentExecutions.length > 0 && (
-        <Card>
-          <CardHeader>
+        <Card className="settings-page-panel">
+          <CardHeader className="settings-card-header">
             <CardTitle>最近执行</CardTitle>
             <CardDescription>最近 20 条执行记录</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
+          <CardContent className="settings-card-content">
+            <div className="space-y-1.5">
               {recentExecutions.map((exec) => (
                 <div
                   key={exec.id}
-                  className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
+                  className="settings-section settings-section--muted flex items-center justify-between px-3 py-2"
                 >
                   <div className="flex items-center gap-3">
                     <span className="text-sm text-muted-foreground">

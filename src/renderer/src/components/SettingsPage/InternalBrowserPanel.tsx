@@ -72,9 +72,9 @@ export function InternalBrowserPanel() {
   }
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
+    <div className="space-y-3">
+      <Card className="settings-page-panel">
+        <CardHeader className="settings-card-header">
           <CardTitle className="flex items-center gap-2">
             <Bug className="h-5 w-5" />
             内置浏览器调试
@@ -83,18 +83,18 @@ export function InternalBrowserPanel() {
             控制 Electron 内置浏览器实例是否自动打开 Developer Tools。
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="rounded-lg border bg-muted/40 p-4">
+        <CardContent className="settings-card-content space-y-3">
+          <div className="settings-section settings-section--muted p-3">
             <div className="text-sm font-semibold">当前已保存配置</div>
-            <div className="mt-2 text-xs text-muted-foreground">
+            <div className="mt-1.5 text-xs text-muted-foreground">
               自动打开 DevTools：{storedConfig.autoOpenDevTools ? '开启' : '关闭'}
             </div>
           </div>
 
-          <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white p-4">
+          <div className="settings-section flex items-center justify-between gap-4 p-3">
             <div className="space-y-1">
-              <Label className="text-base font-semibold">自动打开 Developer Tools</Label>
-              <div className="text-sm text-muted-foreground">
+              <Label className="text-sm font-semibold">自动打开 Developer Tools</Label>
+              <div className="text-xs text-muted-foreground">
                 新创建的内置浏览器页面、`WebContentsView`、插件模态窗口、弹窗壳窗口和隐藏 automation
                 host 会按此开关自动打开 detached DevTools。
               </div>
@@ -111,11 +111,11 @@ export function InternalBrowserPanel() {
             />
           </div>
 
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <div className="settings-section border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
             已经打开的窗口不会被自动补开或自动关闭 DevTools；如需生效，请重新打开对应浏览器实例。
           </div>
 
-          <div className="flex justify-end gap-3">
+          <div className="flex justify-end gap-2">
             <Button
               variant="outline"
               onClick={() => void loadConfig()}

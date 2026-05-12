@@ -340,22 +340,22 @@ export function HttpApiPanel() {
   });
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
+    <div className="space-y-3">
+      <Card className="settings-page-panel">
+        <CardHeader className="settings-card-header">
           <CardTitle className="flex items-center gap-2">
             <Globe className="h-5 w-5" />
             HTTP API 配置
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-6">
+        <CardContent className="settings-card-content space-y-3">
           {(enabledOverrideText || enableMcpOverrideText) && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className="settings-section border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
               <div className="flex items-center gap-2 font-medium">
                 <AlertTriangle className="h-4 w-4" />
                 当前进程存在启动参数覆盖
               </div>
-              <div className="mt-2 space-y-1 text-xs text-amber-800">
+              <div className="mt-1.5 space-y-1 text-xs text-amber-800">
                 <div>已保存配置仍会写入本地，但本次运行按生效配置执行。</div>
                 {enabledOverrideText ? <div>{enabledOverrideText}</div> : null}
                 {enableMcpOverrideText ? <div>{enableMcpOverrideText}</div> : null}
@@ -363,18 +363,18 @@ export function HttpApiPanel() {
             </div>
           )}
 
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="rounded-lg border bg-muted/40 p-4">
+          <div className="grid gap-2.5 md:grid-cols-2">
+            <div className="settings-section settings-section--muted p-3">
               <div className="text-sm font-semibold">已保存配置</div>
-              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+              <div className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
                 <div>HTTP 服务：{storedConfig.enabled ? '开启' : '关闭'}</div>
                 <div>MCP 服务：{storedConfig.enableMcp ? '开启' : '关闭'}</div>
                 <div>鉴权：{storedConfig.enableAuth ? '开启' : '关闭'}</div>
               </div>
             </div>
-            <div className="rounded-lg border bg-muted/40 p-4">
+            <div className="settings-section settings-section--muted p-3">
               <div className="text-sm font-semibold">当前生效配置</div>
-              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+              <div className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
                 <div>HTTP 服务：{effectiveConfig.enabled ? '开启' : '关闭'}</div>
                 <div>MCP 服务：{effectiveConfig.enableMcp ? '开启' : '关闭'}</div>
                 <div>鉴权：{effectiveConfig.enableAuth ? '开启' : '关闭'}</div>
@@ -382,14 +382,14 @@ export function HttpApiPanel() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between rounded-lg bg-muted/50 p-4">
+          <div className="settings-section flex items-center justify-between gap-4 p-3">
             <div className="space-y-0.5">
-              <Label className="flex items-center gap-2 text-base font-semibold">
+              <Label className="flex items-center gap-2 text-sm font-semibold">
                 <Globe className="h-5 w-5" />
                 启用 HTTP 服务器
                 {runtimeOverrides.enabled ? <Badge variant="secondary">运行时覆盖</Badge> : null}
               </Label>
-              <div className="text-sm text-muted-foreground">
+              <div className="text-xs text-muted-foreground">
                 开启后可通过 HTTP 接口访问编排能力和 MCP 协议端点
               </div>
             </div>
@@ -399,9 +399,9 @@ export function HttpApiPanel() {
             />
           </div>
 
-          <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950/20">
+          <div className="settings-section flex items-center justify-between gap-4 border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-950/20">
             <div className="space-y-0.5">
-              <Label className="flex items-center gap-2 text-base font-semibold text-blue-900 dark:text-blue-100">
+              <Label className="flex items-center gap-2 text-sm font-semibold text-blue-900 dark:text-blue-100">
                 <Plug className="h-5 w-5" />
                 启用 MCP 服务
                 {runtimeOverrides.enableMcp ? <Badge variant="secondary">运行时覆盖</Badge> : null}
@@ -413,12 +413,12 @@ export function HttpApiPanel() {
             />
           </div>
 
-          <div className="flex items-center justify-between rounded-lg border border-sky-200 bg-sky-50 p-4 dark:border-sky-800 dark:bg-sky-950/20">
+          <div className="settings-section flex items-center justify-between gap-4 border border-sky-200 bg-sky-50 p-3 dark:border-sky-800 dark:bg-sky-950/20">
             <div className="space-y-0.5">
-              <Label className="text-base font-semibold text-sky-900 dark:text-sky-100">
+              <Label className="text-sm font-semibold text-sky-900 dark:text-sky-100">
                 MCP 端点要求鉴权
               </Label>
-              <div className="text-sm text-sky-700 dark:text-sky-300">
+              <div className="text-xs text-sky-700 dark:text-sky-300">
                 仅在 Token 认证开启时生效
               </div>
             </div>
@@ -428,13 +428,13 @@ export function HttpApiPanel() {
             />
           </div>
 
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <div className="space-y-0.5">
               <Label className="flex items-center gap-2">
                 <Key className="h-4 w-4" />
                 Token 认证
               </Label>
-              <div className="text-sm text-muted-foreground">
+              <div className="text-xs text-muted-foreground">
                 启用后需要在 HTTP 请求头中提供 Bearer Token
               </div>
             </div>
@@ -460,8 +460,8 @@ export function HttpApiPanel() {
             </div>
           )}
 
-          <div className="space-y-2">
-            <Label htmlFor="callbackUrl" className="flex items-center gap-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="callbackUrl" className="flex items-center gap-2 text-sm font-medium">
               <Webhook className="h-4 w-4" />
               Webhook 回调 URL
             </Label>
@@ -474,9 +474,9 @@ export function HttpApiPanel() {
             />
           </div>
 
-          <div className="flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-800 dark:bg-rose-950/20">
+          <div className="settings-section flex items-center justify-between gap-4 border border-rose-200 bg-rose-50 p-3 dark:border-rose-800 dark:bg-rose-950/20">
             <div className="space-y-0.5">
-              <Label className="text-base font-semibold text-rose-900 dark:text-rose-100">
+              <Label className="text-sm font-semibold text-rose-900 dark:text-rose-100">
                 强制 Orchestration Scope 校验
               </Label>
             </div>
@@ -488,8 +488,8 @@ export function HttpApiPanel() {
             />
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="idempotencyStore" className="text-base font-semibold">
+          <div className="space-y-1.5">
+            <Label htmlFor="idempotencyStore" className="text-sm font-medium">
               幂等存储策略
             </Label>
             <Select
@@ -511,13 +511,13 @@ export function HttpApiPanel() {
             </Select>
           </div>
 
-          <div className="flex items-center justify-between rounded-lg border border-purple-200 bg-purple-50 p-4 dark:border-purple-800 dark:bg-purple-950/20">
+          <div className="settings-section flex items-center justify-between gap-4 border border-purple-200 bg-purple-50 p-3 dark:border-purple-800 dark:bg-purple-950/20">
             <div className="space-y-0.5">
-              <Label className="flex items-center gap-2 text-base font-semibold text-purple-900 dark:text-purple-100">
+              <Label className="flex items-center gap-2 text-sm font-semibold text-purple-900 dark:text-purple-100">
                 <Code2 className="h-5 w-5" />
                 开发模式
               </Label>
-              <div className="text-sm text-purple-700 dark:text-purple-300">
+              <div className="text-xs text-purple-700 dark:text-purple-300">
                 启用后解锁插件热重载监听等开发功能
               </div>
             </div>
@@ -527,7 +527,7 @@ export function HttpApiPanel() {
             />
           </div>
 
-          <div className="flex justify-end pt-2">
+          <div className="flex justify-end pt-1">
             <Button onClick={saveConfig} disabled={saving || !hasUnsavedChanges}>
               <Save className="mr-2 h-4 w-4" />
               {saving ? '保存中...' : hasUnsavedChanges ? '保存配置' : '已保存'}
@@ -536,8 +536,8 @@ export function HttpApiPanel() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
+      <Card className="settings-page-panel">
+        <CardHeader className="settings-card-header">
           <CardTitle className="flex items-center justify-between">
             <span className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5" />
@@ -565,27 +565,29 @@ export function HttpApiPanel() {
             </div>
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="settings-card-content space-y-3">
           <div className="flex items-center gap-2">
             <Badge variant={runtimeBadge.variant}>{runtimeBadge.label}</Badge>
-            <span className="text-sm text-muted-foreground">端口: {configuredPort}</span>
+            <span className="text-xs text-muted-foreground">端口: {configuredPort}</span>
           </div>
 
           {!effectiveConfig.enabled && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <div className="settings-section border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
               当前生效配置中 HTTP
               服务为关闭状态。若已保存配置与生效配置不一致，请检查启动参数覆盖提示。
             </div>
           )}
 
           {runtime?.diagnosis && runtime.diagnosis.code !== 'healthy_self' && (
-            <div className={`rounded-md border p-3 text-sm ${diagnosisTone.containerClassName}`}>
+            <div className={`settings-section p-3 text-sm ${diagnosisTone.containerClassName}`}>
               <div className="flex items-center gap-2">
                 <Badge variant={diagnosisTone.badgeVariant}>{runtime.diagnosis.severity}</Badge>
                 <span className="font-medium">{runtime.diagnosis.summary}</span>
               </div>
               {runtime.diagnosis.detail && (
-                <div className="mt-2 text-xs text-muted-foreground">{runtime.diagnosis.detail}</div>
+                <div className="mt-1.5 text-xs text-muted-foreground">
+                  {runtime.diagnosis.detail}
+                </div>
               )}
             </div>
           )}
@@ -594,9 +596,9 @@ export function HttpApiPanel() {
             <div className="text-sm text-destructive">{runtime.error}</div>
           )}
 
-          <div className="rounded-lg border p-4">
+          <div className="settings-section p-3">
             <div className="text-sm font-semibold">接入方式</div>
-            <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+            <div className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
               <div>MCP URL: {mcpBaseUrl}</div>
               <div>
                 建议：先用 `session_prepare` 绑定 profile / engine / visible / scopes，再进入
@@ -609,23 +611,23 @@ export function HttpApiPanel() {
             </div>
           </div>
 
-          <div className="rounded-lg border p-4">
+          <div className="settings-section p-3">
             <div className="text-sm font-semibold">修复建议</div>
-            <div className="mt-2 text-xs text-muted-foreground">
+            <div className="mt-1.5 text-xs text-muted-foreground">
               {runtime?.diagnosis?.suggestedAction ||
                 '若当前服务无响应，可先刷新状态，再尝试自动修复。'}
             </div>
           </div>
 
-          <div className="rounded-lg border p-4">
+          <div className="settings-section p-3">
             <div className="text-sm font-semibold">告警摘要</div>
-            <div className="mt-2">
+            <div className="mt-1.5">
               {runtime?.runtimeAlerts && runtime.runtimeAlerts.length > 0 ? (
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {runtime.runtimeAlerts.map((alert) => (
                     <div
                       key={`${alert.code}-${alert.severity}`}
-                      className="flex items-center justify-between rounded-md border p-2"
+                      className="flex items-center justify-between rounded-md border px-2.5 py-2"
                     >
                       <div className="flex items-center gap-2">
                         <Badge
@@ -635,7 +637,7 @@ export function HttpApiPanel() {
                         </Badge>
                         <span className="text-sm">{alert.message}</span>
                       </div>
-                      <span className="text-xs text-muted-foreground">
+                      <span className="text-[11px] text-muted-foreground">
                         {alert.value} / {alert.threshold}
                       </span>
                     </div>

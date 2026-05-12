@@ -82,18 +82,18 @@ export function OcrPoolPanel() {
   const queueHint = `默认建议: ${config.size} * 2 = ${config.size * 2}`;
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
+    <div className="space-y-3">
+      <Card className="settings-page-panel">
+        <CardHeader className="settings-card-header">
           <CardTitle className="flex items-center gap-2">
             <ScanText className="h-5 w-5" />
             OCR 引擎池配置
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="ocrPoolSize" className="flex items-center gap-2">
+        <CardContent className="settings-card-content space-y-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="ocrPoolSize" className="flex items-center gap-2 text-sm font-medium">
                 <Layers className="h-4 w-4" />
                 池大小
               </Label>
@@ -117,8 +117,10 @@ export function OcrPoolPanel() {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="ocrQueueMode">队列模式</Label>
+            <div className="space-y-1.5">
+              <Label htmlFor="ocrQueueMode" className="text-sm font-medium">
+                队列模式
+              </Label>
               <Select
                 value={config.queueMode}
                 onValueChange={(value) =>
@@ -142,8 +144,10 @@ export function OcrPoolPanel() {
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="ocrMaxQueue">最大队列长度</Label>
+          <div className="space-y-1.5">
+            <Label htmlFor="ocrMaxQueue" className="text-sm font-medium">
+              最大队列长度
+            </Label>
             <Input
               id="ocrMaxQueue"
               type="number"
@@ -165,7 +169,7 @@ export function OcrPoolPanel() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between pt-4">
+          <div className="flex items-center justify-between pt-1">
             <Button variant="outline" onClick={resetDefaults} disabled={saving}>
               <RotateCcw className="h-4 w-4 mr-2" />
               恢复默认
