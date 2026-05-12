@@ -154,11 +154,12 @@ describe('PluginMarket', () => {
     expect(screen.getByRole('button', { name: '已安装' })).toBeInTheDocument();
     expect(screen.queryByTestId('plugin-catalog-panel')).not.toBeInTheDocument();
     expect(screen.getByText('插件运行总览')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '首页' })).toBeInTheDocument();
+    expect(screen.getByText('任务')).toBeInTheDocument();
+    expect(screen.getByText('待命')).toBeInTheDocument();
     expect(screen.getByText('当前运行')).toBeInTheDocument();
     expect(screen.getAllByText('需要处理').length).toBeGreaterThan(0);
     expect(screen.getByText('全部运行态')).toBeInTheDocument();
-    expect(screen.getByText('运行中插件')).toBeInTheDocument();
+    expect(screen.getByText('运行中 1')).toBeInTheDocument();
     expect(screen.getAllByText('本地调试插件').length).toBeGreaterThan(0);
     expect(screen.getAllByText('本地调试插件 · 正在执行批量任务').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: '刷新状态' })).toBeInTheDocument();
@@ -182,7 +183,6 @@ describe('PluginMarket', () => {
     expect(
       screen.getByPlaceholderText('搜索插件名称、ID、作者、描述或分类...')
     ).toBeInTheDocument();
-    expect(screen.getByText('自动匹配名称、ID、作者、描述和分类')).toBeInTheDocument();
     expect(screen.getByText('运行中 1')).toBeInTheDocument();
     expect(screen.getByText('异常 0')).toBeInTheDocument();
 

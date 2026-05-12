@@ -394,11 +394,11 @@ export function PluginMarket() {
     return runtimeStatus?.workState === 'error' || runtimeStatus?.lifecyclePhase === 'error';
   }).length;
   const toolbarButtonClassName =
-    'h-10 rounded-[10px] border-slate-200/80 bg-white/90 px-4 shadow-none hover:bg-white';
+    'h-9 rounded-lg border-slate-200/80 bg-white/90 px-3 text-sm shadow-none hover:bg-white';
   const cardActionButtonClassName =
-    'h-9 rounded-[10px] border-slate-200/70 bg-white/88 px-3 text-slate-600 shadow-none hover:bg-white hover:text-slate-900';
+    'h-8 rounded-lg border-slate-200/70 bg-white/88 px-2 text-xs text-slate-600 shadow-none hover:bg-white hover:text-slate-900';
   const homeCardButtonClassName =
-    'h-8 rounded-[10px] border-slate-200/80 bg-white/90 px-3 text-xs text-slate-600 shadow-none hover:bg-white hover:text-slate-900';
+    'h-8 w-8 rounded-lg border-slate-200/80 bg-white/90 p-0 text-slate-600 shadow-none hover:bg-white hover:text-slate-900';
   const totalPlugins = plugins.length;
   const enabledPluginCount = plugins.filter((plugin) => plugin.enabled !== false).length;
   const disabledPluginCount = totalPlugins - enabledPluginCount;
@@ -441,25 +441,25 @@ export function PluginMarket() {
       row;
 
     return (
-      <article key={plugin.id} className="plugin-market-panel flex h-full flex-col gap-4 p-4">
+      <article key={plugin.id} className="plugin-market-panel flex flex-col gap-3 p-3">
         <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[14px] bg-white/90 text-blue-600 shadow-sm">
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-white/90 text-blue-600 shadow-sm">
             {renderStringIcon(plugin.icon, {
-              size: 20,
-              lucideClassName: 'h-5 w-5 text-blue-600',
-              emojiClassName: 'text-lg leading-none',
-              imageClassName: 'h-5 w-5 object-contain',
-              fallback: <Package className="h-5 w-5 text-blue-600" />,
+              size: 18,
+              lucideClassName: 'h-4 w-4 text-blue-600',
+              emojiClassName: 'text-base leading-none',
+              imageClassName: 'h-4 w-4 object-contain',
+              fallback: <Package className="h-4 w-4 text-blue-600" />,
               alt: plugin.name,
             })}
           </div>
 
-          <div className="min-w-0 flex-1 space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-sm font-semibold text-slate-900">{plugin.name}</h3>
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <h3 className="truncate text-sm font-semibold text-slate-900">{plugin.name}</h3>
               <span
                 className={cn(
-                  'shell-field-chip px-2.5 py-1 text-[11px]',
+                  'shell-field-chip px-2 py-0.5 text-[11px]',
                   getPluginRuntimeChipClassName(plugin, runtimeStatus)
                 )}
               >
@@ -467,7 +467,7 @@ export function PluginMarket() {
               </span>
               <span
                 className={cn(
-                  'shell-field-chip px-2.5 py-1 text-[11px]',
+                  'shell-field-chip px-2 py-0.5 text-[11px]',
                   getSourceChipClassName(plugin)
                 )}
               >
@@ -475,29 +475,32 @@ export function PluginMarket() {
               </span>
             </div>
 
-            <div className="space-y-1">
-              <p className="text-xs text-slate-500">
+            <div className="space-y-0.5">
+              <p className="truncate text-xs text-slate-500">
                 作者：{plugin.author} · ID：{plugin.id}
               </p>
-              <p className="text-sm leading-6 text-slate-600">
+              <p className="line-clamp-1 text-sm text-slate-600">
                 {runtimeSummary || '插件已安装，可从这里快速查看当前运行态。'}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
-          <span className="shell-field-chip shell-field-chip--ghost justify-center px-2.5 py-2 text-[11px]">
+        <div className="grid gap-1.5 text-xs text-slate-500 sm:grid-cols-4">
+          <span className="shell-field-chip shell-field-chip--ghost justify-center px-2 py-1 text-[11px]">
             队列 {runtimeStatus?.activeQueues ?? 0}
           </span>
-          <span className="shell-field-chip shell-field-chip--ghost justify-center px-2.5 py-2 text-[11px]">
+          <span className="shell-field-chip shell-field-chip--ghost justify-center px-2 py-1 text-[11px]">
             运行 {runtimeStatus?.runningTasks ?? 0} · 排队 {runtimeStatus?.pendingTasks ?? 0}
           </span>
-          <span className="shell-field-chip shell-field-chip--ghost justify-center px-2.5 py-2 text-[11px]">
+          <span className="shell-field-chip shell-field-chip--ghost justify-center px-2 py-1 text-[11px]">
             失败 {runtimeStatus?.failedTasks ?? 0} · 已取消 {runtimeStatus?.cancelledTasks ?? 0}
           </span>
-          <span className="shell-field-chip shell-field-chip--ghost justify-center px-2.5 py-2 text-[11px]">
-            最近活动 {lastActivityAt || '暂无'}
+          <span
+            className="shell-field-chip shell-field-chip--ghost justify-center truncate px-2 py-1 text-[11px]"
+            title={lastActivityAt || '暂无'}
+          >
+            最近 {lastActivityAt || '暂无'}
           </span>
         </div>
 
@@ -512,21 +515,22 @@ export function PluginMarket() {
         ) : null}
 
         {runtimeStatus?.lastError?.message ? (
-          <div className="rounded-[14px] border border-red-200/80 bg-red-50/90 p-3 text-sm text-red-700">
+          <div className="rounded-lg border border-red-200/80 bg-red-50/90 px-3 py-2 text-sm text-red-700">
             <p className="font-medium">最近错误</p>
-            <p className="mt-1 break-words leading-6">{runtimeStatus.lastError.message}</p>
+            <p className="mt-1 line-clamp-2 break-words">{runtimeStatus.lastError.message}</p>
           </div>
         ) : null}
 
-        <div className="flex flex-wrap gap-2 border-t border-slate-200/70 pt-3">
+        <div className="flex flex-wrap gap-2 border-t border-slate-200/70 pt-2">
           <Button
             variant="outline"
             size="sm"
             className={homeCardButtonClassName}
             onClick={() => openPluginManager(plugin.id)}
+            title="进入管理"
+            aria-label="进入管理"
           >
-            <ArrowRight className="mr-1.5 h-3.5 w-3.5" />
-            进入管理
+            <ArrowRight className="h-3.5 w-3.5" />
           </Button>
 
           <Button
@@ -535,9 +539,10 @@ export function PluginMarket() {
             className={homeCardButtonClassName}
             onClick={() => cancelPluginTasks(plugin.id, plugin.name)}
             disabled={!canCancelTasks}
+            title="停止任务"
+            aria-label="停止任务"
           >
-            <Square className="mr-1.5 h-3.5 w-3.5 text-orange-600" />
-            停止任务
+            <Square className="h-3.5 w-3.5 text-orange-600" />
           </Button>
         </div>
       </article>
@@ -558,27 +563,27 @@ export function PluginMarket() {
     icon: ReactNode;
   }) => (
     <section className="plugin-market-panel min-h-0 overflow-hidden">
-      <div className="flex items-start justify-between gap-4 border-b border-slate-200/70 bg-white/68 px-4 py-3">
-        <div className="space-y-1">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200/70 bg-white/68 px-3 py-2">
+        <div className="min-w-0 space-y-0.5">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
             {icon}
             <span>{title}</span>
           </div>
-          <p className="text-xs leading-5 text-slate-500">{description}</p>
+          <p className="line-clamp-1 text-xs text-slate-500">{description}</p>
         </div>
-        <span className="shell-field-chip shell-field-chip--ghost px-3 py-1.5 text-xs">
+        <span className="shell-field-chip shell-field-chip--ghost shrink-0 px-2.5 py-1 text-xs">
           {rows.length} 个
         </span>
       </div>
 
-      <div className="p-3">
+      <div className="p-2.5">
         {rows.length === 0 ? (
-          <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-[8px] border border-dashed border-slate-200 bg-slate-50/70 px-6 text-center">
+          <div className="flex min-h-[132px] flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-200 bg-slate-50/70 px-6 text-center">
             <p className="text-sm font-medium text-slate-700">{title}暂无内容</p>
-            <p className="max-w-sm text-sm leading-6 text-slate-500">{emptyMessage}</p>
+            <p className="max-w-sm text-xs leading-5 text-slate-500">{emptyMessage}</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
             {rows.map(renderHomeRuntimeCard)}
           </div>
         )}
@@ -597,39 +602,39 @@ export function PluginMarket() {
     const updatedAt = formatRuntimeTimestamp(runtimeStatus?.updatedAt);
 
     return (
-      <article key={plugin.id} className="plugin-market-panel flex h-full flex-col p-4">
-        <div className="space-y-4">
+      <article key={plugin.id} className="plugin-market-panel flex h-full flex-col p-3">
+        <div className="space-y-3">
           <button
             type="button"
-            className="flex w-full items-start gap-3 rounded-[14px] text-left transition-colors hover:bg-white/70"
+            className="flex w-full items-start gap-3 rounded-lg text-left transition-colors hover:bg-white/70"
             onClick={() => togglePluginExpanded(plugin.id)}
             title="点击查看详情"
           >
-            <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[14px] bg-white/90 text-blue-600 shadow-sm">
+            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-white/90 text-blue-600 shadow-sm">
               {renderStringIcon(plugin.icon, {
-                size: 20,
-                lucideClassName: 'h-5 w-5 text-blue-600',
-                emojiClassName: 'text-lg leading-none',
-                imageClassName: 'h-5 w-5 object-contain',
-                fallback: <Package className="h-5 w-5 text-blue-600" />,
+                size: 18,
+                lucideClassName: 'h-4 w-4 text-blue-600',
+                emojiClassName: 'text-base leading-none',
+                imageClassName: 'h-4 w-4 object-contain',
+                fallback: <Package className="h-4 w-4 text-blue-600" />,
                 alt: plugin.name,
               })}
             </div>
 
-            <div className="min-w-0 flex-1 space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-sm font-semibold text-slate-900">{plugin.name}</h3>
-                <span className="shell-field-chip shell-field-chip--ghost px-2.5 py-1 text-[11px]">
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <h3 className="truncate text-sm font-semibold text-slate-900">{plugin.name}</h3>
+                <span className="shell-field-chip shell-field-chip--ghost px-2 py-0.5 text-[11px]">
                   v{plugin.version}
                 </span>
                 {plugin.category ? (
-                  <span className="shell-field-chip shell-field-chip--ghost px-2.5 py-1 text-[11px]">
+                  <span className="shell-field-chip shell-field-chip--ghost px-2 py-0.5 text-[11px]">
                     {plugin.category}
                   </span>
                 ) : null}
                 <span
                   className={cn(
-                    'shell-field-chip px-2.5 py-1 text-[11px]',
+                    'shell-field-chip px-2 py-0.5 text-[11px]',
                     getSourceChipClassName(plugin)
                   )}
                 >
@@ -637,37 +642,37 @@ export function PluginMarket() {
                 </span>
                 <span
                   className={cn(
-                    'shell-field-chip px-2.5 py-1 text-[11px]',
+                    'shell-field-chip px-2 py-0.5 text-[11px]',
                     getPluginRuntimeChipClassName(plugin, runtimeStatus)
                   )}
                 >
                   {runtimeLabel}
                 </span>
                 {plugin.devMode ? (
-                  <span className="shell-field-chip border-amber-200/80 bg-amber-50 px-2.5 py-1 text-[11px] text-amber-700">
+                  <span className="shell-field-chip border-amber-200/80 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
                     开发模式
                   </span>
                 ) : null}
                 {plugin.hotReloadEnabled ? (
-                  <span className="shell-field-chip border-yellow-200/80 bg-yellow-50 px-2.5 py-1 text-[11px] text-yellow-700">
+                  <span className="shell-field-chip border-yellow-200/80 bg-yellow-50 px-2 py-0.5 text-[11px] text-yellow-700">
                     热重载
                   </span>
                 ) : null}
               </div>
 
-              <div className="space-y-1">
-                <p className="text-xs text-slate-500">
+              <div className="space-y-0.5">
+                <p className="truncate text-xs text-slate-500">
                   作者：{plugin.author} · ID：{plugin.id}
                 </p>
-                {runtimeSummary ? <p className="text-xs text-slate-500">{runtimeSummary}</p> : null}
-                <p className="text-xs text-slate-500">
-                  {expanded ? '收起详情' : '查看详情'}，统一管理启停、配置和安装来源
-                </p>
+                {runtimeSummary ? (
+                  <p className="line-clamp-1 text-xs text-slate-500">{runtimeSummary}</p>
+                ) : null}
+                <p className="text-xs text-slate-500">{expanded ? '收起详情' : '查看详情'}</p>
               </div>
             </div>
           </button>
 
-          <div className="flex flex-wrap items-center gap-2 border-t border-slate-200/70 pt-3">
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-200/70 pt-2">
             {plugin.enabled !== false ? (
               <Button
                 variant="outline"
@@ -804,17 +809,17 @@ export function PluginMarket() {
         </div>
 
         {expanded ? (
-          <div className="mt-4 space-y-3 border-t border-slate-200/70 pt-4 text-sm">
+          <div className="mt-3 space-y-2.5 border-t border-slate-200/70 pt-3 text-sm">
             {plugin.description ? (
               <div className="space-y-1">
                 <p className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">
                   描述
                 </p>
-                <p className="text-slate-600">{plugin.description}</p>
+                <p className="line-clamp-2 text-slate-600">{plugin.description}</p>
               </div>
             ) : null}
 
-            <div className="shell-subpanel space-y-3 rounded-[16px] border border-slate-200/70 bg-white/72 p-3">
+            <div className="shell-subpanel space-y-2 rounded-lg border border-slate-200/70 bg-white/72 p-2.5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="space-y-1">
                   <p className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">
@@ -838,7 +843,9 @@ export function PluginMarket() {
                 </div>
               </div>
 
-              {runtimeSummary ? <p className="text-sm text-slate-600">{runtimeSummary}</p> : null}
+              {runtimeSummary ? (
+                <p className="line-clamp-2 text-sm text-slate-600">{runtimeSummary}</p>
+              ) : null}
 
               {typeof runtimeStatus?.progressPercent === 'number' ? (
                 <div className="space-y-2">
@@ -851,19 +858,19 @@ export function PluginMarket() {
               ) : null}
 
               {runtimeStatus?.lastError?.message ? (
-                <div className="rounded-[14px] border border-red-200/80 bg-red-50/90 p-3 text-sm text-red-700">
+                <div className="rounded-lg border border-red-200/80 bg-red-50/90 px-3 py-2 text-sm text-red-700">
                   <p className="font-medium">最近错误</p>
-                  <p className="mt-1 break-words leading-6">{runtimeStatus.lastError.message}</p>
+                  <p className="mt-1 line-clamp-2 break-words">{runtimeStatus.lastError.message}</p>
                 </div>
               ) : null}
 
-              <div className="grid gap-3 text-xs text-slate-500 sm:grid-cols-2">
+              <div className="grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
                 <p>最近活动：{lastActivityAt || '暂无'}</p>
                 <p>最近更新：{updatedAt || '暂无'}</p>
               </div>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-2 sm:grid-cols-2">
               <div className="space-y-1">
                 <p className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">
                   安装路径
@@ -930,27 +937,27 @@ export function PluginMarket() {
     icon: ReactNode;
   }) => (
     <section className="plugin-market-panel min-h-0 overflow-hidden">
-      <div className="flex items-start justify-between gap-4 border-b border-slate-200/70 bg-white/68 px-4 py-3">
-        <div className="space-y-1">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200/70 bg-white/68 px-3 py-2">
+        <div className="min-w-0 space-y-0.5">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
             {icon}
             <span>{title}</span>
           </div>
-          <p className="text-xs leading-5 text-slate-500">{description}</p>
+          <p className="line-clamp-1 text-xs text-slate-500">{description}</p>
         </div>
-        <span className="shell-field-chip shell-field-chip--ghost px-3 py-1.5 text-xs">
+        <span className="shell-field-chip shell-field-chip--ghost shrink-0 px-2.5 py-1 text-xs">
           {count} 个
         </span>
       </div>
 
-      <div className="p-3">
+      <div className="p-2.5">
         {items.length === 0 ? (
-          <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-[8px] border border-dashed border-slate-200 bg-slate-50/70 px-6 text-center">
+          <div className="flex min-h-[132px] flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-200 bg-slate-50/70 px-6 text-center">
             <p className="text-sm font-medium text-slate-700">{title}暂无匹配项</p>
-            <p className="max-w-sm text-sm leading-6 text-slate-500">{emptyMessage}</p>
+            <p className="max-w-sm text-xs leading-5 text-slate-500">{emptyMessage}</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
             {items.map(renderInstalledPluginCard)}
           </div>
         )}
@@ -1004,17 +1011,14 @@ export function PluginMarket() {
         }
       />
 
-      <div className="plugin-market-scroll flex-1 overflow-auto p-4">
+      <div className="plugin-market-scroll flex-1 overflow-auto p-3">
         {activeView === 'home' ? (
           <div className="space-y-3">
-            <section className="space-y-4">
-              <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-                <div className="space-y-4">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium text-slate-600">插件运行总览</p>
-                    <h2 className="text-xl font-semibold text-slate-900">首页</h2>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <section className="plugin-market-panel p-3">
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="min-w-0 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-slate-900">插件运行总览</p>
                     <span className="shell-field-chip shell-field-chip--ghost px-3 py-1.5 text-xs">
                       已安装 {totalPlugins}
                     </span>
@@ -1027,6 +1031,44 @@ export function PluginMarket() {
                     <span className="shell-field-chip border-slate-200/80 bg-slate-100 px-3 py-1.5 text-xs text-slate-600">
                       停用 {disabledPluginCount}
                     </span>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-4">
+                    <div className="plugin-market-stat px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-slate-500">启用/停用</span>
+                        <Package className="h-4 w-4 text-slate-500" />
+                      </div>
+                      <p className="mt-1 text-sm font-semibold text-slate-900">
+                        {enabledPluginCount} / {disabledPluginCount}
+                      </p>
+                    </div>
+                    <div className="plugin-market-stat px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-slate-500">任务</span>
+                        <Activity className="h-4 w-4 text-blue-600" />
+                      </div>
+                      <p className="mt-1 text-sm font-semibold text-slate-900">
+                        {totalRunningTasks} 运行 · {totalPendingTasks} 排队
+                      </p>
+                    </div>
+                    <div className="plugin-market-stat px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-slate-500">待命</span>
+                        <Clock3 className="h-4 w-4 text-emerald-600" />
+                      </div>
+                      <p className="mt-1 text-sm font-semibold text-slate-900">
+                        {readyRuntimeRows.length} 个空闲
+                      </p>
+                    </div>
+                    <div className="plugin-market-stat px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-slate-500">处理</span>
+                        <CircleAlert className="h-4 w-4 text-red-600" />
+                      </div>
+                      <p className="mt-1 text-sm font-semibold text-slate-900">
+                        {totalRuntimeErrorPluginCount} 异常 · {totalFailedTasks} 失败
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -1055,76 +1097,6 @@ export function PluginMarket() {
                     </Button>
                   ) : null}
                 </div>
-              </div>
-
-              <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <article className="plugin-market-stat p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-1">
-                      <p className="text-xs uppercase tracking-[0.08em] text-slate-400">
-                        已安装插件
-                      </p>
-                      <p className="text-2xl font-semibold text-slate-900">{totalPlugins}</p>
-                    </div>
-                    <div className="rounded-[8px] bg-slate-100 p-2 text-slate-700">
-                      <Package className="h-5 w-5" />
-                    </div>
-                  </div>
-                  <p className="mt-3 text-sm text-slate-500">
-                    启用 {enabledPluginCount} · 停用 {disabledPluginCount}
-                  </p>
-                </article>
-
-                <article className="plugin-market-stat p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-1">
-                      <p className="text-xs uppercase tracking-[0.08em] text-slate-400">
-                        运行中插件
-                      </p>
-                      <p className="text-2xl font-semibold text-slate-900">
-                        {totalRunningPluginCount}
-                      </p>
-                    </div>
-                    <div className="rounded-[8px] bg-blue-50 p-2 text-blue-700">
-                      <Activity className="h-5 w-5" />
-                    </div>
-                  </div>
-                  <p className="mt-3 text-sm text-slate-500">
-                    运行任务 {totalRunningTasks} · 排队任务 {totalPendingTasks}
-                  </p>
-                </article>
-
-                <article className="plugin-market-stat p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-1">
-                      <p className="text-xs uppercase tracking-[0.08em] text-slate-400">待命插件</p>
-                      <p className="text-2xl font-semibold text-slate-900">
-                        {readyRuntimeRows.length}
-                      </p>
-                    </div>
-                    <div className="rounded-[8px] bg-emerald-50 p-2 text-emerald-700">
-                      <Clock3 className="h-5 w-5" />
-                    </div>
-                  </div>
-                  <p className="mt-3 text-sm text-slate-500">已激活且当前空闲，适合立即调度</p>
-                </article>
-
-                <article className="plugin-market-stat p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-1">
-                      <p className="text-xs uppercase tracking-[0.08em] text-slate-400">需要处理</p>
-                      <p className="text-2xl font-semibold text-slate-900">
-                        {totalRuntimeErrorPluginCount}
-                      </p>
-                    </div>
-                    <div className="rounded-[8px] bg-red-50 p-2 text-red-700">
-                      <CircleAlert className="h-5 w-5" />
-                    </div>
-                  </div>
-                  <p className="mt-3 text-sm text-slate-500">
-                    异常插件 {totalRuntimeErrorPluginCount} · 失败任务 {totalFailedTasks}
-                  </p>
-                </article>
               </div>
             </section>
 
@@ -1175,11 +1147,11 @@ export function PluginMarket() {
 
         {activeView === 'installed' ? (
           <div className="space-y-3">
-            <section className="plugin-market-panel space-y-4 p-4">
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                <div className="space-y-2">
+            <section className="plugin-market-panel space-y-3 p-3">
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="min-w-0 space-y-2">
                   <div className="flex items-center gap-2">
-                    <div className="rounded-[8px] bg-slate-100 p-2 text-slate-700">
+                    <div className="rounded-lg bg-slate-100 p-1.5 text-slate-700">
                       <HardDrive className="h-4 w-4" />
                     </div>
                     <div className="space-y-1">
@@ -1236,7 +1208,7 @@ export function PluginMarket() {
                   </Button>
                   <Button
                     size="sm"
-                    className="h-10 rounded-[10px] px-4"
+                    className="h-9 rounded-lg px-3 text-sm"
                     onClick={() => void handleInstallPlugin(true)}
                     disabled={appInfo.loading || !canImportLocalPlugins || isImporting}
                   >
@@ -1257,22 +1229,21 @@ export function PluginMarket() {
               ) : null}
 
               <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                <div className="relative min-w-[240px] flex-1 xl:max-w-2xl">
+                <div className="relative min-w-[240px] flex-1">
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <Input
                     placeholder="搜索插件名称、ID、作者、描述或分类..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="h-10 rounded-[12px] border-slate-200/80 bg-white/96 pl-10 shadow-none"
+                    className="h-9 rounded-lg border-slate-200/80 bg-white/96 pl-9 text-sm shadow-none"
                   />
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                  <span>自动匹配名称、ID、作者、描述和分类</span>
                   {searchKeyword ? (
                     <Button
                       variant="ghost"
-                      className="h-10 rounded-[10px] px-4 text-slate-600 hover:bg-white/72 hover:text-slate-900"
+                      className="h-9 rounded-lg px-3 text-slate-600 hover:bg-white/72 hover:text-slate-900"
                       onClick={() => setSearchQuery('')}
                     >
                       清除搜索
