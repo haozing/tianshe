@@ -40,7 +40,7 @@ export function AccountTable({
   };
 
   return (
-    <div className="flex h-full min-h-[360px] flex-col overflow-hidden rounded-[18px] border border-[rgba(214,221,234,0.78)] bg-white/92 shadow-[0_8px_20px_rgba(20,27,45,0.04)]">
+    <div className="account-center-panel flex h-full min-h-[360px] flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b border-[rgba(214,221,234,0.78)] bg-white/88 px-4 py-3">
         <div>
           <h3 className="text-sm font-semibold text-slate-900">账号列表</h3>
@@ -51,6 +51,11 @@ export function AccountTable({
       </div>
 
       <div className="relative flex-1 overflow-auto">
+        {accounts.length === 0 ? (
+          <div className="pointer-events-none absolute inset-x-0 top-[104px] z-10 flex justify-center px-6 py-12 text-sm text-slate-500">
+            暂无账号数据，请先添加账号
+          </div>
+        ) : null}
         <table className="w-full min-w-[1160px] border-separate border-spacing-0 text-sm md:min-w-[1240px]">
           <thead className="sticky top-0 z-20 bg-[rgba(247,250,254,0.96)] backdrop-blur">
             <tr className="text-left">
@@ -253,10 +258,8 @@ export function AccountTable({
             })}
 
             {accounts.length === 0 && (
-              <tr>
-                <td colSpan={9} className="px-3 py-14 text-center text-sm text-slate-500">
-                  暂无账号数据，请先添加账号
-                </td>
+              <tr aria-hidden="true">
+                <td colSpan={9} className="h-64 border-b border-[rgba(214,221,234,0.72)]" />
               </tr>
             )}
           </tbody>

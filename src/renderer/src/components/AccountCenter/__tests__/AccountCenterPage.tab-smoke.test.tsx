@@ -169,13 +169,8 @@ vi.mock('../ExtensionPackagesPanel', () => ({
   ),
 }));
 
-function openMoreMenu() {
-  fireEvent.click(screen.getByRole('button', { name: '更多' }));
-}
-
-function chooseMoreMenuItem(label: string) {
-  openMoreMenu();
-  fireEvent.click(screen.getByText(label));
+function chooseHeaderTab(label: string) {
+  fireEvent.click(screen.getByRole('button', { name: label }));
 }
 
 describe('AccountCenterPage tab smoke test', () => {
@@ -202,18 +197,18 @@ describe('AccountCenterPage tab smoke test', () => {
     });
   });
 
-  it('keeps account as the primary module and exposes other views in 更多菜单', async () => {
+  it('keeps account as the primary module and exposes other views in the header tab strip', async () => {
     render(<AccountCenterPage />);
 
     expect(screen.getByRole('heading', { name: '账号中心' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '更多' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新增账号' })).toBeInTheDocument();
-
-    openMoreMenu();
-    expect(screen.getByText('账号视图')).toBeInTheDocument();
-    expect(screen.getByText('环境配置')).toBeInTheDocument();
-    expect(screen.getByText('扩展中心')).toBeInTheDocument();
-    expect(screen.getByText('运行中')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '账号视图' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(screen.getByRole('button', { name: '环境配置' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '扩展中心' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '运行中' })).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByTestId('account-panel')).toBeInTheDocument();
@@ -228,20 +223,20 @@ describe('AccountCenterPage tab smoke test', () => {
     render(<AccountCenterPage />);
     await waitFor(() => expect(accountStoreState.loadAllAccounts).toHaveBeenCalledTimes(1));
 
-    chooseMoreMenuItem('扩展中心');
+    chooseHeaderTab('扩展中心');
     await waitFor(() => {
       expect(screen.getByTestId('extensions-panel')).toBeInTheDocument();
       expect(profileStoreState.loadProfiles).toHaveBeenCalledTimes(1);
     });
 
-    chooseMoreMenuItem('运行中');
+    chooseHeaderTab('运行中');
     await waitFor(() => {
       expect(screen.getByTestId('running-panel')).toBeInTheDocument();
       expect(profileStoreState.loadGroups).toHaveBeenCalledTimes(1);
       expect(profileStoreState.loadStats).toHaveBeenCalledTimes(1);
     });
 
-    chooseMoreMenuItem('环境配置');
+    chooseHeaderTab('环境配置');
     await waitFor(() => {
       expect(screen.getByTestId('profile-list')).toBeInTheDocument();
     });
@@ -251,10 +246,10 @@ describe('AccountCenterPage tab smoke test', () => {
     render(<AccountCenterPage />);
     await waitFor(() => expect(accountStoreState.loadAllAccounts).toHaveBeenCalledTimes(1));
 
-    chooseMoreMenuItem('运行中');
+    chooseHeaderTab('运行中');
     await waitFor(() => expect(useUIStore.getState().accountCenterTab).toBe('running'));
 
-    chooseMoreMenuItem('扩展中心');
+    chooseHeaderTab('扩展中心');
     await waitFor(() => expect(useUIStore.getState().accountCenterTab).toBe('extensions'));
   });
 
@@ -262,7 +257,7 @@ describe('AccountCenterPage tab smoke test', () => {
     render(<AccountCenterPage />);
     await waitFor(() => expect(accountStoreState.loadAllAccounts).toHaveBeenCalledTimes(1));
 
-    chooseMoreMenuItem('环境配置');
+    chooseHeaderTab('环境配置');
     await waitFor(() => expect(profileStoreState.loadProfiles).toHaveBeenCalledTimes(1));
 
     profileStoreState.loadProfiles.mockClear();
@@ -276,7 +271,7 @@ describe('AccountCenterPage tab smoke test', () => {
       expect(profileStoreState.loadGroups).not.toHaveBeenCalled();
     });
 
-    chooseMoreMenuItem('扩展中心');
+    chooseHeaderTab('扩展中心');
     await waitFor(() => expect(screen.getByTestId('extensions-panel')).toBeInTheDocument());
 
     profileStoreState.loadProfiles.mockClear();
@@ -287,7 +282,7 @@ describe('AccountCenterPage tab smoke test', () => {
       expect(profileStoreState.loadStats).toHaveBeenCalledTimes(1);
     });
 
-    chooseMoreMenuItem('运行中');
+    chooseHeaderTab('运行中');
     await waitFor(() => expect(screen.getByTestId('running-panel')).toBeInTheDocument());
 
     profileStoreState.loadProfiles.mockClear();
@@ -303,14 +298,14 @@ describe('AccountCenterPage tab smoke test', () => {
     render(<AccountCenterPage />);
     await waitFor(() => expect(accountStoreState.loadAllAccounts).toHaveBeenCalledTimes(1));
 
-    chooseMoreMenuItem('环境配置');
+    chooseHeaderTab('环境配置');
     await waitFor(() => expect(profileStoreState.loadProfiles).toHaveBeenCalledTimes(1));
 
     accountStoreState.loadAllAccounts.mockClear();
     accountStoreState.loadSavedSites.mockClear();
     accountStoreState.loadTags.mockClear();
 
-    chooseMoreMenuItem('账号视图');
+    chooseHeaderTab('账号视图');
     await waitFor(() => {
       expect(accountStoreState.loadAllAccounts).toHaveBeenCalledTimes(1);
       expect(accountStoreState.loadSavedSites).toHaveBeenCalledTimes(1);
@@ -322,7 +317,7 @@ describe('AccountCenterPage tab smoke test', () => {
     render(<AccountCenterPage />);
     await waitFor(() => expect(accountStoreState.loadAllAccounts).toHaveBeenCalledTimes(1));
 
-    chooseMoreMenuItem('环境配置');
+    chooseHeaderTab('环境配置');
     await waitFor(() => expect(profileStoreState.loadProfiles).toHaveBeenCalledTimes(1));
 
     profileStoreState.loadProfiles.mockClear();

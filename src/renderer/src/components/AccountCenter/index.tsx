@@ -143,95 +143,104 @@ export function AccountCenterPage() {
   };
 
   return (
-    <div className="shell-content-surface flex h-full flex-col">
+    <div className="account-center-page flex h-full flex-col">
       <PageFrameHeader
         title="账号中心"
-        className="workspace-page-header"
+        className="account-center-header workspace-page-header"
         actions={
-          <div className="page-header-control-group">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRefresh}
-              disabled={isAccountCenterRefreshing}
-              className="page-header-action-button"
-            >
-              <RefreshCw
-                className={cn('mr-1 h-4 w-4', isAccountCenterRefreshing && 'animate-spin')}
-              />
-              刷新
-            </Button>
+          <div className="account-center-header-controls">
+            <div className="account-center-main-tabs shell-tab-strip" aria-label="账号中心视图">
+              {tabOptions.map(({ value, label, icon: Icon }) => {
+                const isActive = accountCenterTab === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    className={cn('shell-tab-button', isActive && 'shell-tab-button--active')}
+                    onClick={() => setAccountCenterTab(value)}
+                    aria-pressed={isActive}
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <Icon className="h-4 w-4" />
+                      {label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
 
-            {accountCenterTab === 'accounts' ? (
-              <Button size="sm" onClick={handleCreateAccount} className="page-header-action-button">
-                <Plus className="mr-1 h-4 w-4" />
-                新增账号
+            <div className="account-center-command-group">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRefresh}
+                disabled={isAccountCenterRefreshing}
+                className="page-header-action-button"
+              >
+                <RefreshCw
+                  className={cn('mr-1 h-4 w-4', isAccountCenterRefreshing && 'animate-spin')}
+                />
+                刷新
               </Button>
-            ) : null}
 
-            {accountCenterTab === 'profiles' ? (
-              <Button size="sm" onClick={handleCreateProfile} className="page-header-action-button">
-                <Plus className="mr-1 h-4 w-4" />
-                新建环境
-              </Button>
-            ) : null}
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+              {accountCenterTab === 'accounts' ? (
                 <Button
-                  variant="outline"
                   size="sm"
-                  aria-label="更多"
+                  onClick={handleCreateAccount}
                   className="page-header-action-button"
                 >
-                  更多
-                  <ChevronDown className="ml-1 h-4 w-4" />
+                  <Plus className="mr-1 h-4 w-4" />
+                  新增账号
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className="min-w-[220px] rounded-2xl border border-slate-200/90 bg-white/95 p-1.5 shadow-[0_16px_40px_rgba(20,27,45,0.12)]"
-              >
-                {tabOptions.map(({ value, label, icon: Icon }) => {
-                  const isActive = accountCenterTab === value;
-                  return (
-                    <DropdownMenuItem
-                      key={value}
-                      onClick={() => setAccountCenterTab(value)}
-                      className={cn(
-                        'rounded-xl px-3 py-2.5 text-slate-600',
-                        isActive && 'bg-slate-100 text-slate-900'
-                      )}
-                    >
-                      <span className="inline-flex items-center gap-2">
-                        <Icon className="h-4 w-4" />
-                        {label}
-                      </span>
-                    </DropdownMenuItem>
-                  );
-                })}
+              ) : null}
 
-                {accountCenterTab === 'profiles' ? (
-                  <>
+              {accountCenterTab === 'profiles' ? (
+                <Button
+                  size="sm"
+                  onClick={handleCreateProfile}
+                  className="page-header-action-button"
+                >
+                  <Plus className="mr-1 h-4 w-4" />
+                  新建环境
+                </Button>
+              ) : null}
+
+              {accountCenterTab === 'profiles' ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label="更多"
+                      className="page-header-action-button"
+                    >
+                      更多
+                      <ChevronDown className="ml-1 h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    className="min-w-[220px] rounded-lg border border-slate-200/90 bg-white/95 p-1.5 shadow-[0_16px_40px_rgba(20,27,45,0.12)]"
+                  >
                     {cloudSnapshotAvailable ? (
                       <>
-                        <DropdownMenuSeparator className="bg-slate-200/90" />
                         <DropdownMenuItem
                           onClick={openCloudImportDialog}
-                          className="rounded-xl px-3 py-2.5 text-slate-600"
+                          className="rounded-md px-3 py-2.5 text-slate-600"
                         >
                           <span className="inline-flex items-center gap-2">
                             <Download className="h-4 w-4" />
                             从云端导入
                           </span>
                         </DropdownMenuItem>
+                        <DropdownMenuSeparator className="bg-slate-200/90" />
                       </>
                     ) : null}
-                    <DropdownMenuSeparator className="bg-slate-200/90" />
+
                     <DropdownMenuItem
                       onClick={() => setViewMode('grid')}
                       className={cn(
-                        'rounded-xl px-3 py-2.5 text-slate-600',
+                        'rounded-md px-3 py-2.5 text-slate-600',
                         viewMode === 'grid' && 'bg-slate-100 text-slate-900'
                       )}
                     >
@@ -243,7 +252,7 @@ export function AccountCenterPage() {
                     <DropdownMenuItem
                       onClick={() => setViewMode('list')}
                       className={cn(
-                        'rounded-xl px-3 py-2.5 text-slate-600',
+                        'rounded-md px-3 py-2.5 text-slate-600',
                         viewMode === 'list' && 'bg-slate-100 text-slate-900'
                       )}
                     >
@@ -252,17 +261,17 @@ export function AccountCenterPage() {
                         列表视图
                       </span>
                     </DropdownMenuItem>
-                  </>
-                ) : null}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
+            </div>
           </div>
         }
       />
 
-      <div className="shell-content-muted flex flex-1 flex-col overflow-hidden p-4">
+      <div className="account-center-scroll flex flex-1 flex-col overflow-hidden p-4">
         {accountCenterError ? (
-          <div className="flex items-center justify-between gap-4 rounded-2xl border border-red-200 bg-red-50/90 px-4 py-3 text-sm text-red-700">
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-red-200 bg-red-50/90 px-4 py-3 text-sm text-red-700">
             <span>{accountCenterError}</span>
             <Button variant="ghost" size="sm" onClick={clearAccountCenterError}>
               关闭
@@ -281,23 +290,21 @@ export function AccountCenterPage() {
               />
             </div>
           ) : accountCenterTab === 'extensions' ? (
-            <div className="h-full overflow-hidden rounded-[20px] border border-[rgba(214,221,234,0.92)] bg-white/88 shadow-[0_12px_28px_rgba(20,27,45,0.06)]">
-              <div className="h-full overflow-auto p-3">
-                <ExtensionPackagesPanel
-                  key={extensionsRefreshKey}
-                  profiles={profiles}
-                  onProfileDataChanged={refreshProfileCenterData}
-                />
-              </div>
+            <div className="h-full overflow-auto">
+              <ExtensionPackagesPanel
+                key={extensionsRefreshKey}
+                profiles={profiles}
+                onProfileDataChanged={refreshProfileCenterData}
+              />
             </div>
           ) : (
-            <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[280px_minmax(0,1fr)]">
-              <div className="shell-subpanel min-h-0 overflow-hidden rounded-[20px] border">
+            <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[272px_minmax(0,1fr)]">
+              <div className="account-center-panel account-center-sidebar-panel min-h-0 overflow-hidden">
                 <ProfileGroupTree />
               </div>
 
-              <div className="min-h-0 overflow-hidden rounded-[20px] border border-[rgba(214,221,234,0.92)] bg-white/88 shadow-[0_12px_28px_rgba(20,27,45,0.06)]">
-                <div className="h-full overflow-auto p-3">
+              <div className="min-h-0 overflow-hidden">
+                <div className="h-full overflow-auto">
                   {accountCenterTab === 'profiles' ? (
                     <ProfileList
                       profiles={filteredProfiles}

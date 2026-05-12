@@ -478,8 +478,8 @@ export function AccountManagementPanel({
   };
 
   return (
-    <div className="grid h-full min-h-0 gap-3 p-3 xl:grid-cols-[272px_minmax(0,1fr)]">
-      <div className="shell-subpanel min-h-0 overflow-hidden rounded-[20px] border">
+    <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[272px_minmax(0,1fr)]">
+      <div className="account-center-panel account-center-sidebar-panel min-h-0 overflow-hidden">
         <AccountCategorySidebar
           expandedSection={categoryMode}
           selectedCategoryId={selectedCategoryId}
@@ -499,13 +499,13 @@ export function AccountManagementPanel({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
-        <div className="space-y-3 rounded-[18px] bg-[linear-gradient(180deg,rgba(255,255,255,0.84),rgba(248,250,254,0.74))] px-4 py-4 backdrop-blur-sm">
+        <div className="account-center-toolbar-panel space-y-3 px-4 py-4">
           <div className="space-y-3">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="relative min-w-[240px] flex-1 xl:max-w-xl">
                 <ListFilter className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <Input
-                  className="h-10 rounded-[10px] border-slate-200/80 bg-white/96 pl-9 shadow-none"
+                  className="h-10 rounded-lg border-slate-200/80 bg-white/96 pl-9 shadow-none"
                   placeholder="搜索名称、登录账号、平台、URL、标签"
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
@@ -516,7 +516,7 @@ export function AccountManagementPanel({
                 {keywordValue ? (
                   <Button
                     variant="ghost"
-                    className="h-10 rounded-[10px] px-4 text-slate-600 hover:bg-white/72 hover:text-slate-900"
+                    className="h-10 rounded-lg px-4 text-slate-600 hover:bg-white/72 hover:text-slate-900"
                     onClick={() => setKeyword('')}
                   >
                     清除搜索
@@ -526,7 +526,7 @@ export function AccountManagementPanel({
                   <DropdownMenuTrigger asChild>
                     <Button
                       variant="outline"
-                      className="h-10 rounded-[10px] border-slate-200/80 bg-white/90 px-4 shadow-none hover:bg-white"
+                      className="h-10 rounded-lg border-slate-200/80 bg-white/90 px-4 shadow-none hover:bg-white"
                     >
                       <MoreHorizontal className="mr-1 h-4 w-4" />
                       数据维护
@@ -549,7 +549,7 @@ export function AccountManagementPanel({
         </div>
 
         {error ? (
-          <div className="flex items-center justify-between gap-4 rounded-2xl border border-red-200 bg-red-50/90 px-4 py-3 text-sm text-red-700">
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-red-200 bg-red-50/90 px-4 py-3 text-sm text-red-700">
             <span>{error}</span>
             <Button variant="ghost" size="sm" onClick={clearError}>
               关闭

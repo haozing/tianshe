@@ -513,28 +513,32 @@ pre code {
     box-shadow: 0 8px 20px rgba(31, 41, 55, 0.08);
   }
 
-  .plugin-market-page {
+  .plugin-market-page,
+  .account-center-page {
     background: #f7f9fc;
   }
 
-  .plugin-market-header {
+  .plugin-market-header,
+  .account-center-header {
     background: linear-gradient(180deg, rgba(248, 250, 253, 0.98), rgba(244, 247, 252, 0.98));
   }
 
-  .plugin-market-scroll {
+  .plugin-market-scroll,
+  .account-center-scroll {
     background:
-      linear-gradient(180deg, rgba(248, 250, 253, 0.96), rgba(255, 255, 255, 0.94) 180px),
-      #ffffff;
+      linear-gradient(180deg, rgba(248, 250, 253, 0.96), rgba(255, 255, 255, 0.94) 180px), #ffffff;
   }
 
-  .plugin-market-panel {
+  .plugin-market-panel,
+  .account-center-panel {
     border: 1px solid rgba(215, 224, 238, 0.92);
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.94);
     box-shadow: 0 10px 24px rgba(20, 27, 45, 0.04);
   }
 
-  .plugin-market-panel--plain {
+  .plugin-market-panel--plain,
+  .account-center-panel--plain {
     border-radius: 8px;
     background: transparent;
     box-shadow: none;
@@ -545,6 +549,57 @@ pre code {
     border-radius: 8px;
     background: #ffffff;
     box-shadow: 0 8px 18px rgba(20, 27, 45, 0.04);
+  }
+
+  .account-center-header-controls,
+  .account-center-command-group {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
+  .account-center-main-tabs {
+    max-width: min(100%, 640px);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .account-center-main-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .account-center-command-group {
+    flex-shrink: 0;
+  }
+
+  .account-center-sidebar-panel {
+    background: linear-gradient(180deg, rgba(248, 250, 253, 0.96), rgba(255, 255, 255, 0.94));
+  }
+
+  .account-center-toolbar-panel {
+    border: 1px solid rgba(215, 224, 238, 0.92);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.72);
+  }
+
+  @media (max-width: 1100px) {
+    .account-center-header .page-frame-header__row {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .account-center-header .page-frame-header__actions,
+    .account-center-header-controls,
+    .account-center-main-tabs {
+      width: 100%;
+    }
+
+    .account-center-header-controls {
+      justify-content: flex-start;
+    }
   }
 
   .datasets-workspace .datasets-workspace-chrome {
