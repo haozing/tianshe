@@ -70,7 +70,10 @@ const BROWSER_OPTIONS_BY_ENGINE: Record<AutomationEngine, FingerprintUIBrowser[]
   ruyi: ['Firefox'],
 };
 
-const CORE_BROWSER_BY_UI: Record<FingerprintUIBrowser, FingerprintCoreConfig['browserProfile']['browser']> = {
+const CORE_BROWSER_BY_UI: Record<
+  FingerprintUIBrowser,
+  FingerprintCoreConfig['browserProfile']['browser']
+> = {
   Chrome: 'chrome',
   Firefox: 'firefox',
   Edge: 'edge',
@@ -152,20 +155,20 @@ interface AdvancedSectionProps {
 
 function AdvancedSection({ title, description, open, onToggle, children }: AdvancedSectionProps) {
   return (
-    <section className="shell-soft-card overflow-hidden">
+    <section className="account-form-section shell-soft-card overflow-hidden">
       <button
         type="button"
-        className="flex w-full items-start justify-between gap-4 px-5 py-4 text-left"
+        className="flex w-full items-start justify-between gap-3 px-3.5 py-3 text-left"
         onClick={onToggle}
         aria-expanded={open}
       >
-        <div className="space-y-1">
+        <div className="space-y-0.5">
           <div className="text-sm font-semibold text-slate-900">{title}</div>
-          <p className="text-xs leading-5 text-slate-500">{description}</p>
+          <p className="text-xs leading-4 text-slate-500">{description}</p>
         </div>
         <span
           className={cn(
-            'shell-field-chip shell-field-chip--ghost mt-0.5 inline-flex h-8 w-8 items-center justify-center text-slate-500 transition-transform',
+            'shell-field-chip shell-field-chip--ghost mt-0.5 inline-flex h-7 w-7 items-center justify-center text-slate-500 transition-transform',
             open && 'rotate-90'
           )}
         >
@@ -178,7 +181,7 @@ function AdvancedSection({ title, description, open, onToggle, children }: Advan
       </button>
 
       {open ? (
-        <div className="border-t border-slate-200/80 bg-white/40 px-5 py-5">{children}</div>
+        <div className="border-t border-slate-200/80 bg-white/40 px-3.5 py-3.5">{children}</div>
       ) : null}
     </section>
   );
@@ -186,9 +189,9 @@ function AdvancedSection({ title, description, open, onToggle, children }: Advan
 
 function DialogSectionHeader({ title, description }: { title: string; description: string }) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-0.5">
       <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-      <p className="text-xs leading-5 text-slate-500">{description}</p>
+      <p className="text-xs leading-4 text-slate-500">{description}</p>
     </div>
   );
 }
@@ -370,7 +373,8 @@ export function ProfileFormDialog({
             userAgent:
               preset?.config.identity.hardware.userAgent || prev.identity.hardware.userAgent,
             browserVersion:
-              preset?.config.identity.hardware.browserVersion || prev.identity.hardware.browserVersion,
+              preset?.config.identity.hardware.browserVersion ||
+              prev.identity.hardware.browserVersion,
             fontSystem: nextOs === 'macOS' ? 'mac' : nextOs === 'Linux' ? 'linux' : 'windows',
             hardwareConcurrency:
               overrides.hardwareConcurrency ?? prev.identity.hardware.hardwareConcurrency,
@@ -802,8 +806,8 @@ export function ProfileFormDialog({
     .map((tag) => tag.trim())
     .filter(Boolean)
     .slice(0, 6);
-  const controlClassName = 'shell-field-input h-10 px-3 py-2 text-sm';
-  const textAreaClassName = 'shell-field-input min-h-[104px] resize-y px-3 py-2 text-sm';
+  const controlClassName = 'shell-field-input h-9 px-3 py-1.5 text-sm';
+  const textAreaClassName = 'shell-field-input min-h-[88px] resize-y px-3 py-2 text-sm';
   const checkboxClassName =
     'h-4 w-4 rounded border-slate-300 text-primary focus:ring-2 focus:ring-primary/30';
 
@@ -816,46 +820,46 @@ export function ProfileFormDialog({
       closeOnEsc={!isSubmitting}
       closeOnBackdropClick={!isSubmitting}
       disableCloseButton={isSubmitting}
-      className="shell-drawer-surface mx-0 ml-auto mr-0 mt-[var(--app-titlebar-height)] flex h-[calc(100dvh-var(--app-titlebar-height))] max-h-[calc(100dvh-var(--app-titlebar-height))] max-w-[920px] self-start flex-col rounded-none border-y-0 border-r-0"
-      contentClassName="shell-content-muted flex-1 overflow-y-auto p-5"
+      className="account-form-drawer account-form-drawer--profile shell-drawer-surface mx-0 ml-auto mr-0 mt-[var(--app-titlebar-height)] flex h-[calc(100dvh-var(--app-titlebar-height))] max-h-[calc(100dvh-var(--app-titlebar-height))] max-w-[860px] self-start flex-col rounded-none border-y-0 border-r-0"
+      contentClassName="account-form-content shell-content-muted flex-1 overflow-y-auto p-3"
       footer={
         <>
           <Button
             variant="outline"
             onClick={handleDialogClose}
             disabled={isSubmitting}
-            className="h-10 rounded-xl"
+            className="h-9 rounded-lg px-3"
           >
             取消
           </Button>
           <Button
             onClick={handleSubmit}
             disabled={isSubmitting || !name.trim()}
-            className="h-10 rounded-xl"
+            className="h-9 rounded-lg px-3"
           >
             {isSubmitting ? '保存中...' : profileId ? '保存' : '创建'}
           </Button>
         </>
       }
     >
-      <div className="space-y-4">
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList className="shell-tab-strip h-auto w-full justify-start bg-transparent p-1 text-slate-500 shadow-none">
-            <TabsTrigger value="basic" className="h-10 flex-1 rounded-xl">
+      <div className="space-y-3">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-3">
+          <TabsList className="shell-tab-strip account-form-tabs h-auto w-full justify-start bg-transparent p-1 text-slate-500 shadow-none">
+            <TabsTrigger value="basic" className="h-8 flex-1 rounded-lg text-xs">
               基本信息
             </TabsTrigger>
-            <TabsTrigger value="proxy" className="h-10 flex-1 rounded-xl">
+            <TabsTrigger value="proxy" className="h-8 flex-1 rounded-lg text-xs">
               代理设置
             </TabsTrigger>
-            <TabsTrigger value="advanced" className="h-10 flex-1 rounded-xl">
+            <TabsTrigger value="advanced" className="h-8 flex-1 rounded-lg text-xs">
               高级设置
             </TabsTrigger>
           </TabsList>
 
           {/* 基本信息 */}
-          <TabsContent value="basic" className="mt-0 space-y-4">
-            <section className="shell-soft-card space-y-4 p-5">
-              <div className="grid gap-4 md:grid-cols-2">
+          <TabsContent value="basic" className="mt-0 space-y-3">
+            <section className="account-form-section shell-soft-card space-y-3 p-3">
+              <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="name" className="text-xs font-medium text-slate-600">
                     配置名称 *
@@ -871,11 +875,11 @@ export function ProfileFormDialog({
 
                 <div className="space-y-2">
                   <Label className="text-xs font-medium text-slate-600">引擎</Label>
-                    <Select
-                      value={engine}
-                      onValueChange={(v) => handleEngineChange(v as AutomationEngine)}
-                      className={controlClassName}
-                    >
+                  <Select
+                    value={engine}
+                    onValueChange={(v) => handleEngineChange(v as AutomationEngine)}
+                    className={controlClassName}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -885,13 +889,13 @@ export function ProfileFormDialog({
                       <SelectItem value="ruyi">Ruyi</SelectItem>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs leading-5 text-slate-500">
+                  <p className="text-xs leading-4 text-slate-500">
                     每个 Profile 只绑定一个引擎；运行面板与插件将按该引擎启动或复用。
                   </p>
                 </div>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-[minmax(0,1fr),minmax(0,260px)]">
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),minmax(0,240px)]">
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-3">
                     <Label className="text-xs font-medium text-slate-600">分组</Label>
@@ -899,7 +903,7 @@ export function ProfileFormDialog({
                       variant="outline"
                       type="button"
                       onClick={handleCreateGroup}
-                      className="h-10 rounded-xl px-4"
+                      className="h-8 rounded-lg px-3 text-xs"
                     >
                       新建分组
                     </Button>
@@ -913,7 +917,7 @@ export function ProfileFormDialog({
                     ))}
                   </Select>
                   {flattenedGroups.length === 0 ? (
-                    <p className="text-xs leading-5 text-slate-500">
+                    <p className="text-xs leading-4 text-slate-500">
                       暂无分组，可点击「新建分组」后立即归类。
                     </p>
                   ) : null}
@@ -921,9 +925,9 @@ export function ProfileFormDialog({
 
                 <div className="space-y-2">
                   <Label className="text-xs font-medium text-slate-600">颜色</Label>
-                  <div className="shell-content-muted flex items-center gap-3 rounded-[18px] border border-slate-200/80 p-3">
+                  <div className="account-form-muted-panel shell-content-muted flex items-center gap-2.5 border border-slate-200/80 p-2.5">
                     <div
-                      className="h-6 w-6 flex-shrink-0 rounded-full border border-slate-200 bg-white"
+                      className="h-5 w-5 flex-shrink-0 rounded-full border border-slate-200 bg-white"
                       style={{
                         backgroundColor: color || 'transparent',
                       }}
@@ -940,7 +944,7 @@ export function ProfileFormDialog({
                       type="button"
                       onClick={() => setColor('')}
                       disabled={!color}
-                      className="h-10 rounded-xl px-4"
+                      className="h-9 rounded-lg px-3"
                     >
                       清除
                     </Button>
@@ -949,8 +953,8 @@ export function ProfileFormDialog({
               </div>
             </section>
 
-            <section className="shell-soft-card space-y-4 p-5">
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr),280px]">
+            <section className="account-form-section shell-soft-card space-y-3 p-3">
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr),260px]">
                 <div className="space-y-2">
                   <Label htmlFor="notes" className="text-xs font-medium text-slate-600">
                     备注
@@ -975,7 +979,7 @@ export function ProfileFormDialog({
                     placeholder="例如：工作, 重要, VIP"
                     className={controlClassName}
                   />
-                  <div className="shell-content-muted min-h-[104px] rounded-[18px] border border-slate-200/80 p-3">
+                  <div className="account-form-muted-panel shell-content-muted min-h-[88px] border border-slate-200/80 p-2.5">
                     {tagPreview.length > 0 ? (
                       <div className="flex flex-wrap gap-2">
                         {tagPreview.map((tag) => (
@@ -985,7 +989,7 @@ export function ProfileFormDialog({
                         ))}
                       </div>
                     ) : (
-                      <p className="text-xs leading-5 text-slate-500">输入标签</p>
+                      <p className="text-xs leading-4 text-slate-500">输入标签</p>
                     )}
                   </div>
                 </div>
@@ -994,14 +998,14 @@ export function ProfileFormDialog({
           </TabsContent>
 
           {/* 代理设置 */}
-          <TabsContent value="proxy" className="mt-0 space-y-4">
-            <section className="shell-soft-card space-y-4 p-5">
+          <TabsContent value="proxy" className="mt-0 space-y-3">
+            <section className="account-form-section shell-soft-card space-y-3 p-3">
               <DialogSectionHeader
                 title="代理设置"
                 description="启动该 Profile 时会自动带入代理参数。"
               />
 
-              <label className="shell-content-muted flex items-start gap-3 rounded-[18px] border border-slate-200/80 p-4">
+              <label className="account-form-muted-panel shell-content-muted flex items-start gap-3 border border-slate-200/80 p-3">
                 <input
                   type="checkbox"
                   id="proxyEnabled"
@@ -1015,7 +1019,7 @@ export function ProfileFormDialog({
               </label>
 
               {proxyEnabled ? (
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-3 md:grid-cols-2">
                   <div className="space-y-2 md:col-span-2">
                     <Label className="text-xs font-medium text-slate-600">代理类型</Label>
                     <Select
@@ -1088,7 +1092,7 @@ export function ProfileFormDialog({
                   </div>
                 </div>
               ) : (
-                <div className="shell-content-muted rounded-[18px] border border-slate-200/80 p-4 text-sm text-slate-500">
+                <div className="account-form-muted-panel shell-content-muted border border-slate-200/80 p-3 text-sm text-slate-500">
                   当前未启用代理。保留为空时，环境会按本机默认网络直接启动。
                 </div>
               )}
@@ -1103,11 +1107,11 @@ export function ProfileFormDialog({
               open={advancedFingerprintOpen}
               onToggle={() => setAdvancedFingerprintOpen((prev) => !prev)}
             >
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {/* 快速配置区域 */}
-                <div className="shell-content-muted space-y-3 rounded-[18px] border border-slate-200/80 p-4">
+                <div className="account-form-muted-panel shell-content-muted space-y-3 border border-slate-200/80 p-3">
                   <Label className="text-sm font-medium text-slate-900">快速配置</Label>
-                  <div className="flex gap-3">
+                  <div className="flex gap-2.5">
                     <Select
                       value={selectedPreset}
                       onValueChange={applyPreset}
@@ -1128,12 +1132,12 @@ export function ProfileFormDialog({
                     <Button
                       variant="outline"
                       onClick={handleRandomGenerate}
-                      className="h-10 rounded-xl"
+                      className="h-9 rounded-lg px-3"
                     >
                       随机生成
                     </Button>
                   </div>
-                  <p className="text-xs leading-5 text-slate-500">
+                  <p className="text-xs leading-4 text-slate-500">
                     {isExtensionEngine
                       ? 'Extension 会把统一身份配置物化为 Chromium 原生文本文件，通过 --ruyi 交给内核，并额外叠加内置控制扩展；启动真值按 FingerPrintJSBrowser README 描述字段已在真实页面验证。'
                       : isRuyiEngine
@@ -1143,9 +1147,9 @@ export function ProfileFormDialog({
                 </div>
 
                 {/* 系统信息 */}
-                <div className="shell-content-muted space-y-3 rounded-[18px] border border-slate-200/80 p-4">
+                <div className="account-form-muted-panel shell-content-muted space-y-3 border border-slate-200/80 p-3">
                   <Label className="text-sm font-medium text-slate-900">系统信息</Label>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-3 md:grid-cols-2">
                     <div className="space-y-2">
                       <Label className="text-xs font-medium text-slate-600">操作系统</Label>
                       <Select
@@ -1197,7 +1201,7 @@ export function ProfileFormDialog({
                 </div>
 
                 {/* 硬件配置 */}
-                <div className="shell-content-muted space-y-3 rounded-[18px] border border-slate-200/80 p-4">
+                <div className="account-form-muted-panel shell-content-muted space-y-3 border border-slate-200/80 p-3">
                   <Label className="text-sm font-medium text-slate-900">硬件配置</Label>
 
                   <div className="space-y-2">
@@ -1233,7 +1237,7 @@ export function ProfileFormDialog({
                     </Select>
                   </div>
 
-                  <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-3 md:grid-cols-2">
                     <div className="space-y-2">
                       <Label className="text-xs font-medium text-slate-600">CPU 核心数</Label>
                       <Select
@@ -1288,15 +1292,15 @@ export function ProfileFormDialog({
                     </div>
                   </div>
 
-                  <p className="text-xs leading-5 text-slate-500">
+                  <p className="text-xs leading-4 text-slate-500">
                     颜色深度、像素比、触摸能力等隐藏字段会按当前分辨率模板和引擎契约自动推导。
                   </p>
                 </div>
 
                 {/* WebGL 配置 */}
-                <div className="shell-content-muted space-y-3 rounded-[18px] border border-slate-200/80 p-4">
+                <div className="account-form-muted-panel shell-content-muted space-y-3 border border-slate-200/80 p-3">
                   <Label className="text-sm font-medium text-slate-900">WebGL 配置</Label>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-3 md:grid-cols-2">
                     <div className="space-y-2">
                       <Label className="text-xs font-medium text-slate-600">GPU 厂商</Label>
                       <Select
@@ -1305,7 +1309,8 @@ export function ProfileFormDialog({
                           setSelectedPreset('custom');
                           setGpuVendor(value);
                           const nextRenderer =
-                            gpuOptions.find((option) => option.vendor === value)?.renderers[0] || '';
+                            gpuOptions.find((option) => option.vendor === value)?.renderers[0] ||
+                            '';
                           setGpuRenderer(nextRenderer);
                         }}
                         className={controlClassName}
@@ -1347,15 +1352,15 @@ export function ProfileFormDialog({
                     </div>
                   </div>
 
-                  <p className="text-xs leading-5 text-slate-500">
+                  <p className="text-xs leading-4 text-slate-500">
                     WebGL 版本字符串和更细的数值上限由引擎模板自动补齐，不再单独暴露。
                   </p>
                 </div>
 
                 {/* 国际化配置 */}
-                <div className="shell-content-muted space-y-3 rounded-[18px] border border-slate-200/80 p-4">
+                <div className="account-form-muted-panel shell-content-muted space-y-3 border border-slate-200/80 p-3">
                   <Label className="text-sm font-medium text-slate-900">国际化</Label>
-                  <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-3 md:grid-cols-2">
                     <div className="space-y-2">
                       <Label className="text-xs font-medium text-slate-600">时区</Label>
                       <Select
@@ -1400,12 +1405,11 @@ export function ProfileFormDialog({
                     </div>
                   </div>
 
-                  <p className="text-xs leading-5 text-slate-500">
+                  <p className="text-xs leading-4 text-slate-500">
                     首项会自动作为 primaryLanguage；User-Agent、platform、fontSystem、webdriver
                     等隐藏字段会在保存前按当前画像自动重建。
                   </p>
                 </div>
-
               </div>
             </AdvancedSection>
           </TabsContent>
@@ -1418,14 +1422,14 @@ export function ProfileFormDialog({
               open={advancedPerformanceOpen}
               onToggle={() => setAdvancedPerformanceOpen((prev) => !prev)}
             >
-              <div className="space-y-4">
-                <div className="shell-content-muted space-y-2 rounded-[18px] border border-slate-200/80 p-4">
+              <div className="space-y-3">
+                <div className="account-form-muted-panel shell-content-muted space-y-2 border border-slate-200/80 p-3">
                   <p className="text-xs text-amber-600">
                     每个 Profile 统一只保留 1 个 live 浏览器实例；再次启动会复用或等待当前实例释放。
                   </p>
                 </div>
 
-                <div className="shell-content-muted grid grid-cols-2 gap-4 rounded-[18px] border border-slate-200/80 p-4">
+                <div className="account-form-muted-panel shell-content-muted grid gap-3 border border-slate-200/80 p-3 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label className="text-xs font-medium text-slate-600">空闲回收（分钟）</Label>
                     <Input
@@ -1452,16 +1456,16 @@ export function ProfileFormDialog({
                 </div>
 
                 {profileId && (
-                  <div className="shell-content-muted rounded-[18px] border border-slate-200/80 p-4">
+                  <div className="account-form-muted-panel shell-content-muted border border-slate-200/80 p-3">
                     <Label className="text-sm font-medium text-slate-900">应用变更</Label>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                    <p className="mt-1 text-xs leading-4 text-slate-500">
                       代理/性能设置不会自动应用到已打开的浏览器实例；如需立即生效，请重启该配置下的浏览器。
                     </p>
                     <div className="mt-3">
                       <Button
                         variant="outline"
                         type="button"
-                        className="h-10 rounded-xl"
+                        className="h-9 rounded-lg px-3"
                         onClick={async () => {
                           if (!profileId) return;
                           if (!window.confirm('将关闭该配置下所有已打开的浏览器，确定要重启吗？'))

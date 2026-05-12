@@ -32,19 +32,19 @@ interface AccountFormDialogProps {
 
 function DialogSectionHeader({ title, description }: { title: string; description: string }) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-0.5">
       <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-      <p className="text-xs leading-5 text-slate-500">{description}</p>
+      <p className="text-xs leading-4 text-slate-500">{description}</p>
     </div>
   );
 }
 
 function getBindingModeCardClassName(selected: boolean) {
   return cn(
-    'rounded-[18px] border px-4 py-4 text-left transition-[background-color,border-color,box-shadow]',
+    'account-form-option-card text-left transition-[background-color,border-color,box-shadow]',
     selected
-      ? 'border-primary/30 bg-primary/[0.045] shadow-[0_12px_24px_rgba(37,99,235,0.08)]'
-      : 'border-slate-200/70 bg-white/60 hover:bg-white/82 hover:shadow-[0_10px_22px_rgba(20,27,45,0.06)]'
+      ? 'account-form-option-card--selected'
+      : 'border-slate-200/80 bg-white/70 hover:bg-white/90'
   );
 }
 
@@ -85,10 +85,10 @@ export function AccountFormDialog({
       : totalProfileCount > 0
         ? `当前所有现有环境都已绑定${selectedPlatformName ? `「${selectedPlatformName}」` : '该'}平台账号，系统已自动切换为创建新环境。`
         : '当前还没有浏览器环境，系统会在保存账号时自动创建一个新环境。';
-  const controlClassName = 'shell-field-input h-10 px-3 py-2 text-sm';
-  const textAreaClassName = 'shell-field-input min-h-[112px] resize-y px-3 py-2 text-sm';
+  const controlClassName = 'shell-field-input h-9 px-3 py-1.5 text-sm';
+  const textAreaClassName = 'shell-field-input min-h-[88px] resize-y px-3 py-2 text-sm';
   const supportBlockClassName =
-    'rounded-[16px] bg-slate-50/84 p-3 text-xs leading-5 text-slate-500';
+    'account-form-muted-panel bg-slate-50/84 p-2.5 text-xs leading-4 text-slate-500';
 
   return (
     <DialogV2
@@ -99,28 +99,26 @@ export function AccountFormDialog({
       closeOnEsc={!submittingAccount}
       closeOnBackdropClick={!submittingAccount}
       disableCloseButton={submittingAccount}
-      className="shell-drawer-surface mx-0 ml-auto mr-0 mt-[var(--app-titlebar-height)] flex h-[calc(100dvh-var(--app-titlebar-height))] max-h-[calc(100dvh-var(--app-titlebar-height))] max-w-[780px] self-start flex-col rounded-none border-y-0 border-r-0"
-      contentClassName="shell-content-muted flex-1 overflow-y-auto p-4"
+      className="account-form-drawer account-form-drawer--account shell-drawer-surface mx-0 ml-auto mr-0 mt-[var(--app-titlebar-height)] flex h-[calc(100dvh-var(--app-titlebar-height))] max-h-[calc(100dvh-var(--app-titlebar-height))] max-w-[720px] self-start flex-col rounded-none border-y-0 border-r-0"
+      contentClassName="account-form-content shell-content-muted flex-1 overflow-y-auto p-3"
       footer={
         <>
           <Button
             variant="outline"
             onClick={onClose}
             disabled={submittingAccount}
-            className="h-10 rounded-xl border-slate-200/80 bg-white/90 shadow-none hover:bg-white"
+            className="h-9 rounded-lg border-slate-200/80 bg-white/90 px-3 shadow-none hover:bg-white"
           >
             取消
           </Button>
-          <Button onClick={onSubmit} disabled={submittingAccount} className="h-10 rounded-xl">
+          <Button onClick={onSubmit} disabled={submittingAccount} className="h-9 rounded-lg px-3">
             {submittingAccount ? '保存中...' : '保存账号'}
           </Button>
         </>
       }
     >
-      <div className="space-y-4">
-
-        <section className="shell-soft-card space-y-4 p-4">
-
+      <div className="space-y-3">
+        <section className="account-form-section shell-soft-card space-y-3 p-3">
           <div className="space-y-2">
             <Label className="text-xs font-medium text-slate-600">平台</Label>
             <div className="flex gap-2">
@@ -139,14 +137,14 @@ export function AccountFormDialog({
               <Button
                 variant="outline"
                 onClick={onOpenPlatformDialog}
-                className="h-10 shrink-0 rounded-xl border-slate-200/80 bg-white/90 px-4 shadow-none hover:bg-white"
+                className="h-9 shrink-0 rounded-lg border-slate-200/80 bg-white/90 px-3 shadow-none hover:bg-white"
               >
                 新建平台
               </Button>
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-2">
               <Label className="text-xs font-medium text-slate-600">名称</Label>
               <Input
@@ -189,7 +187,7 @@ export function AccountFormDialog({
             </div>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr),240px]">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr),220px]">
             <div className="space-y-2">
               <Label className="text-xs font-medium text-slate-600">备注</Label>
               <textarea
@@ -214,29 +212,29 @@ export function AccountFormDialog({
           </div>
         </section>
 
-        <section className="shell-soft-card space-y-4 p-4">
-          <div className="space-y-4">
+        <section className="account-form-section shell-soft-card space-y-3 p-3">
+          <div className="space-y-3">
             <DialogSectionHeader
               title="浏览器环境"
               description="环境放在最后确认。系统会优先复用未绑定当前平台账号的环境，只有全部占用时才默认自动创建。"
             />
 
-            <div className="flex items-start gap-3 rounded-[16px] bg-white/62 p-4">
-              <div className="rounded-[14px] bg-white p-2 text-slate-700 shadow-sm">
+            <div className="account-form-muted-panel flex items-start gap-3 bg-white/70 p-3">
+              <div className="rounded-lg bg-white p-2 text-slate-700 shadow-sm">
                 {canAutoCreateProfile ? (
-                  <Sparkles className="h-5 w-5" />
+                  <Sparkles className="h-4 w-4" />
                 ) : (
-                  <Globe className="h-5 w-5" />
+                  <Globe className="h-4 w-4" />
                 )}
               </div>
               <div className="min-w-0 space-y-1">
                 <div className="text-sm font-medium text-slate-900">账号浏览器环境</div>
-                <p className="text-xs leading-5 text-slate-500">{profileRecommendationText}</p>
+                <p className="text-xs leading-4 text-slate-500">{profileRecommendationText}</p>
               </div>
             </div>
 
             {!editingAccountId && (
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-2.5 md:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => onProfileBindingModeChange('select')}
@@ -245,7 +243,7 @@ export function AccountFormDialog({
                   )}
                 >
                   <div className="text-sm font-medium text-slate-900">复用已有环境</div>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                  <p className="mt-1 text-xs leading-4 text-slate-500">
                     只展示当前平台可复用的环境；如果现有环境都已占用，会自动切到创建新环境。
                   </p>
                 </button>
@@ -257,7 +255,7 @@ export function AccountFormDialog({
                   )}
                 >
                   <div className="text-sm font-medium text-slate-900">自动创建环境</div>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                  <p className="mt-1 text-xs leading-4 text-slate-500">
                     保存账号时自动创建一个 Extension 引擎环境，并立即完成绑定。
                   </p>
                 </button>
@@ -280,7 +278,7 @@ export function AccountFormDialog({
                       </option>
                     ))}
                   </Select>
-                  <p className="text-xs leading-5 text-slate-500">
+                  <p className="text-xs leading-4 text-slate-500">
                     {selectedProfileName
                       ? `当前账号环境：${selectedProfileName}`
                       : hasSelectableProfiles
@@ -299,7 +297,7 @@ export function AccountFormDialog({
                     placeholder={suggestedAutoProfileName}
                     className={controlClassName}
                   />
-                  <p className="text-xs leading-5 text-slate-500">
+                  <p className="text-xs leading-4 text-slate-500">
                     默认名称：{suggestedAutoProfileName}。保存时会按 Extension 引擎创建。
                   </p>
                 </>

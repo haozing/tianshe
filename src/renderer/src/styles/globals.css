@@ -635,6 +635,67 @@ pre code {
     background: rgba(255, 255, 255, 0.86);
   }
 
+  .account-form-drawer {
+    background:
+      linear-gradient(180deg, rgba(248, 250, 253, 0.98), rgba(255, 255, 255, 0.98) 180px), #ffffff;
+    box-shadow: -18px 0 40px rgba(20, 27, 45, 0.11);
+  }
+
+  .account-form-drawer .shell-floating-panel__header {
+    padding: 14px 16px 12px;
+    background: linear-gradient(180deg, rgba(248, 250, 253, 0.98), rgba(244, 247, 252, 0.96));
+  }
+
+  .account-form-drawer .shell-floating-panel__header h2 {
+    font-size: 16px;
+    line-height: 1.35;
+  }
+
+  .account-form-drawer .shell-floating-panel__footer {
+    padding: 10px 12px;
+    background: rgba(248, 250, 253, 0.96);
+  }
+
+  .account-form-content {
+    background:
+      linear-gradient(180deg, rgba(248, 250, 253, 0.96), rgba(255, 255, 255, 0.94) 180px), #ffffff;
+  }
+
+  .account-form-section {
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 6px 16px rgba(20, 27, 45, 0.035);
+  }
+
+  .account-form-muted-panel {
+    border-radius: 8px;
+  }
+
+  .account-form-tabs {
+    border-radius: 8px;
+  }
+
+  .account-form-option-card {
+    border: 1px solid rgba(215, 224, 238, 0.92);
+    border-radius: 8px;
+    padding: 10px 12px;
+    min-height: 78px;
+  }
+
+  .account-form-option-card--selected {
+    border-color: rgba(37, 99, 235, 0.36);
+    background: rgba(239, 246, 255, 0.72);
+    box-shadow: inset 3px 0 0 rgba(37, 99, 235, 0.78);
+  }
+
+  .account-form-drawer .shell-field-input {
+    border-radius: 8px;
+  }
+
+  .account-form-drawer .shell-field-chip {
+    border-radius: 999px;
+  }
+
   @media (max-width: 1100px) {
     .account-center-header .page-frame-header__row {
       align-items: flex-start;
