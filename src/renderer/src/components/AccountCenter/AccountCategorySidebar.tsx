@@ -32,7 +32,7 @@ interface CategorySectionProps {
 
 function getCategoryItemClassName(selected: boolean) {
   return cn(
-    'flex w-full items-center justify-between rounded-lg border-l-[3px] px-3 py-2 text-left text-sm transition-[background-color,color,box-shadow,border-color]',
+    'flex w-full items-center justify-between rounded-lg border-l-[3px] px-3 py-1.5 text-left text-sm transition-[background-color,color,box-shadow,border-color]',
     selected
       ? 'border-l-blue-500 bg-white text-slate-900 shadow-sm'
       : 'border-l-transparent text-slate-600 hover:bg-white/72 hover:text-slate-900'
@@ -55,7 +55,7 @@ function CategorySection({
       <button
         type="button"
         className={cn(
-          'flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-left text-sm transition-colors',
+          'flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors',
           expanded ? 'bg-white/82 text-slate-900' : 'text-slate-700 hover:bg-white/58'
         )}
         onClick={onExpand}
@@ -83,7 +83,7 @@ function CategorySection({
               </button>
             ))
           ) : (
-            <div className="px-3 py-3 text-xs text-slate-500">{emptyText}</div>
+            <div className="px-3 py-2.5 text-xs text-slate-500">{emptyText}</div>
           )}
         </div>
       ) : null}
@@ -101,7 +101,7 @@ export function AccountCategorySidebar({
   onSelectCategory,
 }: AccountCategorySidebarProps) {
   return (
-    <div className="flex h-full flex-col overflow-hidden p-3">
+    <div className="flex h-full flex-col overflow-hidden p-2.5">
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
         <button
           type="button"

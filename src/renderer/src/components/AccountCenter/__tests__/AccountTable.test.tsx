@@ -57,7 +57,8 @@ describe('AccountTable', () => {
     expect(screen.getByText('运营主账号')).toBeInTheDocument();
     expect(screen.getByText('1')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '启动' })).toBeInTheDocument();
-    expect(screen.getByText('密码：••••••')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '编辑账号' })).toBeInTheDocument();
+    expect(screen.queryByText('密码：••••••')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
 

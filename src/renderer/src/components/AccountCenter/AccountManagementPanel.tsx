@@ -478,7 +478,7 @@ export function AccountManagementPanel({
   };
 
   return (
-    <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[224px_minmax(0,1fr)]">
+    <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[208px_minmax(0,1fr)]">
       <div className="account-center-panel account-center-sidebar-panel min-h-0 overflow-hidden">
         <AccountCategorySidebar
           expandedSection={categoryMode}
@@ -499,9 +499,9 @@ export function AccountManagementPanel({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
-        <div className="account-center-toolbar-panel px-3 py-3">
+        <div className="account-center-toolbar-panel px-3 py-2.5">
           <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-            <div className="relative min-w-[240px] flex-1 xl:max-w-xl">
+            <div className="relative min-w-[240px] flex-1">
               <ListFilter className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <Input
                 className="h-9 rounded-lg border-slate-200/80 bg-white/96 pl-9 text-sm shadow-none"

@@ -56,34 +56,41 @@ export function AccountTable({
             暂无账号数据，请先添加账号
           </div>
         ) : null}
-        <table className="w-full min-w-[1160px] border-separate border-spacing-0 text-sm md:min-w-[1240px]">
+        <table className="w-full min-w-[960px] table-fixed border-separate border-spacing-0 text-sm">
+          <colgroup>
+            <col className="w-[52px]" />
+            <col className="w-[128px]" />
+            <col className="w-[150px]" />
+            <col className="w-[190px]" />
+            <col className="w-[250px]" />
+            <col className="w-[150px]" />
+            <col className="w-[150px]" />
+            <col className="w-[112px]" />
+          </colgroup>
           <thead className="sticky top-0 z-20 bg-[rgba(247,250,254,0.96)] backdrop-blur">
             <tr className="text-left">
-              <th className="sticky left-0 z-20 w-[60px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.98)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500 backdrop-blur">
+              <th className="sticky left-0 z-20 border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.98)] px-3 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500 backdrop-blur">
                 序号
               </th>
-              <th className="min-w-[160px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
+              <th className="border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 平台
               </th>
-              <th className="min-w-[180px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
+              <th className="border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 名称
               </th>
-              <th className="min-w-[220px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
+              <th className="border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 登录账号
               </th>
-              <th className="min-w-[240px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
+              <th className="border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 登录地址
               </th>
-              <th className="min-w-[220px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
+              <th className="border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 浏览器环境
               </th>
-              <th className="min-w-[220px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
+              <th className="border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 标签
               </th>
-              <th className="min-w-[220px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
-                备注
-              </th>
-              <th className="sticky right-0 z-30 w-[148px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.98)] px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.04em] text-slate-500 backdrop-blur">
+              <th className="sticky right-0 z-30 border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.98)] px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.04em] text-slate-500 backdrop-blur">
                 操作
               </th>
             </tr>
@@ -104,46 +111,36 @@ export function AccountTable({
               const accountPassword = revealedPasswords[account.id] || '';
               const isPasswordVisible = Boolean(visiblePasswords[account.id]);
               const passwordSummary = !account.hasPassword
-                ? '密码：未保存'
+                ? ''
                 : isReadOnly
                   ? '密码：当前云账号不可查看'
                   : isPasswordVisible
                     ? `密码：${accountPassword.length > 0 ? accountPassword : '空密码'}`
-                    : '密码：••••••';
+                    : '';
 
               return (
                 <tr key={account.id} className="hover:bg-slate-50/70">
-                  <td className="sticky left-0 z-10 border-b border-[rgba(214,221,234,0.72)] bg-white/96 px-3 py-2.5 align-top text-muted-foreground backdrop-blur">
+                  <td className="sticky left-0 z-10 border-b border-[rgba(214,221,234,0.72)] bg-white/96 px-3 py-2 align-middle text-muted-foreground backdrop-blur">
                     {index + 1}
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
-                    <div className="space-y-1">
-                      <div className="font-medium text-slate-900">{platformName}</div>
-                      {platform?.url ? (
-                        <div
-                          className="truncate text-xs text-muted-foreground"
-                          title={platform.url}
-                        >
-                          {platform.url}
-                        </div>
-                      ) : null}
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2 align-middle">
+                    <div className="truncate font-medium text-slate-900" title={platformName}>
+                      {platformName}
                     </div>
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
-                    <div className="space-y-1">
-                      <div
-                        className="max-w-[220px] truncate font-medium text-slate-900"
-                        title={account.displayName || account.name || '-'}
-                      >
-                        {account.displayName || account.name || '-'}
-                      </div>
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2 align-middle">
+                    <div
+                      className="truncate font-medium text-slate-900"
+                      title={account.displayName || account.name || '-'}
+                    >
+                      {account.displayName || account.name || '-'}
                     </div>
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
-                    <div className="space-y-1">
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2 align-middle">
+                    <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span
-                          className="max-w-[180px] truncate font-medium text-slate-900"
+                          className="min-w-0 truncate font-medium text-slate-900"
                           title={account.name}
                         >
                           {account.name}
@@ -154,22 +151,23 @@ export function AccountTable({
                           </span>
                         ) : null}
                       </div>
-                      <div className="text-xs text-muted-foreground">{passwordSummary}</div>
+                      {passwordSummary ? (
+                        <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                          {passwordSummary}
+                        </div>
+                      ) : null}
                     </div>
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
-                    <div
-                      className="max-w-[280px] truncate text-muted-foreground"
-                      title={account.loginUrl}
-                    >
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2 align-middle">
+                    <div className="truncate text-muted-foreground" title={account.loginUrl}>
                       {account.loginUrl}
                     </div>
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2 align-middle">
                     <span
                       title={accountSessionLabel}
                       className={cn(
-                        'inline-flex max-w-[220px] truncate rounded-full px-2 py-0.5 text-xs',
+                        'inline-flex max-w-full truncate rounded-full px-2 py-0.5 text-xs',
                         hasAccountProfile
                           ? 'bg-emerald-100 text-emerald-800'
                           : 'bg-amber-100 text-amber-800'
@@ -178,15 +176,15 @@ export function AccountTable({
                       {accountSessionLabel}
                     </span>
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2 align-middle">
                     {(account.tags || []).length > 0 ? (
-                      <div className="flex max-w-[240px] flex-wrap gap-1">
+                      <div className="flex max-w-full flex-nowrap gap-1 overflow-hidden">
                         {(account.tags || []).map((tagValue) => (
                           <span
                             key={tagValue}
-                            className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700"
+                            className="inline-flex min-w-0 shrink rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700"
                           >
-                            {tagValue}
+                            <span className="truncate">{tagValue}</span>
                           </span>
                         ))}
                       </div>
@@ -194,28 +192,36 @@ export function AccountTable({
                       <span className="text-xs text-muted-foreground">-</span>
                     )}
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
-                    <div className="max-w-[220px] whitespace-pre-wrap break-words text-sm text-muted-foreground">
-                      {account.notes?.trim() || '-'}
-                    </div>
-                  </td>
-                  <td className="sticky right-0 z-10 border-b border-[rgba(214,221,234,0.72)] bg-white/96 px-3 py-2.5 align-top shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.38)] backdrop-blur">
-                    <div className="flex items-center justify-end gap-2">
+                  <td className="sticky right-0 z-10 border-b border-[rgba(214,221,234,0.72)] bg-white/96 px-3 py-2 align-middle shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.38)] backdrop-blur">
+                    <div className="flex items-center justify-end gap-1.5">
                       <Button
-                        variant="outline"
-                        size="sm"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
                         onClick={() => onOpenBrowser(account)}
                         disabled={!canLogin}
                         title={canLogin ? '按登录 URL 启动浏览器' : '当前账号无可用浏览器环境'}
+                        aria-label="启动"
                       >
-                        <Play className="mr-1 h-3.5 w-3.5" />
-                        启动
+                        <Play className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => onEditAccount(account)}
+                        disabled={isReadOnly}
+                        title="编辑账号"
+                        aria-label="编辑账号"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
                       </Button>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button
                             variant="ghost"
                             size="icon"
+                            className="h-7 w-7"
                             title="更多操作"
                             aria-label="更多操作"
                           >
@@ -259,7 +265,7 @@ export function AccountTable({
 
             {accounts.length === 0 && (
               <tr aria-hidden="true">
-                <td colSpan={9} className="h-44" />
+                <td colSpan={8} className="h-44" />
               </tr>
             )}
           </tbody>

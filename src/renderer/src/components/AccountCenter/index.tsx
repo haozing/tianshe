@@ -298,7 +298,7 @@ export function AccountCenterPage() {
               />
             </div>
           ) : (
-            <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[224px_minmax(0,1fr)]">
+            <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[208px_minmax(0,1fr)]">
               <div className="account-center-panel account-center-sidebar-panel min-h-0 overflow-hidden">
                 <ProfileGroupTree />
               </div>
