@@ -464,57 +464,58 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
         ref={asideRef}
         className={cn(
           'flex-shrink-0 h-full',
-          isActivityBarCollapsed ? 'w-12' : 'w-40',
+          isActivityBarCollapsed ? 'w-14' : 'w-48',
           'shell-sidebar-surface border-r flex flex-col',
           'transition-[width] duration-200 ease-out'
         )}
         role="navigation"
         aria-label="主导航"
       >
-        {/* 主导航顶部：云端登录 + 展开/收起 */}
         <div
           className={cn(
-            'h-12 flex items-center',
-            isActivityBarCollapsed ? 'justify-center px-0' : 'justify-between px-2'
+            'flex h-12 items-center border-b border-slate-200/70',
+            isActivityBarCollapsed ? 'justify-center px-0' : 'justify-between px-3'
           )}
         >
-          {!isActivityBarCollapsed && cloudAuthAvailable && (
+          <div className={cn('flex items-center', isActivityBarCollapsed ? 'justify-center' : 'gap-1')}>
+            {!isActivityBarCollapsed && cloudAuthAvailable && (
+              <button
+                type="button"
+                title={cloudSession.loggedIn ? `云端账号：${cloudLabel}` : '云端登录'}
+                aria-label={cloudSession.loggedIn ? '云端账号' : '云端登录'}
+                onClick={() => setCloudAuthDialogOpen(true)}
+                className={cn(
+                  'relative rounded-md flex items-center justify-center h-8 w-8',
+                  'text-slate-600 hover:bg-white/70 hover:text-slate-900',
+                  'transition-colors'
+                )}
+              >
+                <UserRound className="h-4 w-4" />
+                {cloudAuthState === 'ready' && (
+                  <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                )}
+              </button>
+            )}
+
             <button
               type="button"
-              title={cloudSession.loggedIn ? `云端账号：${cloudLabel}` : '云端登录'}
-              aria-label={cloudSession.loggedIn ? '云端账号' : '云端登录'}
-              onClick={() => setCloudAuthDialogOpen(true)}
+              onClick={toggleActivityBar}
+              title={isActivityBarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+              aria-label={isActivityBarCollapsed ? '展开侧边栏' : '收起侧边栏'}
               className={cn(
-                'relative rounded-md flex items-center justify-center h-8 w-8',
-                'text-slate-600 hover:bg-white/70 hover:text-slate-900',
+                'rounded-full border border-slate-200/80 bg-white/72 flex items-center justify-center shadow-sm',
+                isActivityBarCollapsed ? 'h-7 w-7' : 'h-8 w-8',
+                'text-slate-500 hover:border-slate-300 hover:bg-white hover:text-slate-900',
                 'transition-colors'
               )}
             >
-              <UserRound className="h-4 w-4" />
-              {cloudAuthState === 'ready' && (
-                <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              {isActivityBarCollapsed ? (
+                <ChevronRight className="h-4 w-4" />
+              ) : (
+                <ChevronLeft className="h-4 w-4" />
               )}
             </button>
-          )}
-
-          <button
-            type="button"
-            onClick={toggleActivityBar}
-            title={isActivityBarCollapsed ? '展开侧边栏' : '收起侧边栏'}
-            aria-label={isActivityBarCollapsed ? '展开侧边栏' : '收起侧边栏'}
-            className={cn(
-              'rounded-md flex items-center justify-center',
-              isActivityBarCollapsed ? 'h-6 w-6' : 'h-8 w-8',
-              'text-slate-600 hover:bg-white/70 hover:text-slate-900',
-              'transition-colors'
-            )}
-          >
-            {isActivityBarCollapsed ? (
-              <ChevronRight className="h-4 w-4" />
-            ) : (
-              <ChevronLeft className="h-4 w-4" />
-            )}
-          </button>
+          </div>
         </div>
 
         {/* Activity Bar 按钮列表 */}

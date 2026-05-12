@@ -39,6 +39,7 @@ import { WINDOWS_TITLEBAR_OVERLAY_HEIGHT } from '../constants/layout';
 import { attachNavigationGuards } from '../core/browser-core/navigation-guard';
 import { getSessionWebRequestHub } from '../core/browser-core/web-request-hub';
 import { createLogger } from '../core/logger';
+import { APP_BRAND } from '../shared/app-brand';
 import {
   formatRendererBuildWarning,
   getRendererBuildFreshness,
@@ -204,7 +205,7 @@ export class WindowManager {
         nodeIntegration: false,
         sandbox: true,
       },
-      title: 'TiansheAI',
+      title: APP_BRAND.windowTitle,
     });
 
     const requestHub = getSessionWebRequestHub(window.webContents.session);

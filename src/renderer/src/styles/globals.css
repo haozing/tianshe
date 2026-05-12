@@ -140,17 +140,13 @@ pre code {
   }
 
   .app-titlebar__logo {
-    display: grid;
-    place-items: center;
     width: 28px;
     height: 28px;
+    object-fit: contain;
     border-radius: 10px;
-    background: linear-gradient(135deg, #475569, #0f172a);
-    color: white;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+    box-shadow:
+      0 8px 18px rgba(15, 23, 42, 0.12),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.18);
   }
 
   .app-titlebar__name {
@@ -515,6 +511,40 @@ pre code {
     background: rgba(255, 255, 255, 0.94);
     color: #1f2937;
     box-shadow: 0 8px 20px rgba(31, 41, 55, 0.08);
+  }
+
+  .plugin-market-page {
+    background: #f7f9fc;
+  }
+
+  .plugin-market-header {
+    background: linear-gradient(180deg, rgba(248, 250, 253, 0.98), rgba(244, 247, 252, 0.98));
+  }
+
+  .plugin-market-scroll {
+    background:
+      linear-gradient(180deg, rgba(248, 250, 253, 0.96), rgba(255, 255, 255, 0.94) 180px),
+      #ffffff;
+  }
+
+  .plugin-market-panel {
+    border: 1px solid rgba(215, 224, 238, 0.92);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 10px 24px rgba(20, 27, 45, 0.04);
+  }
+
+  .plugin-market-panel--plain {
+    border-radius: 8px;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .plugin-market-stat {
+    border: 1px solid rgba(221, 228, 239, 0.92);
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 8px 18px rgba(20, 27, 45, 0.04);
   }
 
   .datasets-workspace .datasets-workspace-chrome {

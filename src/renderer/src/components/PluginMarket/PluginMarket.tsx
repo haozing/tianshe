@@ -441,7 +441,7 @@ export function PluginMarket() {
       row;
 
     return (
-      <article key={plugin.id} className="shell-soft-card flex h-full flex-col gap-4 border p-4">
+      <article key={plugin.id} className="plugin-market-panel flex h-full flex-col gap-4 p-4">
         <div className="flex items-start gap-3">
           <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[14px] bg-white/90 text-blue-600 shadow-sm">
             {renderStringIcon(plugin.icon, {
@@ -557,7 +557,7 @@ export function PluginMarket() {
     emptyMessage: string;
     icon: ReactNode;
   }) => (
-    <section className="shell-subpanel min-h-0 overflow-hidden rounded-[20px] border">
+    <section className="plugin-market-panel min-h-0 overflow-hidden">
       <div className="flex items-start justify-between gap-4 border-b border-slate-200/70 bg-white/68 px-4 py-3">
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
@@ -573,7 +573,7 @@ export function PluginMarket() {
 
       <div className="p-3">
         {rows.length === 0 ? (
-          <div className="shell-soft-card flex min-h-[220px] flex-col items-center justify-center gap-2 border px-6 text-center">
+          <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-[8px] border border-dashed border-slate-200 bg-slate-50/70 px-6 text-center">
             <p className="text-sm font-medium text-slate-700">{title}暂无内容</p>
             <p className="max-w-sm text-sm leading-6 text-slate-500">{emptyMessage}</p>
           </div>
@@ -597,7 +597,7 @@ export function PluginMarket() {
     const updatedAt = formatRuntimeTimestamp(runtimeStatus?.updatedAt);
 
     return (
-      <article key={plugin.id} className="shell-soft-card flex h-full flex-col border p-4">
+      <article key={plugin.id} className="plugin-market-panel flex h-full flex-col p-4">
         <div className="space-y-4">
           <button
             type="button"
@@ -929,7 +929,7 @@ export function PluginMarket() {
     emptyMessage: string;
     icon: ReactNode;
   }) => (
-    <section className="shell-subpanel min-h-0 overflow-hidden rounded-[20px] border">
+    <section className="plugin-market-panel min-h-0 overflow-hidden">
       <div className="flex items-start justify-between gap-4 border-b border-slate-200/70 bg-white/68 px-4 py-3">
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
@@ -945,7 +945,7 @@ export function PluginMarket() {
 
       <div className="p-3">
         {items.length === 0 ? (
-          <div className="shell-soft-card flex min-h-[220px] flex-col items-center justify-center gap-2 border px-6 text-center">
+          <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-[8px] border border-dashed border-slate-200 bg-slate-50/70 px-6 text-center">
             <p className="text-sm font-medium text-slate-700">{title}暂无匹配项</p>
             <p className="max-w-sm text-sm leading-6 text-slate-500">{emptyMessage}</p>
           </div>
@@ -959,10 +959,11 @@ export function PluginMarket() {
   );
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="plugin-market-page flex h-full flex-col">
       <PageFrameHeader
         title="插件中心"
-        className="workspace-page-header"
+        subtitle="查看插件运行状态，管理本地和云端插件。"
+        className="plugin-market-header workspace-page-header"
         actions={
           <div className="page-header-control-group">
             <div className="shell-tab-strip">
@@ -1003,10 +1004,10 @@ export function PluginMarket() {
         }
       />
 
-      <div className="shell-content-muted flex-1 overflow-auto p-4">
+      <div className="plugin-market-scroll flex-1 overflow-auto p-4">
         {activeView === 'home' ? (
           <div className="space-y-3">
-            <section className="shell-soft-card overflow-hidden border bg-[linear-gradient(135deg,rgba(14,116,144,0.12),rgba(255,255,255,0.92),rgba(59,130,246,0.08))] p-5">
+            <section className="space-y-4">
               <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
                 <div className="space-y-4">
                   <div className="space-y-1">
@@ -1057,7 +1058,7 @@ export function PluginMarket() {
               </div>
 
               <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <article className="shell-subpanel rounded-[18px] border border-white/80 bg-white/82 p-4">
+                <article className="plugin-market-stat p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="space-y-1">
                       <p className="text-xs uppercase tracking-[0.08em] text-slate-400">
@@ -1065,7 +1066,7 @@ export function PluginMarket() {
                       </p>
                       <p className="text-2xl font-semibold text-slate-900">{totalPlugins}</p>
                     </div>
-                    <div className="rounded-[14px] bg-slate-100 p-2 text-slate-700">
+                    <div className="rounded-[8px] bg-slate-100 p-2 text-slate-700">
                       <Package className="h-5 w-5" />
                     </div>
                   </div>
@@ -1074,7 +1075,7 @@ export function PluginMarket() {
                   </p>
                 </article>
 
-                <article className="shell-subpanel rounded-[18px] border border-white/80 bg-white/82 p-4">
+                <article className="plugin-market-stat p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="space-y-1">
                       <p className="text-xs uppercase tracking-[0.08em] text-slate-400">
@@ -1084,7 +1085,7 @@ export function PluginMarket() {
                         {totalRunningPluginCount}
                       </p>
                     </div>
-                    <div className="rounded-[14px] bg-blue-50 p-2 text-blue-700">
+                    <div className="rounded-[8px] bg-blue-50 p-2 text-blue-700">
                       <Activity className="h-5 w-5" />
                     </div>
                   </div>
@@ -1093,7 +1094,7 @@ export function PluginMarket() {
                   </p>
                 </article>
 
-                <article className="shell-subpanel rounded-[18px] border border-white/80 bg-white/82 p-4">
+                <article className="plugin-market-stat p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="space-y-1">
                       <p className="text-xs uppercase tracking-[0.08em] text-slate-400">待命插件</p>
@@ -1101,14 +1102,14 @@ export function PluginMarket() {
                         {readyRuntimeRows.length}
                       </p>
                     </div>
-                    <div className="rounded-[14px] bg-emerald-50 p-2 text-emerald-700">
+                    <div className="rounded-[8px] bg-emerald-50 p-2 text-emerald-700">
                       <Clock3 className="h-5 w-5" />
                     </div>
                   </div>
                   <p className="mt-3 text-sm text-slate-500">已激活且当前空闲，适合立即调度</p>
                 </article>
 
-                <article className="shell-subpanel rounded-[18px] border border-white/80 bg-white/82 p-4">
+                <article className="plugin-market-stat p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="space-y-1">
                       <p className="text-xs uppercase tracking-[0.08em] text-slate-400">需要处理</p>
@@ -1116,7 +1117,7 @@ export function PluginMarket() {
                         {totalRuntimeErrorPluginCount}
                       </p>
                     </div>
-                    <div className="rounded-[14px] bg-red-50 p-2 text-red-700">
+                    <div className="rounded-[8px] bg-red-50 p-2 text-red-700">
                       <CircleAlert className="h-5 w-5" />
                     </div>
                   </div>
@@ -1128,7 +1129,7 @@ export function PluginMarket() {
             </section>
 
             {pluginsLoading || runtimeLoading ? (
-              <div className="shell-soft-card space-y-3 border p-4">
+              <div className="plugin-market-panel space-y-3 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-medium text-slate-900">正在刷新插件首页</p>
                   <span className="text-xs text-slate-500">同步安装列表与运行状态</span>
@@ -1174,11 +1175,11 @@ export function PluginMarket() {
 
         {activeView === 'installed' ? (
           <div className="space-y-3">
-            <section className="shell-soft-card space-y-4 border p-4">
+            <section className="plugin-market-panel space-y-4 p-4">
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
-                    <div className="rounded-[14px] bg-white/90 p-2 text-slate-700 shadow-sm">
+                    <div className="rounded-[8px] bg-slate-100 p-2 text-slate-700">
                       <HardDrive className="h-4 w-4" />
                     </div>
                     <div className="space-y-1">
@@ -1282,7 +1283,7 @@ export function PluginMarket() {
             </section>
 
             {pluginsLoading || runtimeLoading ? (
-              <div className="shell-soft-card space-y-3 border p-4">
+              <div className="plugin-market-panel space-y-3 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-medium text-slate-900">正在刷新本地插件状态</p>
                   <span className="text-xs text-slate-500">同步安装列表与运行状态</span>

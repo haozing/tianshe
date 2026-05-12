@@ -10,6 +10,7 @@
     "src/main/**/*",
     "src/core/**/*",
     "src/types/**/*",
+    "src/shared/**/*",
     "src/preload/**/*"
   ]
 }
