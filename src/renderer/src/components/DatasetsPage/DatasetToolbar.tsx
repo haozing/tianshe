@@ -61,9 +61,9 @@ interface DatasetToolbarProps {
 }
 
 const toolbarMenuItemClasses =
-  'shell-field-option flex w-full items-center gap-3 px-3 py-2.5 text-sm text-slate-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50';
+  'shell-field-option flex w-full items-center gap-2.5 px-2.5 py-1.5 text-sm text-slate-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50';
 const toolbarMenuHeaderClasses =
-  'px-3 py-2 text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500';
+  'px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500';
 const toolbarBadgeClasses =
   'shell-field-chip shell-field-chip--accent absolute -right-1 -top-1 flex min-h-[18px] min-w-[18px] items-center justify-center px-1 text-[10px] font-semibold leading-none';
 const toolbarActiveMetaClasses =
@@ -172,10 +172,10 @@ export function DatasetToolbar({
   return (
     <div className="flex flex-col" role="toolbar" aria-label="数据表工具栏">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-2.5 xl:items-center">
+      <div className="flex flex-wrap items-start justify-between gap-2 px-3 py-2 xl:items-center">
         {/* Left Side - Main Tools */}
-        <div className="min-w-0 flex-1 overflow-x-auto pb-1">
-          <div className="flex min-w-max items-center gap-2 pr-2">
+        <div className="min-w-0 flex-1 overflow-x-auto">
+          <div className="flex min-w-max items-center gap-1.5 pr-2">
             {/* Add Record */}
             <button
               type="button"
@@ -183,7 +183,7 @@ export function DatasetToolbar({
               disabled={readOnly}
               className={cn(
                 getToolbarButtonClasses({ disabled: readOnly, emphasized: true }),
-                'px-3.5'
+                'px-3'
               )}
               title={readOnly ? '数据未就绪，暂不支持新增记录' : '添加记录'}
             >
@@ -203,7 +203,7 @@ export function DatasetToolbar({
               </button>
             )}
 
-            <div className="mx-1 h-6 w-px shrink-0 bg-slate-200/70" />
+            <div className="mx-0.5 h-5 w-px shrink-0 bg-slate-200/70" />
 
             {/* Data Processing - Main Functions */}
             <button
@@ -253,7 +253,7 @@ export function DatasetToolbar({
               {hasColorRules && <span className={toolbarBadgeClasses}>{colorRuleCount}</span>}
             </button>
 
-            <div className="mx-1 h-6 w-px shrink-0 bg-slate-200/70" />
+            <div className="mx-0.5 h-5 w-px shrink-0 bg-slate-200/70" />
 
             {/* Data Processing - Secondary Functions */}
             <button
@@ -307,11 +307,10 @@ export function DatasetToolbar({
                 <Settings className="w-4 h-4" />
               </button>
             )}
-
           </div>
         </div>
 
-        <div className="flex shrink-0 items-start gap-2 xl:items-center">
+        <div className="flex shrink-0 items-start gap-1.5 xl:items-center">
           {/* More Functions */}
           <div className="relative" ref={moreButtonRef}>
             <ToolbarButton
@@ -342,7 +341,7 @@ export function DatasetToolbar({
                   id={moreMenuId}
                   role="menu"
                   aria-label="更多功能菜单"
-                  className="shell-field-panel absolute right-0 top-full z-20 mt-2 min-w-[220px] p-1"
+                  className="shell-field-panel absolute right-0 top-full z-20 mt-1.5 min-w-[210px] p-1"
                 >
                   <div className="py-1">
                     <button
@@ -488,7 +487,7 @@ export function DatasetToolbar({
                     id={runMenuId}
                     role="menu"
                     aria-label="插件功能菜单"
-                    className="shell-field-panel absolute right-0 top-full z-20 mt-2 min-w-[220px] p-1"
+                    className="shell-field-panel absolute right-0 top-full z-20 mt-1.5 min-w-[210px] p-1"
                   >
                     <div className="max-h-[320px] overflow-y-auto py-1">
                       {/* Plugin Functions Header */}
@@ -575,7 +574,7 @@ function getToolbarButtonClasses({
   emphasized?: boolean;
 } = {}) {
   return cn(
-    'shell-field-control shell-field-control--inline flex h-10 shrink-0 items-center gap-2 whitespace-nowrap rounded-[14px] px-3.5 text-sm font-medium transition-colors',
+    'shell-field-control shell-field-control--inline flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-sm font-medium transition-colors',
     disabled
       ? 'cursor-not-allowed border-transparent bg-transparent text-slate-400 shadow-none'
       : active

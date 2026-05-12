@@ -204,9 +204,9 @@ describe('DatasetsPage responsive matrix', () => {
   });
 
   it.each([
-    [390, 'narrow', '15rem'],
-    [768, 'regular', '16rem'],
-    [1440, 'wide', '17rem'],
+    [390, 'narrow', '14rem'],
+    [768, 'regular', '15rem'],
+    [1440, 'wide', '15rem'],
   ] as const)(
     'applies the high-density workspace metrics for viewport %s',
     async (viewportWidth, expectedTier, expectedSidebarWidth) => {
@@ -230,7 +230,7 @@ describe('DatasetsPage responsive matrix', () => {
     });
 
     expect(getWorkspaceRoot()).toHaveAttribute('data-datasets-viewport', 'wide');
-    expect(getSidebarSurface()?.style.width).toBe('17rem');
+    expect(getSidebarSurface()?.style.width).toBe('15rem');
 
     act(() => {
       setViewportWidth(390);
@@ -239,7 +239,7 @@ describe('DatasetsPage responsive matrix', () => {
 
     await waitFor(() => {
       expect(getWorkspaceRoot()).toHaveAttribute('data-datasets-viewport', 'narrow');
-      expect(getSidebarSurface()?.style.width).toBe('15rem');
+      expect(getSidebarSurface()?.style.width).toBe('14rem');
     });
 
     fireEvent.click(screen.getByTitle('收起侧边栏'));
@@ -247,6 +247,6 @@ describe('DatasetsPage responsive matrix', () => {
     await screen.findByTitle('快速搜索');
     const collapsedSidebarSurface = getSidebarSurface();
 
-    expect(collapsedSidebarSurface?.style.width).toBe('4rem');
+    expect(collapsedSidebarSurface?.style.width).toBe('3.75rem');
   });
 });

@@ -107,6 +107,58 @@ describe('TanStackDataTable load-more behavior', () => {
     expect(onScrollEnd).toHaveBeenCalledTimes(1);
   });
 
+  it('binds load-more listeners after the table leaves its initial empty state', async () => {
+    const onScrollEnd = vi.fn();
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(
+        <TanStackDataTable
+          data={[]}
+          enableVirtualization={false}
+          showFooter={false}
+          hasMore
+          loading={false}
+          loadingMore={false}
+          onScrollEnd={onScrollEnd}
+        />
+      );
+      await Promise.resolve();
+    });
+
+    expect(view.container.querySelector('.tanstack-table-wrapper')).toBeNull();
+
+    await act(async () => {
+      view.rerender(
+        <TanStackDataTable
+          data={buildRows(20)}
+          enableVirtualization={false}
+          showFooter={false}
+          hasMore
+          loading={false}
+          loadingMore={false}
+          onScrollEnd={onScrollEnd}
+        />
+      );
+      await Promise.resolve();
+    });
+
+    const wrapper = getWrapper(view.container);
+    const metrics = attachScrollMetrics(wrapper, {
+      clientHeight: 300,
+      scrollHeight: 1200,
+      scrollTop: 0,
+    });
+
+    await act(async () => {
+      metrics.setScrollTop(650);
+      fireEvent.scroll(wrapper);
+      vi.advanceTimersByTime(200);
+      await Promise.resolve();
+    });
+
+    expect(onScrollEnd).toHaveBeenCalledTimes(1);
+  });
+
   it('rechecks after data append when the user is still near the bottom', async () => {
     const onScrollEnd = vi.fn();
     const initialRows = buildRows(20);

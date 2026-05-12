@@ -130,9 +130,9 @@ function SortableTabItem({
     >
       <div
         className={cn(
-          'group relative flex min-w-0 flex-col items-start rounded-xl px-4 py-2.5 transition-all',
+          'group relative flex min-w-0 flex-col items-start rounded-lg px-3 py-1.5 transition-all',
           isSelected
-            ? 'bg-white text-slate-900 shadow-[0_10px_20px_rgba(20,27,45,0.08)]'
+            ? 'bg-white text-slate-900 shadow-[0_6px_14px_rgba(20,27,45,0.055)]'
             : 'text-slate-600 hover:bg-white/72 hover:text-slate-900'
         )}
       >
@@ -161,7 +161,7 @@ function SortableTabItem({
                   e.stopPropagation();
                   onRenameRequest();
                 }}
-                className="shell-icon-button rounded-full p-1.5 text-slate-400 transition-colors hover:bg-sky-100 hover:text-sky-700"
+                className="shell-icon-button rounded-lg p-1 text-slate-400 transition-colors hover:bg-sky-100 hover:text-sky-700"
                 title="重命名数据表"
               >
                 <Pencil className="w-3 h-3 text-sky-700" />
@@ -174,7 +174,7 @@ function SortableTabItem({
                   e.stopPropagation();
                   onDeleteRequest();
                 }}
-                className="shell-icon-button rounded-full p-1.5 text-slate-400 transition-colors hover:bg-red-100 hover:text-red-600"
+                className="shell-icon-button rounded-lg p-1 text-slate-400 transition-colors hover:bg-red-100 hover:text-red-600"
                 title="删除数据表"
               >
                 <X className="w-3 h-3 text-red-600" />
@@ -276,9 +276,9 @@ export function DatasetTabs({
 
   return (
     <>
-      <div className="overflow-x-auto px-4 py-2">
+      <div className="overflow-x-auto px-3 py-1.5">
         <div
-          className="datasets-workspace-tab-strip shell-tab-strip flex w-max min-w-full items-center gap-2"
+          className="datasets-workspace-tab-strip shell-tab-strip flex w-max min-w-full items-center gap-1.5"
           role="tablist"
           aria-label="组内数据表标签"
         >
@@ -307,7 +307,7 @@ export function DatasetTabs({
           <button
             type="button"
             onClick={onCreateTab}
-            className="shell-field-control shell-field-control--inline flex items-center gap-1.5 rounded-[14px] px-3.5 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-white/82 hover:text-slate-900"
+            className="shell-field-control shell-field-control--inline flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-white/82 hover:text-slate-900"
             title="复制当前数据表为新标签页"
           >
             <Plus className="w-4 h-4" />

@@ -256,7 +256,7 @@ export function TanStackDataTable({
       container.removeEventListener('scroll', handleScroll);
       container.removeEventListener('wheel', handleWheel);
     };
-  }, [handleScroll, handleWheel, clearScheduledLoadMoreCheck]);
+  }, [data.length, handleScroll, handleWheel, clearScheduledLoadMoreCheck]);
 
   React.useEffect(() => {
     if (!tableWrapperRef.current || !onScrollEnd || !hasMore || loadingMore || loading) {
@@ -616,7 +616,7 @@ export function TanStackDataTable({
           id: column.id,
           header: column.header ?? column.id,
           duckdbType: column.duckdbType,
-          isVisible: visibilityOverrides[column.id] ?? (column.isVisible !== false),
+          isVisible: visibilityOverrides[column.id] ?? column.isVisible !== false,
           isDefaultHidden: column.isDefaultHidden === true,
           isViewHidden: column.isViewHidden === true,
           isViewForcedVisible: column.isViewForcedVisible === true,
@@ -838,7 +838,7 @@ export function TanStackDataTable({
                         height: `${virtualRow.size}px`,
                       }}
                     >
-                      {row.getVisibleCells().map((cell) => (
+                      {row.getVisibleCells().map((cell) =>
                         (() => {
                           const cellMeta = cell.column.columnDef.meta as
                             | { fieldName?: string }
@@ -858,26 +858,27 @@ export function TanStackDataTable({
                               className={typeof cell.getValue() === 'number' ? 'cell-number' : ''}
                               style={cellColor ? { backgroundColor: cellColor } : undefined}
                             >
-                          {cell.getIsGrouped() ? (
-                            // 分组单元格
-                            flexRender(cell.column.columnDef.cell, cell.getContext())
-                          ) : cell.getIsAggregated() ? (
-                            // 聚合单元格
-                            flexRender(
-                              cell.column.columnDef.aggregatedCell ?? cell.column.columnDef.cell,
-                              cell.getContext()
-                            )
-                          ) : cell.getIsPlaceholder() ? (
-                            // 占位符
-                            <span className="placeholder-cell">-</span>
-                          ) : (
-                            // 普通单元格
-                            flexRender(cell.column.columnDef.cell, cell.getContext())
-                          )}
+                              {cell.getIsGrouped() ? (
+                                // 分组单元格
+                                flexRender(cell.column.columnDef.cell, cell.getContext())
+                              ) : cell.getIsAggregated() ? (
+                                // 聚合单元格
+                                flexRender(
+                                  cell.column.columnDef.aggregatedCell ??
+                                    cell.column.columnDef.cell,
+                                  cell.getContext()
+                                )
+                              ) : cell.getIsPlaceholder() ? (
+                                // 占位符
+                                <span className="placeholder-cell">-</span>
+                              ) : (
+                                // 普通单元格
+                                flexRender(cell.column.columnDef.cell, cell.getContext())
+                              )}
                             </td>
                           );
                         })()
-                      ))}
+                      )}
                     </tr>
                   );
                 })}
@@ -938,10 +939,7 @@ export function TanStackDataTable({
 
       {/* 设置弹窗 */}
       {showSettingsPopup && (
-        <div
-          className="table-column-manager-overlay"
-          onClick={closeColumnManager}
-        >
+        <div className="table-column-manager-overlay" onClick={closeColumnManager}>
           <div
             role="dialog"
             aria-modal="false"
@@ -952,9 +950,7 @@ export function TanStackDataTable({
             {/* 弹窗头部 - 固定 */}
             <div className="table-column-manager-header shell-drawer-header">
               <div className="table-column-manager-title-group">
-                <h3 className="table-column-manager-title">
-                  字段配置
-                </h3>
+                <h3 className="table-column-manager-title">字段配置</h3>
                 <HelpCircle size={16} className="text-slate-400" />
               </div>
               <button
@@ -969,10 +965,7 @@ export function TanStackDataTable({
             </div>
 
             {/* 列管理列表 - 可滚动 */}
-            <div
-              className="table-column-manager-list"
-              onClick={() => setColumnMenuOpen(null)}
-            >
+            <div className="table-column-manager-list" onClick={() => setColumnMenuOpen(null)}>
               {getManageableColumns().map((column, index, orderedColumns) => {
                 const columnId = column.id;
                 const header = column.header || columnId;
@@ -1000,10 +993,7 @@ export function TanStackDataTable({
                 const isLastColumn = index === orderedColumns.length - 1;
 
                 return (
-                  <div
-                    key={columnId}
-                    className="table-column-manager-row"
-                  >
+                  <div key={columnId} className="table-column-manager-row">
                     {!isFirstColumn && (
                       <GripVertical size={16} className="table-column-manager-drag" />
                     )}

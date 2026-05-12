@@ -514,7 +514,8 @@ pre code {
   }
 
   .plugin-market-page,
-  .account-center-page {
+  .account-center-page,
+  .datasets-workspace {
     background: #f7f9fc;
   }
 
@@ -528,13 +529,15 @@ pre code {
   }
 
   .plugin-market-scroll,
-  .account-center-scroll {
+  .account-center-scroll,
+  .datasets-workspace-main {
     background:
       linear-gradient(180deg, rgba(248, 250, 253, 0.96), rgba(255, 255, 255, 0.94) 180px), #ffffff;
   }
 
   .plugin-market-panel,
-  .account-center-panel {
+  .account-center-panel,
+  .datasets-workspace-panel {
     border: 1px solid rgba(215, 224, 238, 0.92);
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.94);
@@ -611,9 +614,19 @@ pre code {
     }
   }
 
+  .datasets-workspace .shell-sidebar-surface {
+    background: linear-gradient(180deg, rgba(248, 250, 253, 0.98), rgba(255, 255, 255, 0.94));
+  }
+
+  .datasets-workspace .datasets-workspace-main {
+    background:
+      linear-gradient(180deg, rgba(248, 250, 253, 0.96), rgba(255, 255, 255, 0.94) 180px), #ffffff;
+  }
+
   .datasets-workspace .datasets-workspace-chrome {
-    background: linear-gradient(180deg, rgba(246, 248, 252, 0.88), rgba(242, 245, 251, 0.94));
-    box-shadow: inset 0 -1px 0 rgba(214, 221, 234, 0.72);
+    background: rgba(255, 255, 255, 0.82);
+    border-bottom: 1px solid rgba(215, 224, 238, 0.92);
+    box-shadow: 0 6px 16px rgba(20, 27, 45, 0.028);
   }
 
   .datasets-workspace .datasets-workspace-tab-strip {
@@ -623,10 +636,20 @@ pre code {
     padding: 0;
   }
 
+  .datasets-workspace .datasets-workspace-table-shell {
+    margin: 12px;
+    overflow: hidden;
+    border: 1px solid rgba(215, 224, 238, 0.92);
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 8px 20px rgba(20, 27, 45, 0.035);
+  }
+
   .datasets-workspace .datasets-workspace-empty-state {
-    border-color: transparent;
-    background: rgba(255, 255, 255, 0.72);
-    box-shadow: 0 10px 24px rgba(20, 27, 45, 0.04);
+    border: 1px solid rgba(215, 224, 238, 0.92);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 8px 20px rgba(20, 27, 45, 0.035);
   }
 
   .datasets-workspace .datasets-workspace-sidebar-header {

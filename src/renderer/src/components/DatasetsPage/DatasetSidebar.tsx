@@ -63,16 +63,16 @@ const categoryIcons: Record<string, React.ReactNode> = {
 };
 
 const sidebarRowBaseClasses =
-  'group relative mb-1 flex w-full items-center gap-3 rounded-[18px] px-3 py-2 text-left transition-all duration-200';
+  'group relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-all duration-200';
 const sidebarRowSelectedClasses =
-  'bg-white/95 text-slate-900 shadow-[0_12px_28px_rgba(20,27,45,0.08)]';
+  'bg-white/95 text-slate-900 shadow-[0_6px_16px_rgba(20,27,45,0.055)]';
 const sidebarRowIdleClasses = 'text-slate-700 hover:bg-white/78 hover:text-slate-900';
 const sidebarMenuButtonClasses =
-  'shell-icon-button rounded-full p-1.5 text-slate-400 transition-colors hover:bg-white/80 hover:text-slate-700';
+  'shell-icon-button rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/80 hover:text-slate-700';
 const sidebarMenuItemClasses =
-  'shell-field-option flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 transition-colors';
+  'shell-field-option flex w-full items-center gap-2 px-2.5 py-1.5 text-sm text-slate-700 transition-colors';
 const sidebarActionButtonClasses =
-  'shell-field-control shell-field-control--inline flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm font-medium text-slate-700 hover:text-slate-900';
+  'shell-field-control shell-field-control--inline flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm font-medium text-slate-700 hover:text-slate-900';
 
 export function DatasetSidebar({
   categories,
@@ -251,7 +251,7 @@ export function DatasetSidebar({
     };
 
     return (
-      <div key={table.id} className="relative group" style={{ marginLeft: depth * 24 }}>
+      <div key={table.id} className="relative group" style={{ marginLeft: depth * 16 }}>
         <div
           id={getTableTreeItemId(table.id)}
           role="treeitem"
@@ -265,7 +265,7 @@ export function DatasetSidebar({
               handleSelectVisibleTable();
             }
           }}
-          className={`${sidebarRowBaseClasses} cursor-pointer py-1.5 ${
+          className={`${sidebarRowBaseClasses} cursor-pointer ${
             isTableSelected
               ? `${sidebarRowSelectedClasses} ${selectedTextClass}`
               : `${sidebarRowIdleClasses} text-slate-600`
@@ -333,16 +333,14 @@ export function DatasetSidebar({
                       onDeleteTable?.(table.datasetId);
                     }}
                     disabled={deletingItemId === table.datasetId}
-                    className="shell-field-option flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="shell-field-option flex w-full items-center gap-2 px-2.5 py-1.5 text-sm text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {deletingItemId === table.datasetId ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
                       <Trash2 className="h-4 w-4" />
                     )}
-                    <span>
-                      {deletingItemId === table.datasetId ? '删除中...' : '删除数据表'}
-                    </span>
+                    <span>{deletingItemId === table.datasetId ? '删除中...' : '删除数据表'}</span>
                   </button>
                 </div>
               )}
@@ -360,8 +358,8 @@ export function DatasetSidebar({
     if (!hasVisibleChildren && !category.pluginId) {
       return (
         <div
-          style={{ marginLeft: nextDepth * 24 }}
-          className="mx-1 rounded-2xl border border-dashed border-slate-200/80 bg-white/45 px-3 py-2 text-xs italic text-slate-500"
+          style={{ marginLeft: nextDepth * 16 }}
+          className="mx-1 rounded-lg border border-dashed border-slate-200/80 bg-white/45 px-2.5 py-1.5 text-xs italic text-slate-500"
         >
           可拖拽内容到这里
         </div>
@@ -420,7 +418,7 @@ export function DatasetSidebar({
           className={`${sidebarRowBaseClasses} cursor-pointer ${
             isSelected ? sidebarRowSelectedClasses : sidebarRowIdleClasses
           }`}
-          style={depth > 0 ? { marginLeft: depth * 24 } : undefined}
+          style={depth > 0 ? { marginLeft: depth * 16 } : undefined}
         >
           {isSelected && (
             <span
@@ -522,7 +520,7 @@ export function DatasetSidebar({
                       type="button"
                       role="menuitem"
                       onClick={(e) => handleDeleteCategory(category.id, e)}
-                      className="shell-field-option flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 transition-colors hover:bg-red-50"
+                      className="shell-field-option flex w-full items-center gap-2 px-2.5 py-1.5 text-sm text-red-600 transition-colors hover:bg-red-50"
                     >
                       <Trash2 className="h-4 w-4" />
                       <span>删除文件夹</span>
@@ -534,7 +532,7 @@ export function DatasetSidebar({
                     role="menuitem"
                     onClick={(e) => handleDeleteCategory(category.id, e)}
                     disabled={deletingItemId === category.id}
-                    className="shell-field-option flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="shell-field-option flex w-full items-center gap-2 px-2.5 py-1.5 text-sm text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {deletingItemId === category.id ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -631,7 +629,7 @@ export function DatasetSidebar({
     return (
       <div className="shell-sidebar-surface relative flex h-full flex-col">
         {/* 折叠顶部操作 */}
-        <div className="datasets-workspace-sidebar-header space-y-2 p-3">
+        <div className="datasets-workspace-sidebar-header space-y-1.5 p-2">
           <button
             type="button"
             ref={collapsedQuickSearchButtonRef}
@@ -639,7 +637,7 @@ export function DatasetSidebar({
               const nextValue = !showCollapsedQuickPanel;
               setShowCollapsedQuickPanel(nextValue);
             }}
-            className="shell-icon-button flex w-full items-center justify-center rounded-[18px] p-2.5 text-slate-600 transition-colors hover:bg-white/75 hover:text-slate-900"
+            className="shell-icon-button flex h-9 w-full items-center justify-center rounded-lg p-0 text-slate-600 transition-colors hover:bg-white/75 hover:text-slate-900"
             title="快速搜索"
             aria-label="快速搜索"
             aria-haspopup="dialog"
@@ -651,7 +649,7 @@ export function DatasetSidebar({
           <button
             type="button"
             onClick={handleExpandSidebar}
-            className="shell-icon-button flex w-full items-center justify-center rounded-[18px] p-2.5 text-slate-600 transition-colors hover:bg-white/75 hover:text-slate-900"
+            className="shell-icon-button flex h-9 w-full items-center justify-center rounded-lg p-0 text-slate-600 transition-colors hover:bg-white/75 hover:text-slate-900"
             title="展开侧边栏"
             aria-label="展开侧边栏"
           >
@@ -660,16 +658,19 @@ export function DatasetSidebar({
         </div>
 
         {/* 只显示图标的分类列表 */}
-        <div className="flex-1 overflow-y-auto p-2" role="tree" aria-label="数据目录">
+        <div className="flex-1 overflow-y-auto p-1.5" role="tree" aria-label="数据目录">
           {visibleRootCategories.map((category) => {
             const isSelected = selectedCategory === category.id;
             const visibleItemCount = countVisibleItems(category);
-            const icon =
-              category.isFolder ?
-                effectiveExpandedFolders.has(category.id) ?
-                  <FolderOpen className="h-5 w-5" />
-                : <Folder className="h-5 w-5" />
-              : categoryIcons[category.id] || <Database className="h-5 w-5" />;
+            const icon = category.isFolder ? (
+              effectiveExpandedFolders.has(category.id) ? (
+                <FolderOpen className="h-5 w-5" />
+              ) : (
+                <Folder className="h-5 w-5" />
+              )
+            ) : (
+              categoryIcons[category.id] || <Database className="h-5 w-5" />
+            );
 
             return (
               <button
@@ -683,7 +684,9 @@ export function DatasetSidebar({
                 role="treeitem"
                 aria-level={1}
                 aria-selected={isSelected}
-                aria-expanded={category.isFolder ? effectiveExpandedFolders.has(category.id) : undefined}
+                aria-expanded={
+                  category.isFolder ? effectiveExpandedFolders.has(category.id) : undefined
+                }
               >
                 {isSelected && (
                   <span
@@ -703,11 +706,11 @@ export function DatasetSidebar({
         </div>
 
         {/* 折叠状态下的底部操作区 */}
-        <div className="datasets-workspace-sidebar-footer space-y-1 p-2">
+        <div className="datasets-workspace-sidebar-footer space-y-1 p-1.5">
           <button
             type="button"
             onClick={onImportExcel}
-            className="shell-icon-button flex w-full items-center justify-center rounded-[18px] p-2.5 text-slate-600 transition-colors hover:bg-white/75 hover:text-slate-900"
+            className="shell-icon-button flex h-9 w-full items-center justify-center rounded-lg p-0 text-slate-600 transition-colors hover:bg-white/75 hover:text-slate-900"
             title="导入 Excel"
           >
             <FileSpreadsheet className="h-5 w-5 text-green-600" />
@@ -715,7 +718,7 @@ export function DatasetSidebar({
           <button
             type="button"
             onClick={onCreateDataset}
-            className="shell-icon-button flex w-full items-center justify-center rounded-[18px] p-2.5 text-slate-600 transition-colors hover:bg-white/75 hover:text-slate-900"
+            className="shell-icon-button flex h-9 w-full items-center justify-center rounded-lg p-0 text-slate-600 transition-colors hover:bg-white/75 hover:text-slate-900"
             title="数据表"
           >
             <Table2 className="h-5 w-5 text-violet-600" />
@@ -723,7 +726,7 @@ export function DatasetSidebar({
           <button
             type="button"
             onClick={onCreateFolder}
-            className="shell-icon-button flex w-full items-center justify-center rounded-[18px] p-2.5 text-slate-600 transition-colors hover:bg-white/75 hover:text-slate-900"
+            className="shell-icon-button flex h-9 w-full items-center justify-center rounded-lg p-0 text-slate-600 transition-colors hover:bg-white/75 hover:text-slate-900"
             title="文件夹"
           >
             <FolderPlus className="h-5 w-5 text-slate-600" />
@@ -737,7 +740,7 @@ export function DatasetSidebar({
             role="dialog"
             aria-modal="false"
             aria-label="折叠侧边栏快速搜索"
-            className="shell-field-panel absolute left-full top-3 z-30 ml-3 flex w-[min(20rem,calc(100vw-6rem))] max-w-[20rem] flex-col p-3 shadow-[0_24px_56px_rgba(20,27,45,0.18)]"
+            className="shell-field-panel absolute left-full top-2 z-30 ml-2 flex w-[min(20rem,calc(100vw-6rem))] max-w-[20rem] flex-col p-3 shadow-[0_20px_44px_rgba(20,27,45,0.14)]"
           >
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -749,7 +752,7 @@ export function DatasetSidebar({
                 onClick={() => {
                   handleExpandSidebar();
                 }}
-                className="shell-icon-button rounded-full p-2 text-slate-500 transition-colors hover:bg-white/80 hover:text-slate-900"
+                className="shell-icon-button rounded-lg p-2 text-slate-500 transition-colors hover:bg-white/80 hover:text-slate-900"
                 title="展开完整侧边栏"
               >
                 <ChevronLeft className="h-4 w-4 rotate-180" />
@@ -765,7 +768,7 @@ export function DatasetSidebar({
                 value={searchQuery}
                 onChange={(e) => onSearchChange(e.target.value)}
                 aria-label="快速搜索数据目录"
-                className="shell-field-input py-2.5 pl-10 pr-3 text-sm"
+                className="shell-field-input h-9 py-0 pl-9 pr-3 text-sm"
               />
             </div>
 
@@ -777,7 +780,7 @@ export function DatasetSidebar({
               {visibleRootCategories.length > 0 ? (
                 visibleRootCategories.map((category) => renderCategoryNode(category))
               ) : (
-                <div className="rounded-2xl border border-dashed border-slate-200/80 bg-white/55 px-4 py-6 text-sm text-slate-500">
+                <div className="rounded-lg border border-dashed border-slate-200/80 bg-white/55 px-3 py-4 text-sm text-slate-500">
                   未找到匹配的数据表
                 </div>
               )}
@@ -792,7 +795,7 @@ export function DatasetSidebar({
   return (
     <div className="shell-sidebar-surface flex h-full flex-col">
       {/* Search Header with Collapse Button */}
-      <div className="datasets-workspace-sidebar-header p-4">
+      <div className="datasets-workspace-sidebar-header p-3">
         <div className="flex items-center gap-2">
           {/* Search Input */}
           <div className="relative flex-1">
@@ -804,7 +807,7 @@ export function DatasetSidebar({
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
               aria-label="搜索数据目录"
-              className="shell-field-input py-2.5 pl-10 pr-3 text-sm"
+              className="shell-field-input h-9 py-0 pl-9 pr-3 text-sm"
             />
           </div>
 
@@ -812,7 +815,7 @@ export function DatasetSidebar({
           <button
             type="button"
             onClick={onToggleCollapse}
-            className="shell-icon-button shrink-0 rounded-full p-2.5 text-slate-600 transition-colors hover:bg-white/75 hover:text-slate-900"
+            className="shell-icon-button flex h-9 w-9 shrink-0 items-center justify-center rounded-lg p-0 text-slate-600 transition-colors hover:bg-white/75 hover:text-slate-900"
             title="收起侧边栏"
             aria-label="收起侧边栏"
           >
@@ -831,34 +834,22 @@ export function DatasetSidebar({
       </div>
 
       {/* 底部操作区 */}
-      <div className="datasets-workspace-sidebar-footer space-y-2 p-3">
-        <div className="mb-1 px-1 text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
+      <div className="datasets-workspace-sidebar-footer space-y-1.5 p-2.5">
+        <div className="px-1 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
           新建
         </div>
 
-        <button
-          type="button"
-          onClick={onImportExcel}
-          className={sidebarActionButtonClasses}
-        >
+        <button type="button" onClick={onImportExcel} className={sidebarActionButtonClasses}>
           <FileSpreadsheet className="h-4 w-4 text-green-600" />
           <span>导入 Excel</span>
         </button>
 
-        <button
-          type="button"
-          onClick={onCreateDataset}
-          className={sidebarActionButtonClasses}
-        >
+        <button type="button" onClick={onCreateDataset} className={sidebarActionButtonClasses}>
           <Table2 className="h-4 w-4 text-violet-600" />
           <span>数据表</span>
         </button>
 
-        <button
-          type="button"
-          onClick={onCreateFolder}
-          className={sidebarActionButtonClasses}
-        >
+        <button type="button" onClick={onCreateFolder} className={sidebarActionButtonClasses}>
           <FolderPlus className="h-4 w-4 text-slate-600" />
           <span>文件夹</span>
         </button>

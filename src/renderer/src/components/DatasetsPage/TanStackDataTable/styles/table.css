@@ -5,7 +5,7 @@
 .tanstack-table-container {
   width: 100%; /* 宽度填满父容器 */
   height: 100%; /* 高度填满父容器 */
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 251, 253, 0.98));
+  background: #ffffff;
   overflow: visible; /* 不自己滚动，滚动由父容器DatasetTable处理 */
   position: relative;
   display: flex; /* 使用 flex 布局 */
@@ -28,7 +28,8 @@
   border-collapse: separate; /* 改为separate以支持sticky定位 */
   border-spacing: 0; /* 移除边框间距保持紧凑 */
   font-size: 14px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   table-layout: auto; /* 让列宽根据内容和设置自动计算 */
 }
 
@@ -46,7 +47,7 @@
   font-weight: 500;
   font-size: 13px;
   text-align: left;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-bottom: 1px solid rgba(226, 232, 240, 0.92);
   white-space: nowrap;
   user-select: none;
@@ -71,7 +72,8 @@
   border-collapse: separate;
   border-spacing: 0;
   font-size: 14px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   table-layout: auto;
 }
 
@@ -80,7 +82,7 @@
   color: #374151;
   font-weight: 500;
   font-size: 13px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-top: 1px solid rgba(226, 232, 240, 0.92);
   white-space: nowrap;
 }
@@ -162,11 +164,11 @@
 }
 
 .tanstack-table td {
-  --table-cell-pad-y: 10px;
-  --table-cell-pad-x: 12px;
-  padding: 10px 12px;
+  --table-cell-pad-y: 8px;
+  --table-cell-pad-x: 10px;
+  padding: 8px 10px;
   color: #1f2937;
-  line-height: 1.5;
+  line-height: 1.42;
   border-bottom: 1px solid rgba(241, 245, 249, 0.96); /* 在td上添加底部边框 */
   max-width: 300px; /* 限制最大宽度以触发截断 */
   white-space: nowrap; /* 不换行 */
@@ -297,11 +299,21 @@
 }
 
 /* 缩进样式 */
-.indent-0 { padding-left: 16px; }
-.indent-1 { padding-left: 40px; }
-.indent-2 { padding-left: 64px; }
-.indent-3 { padding-left: 88px; }
-.indent-4 { padding-left: 112px; }
+.indent-0 {
+  padding-left: 16px;
+}
+.indent-1 {
+  padding-left: 40px;
+}
+.indent-2 {
+  padding-left: 64px;
+}
+.indent-3 {
+  padding-left: 88px;
+}
+.indent-4 {
+  padding-left: 112px;
+}
 
 /* 空状态 */
 .table-empty-state {
@@ -311,17 +323,17 @@
   justify-content: center;
   height: 100%;
   color: #94a3b8;
-  gap: 12px;
+  gap: 8px;
 }
 
 .table-empty-state svg {
-  width: 52px;
-  height: 52px;
+  width: 40px;
+  height: 40px;
   opacity: 0.4;
 }
 
 .table-empty-state p {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
 }
 
@@ -335,9 +347,9 @@
 }
 
 .table-loading-spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid #e5e7eb;
+  width: 26px;
+  height: 26px;
+  border: 2px solid #e5e7eb;
   border-top-color: #3b82f6;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -355,7 +367,7 @@
 }
 
 .table-column-manager-drawer {
-  width: 320px;
+  width: 300px;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -368,7 +380,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 18px;
+  padding: 12px 14px;
   flex-shrink: 0;
 }
 
@@ -395,15 +407,15 @@
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 10px 10px 12px;
+  padding: 8px 8px 10px;
 }
 
 .table-column-manager-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border-radius: 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
   transition:
     background-color 160ms ease,
     box-shadow 160ms ease;
@@ -472,7 +484,7 @@
 }
 
 .table-column-manager-footer {
-  padding: 12px;
+  padding: 10px;
   flex-shrink: 0;
 }
 
@@ -480,7 +492,7 @@
   width: 100%;
   justify-content: flex-start;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   color: #475569;
 }
 
@@ -490,7 +502,9 @@
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 选中行样式 */
@@ -531,15 +545,15 @@
 }
 
 .tanstack-table.row-height-normal td {
-  --table-cell-pad-y: 10px;
-  --table-cell-pad-x: 16px;
-  padding: 10px 16px;
+  --table-cell-pad-y: 8px;
+  --table-cell-pad-x: 12px;
+  padding: 8px 12px;
 }
 
 .tanstack-table.row-height-comfortable td {
-  --table-cell-pad-y: 14px;
-  --table-cell-pad-x: 16px;
-  padding: 14px 16px;
+  --table-cell-pad-y: 12px;
+  --table-cell-pad-x: 14px;
+  padding: 12px 14px;
 }
 
 /* Checkbox 样式 */
@@ -828,7 +842,7 @@
 
 /* Webkit 浏览器（Chrome, Safari, Edge）滚动条 */
 .tanstack-table-wrapper::-webkit-scrollbar {
-  width: 12px;  /* 纵向滚动条宽度 */
+  width: 12px; /* 纵向滚动条宽度 */
   height: 12px; /* 横向滚动条高度 */
 }
 

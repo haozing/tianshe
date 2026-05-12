@@ -1170,7 +1170,7 @@ export function DatasetsPage() {
 
   return (
     <div
-      className="datasets-workspace shell-content-muted flex min-h-0 flex-1"
+      className="datasets-workspace shell-content-muted flex min-h-0 flex-1 bg-[#f7f9fc]"
       data-datasets-viewport={workspaceViewportMetrics.tier}
     >
       {/* Left Sidebar */}
@@ -1207,7 +1207,7 @@ export function DatasetsPage() {
       </div>
 
       {/* Main Content Area */}
-      <div className="shell-content-surface flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="datasets-workspace-main flex min-h-0 min-w-0 flex-1 flex-col">
         {showWorkspaceChrome && (
           <div className="datasets-workspace-chrome">
             {/* Group Tabs - 组内数据表切换 */}
@@ -1290,12 +1290,12 @@ export function DatasetsPage() {
                       paddingBlock: workspaceViewportMetrics.bulkBarPaddingBlock,
                     }}
                   >
-                    <span className="shell-field-chip shell-field-chip--ghost px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
+                    <span className="shell-field-chip shell-field-chip--ghost px-2.5 py-0.5 text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">
                       已选中 {selectedRows.length} 行
                     </span>
                     <button
                       onClick={handleDeleteRows}
-                      className="shell-field-control shell-field-control--inline flex h-9 items-center gap-1.5 px-3.5 text-sm font-medium text-red-600 transition-colors hover:bg-red-50/85 hover:text-red-700"
+                      className="shell-field-control shell-field-control--inline flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-red-600 transition-colors hover:bg-red-50/85 hover:text-red-700"
                       title="永久删除选中的行（不可恢复）"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -1309,60 +1309,58 @@ export function DatasetsPage() {
         )}
 
         {/* Data Table / Custom Page */}
-        <div className="flex-1 flex flex-col bg-white min-h-0">
-          {currentTable ? (
-            <>
-              {/* 根据表类型显示不同的内容 */}
-              {currentTable.isCustomPage ? (
-                <CustomPageViewer
-                  page={currentTable.customPageInfo!}
-                  datasetId={currentTable.datasetId}
-                />
-              ) : (
-                <div
-                  id={activeWorkspacePanelId}
-                  role={showGroupTabs ? 'tabpanel' : undefined}
-                  aria-labelledby={activeWorkspaceTabId}
-                  className="min-h-0 flex flex-1 flex-col"
-                >
-                  <DatasetTable
-                    datasetId={currentTable.datasetId}
-                    rowHeight={currentRowHeight}
-                    readOnly={isDataReadOnly}
-                    onAddColumn={() => {
-                      if (isDataReadOnly) {
-                        toast.warning('数据未就绪，暂不支持添加列');
-                        return;
-                      }
-                      setShowAddColumnDialog(true);
-                    }}
-                    onRowSelectionChange={(rows) => {
-                      setSelectedRows(rows);
-                    }}
-                    showColumnManager={showColumnPanel}
-                    onColumnManagerChange={setShowColumnPanel}
-                  />
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="shell-content-muted flex flex-1 items-center justify-center p-8">
+        {currentTable ? (
+          <div className="datasets-workspace-table-shell flex min-h-0 flex-1 flex-col">
+            {/* 根据表类型显示不同的内容 */}
+            {currentTable.isCustomPage ? (
+              <CustomPageViewer
+                page={currentTable.customPageInfo!}
+                datasetId={currentTable.datasetId}
+              />
+            ) : (
               <div
-                className="datasets-workspace-empty-state shell-soft-card text-center"
-                style={{
-                  maxWidth: workspaceViewportMetrics.emptyStateMaxWidth,
-                  paddingInline: workspaceViewportMetrics.emptyStatePaddingInline,
-                  paddingBlock: workspaceViewportMetrics.emptyStatePaddingBlock,
-                }}
+                id={activeWorkspacePanelId}
+                role={showGroupTabs ? 'tabpanel' : undefined}
+                aria-labelledby={activeWorkspaceTabId}
+                className="min-h-0 flex flex-1 flex-col"
               >
-                <p className="mb-2 text-lg font-semibold text-slate-900">
-                  {currentEmptyStateTitle}
-                </p>
-                <p className="text-sm leading-6 text-slate-600">{currentEmptyStateDescription}</p>
+                <DatasetTable
+                  datasetId={currentTable.datasetId}
+                  rowHeight={currentRowHeight}
+                  readOnly={isDataReadOnly}
+                  onAddColumn={() => {
+                    if (isDataReadOnly) {
+                      toast.warning('数据未就绪，暂不支持添加列');
+                      return;
+                    }
+                    setShowAddColumnDialog(true);
+                  }}
+                  onRowSelectionChange={(rows) => {
+                    setSelectedRows(rows);
+                  }}
+                  showColumnManager={showColumnPanel}
+                  onColumnManagerChange={setShowColumnPanel}
+                />
               </div>
+            )}
+          </div>
+        ) : (
+          <div className="shell-content-muted flex flex-1 items-center justify-center p-3">
+            <div
+              className="datasets-workspace-empty-state text-center"
+              style={{
+                maxWidth: workspaceViewportMetrics.emptyStateMaxWidth,
+                paddingInline: workspaceViewportMetrics.emptyStatePaddingInline,
+                paddingBlock: workspaceViewportMetrics.emptyStatePaddingBlock,
+              }}
+            >
+              <p className="mb-1.5 text-base font-semibold text-slate-900">
+                {currentEmptyStateTitle}
+              </p>
+              <p className="text-sm leading-5 text-slate-600">{currentEmptyStateDescription}</p>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Add Record Drawer */}

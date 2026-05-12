@@ -246,7 +246,7 @@ describe('DatasetsPage sidebar search wiring', () => {
 
     expect(collapsedSidebarContainer).toBeTruthy();
     await waitFor(() => {
-      expect(collapsedSidebarContainer?.style.width).toBe('4.5rem');
+      expect(collapsedSidebarContainer?.style.width).toBe('4rem');
     });
     expect(screen.getByTitle('Dataset 1')).toBeInTheDocument();
 
@@ -256,6 +256,6 @@ describe('DatasetsPage sidebar search wiring', () => {
       expect(screen.getByPlaceholderText('搜索')).toHaveFocus();
     });
     expect(screen.getByText('快速搜索')).toBeInTheDocument();
-    expect(collapsedSidebarContainer?.style.width).toBe('4.5rem');
+    expect(collapsedSidebarContainer?.style.width).toBe('4rem');
   });
 });
