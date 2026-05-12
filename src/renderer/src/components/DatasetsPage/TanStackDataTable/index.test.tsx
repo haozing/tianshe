@@ -193,6 +193,88 @@ describe('TanStackDataTable load-more behavior', () => {
     expect(onScrollEnd).toHaveBeenCalledTimes(2);
   });
 
+  it('checks for load more on downward wheel events near the bottom', async () => {
+    const onScrollEnd = vi.fn();
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(
+        <TanStackDataTable
+          data={buildRows(20)}
+          enableVirtualization={false}
+          showFooter={false}
+          hasMore
+          loading={false}
+          loadingMore={false}
+          onScrollEnd={onScrollEnd}
+        />
+      ));
+      await Promise.resolve();
+    });
+
+    const wrapper = getWrapper(container);
+    attachScrollMetrics(wrapper, {
+      clientHeight: 300,
+      scrollHeight: 1200,
+      scrollTop: 650,
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(120);
+      await Promise.resolve();
+    });
+    expect(onScrollEnd).toHaveBeenCalledTimes(1);
+
+    onScrollEnd.mockClear();
+
+    await act(async () => {
+      fireEvent.wheel(wrapper, { deltaY: 120, deltaX: 0 });
+      vi.advanceTimersByTime(200);
+      await Promise.resolve();
+    });
+
+    expect(onScrollEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('unlocks load-more checks after an async load completes', async () => {
+    const onScrollEnd = vi.fn().mockResolvedValue(undefined);
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(
+        <TanStackDataTable
+          data={buildRows(20)}
+          enableVirtualization={false}
+          showFooter={false}
+          hasMore
+          loading={false}
+          loadingMore={false}
+          onScrollEnd={onScrollEnd}
+        />
+      ));
+      await Promise.resolve();
+    });
+
+    const wrapper = getWrapper(container);
+    attachScrollMetrics(wrapper, {
+      clientHeight: 300,
+      scrollHeight: 1200,
+      scrollTop: 650,
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(120);
+      await Promise.resolve();
+    });
+    expect(onScrollEnd).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.wheel(wrapper, { deltaY: 120, deltaX: 0 });
+      vi.advanceTimersByTime(200);
+      await Promise.resolve();
+    });
+
+    expect(onScrollEnd).toHaveBeenCalledTimes(2);
+  });
+
   it('does not reorder rows when clicking a column header', async () => {
     let container!: HTMLElement;
     await act(async () => {

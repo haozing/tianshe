@@ -70,7 +70,7 @@ export interface TanStackDataTableProps {
   showFooter?: boolean; // 是否显示底部汇总行
   showColumnManager?: boolean; // 是否显示列管理面板
   onColumnManagerChange?: (show: boolean) => void; // 列管理面板显示状态变化回调
-  onScrollEnd?: () => void; // 滚动到底部的回调
+  onScrollEnd?: () => void | Promise<void>; // 滚动到底部的回调
   hasMore?: boolean; // 是否还有更多数据
   totalRowCount?: number; // 数据集的总行数
   filteredTotalCount?: number; // 🆕 筛选后的总行数（当有筛选条件时）
@@ -189,7 +189,16 @@ export function TanStackDataTable({
     const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     if (distanceToBottom <= LOAD_MORE_THRESHOLD_PX) {
       loadMoreLockedRef.current = true;
-      onScrollEnd();
+      Promise.resolve(onScrollEnd())
+        .catch((error) => {
+          logger.error('Failed to handle table scroll end', {
+            operation: 'dataset.table.scrollEnd',
+            error,
+          });
+        })
+        .finally(() => {
+          loadMoreLockedRef.current = false;
+        });
     }
   }, [onScrollEnd, hasMore, loadingMore, loading]);
 
@@ -224,16 +233,30 @@ export function TanStackDataTable({
     scheduleLoadMoreCheck();
   }, [scheduleLoadMoreCheck]);
 
+  const handleWheel = React.useCallback(
+    (event: WheelEvent) => {
+      const isMostlyHorizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY);
+      if (event.deltaY <= 0 || isMostlyHorizontal) {
+        return;
+      }
+
+      scheduleLoadMoreCheck();
+    },
+    [scheduleLoadMoreCheck]
+  );
+
   React.useEffect(() => {
     const container = tableWrapperRef.current;
     if (!container) return;
 
     container.addEventListener('scroll', handleScroll, { passive: true });
+    container.addEventListener('wheel', handleWheel, { passive: true });
     return () => {
       clearScheduledLoadMoreCheck();
       container.removeEventListener('scroll', handleScroll);
+      container.removeEventListener('wheel', handleWheel);
     };
-  }, [handleScroll, clearScheduledLoadMoreCheck]);
+  }, [handleScroll, handleWheel, clearScheduledLoadMoreCheck]);
 
   React.useEffect(() => {
     if (!tableWrapperRef.current || !onScrollEnd || !hasMore || loadingMore || loading) {

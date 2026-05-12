@@ -689,8 +689,9 @@ export function DatasetTable({
   // Handle scroll end (load more data)
   const handleScrollEnd = useCallback(() => {
     if (datasetId && hasMore && !loadingMore && !loading) {
-      loadMoreData(datasetId);
+      return loadMoreData(datasetId);
     }
+    return undefined;
   }, [datasetId, hasMore, loadingMore, loading, loadMoreData]);
 
   // Handle cell value change
