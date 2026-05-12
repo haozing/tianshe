@@ -269,7 +269,7 @@ export function AccountCenterPage() {
         }
       />
 
-      <div className="account-center-scroll flex flex-1 flex-col overflow-hidden p-4">
+      <div className="account-center-scroll flex flex-1 flex-col overflow-hidden p-3">
         {accountCenterError ? (
           <div className="flex items-center justify-between gap-4 rounded-lg border border-red-200 bg-red-50/90 px-4 py-3 text-sm text-red-700">
             <span>{accountCenterError}</span>
@@ -298,7 +298,7 @@ export function AccountCenterPage() {
               />
             </div>
           ) : (
-            <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[272px_minmax(0,1fr)]">
+            <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[224px_minmax(0,1fr)]">
               <div className="account-center-panel account-center-sidebar-panel min-h-0 overflow-hidden">
                 <ProfileGroupTree />
               </div>

@@ -40,50 +40,50 @@ export function AccountTable({
   };
 
   return (
-    <div className="account-center-panel flex h-full min-h-[360px] flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b border-[rgba(214,221,234,0.78)] bg-white/88 px-4 py-3">
+    <div className="account-center-panel flex h-full min-h-[320px] flex-col overflow-hidden">
+      <div className="flex h-11 items-center justify-between border-b border-[rgba(214,221,234,0.78)] bg-white/88 px-3">
         <div>
           <h3 className="text-sm font-semibold text-slate-900">账号列表</h3>
         </div>
-        <div className="shell-field-chip shell-field-chip--ghost px-3 py-1.5 text-xs">
+        <div className="shell-field-chip shell-field-chip--ghost px-2.5 py-1 text-xs">
           当前 {accounts.length} 个账号
         </div>
       </div>
 
       <div className="relative flex-1 overflow-auto">
         {accounts.length === 0 ? (
-          <div className="pointer-events-none absolute inset-x-0 top-[104px] z-10 flex justify-center px-6 py-12 text-sm text-slate-500">
+          <div className="pointer-events-none absolute inset-x-0 top-[88px] z-10 flex justify-center px-6 py-8 text-sm text-slate-500">
             暂无账号数据，请先添加账号
           </div>
         ) : null}
         <table className="w-full min-w-[1160px] border-separate border-spacing-0 text-sm md:min-w-[1240px]">
           <thead className="sticky top-0 z-20 bg-[rgba(247,250,254,0.96)] backdrop-blur">
             <tr className="text-left">
-              <th className="sticky left-0 z-20 w-[72px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.98)] px-3 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-slate-500 backdrop-blur">
+              <th className="sticky left-0 z-20 w-[60px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.98)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500 backdrop-blur">
                 序号
               </th>
-              <th className="min-w-[160px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+              <th className="min-w-[160px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 平台
               </th>
-              <th className="min-w-[180px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+              <th className="min-w-[180px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 名称
               </th>
-              <th className="min-w-[220px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+              <th className="min-w-[220px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 登录账号
               </th>
-              <th className="min-w-[240px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+              <th className="min-w-[240px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 登录地址
               </th>
-              <th className="min-w-[220px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+              <th className="min-w-[220px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 浏览器环境
               </th>
-              <th className="min-w-[220px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+              <th className="min-w-[220px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 标签
               </th>
-              <th className="min-w-[220px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+              <th className="min-w-[220px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.96)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-slate-500">
                 备注
               </th>
-              <th className="sticky right-0 z-30 w-[168px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.98)] px-3 py-3 text-right text-xs font-semibold uppercase tracking-[0.06em] text-slate-500 backdrop-blur">
+              <th className="sticky right-0 z-30 w-[148px] border-b border-[rgba(214,221,234,0.78)] bg-[rgba(247,250,254,0.98)] px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.04em] text-slate-500 backdrop-blur">
                 操作
               </th>
             </tr>
@@ -113,10 +113,10 @@ export function AccountTable({
 
               return (
                 <tr key={account.id} className="hover:bg-slate-50/70">
-                  <td className="sticky left-0 z-10 border-b border-[rgba(214,221,234,0.72)] bg-white/96 px-3 py-3 align-top text-muted-foreground backdrop-blur">
+                  <td className="sticky left-0 z-10 border-b border-[rgba(214,221,234,0.72)] bg-white/96 px-3 py-2.5 align-top text-muted-foreground backdrop-blur">
                     {index + 1}
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-3 align-top">
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
                     <div className="space-y-1">
                       <div className="font-medium text-slate-900">{platformName}</div>
                       {platform?.url ? (
@@ -129,7 +129,7 @@ export function AccountTable({
                       ) : null}
                     </div>
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-3 align-top">
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
                     <div className="space-y-1">
                       <div
                         className="max-w-[220px] truncate font-medium text-slate-900"
@@ -139,7 +139,7 @@ export function AccountTable({
                       </div>
                     </div>
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-3 align-top">
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
                         <span
@@ -157,7 +157,7 @@ export function AccountTable({
                       <div className="text-xs text-muted-foreground">{passwordSummary}</div>
                     </div>
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-3 align-top">
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
                     <div
                       className="max-w-[280px] truncate text-muted-foreground"
                       title={account.loginUrl}
@@ -165,7 +165,7 @@ export function AccountTable({
                       {account.loginUrl}
                     </div>
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-3 align-top">
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
                     <span
                       title={accountSessionLabel}
                       className={cn(
@@ -178,7 +178,7 @@ export function AccountTable({
                       {accountSessionLabel}
                     </span>
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-3 align-top">
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
                     {(account.tags || []).length > 0 ? (
                       <div className="flex max-w-[240px] flex-wrap gap-1">
                         {(account.tags || []).map((tagValue) => (
@@ -194,12 +194,12 @@ export function AccountTable({
                       <span className="text-xs text-muted-foreground">-</span>
                     )}
                   </td>
-                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-3 align-top">
+                  <td className="border-b border-[rgba(214,221,234,0.72)] px-3 py-2.5 align-top">
                     <div className="max-w-[220px] whitespace-pre-wrap break-words text-sm text-muted-foreground">
                       {account.notes?.trim() || '-'}
                     </div>
                   </td>
-                  <td className="sticky right-0 z-10 border-b border-[rgba(214,221,234,0.72)] bg-white/96 px-3 py-3 align-top shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.38)] backdrop-blur">
+                  <td className="sticky right-0 z-10 border-b border-[rgba(214,221,234,0.72)] bg-white/96 px-3 py-2.5 align-top shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.38)] backdrop-blur">
                     <div className="flex items-center justify-end gap-2">
                       <Button
                         variant="outline"
@@ -259,7 +259,7 @@ export function AccountTable({
 
             {accounts.length === 0 && (
               <tr aria-hidden="true">
-                <td colSpan={9} className="h-64 border-b border-[rgba(214,221,234,0.72)]" />
+                <td colSpan={9} className="h-44" />
               </tr>
             )}
           </tbody>

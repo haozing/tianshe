@@ -523,6 +523,10 @@ pre code {
     background: linear-gradient(180deg, rgba(248, 250, 253, 0.98), rgba(244, 247, 252, 0.98));
   }
 
+  .account-center-header.page-frame-header {
+    padding: 16px 24px 14px;
+  }
+
   .plugin-market-scroll,
   .account-center-scroll {
     background:
@@ -535,6 +539,11 @@ pre code {
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.94);
     box-shadow: 0 10px 24px rgba(20, 27, 45, 0.04);
+  }
+
+  .account-center-panel,
+  .account-center-toolbar-panel {
+    box-shadow: 0 6px 16px rgba(20, 27, 45, 0.035);
   }
 
   .plugin-market-panel--plain,
@@ -582,7 +591,7 @@ pre code {
   .account-center-toolbar-panel {
     border: 1px solid rgba(215, 224, 238, 0.92);
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.72);
+    background: rgba(255, 255, 255, 0.86);
   }
 
   @media (max-width: 1100px) {

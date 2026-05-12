@@ -478,7 +478,7 @@ export function AccountManagementPanel({
   };
 
   return (
-    <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[272px_minmax(0,1fr)]">
+    <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[224px_minmax(0,1fr)]">
       <div className="account-center-panel account-center-sidebar-panel min-h-0 overflow-hidden">
         <AccountCategorySidebar
           expandedSection={categoryMode}
@@ -499,51 +499,49 @@ export function AccountManagementPanel({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
-        <div className="account-center-toolbar-panel space-y-3 px-4 py-4">
-          <div className="space-y-3">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-              <div className="relative min-w-[240px] flex-1 xl:max-w-xl">
-                <ListFilter className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <Input
-                  className="h-10 rounded-lg border-slate-200/80 bg-white/96 pl-9 shadow-none"
-                  placeholder="搜索名称、登录账号、平台、URL、标签"
-                  value={keyword}
-                  onChange={(e) => setKeyword(e.target.value)}
-                />
-              </div>
+        <div className="account-center-toolbar-panel px-3 py-3">
+          <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+            <div className="relative min-w-[240px] flex-1 xl:max-w-xl">
+              <ListFilter className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input
+                className="h-9 rounded-lg border-slate-200/80 bg-white/96 pl-9 text-sm shadow-none"
+                placeholder="搜索名称、登录账号、平台、URL、标签"
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+              />
+            </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                {keywordValue ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {keywordValue ? (
+                <Button
+                  variant="ghost"
+                  className="h-9 rounded-lg px-3 text-sm text-slate-600 hover:bg-white/72 hover:text-slate-900"
+                  onClick={() => setKeyword('')}
+                >
+                  清除搜索
+                </Button>
+              ) : null}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
                   <Button
-                    variant="ghost"
-                    className="h-10 rounded-lg px-4 text-slate-600 hover:bg-white/72 hover:text-slate-900"
-                    onClick={() => setKeyword('')}
+                    variant="outline"
+                    className="h-9 rounded-lg border-slate-200/80 bg-white/90 px-3 text-sm shadow-none hover:bg-white"
                   >
-                    清除搜索
+                    <MoreHorizontal className="mr-1 h-4 w-4" />
+                    数据维护
                   </Button>
-                ) : null}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className="h-10 rounded-lg border-slate-200/80 bg-white/90 px-4 shadow-none hover:bg-white"
-                    >
-                      <MoreHorizontal className="mr-1 h-4 w-4" />
-                      数据维护
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => setIsPlatformDialogOpen(true)}>
-                      <Globe className="mr-2 h-4 w-4" />
-                      平台信息
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setIsTagDialogOpen(true)}>
-                      <Tag className="mr-2 h-4 w-4" />
-                      标签管理
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setIsPlatformDialogOpen(true)}>
+                    <Globe className="mr-2 h-4 w-4" />
+                    平台信息
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setIsTagDialogOpen(true)}>
+                    <Tag className="mr-2 h-4 w-4" />
+                    标签管理
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
         </div>
