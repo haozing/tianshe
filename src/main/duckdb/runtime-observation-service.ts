@@ -23,7 +23,7 @@ interface RuntimeEventRow {
   source?: string | null;
   capability?: string | null;
   plugin_id?: string | null;
-  browser_engine?: RuntimeEvent['browserEngine'] | null;
+  browser_runtime_id?: RuntimeEvent['browserRuntimeId'] | null;
   session_id?: string | null;
   profile_id?: string | null;
   dataset_id?: string | null;
@@ -47,7 +47,7 @@ interface RuntimeArtifactRow {
   source?: string | null;
   capability?: string | null;
   plugin_id?: string | null;
-  browser_engine?: RuntimeArtifact['browserEngine'] | null;
+  browser_runtime_id?: RuntimeArtifact['browserRuntimeId'] | null;
   session_id?: string | null;
   profile_id?: string | null;
   dataset_id?: string | null;
@@ -98,7 +98,7 @@ export class RuntimeObservationService implements ObservationSink {
         source VARCHAR,
         capability VARCHAR,
         plugin_id VARCHAR,
-        browser_engine VARCHAR,
+        browser_runtime_id VARCHAR,
         session_id VARCHAR,
         profile_id VARCHAR,
         dataset_id VARCHAR,
@@ -124,7 +124,7 @@ export class RuntimeObservationService implements ObservationSink {
         source VARCHAR,
         capability VARCHAR,
         plugin_id VARCHAR,
-        browser_engine VARCHAR,
+        browser_runtime_id VARCHAR,
         session_id VARCHAR,
         profile_id VARCHAR,
         dataset_id VARCHAR,
@@ -152,7 +152,7 @@ export class RuntimeObservationService implements ObservationSink {
     await runPrepared(this.conn, `
       INSERT INTO runtime_events (
         id, trace_id, span_id, parent_span_id, timestamp, seq, level, event, outcome, component,
-        message, duration_ms, source, capability, plugin_id, browser_engine, session_id,
+        message, duration_ms, source, capability, plugin_id, browser_runtime_id, session_id,
         profile_id, dataset_id, browser_id, attrs, error, artifact_refs
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
@@ -171,7 +171,7 @@ export class RuntimeObservationService implements ObservationSink {
         event.source ?? null,
         event.capability ?? null,
         event.pluginId ?? null,
-        event.browserEngine ?? null,
+        event.browserRuntimeId ?? null,
         event.sessionId ?? null,
         event.profileId ?? null,
         event.datasetId ?? null,
@@ -186,7 +186,7 @@ export class RuntimeObservationService implements ObservationSink {
     await runPrepared(this.conn, `
       INSERT INTO runtime_artifacts (
         id, trace_id, span_id, parent_span_id, timestamp, seq, type, component, label, mime_type,
-        source, capability, plugin_id, browser_engine, session_id, profile_id, dataset_id,
+        source, capability, plugin_id, browser_runtime_id, session_id, profile_id, dataset_id,
         browser_id, attrs, data
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
@@ -203,7 +203,7 @@ export class RuntimeObservationService implements ObservationSink {
         artifact.source ?? null,
         artifact.capability ?? null,
         artifact.pluginId ?? null,
-        artifact.browserEngine ?? null,
+        artifact.browserRuntimeId ?? null,
         artifact.sessionId ?? null,
         artifact.profileId ?? null,
         artifact.datasetId ?? null,
@@ -322,7 +322,7 @@ export class RuntimeObservationService implements ObservationSink {
       ...(row.source ? { source: row.source } : {}),
       ...(row.capability ? { capability: row.capability } : {}),
       ...(row.plugin_id ? { pluginId: row.plugin_id } : {}),
-      ...(row.browser_engine ? { browserEngine: row.browser_engine } : {}),
+      ...(row.browser_runtime_id ? { browserRuntimeId: row.browser_runtime_id } : {}),
       ...(row.session_id ? { sessionId: row.session_id } : {}),
       ...(row.profile_id ? { profileId: row.profile_id } : {}),
       ...(row.dataset_id ? { datasetId: row.dataset_id } : {}),
@@ -347,7 +347,7 @@ export class RuntimeObservationService implements ObservationSink {
       ...(row.source ? { source: row.source } : {}),
       ...(row.capability ? { capability: row.capability } : {}),
       ...(row.plugin_id ? { pluginId: row.plugin_id } : {}),
-      ...(row.browser_engine ? { browserEngine: row.browser_engine } : {}),
+      ...(row.browser_runtime_id ? { browserRuntimeId: row.browser_runtime_id } : {}),
       ...(row.session_id ? { sessionId: row.session_id } : {}),
       ...(row.profile_id ? { profileId: row.profile_id } : {}),
       ...(row.dataset_id ? { datasetId: row.dataset_id } : {}),

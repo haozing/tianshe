@@ -3,7 +3,7 @@ import { useProfileStore } from '../../stores/profileStore';
 import { useAccountStore } from '../../stores/accountStore';
 import { useCloudAuthStore } from '../../stores/cloudAuthStore';
 import { toast } from '../../lib/toast';
-import type { AutomationEngine } from '../../../../types/profile';
+import type { BrowserRuntimeId } from '../../../../types/profile';
 import { isCloudSnapshotAvailable } from '../../lib/edition';
 
 const ACCOUNT_BUNDLE_CONFLICT_MESSAGE =
@@ -19,7 +19,7 @@ export interface CloudProfileListItem {
   profileUid?: string;
   cloudUid: string;
   name: string;
-  engine: AutomationEngine;
+  runtimeId: BrowserRuntimeId;
   ownerUserId: number;
   ownerUserName?: string;
   visibility: 'public' | 'private';

@@ -93,7 +93,7 @@ describe('SyncLocalApplyService domain routing', () => {
 
     const result = await service.applyChange(
       'profile',
-      createChange('profile', { name: '环境一', engine: 'extension' })
+      createChange('profile', { name: '环境一', runtimeId: 'chromium-extension-relay' })
     );
 
     expect(result).toEqual({
@@ -103,7 +103,7 @@ describe('SyncLocalApplyService domain routing', () => {
     });
     expect(deps.profileService.create).toHaveBeenCalledWith({
       name: '环境一',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
     });
   });
 
@@ -146,7 +146,7 @@ describe('SyncLocalApplyService domain routing', () => {
 
     const service = new SyncLocalApplyService(deps as any);
     await service.applyChange(
-      'extension',
+      'chromium-extension-relay',
       createChange('profileExtensionBinding', {
         enabled: false,
       })

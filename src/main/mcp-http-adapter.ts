@@ -126,7 +126,7 @@ const createSessionRuntimeOptions = (
 ): McpSessionRuntimeOptions => ({
   transports: options.routeContext.transports,
   dependencies: options.routeContext.dependencies,
-  parseRequestedEngine: options.browserBinding.parseRequestedEngine,
+  parseRequestedRuntimeId: options.browserBinding.parseRequestedRuntimeId,
   acquireBrowserFromPool: options.browserBinding.acquireBrowserFromPool,
   getBrowserPoolManager: options.browserBinding.getBrowserPoolManager,
   cleanupSession: options.sessionLifecycle.cleanupSession,

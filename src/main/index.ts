@@ -359,6 +359,7 @@ async function startHttpServer(): Promise<void> {
         viewManager,
         windowManager,
         fingerprintManager,
+        browserRuntimeManager: appRuntime.requireBrowserRuntimeManager(),
         getBrowserPoolManager,
         getPluginRegistry,
         cloudRuntimePluginProvider: tiansheEdition.cloudCatalog.runtimePlugin,
@@ -410,7 +411,7 @@ async function startHttpServer(): Promise<void> {
         logger.info('MCP endpoint enabled', {
           transport: 'http',
           url: mcpBaseUrl,
-          note: 'use session_prepare to bind profile, engine, visibility, and scopes',
+          note: 'use session_prepare to bind profile, runtimeId, visibility, and scopes',
         });
       } else {
         logger.info('MCP endpoint disabled');

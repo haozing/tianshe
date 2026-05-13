@@ -318,7 +318,7 @@ describe('ExtensionBrowser lifecycle', () => {
     await Promise.resolve();
     expect(relay.dispatchCommand).toHaveBeenCalledWith(
       'dialog.handle',
-      { accept: true, promptText: 'done', nonBlocking: true, target: { tabId: 11, windowId: 5 } },
+      { accept: true, promptText: 'done', target: { tabId: 11, windowId: 5 } },
       undefined
     );
     expect(resolved).toBe(false);
@@ -332,7 +332,7 @@ describe('ExtensionBrowser lifecycle', () => {
     expect(resolved).toBe(true);
   });
 
-  it('falls back to native dialog keys when dialog-closed never arrives but the page resumes', async () => {
+  it('treats page resume as dialog close when dialog-closed never arrives', async () => {
     vi.useFakeTimers();
     const sendWindowsDialogKeysMock = vi.mocked(sendWindowsDialogKeys);
     sendWindowsDialogKeysMock.mockResolvedValueOnce(true);
@@ -393,21 +393,69 @@ describe('ExtensionBrowser lifecycle', () => {
     await vi.advanceTimersByTimeAsync(15_000);
 
     await expect(handlePromise).resolves.toBeUndefined();
-    expect(sendWindowsDialogKeysMock).toHaveBeenCalledWith({
-      processId: 1234,
-      accept: true,
-      promptText: 'done',
-    });
-    expect(relay.dispatchCommand).toHaveBeenCalledWith(
-      'show',
-      { target: { tabId: 11, windowId: 5 } },
-      5000
-    );
+    expect(sendWindowsDialogKeysMock).not.toHaveBeenCalled();
     expect(relay.dispatchCommand).toHaveBeenCalledWith(
       'evaluate',
       { script: 'document.readyState', target: { tabId: 11, windowId: 5 } },
-      3000
+      500
     );
+    vi.useRealTimers();
+  });
+
+  it('clears dialog state when the close event is missing after a successful handle command', async () => {
+    vi.useFakeTimers();
+    const sendWindowsDialogKeysMock = vi.mocked(sendWindowsDialogKeys);
+    sendWindowsDialogKeysMock.mockClear();
+
+    let relayListener: ((event: any) => void) | null = null;
+    const relay = {
+      onEvent: vi.fn((listener: (event: any) => void) => {
+        relayListener = listener;
+        return () => undefined;
+      }),
+      dispatchCommand: vi.fn(async (name: string) => {
+        if (name === 'evaluate') {
+          throw new Error('dialog still blocking evaluate');
+        }
+        return true;
+      }),
+      getClientState: vi.fn(() => ({
+        registeredAt: Date.now(),
+        tabId: 11,
+        windowId: 5,
+        url: 'https://example.com/current',
+        title: 'Current',
+      })),
+      isStopped: vi.fn(() => false),
+    } as any;
+
+    const browser = new ExtensionBrowser({
+      relay,
+      closeInternal: vi.fn(async () => undefined),
+      initialClientState: {
+        registeredAt: Date.now(),
+        tabId: 11,
+        windowId: 5,
+        url: 'https://example.com/current',
+        title: 'Current',
+      },
+    });
+
+    relayListener?.({
+      type: 'dialog-opened',
+      dialog: {
+        type: 'confirm',
+        message: 'Continue?',
+        contextId: '11',
+      },
+    });
+
+    const handlePromise = browser.handleDialog({ accept: true });
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    await expect(handlePromise).resolves.toBeUndefined();
+    expect((browser as any).currentDialog).toBeNull();
+    expect(sendWindowsDialogKeysMock).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 });

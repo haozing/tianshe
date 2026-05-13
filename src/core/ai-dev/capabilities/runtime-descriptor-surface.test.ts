@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { BrowserRuntimeStatus } from '../../browser-runtime';
 import { createProfileCapabilityCatalog } from './profile-catalog';
 import { createSystemCapabilityCatalog } from './system-catalog';
 
 describe('runtime descriptor external surfaces', () => {
-  it('system_bootstrap exposes static browser engine descriptors for pre-acquire planning', async () => {
+  it('system_bootstrap exposes static browser runtime descriptors for pre-acquire planning', async () => {
     const catalog = createSystemCapabilityCatalog();
     const result = await catalog.system_bootstrap.handler(
       {},
@@ -41,6 +42,21 @@ describe('runtime descriptor external surfaces', () => {
             runtimeAlerts: [],
           }),
           listPublicCapabilities: async () => ['system_bootstrap', 'profile_list', 'session_prepare'],
+          listBrowserRuntimeStatuses: async (): Promise<BrowserRuntimeStatus[]> => [
+            {
+              runtimeId: 'chromium-extension-relay',
+              descriptor: {} as BrowserRuntimeStatus['descriptor'],
+              source: { type: 'custom-path', executablePath: 'C:/Browsers/chrome.exe' },
+              resolvedRuntime: null,
+              installed: true,
+              healthy: true,
+              installState: 'custom-path',
+              version: '120.0.0.0',
+              executablePath: 'C:/Browsers/chrome.exe',
+              errors: [],
+              warnings: [],
+            },
+          ],
         },
       },
       { capability: 'system_bootstrap' }
@@ -48,60 +64,72 @@ describe('runtime descriptor external surfaces', () => {
 
     expect(result.structuredContent).toMatchObject({
       data: {
-        browserEngines: {
-          total: 3,
+        browserRuntimes: {
+          total: 4,
           descriptors: {
-            extension: {
-              engine: 'extension',
+            'chromium-extension-relay': {
+              runtimeId: 'chromium-extension-relay',
               capabilities: {
                 'network.responseBody': {
                   supported: true,
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
               },
             },
-            ruyi: {
-              engine: 'ruyi',
+            'firefox-bidi': {
+              runtimeId: 'firefox-bidi',
               capabilities: {
                 'pdf.print': {
                   supported: true,
                   stability: 'experimental',
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
                 'input.touch': {
                   supported: true,
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
                 'events.runtime': {
                   supported: true,
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
                 'storage.dom': {
                   supported: true,
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
                 'intercept.observe': {
                   supported: true,
                   stability: 'experimental',
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
                 'intercept.control': {
                   supported: true,
                   stability: 'experimental',
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
               },
+            },
+          },
+          statuses: {
+            'chromium-extension-relay': {
+              runtimeId: 'chromium-extension-relay',
+              installState: 'custom-path',
+              installed: true,
+              executablePath: 'C:/Browsers/chrome.exe',
+            },
+            'electron-webcontents': {
+              runtimeId: 'electron-webcontents',
+              installState: 'unknown',
             },
           },
         },
       },
       authoritativeFields: expect.arrayContaining([
-        'structuredContent.data.browserEngines.descriptors',
+        'structuredContent.data.browserRuntimes.descriptors',
       ]),
     });
   });
 
-  it('profile surfaces backfill engine runtime descriptors from the static engine registry', async () => {
+  it('profile surfaces backfill runtime descriptors from the static runtime registry', async () => {
     const catalog = createProfileCapabilityCatalog();
 
     const listResult = await catalog.profile_list.handler(
@@ -112,7 +140,7 @@ describe('runtime descriptor external surfaces', () => {
             {
               id: 'profile-extension',
               name: 'Extension QA',
-              engine: 'extension',
+              runtimeId: 'chromium-extension-relay',
               status: 'idle',
               partition: 'persist:profile-extension',
               isSystem: false,
@@ -120,7 +148,7 @@ describe('runtime descriptor external surfaces', () => {
             {
               id: 'profile-ruyi',
               name: 'Firefox QA',
-              engine: 'ruyi',
+              runtimeId: 'firefox-bidi',
               status: 'idle',
               partition: 'persist:profile-ruyi',
               isSystem: false,
@@ -131,7 +159,7 @@ describe('runtime descriptor external surfaces', () => {
               ? {
                   id: 'profile-extension',
                   name: 'Extension QA',
-                  engine: 'extension',
+                  runtimeId: 'chromium-extension-relay',
                   status: 'idle',
                   partition: 'persist:profile-extension',
                   isSystem: false,
@@ -157,47 +185,47 @@ describe('runtime descriptor external surfaces', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: 'profile-extension',
-          engineRuntimeDescriptor: expect.objectContaining({
-            engine: 'extension',
+          runtimeDescriptor: expect.objectContaining({
+            runtimeId: 'chromium-extension-relay',
             capabilities: expect.objectContaining({
               'network.responseBody': expect.objectContaining({
                 supported: true,
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
             }),
           }),
         }),
         expect.objectContaining({
           id: 'profile-ruyi',
-          engineRuntimeDescriptor: expect.objectContaining({
-            engine: 'ruyi',
+          runtimeDescriptor: expect.objectContaining({
+            runtimeId: 'firefox-bidi',
             capabilities: expect.objectContaining({
               'pdf.print': expect.objectContaining({
                 supported: true,
                 stability: 'experimental',
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
               'input.touch': expect.objectContaining({
                 supported: true,
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
               'events.runtime': expect.objectContaining({
                 supported: true,
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
               'storage.dom': expect.objectContaining({
                 supported: true,
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
               'intercept.observe': expect.objectContaining({
                 supported: true,
                 stability: 'experimental',
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
               'intercept.control': expect.objectContaining({
                 supported: true,
                 stability: 'experimental',
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
             }),
           }),
@@ -213,7 +241,7 @@ describe('runtime descriptor external surfaces', () => {
           getProfile: async () => ({
             id: 'profile-extension',
             name: 'Extension QA',
-            engine: 'extension',
+            runtimeId: 'chromium-extension-relay',
             status: 'idle',
             partition: 'persist:profile-extension',
             isSystem: false,
@@ -235,12 +263,12 @@ describe('runtime descriptor external surfaces', () => {
 
     expect((getResult.structuredContent as any)?.data?.profile).toMatchObject({
       id: 'profile-extension',
-      engineRuntimeDescriptor: expect.objectContaining({
-        engine: 'extension',
+      runtimeDescriptor: expect.objectContaining({
+        runtimeId: 'chromium-extension-relay',
         capabilities: expect.objectContaining({
           'network.responseBody': expect.objectContaining({
             supported: true,
-            source: 'static-engine',
+            source: 'static-runtime',
           }),
         }),
       }),

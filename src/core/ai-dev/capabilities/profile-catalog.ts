@@ -1,10 +1,12 @@
 import { createStructuredError, ErrorCode } from '../../../types/error-codes';
 import type {
+  BrowserRuntimeId,
   CreateProfileParams,
   FingerprintConfig,
   ProxyConfig,
   UpdateProfileParams,
 } from '../../../types/profile';
+import { BROWSER_RUNTIME_IDS, isBrowserRuntimeId } from '../../../types/profile';
 import type {
   OrchestrationCapabilityDefinition,
   OrchestrationDependencies,
@@ -25,7 +27,7 @@ import {
   inspectProfileResolution,
 } from './profile-resolution-utils';
 import { createStructuredResult } from './result-utils';
-import { getStaticEngineRuntimeDescriptor } from '../../browser-pool/engine-capability-registry';
+import { getStaticRuntimeDescriptor } from '../../browser-pool/runtime-capability-registry';
 
 const PROFILE_CAPABILITY_VERSION = '1.0.0';
 
@@ -49,36 +51,33 @@ const PROFILE_WRITE_METADATA: CapabilityMetadata = {
 
 const asText = (value: unknown): string => String(value == null ? '' : value).trim();
 
-const normalizeEngine = (value: unknown): 'electron' | 'extension' | 'ruyi' | undefined => {
-  const normalized = asText(value).toLowerCase();
-  if (normalized === 'electron' || normalized === 'extension' || normalized === 'ruyi') {
-    return normalized;
-  }
-  return undefined;
+const normalizeRuntimeId = (value: unknown): BrowserRuntimeId | undefined => {
+  const normalized = asText(value);
+  return isBrowserRuntimeId(normalized) ? normalized : undefined;
 };
 
 const BROWSER_RUNTIME_DESCRIPTOR_SCHEMA = createBrowserRuntimeDescriptorSchema();
 
-const resolveProfileEngineRuntimeDescriptor = (engine: unknown) => {
-  const normalized = normalizeEngine(engine);
-  return normalized ? getStaticEngineRuntimeDescriptor(normalized) : null;
+const resolveProfileRuntimeDescriptor = (runtimeId: unknown) => {
+  const normalized = normalizeRuntimeId(runtimeId);
+  return normalized ? getStaticRuntimeDescriptor(normalized) : null;
 };
 
 const PROFILE_INFO_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'name', 'engine', 'status', 'isSystem', 'engineRuntimeDescriptor'],
+  required: ['id', 'name', 'runtimeId', 'status', 'isSystem', 'runtimeDescriptor'],
   properties: {
     id: { type: 'string' },
     name: { type: 'string' },
-    engine: { type: 'string' },
+    runtimeId: { type: 'string' },
     status: { type: 'string' },
     partition: { type: 'string' },
     isSystem: { type: 'boolean' },
     totalUses: { type: 'number' },
     lastActiveAt: { type: 'string' },
     updatedAt: { type: 'string' },
-    engineRuntimeDescriptor: {
+    runtimeDescriptor: {
       anyOf: [{ type: 'null' }, BROWSER_RUNTIME_DESCRIPTOR_SCHEMA],
     },
   },
@@ -139,7 +138,7 @@ const PROFILE_OUTPUT_SCHEMAS: Partial<Record<string, Record<string, unknown>>> =
             required: ['profileId', 'visible'],
             properties: {
               profileId: { type: 'string' },
-              engine: { type: 'string', enum: ['electron', 'extension', 'ruyi'] },
+              runtimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
               visible: { type: 'boolean' },
             },
           },
@@ -328,18 +327,18 @@ const readOptionalNumericArg = (
   return raw;
 };
 
-const readOptionalEngineArg = (
+const readOptionalRuntimeIdArg = (
   args: Record<string, unknown>,
   key: string
-): 'electron' | 'extension' | 'ruyi' | undefined => {
+): BrowserRuntimeId | undefined => {
   if (!(key in args)) {
     return undefined;
   }
-  const value = normalizeEngine(args[key]);
+  const value = normalizeRuntimeId(args[key]);
   if (!value) {
     throw createStructuredError(
       ErrorCode.INVALID_PARAMETER,
-      `Parameter ${key} must be "electron", "extension", or "ruyi"`
+      `Parameter ${key} must be one of: ${BROWSER_RUNTIME_IDS.join(', ')}`
     );
   }
   return value;
@@ -347,14 +346,17 @@ const readOptionalEngineArg = (
 
 const hasProfileRuntimeMutation = (params: UpdateProfileParams): boolean =>
   params.fingerprint !== undefined ||
-  params.engine !== undefined ||
+  params.runtimeId !== undefined ||
+  params.runtimeSourceOverride !== undefined ||
   params.proxy !== undefined ||
   params.idleTimeoutMs !== undefined ||
   params.lockTimeoutMs !== undefined;
 
 const buildCreateProfileParams = (args: Record<string, unknown>): CreateProfileParams => ({
   name: readStringArg(args, 'name', { required: true }) || '',
-  ...(readOptionalEngineArg(args, 'engine') ? { engine: readOptionalEngineArg(args, 'engine') } : {}),
+  ...(readOptionalRuntimeIdArg(args, 'runtimeId')
+    ? { runtimeId: readOptionalRuntimeIdArg(args, 'runtimeId') }
+    : {}),
   ...(readNullableStringArg(args, 'groupId') !== undefined
     ? { groupId: readNullableStringArg(args, 'groupId') }
     : {}),
@@ -380,7 +382,7 @@ const buildCreateProfileParams = (args: Record<string, unknown>): CreateProfileP
 const buildUpdateProfileParams = (args: Record<string, unknown>): UpdateProfileParams => {
   const params: UpdateProfileParams = {};
   const name = readStringArg(args, 'name', { required: false });
-  const engine = readOptionalEngineArg(args, 'engine');
+  const runtimeId = readOptionalRuntimeIdArg(args, 'runtimeId');
   const groupId = readNullableStringArg(args, 'groupId');
   const proxy = readOptionalObjectArg<ProxyConfig>(args, 'proxy');
   const fingerprint = readOptionalObjectArg<Partial<FingerprintConfig>>(args, 'fingerprint');
@@ -391,7 +393,7 @@ const buildUpdateProfileParams = (args: Record<string, unknown>): UpdateProfileP
   const lockTimeoutMs = readOptionalNumericArg(args, 'lockTimeoutMs', { integer: true, min: 0 });
 
   if (name !== undefined) params.name = name;
-  if (engine !== undefined) params.engine = engine;
+  if (runtimeId !== undefined) params.runtimeId = runtimeId;
   if (groupId !== undefined) params.groupId = groupId;
   if (proxy !== undefined) params.proxy = proxy;
   if (fingerprint !== undefined) params.fingerprint = fingerprint || undefined;
@@ -407,7 +409,7 @@ const buildUpdateProfileParams = (args: Record<string, unknown>): UpdateProfileP
 const normalizeProfile = (profile: OrchestrationProfileInfo): OrchestrationProfileInfo => ({
   id: asText(profile.id),
   name: asText(profile.name),
-  engine: asText(profile.engine),
+  runtimeId: asText(profile.runtimeId),
   status: asText(profile.status),
   partition: asText(profile.partition) || undefined,
   isSystem: profile.isSystem === true,
@@ -417,15 +419,15 @@ const normalizeProfile = (profile: OrchestrationProfileInfo): OrchestrationProfi
       : undefined,
   lastActiveAt: asText(profile.lastActiveAt) || undefined,
   updatedAt: asText(profile.updatedAt) || undefined,
-  engineRuntimeDescriptor:
-    profile.engineRuntimeDescriptor ?? resolveProfileEngineRuntimeDescriptor(profile.engine),
+  runtimeDescriptor:
+    profile.runtimeDescriptor ?? resolveProfileRuntimeDescriptor(profile.runtimeId),
 });
 
 const formatProfileLine = (profile: OrchestrationProfileInfo): string => {
   const fields = [
     asText(profile.id) || '-',
     asText(profile.name) || '-',
-    asText(profile.engine) || '-',
+    asText(profile.runtimeId) || '-',
     asText(profile.status) || '-',
   ];
   const extras: string[] = [];
@@ -465,7 +467,7 @@ const ensureProfileGateway = (deps: OrchestrationDependencies) => {
 const profileListHandler: CapabilityHandler<OrchestrationDependencies> = async (args, deps) => {
   const gateway = ensureProfileGateway(deps);
   const query = asText(readStringArg(args, 'query', { required: false })).toLowerCase();
-  const engine = asText(readStringArg(args, 'engine', { required: false })).toLowerCase();
+  const runtimeId = asText(readStringArg(args, 'runtimeId', { required: false }));
   const status = asText(readStringArg(args, 'status', { required: false })).toLowerCase();
   const includeSystem = readBooleanArg(args, 'includeSystem', true);
   const limit = readOptionalLimitArg(args, 'limit');
@@ -473,7 +475,7 @@ const profileListHandler: CapabilityHandler<OrchestrationDependencies> = async (
   const all = (await gateway.listProfiles()).map(normalizeProfile);
   const filtered = all.filter((item) => {
     if (!includeSystem && item.isSystem) return false;
-    if (engine && String(item.engine || '').toLowerCase() !== engine) return false;
+    if (runtimeId && item.runtimeId !== runtimeId) return false;
     if (status && String(item.status || '').toLowerCase() !== status) return false;
     if (!query) return true;
     const id = String(item.id || '').toLowerCase();
@@ -569,12 +571,12 @@ const profileStartSessionHandler: CapabilityHandler<OrchestrationDependencies> =
 ) => {
   const gateway = ensureProfileGateway(deps);
   const query = readStringArg(args, 'query');
-  const engine = asText(readStringArg(args, 'engine', { required: false }));
+  const runtimeId = asText(readStringArg(args, 'runtimeId', { required: false }));
   const visible = readBooleanArg(args, 'visible', false);
-  if (engine && engine !== 'electron' && engine !== 'extension' && engine !== 'ruyi') {
+  if (runtimeId && !isBrowserRuntimeId(runtimeId)) {
     throw createStructuredError(
       ErrorCode.INVALID_PARAMETER,
-      'Parameter engine must be "electron", "extension", or "ruyi"'
+      `Parameter runtimeId must be one of: ${BROWSER_RUNTIME_IDS.join(', ')}`
     );
   }
 
@@ -588,24 +590,24 @@ const profileStartSessionHandler: CapabilityHandler<OrchestrationDependencies> =
   const result = inspection.result;
 
   const profile = normalizeProfile(result.profile);
-  const requestedEngine = normalizeEngine(engine);
-  const profileEngine = normalizeEngine(profile.engine);
-  if (requestedEngine && profileEngine && requestedEngine !== profileEngine) {
+  const requestedRuntimeId = normalizeRuntimeId(runtimeId);
+  const profileRuntimeId = normalizeRuntimeId(profile.runtimeId);
+  if (requestedRuntimeId && profileRuntimeId && requestedRuntimeId !== profileRuntimeId) {
     throw createStructuredError(
       ErrorCode.INVALID_PARAMETER,
-      `Profile ${profile.id} is bound to engine "${profileEngine}" and cannot start a session with engine "${requestedEngine}"`,
+      `Profile ${profile.id} is bound to runtime "${profileRuntimeId}" and cannot start a session with runtime "${requestedRuntimeId}"`,
       {
         suggestion:
-          'Choose a profile whose engine matches the requested session engine, or omit engine to reuse the profile default.',
+          'Choose a profile whose runtime matches the requested session runtime, or omit runtimeId to reuse the profile default.',
         context: {
-          reasonCode: 'profile_engine_mismatch',
+          reasonCode: 'profile_runtime_mismatch',
           effectiveProfileSource: 'resolved_query',
-          effectiveEngineSource: 'requested',
+          effectiveRuntimeSource: 'requested',
           query: asText(result.query),
           profileId: profile.id,
           profileName: profile.name,
-          profileEngine,
-          requestedEngine,
+          profileRuntimeId,
+          requestedRuntimeId,
         },
       }
     );
@@ -613,8 +615,8 @@ const profileStartSessionHandler: CapabilityHandler<OrchestrationDependencies> =
   const mcpHeaders: Record<string, string> = {
     'mcp-partition': profile.id,
   };
-  if (engine) {
-    mcpHeaders['mcp-engine'] = engine;
+  if (runtimeId) {
+    mcpHeaders['mcp-runtime-id'] = runtimeId;
   }
 
   return createStructuredResult(
@@ -625,7 +627,7 @@ const profileStartSessionHandler: CapabilityHandler<OrchestrationDependencies> =
         `Headers: ${Object.entries(mcpHeaders)
           .map(([key, value]) => `${key}=${value}`)
           .join(', ')}`,
-        `Create session: profileId=${profile.id}${engine ? `, engine=${engine}` : ''}, visible=${visible}`,
+        `Create session: profileId=${profile.id}${runtimeId ? `, runtimeId=${runtimeId}` : ''}, visible=${visible}`,
       ].join('\n'),
       data: {
         query: asText(result.query),
@@ -635,7 +637,7 @@ const profileStartSessionHandler: CapabilityHandler<OrchestrationDependencies> =
           mcpHeaders,
           orchestrationSessionCreate: {
             profileId: profile.id,
-            ...(engine ? { engine } : {}),
+            ...(runtimeId ? { runtimeId } : {}),
             visible,
           },
         },
@@ -687,7 +689,7 @@ const profileUpdateHandler: CapabilityHandler<OrchestrationDependencies> = async
       'profile_update requires at least one mutable field',
       {
         suggestion:
-          'Provide one or more profile fields to update, such as name, engine, proxy, fingerprint, tags, or timeouts.',
+          'Provide one or more profile fields to update, such as name, runtimeId, proxy, fingerprint, tags, or timeouts.',
       }
     );
   }
@@ -699,7 +701,7 @@ const profileUpdateHandler: CapabilityHandler<OrchestrationDependencies> = async
       'Runtime-affecting profile changes require allowRuntimeReset=true',
       {
         suggestion:
-          'Set allowRuntimeReset=true only after confirming that changing engine/fingerprint/proxy/timeouts may reset active runtime state for this profile.',
+          'Set allowRuntimeReset=true only after confirming that changing runtimeId/fingerprint/proxy/timeouts may reset active runtime state for this profile.',
         context: {
           profileId,
           changedFields,
@@ -771,7 +773,7 @@ const PROFILE_CAPABILITIES: Array<{
         additionalProperties: false,
         properties: {
           query: { type: 'string', minLength: 1 },
-          engine: { type: 'string', enum: ['electron', 'extension', 'ruyi'] },
+          runtimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
           status: { type: 'string', enum: ['idle', 'active', 'error'] },
           includeSystem: { type: 'boolean' },
           limit: { type: 'integer', minimum: 1 },
@@ -830,7 +832,7 @@ const PROFILE_CAPABILITIES: Array<{
         required: ['query'],
         properties: {
           query: { type: 'string', minLength: 1 },
-          engine: { type: 'string', enum: ['electron', 'extension', 'ruyi'] },
+          runtimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
           visible: { type: 'boolean' },
         },
       },
@@ -851,7 +853,7 @@ const PROFILE_CAPABILITIES: Array<{
         required: ['name', 'confirmRisk'],
         properties: {
           name: { type: 'string', minLength: 1 },
-          engine: { type: 'string', enum: ['electron', 'extension', 'ruyi'] },
+          runtimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
           groupId: { type: ['string', 'null'] },
           proxy: { type: ['object', 'null'], additionalProperties: true },
           fingerprint: { type: ['object', 'null'], additionalProperties: true },
@@ -878,7 +880,7 @@ const PROFILE_CAPABILITIES: Array<{
             title: 'Create one extension profile',
             arguments: {
               name: 'Shop QA',
-              engine: 'extension',
+              runtimeId: 'chromium-extension-relay',
               confirmRisk: true,
             },
           },
@@ -905,7 +907,7 @@ const PROFILE_CAPABILITIES: Array<{
         properties: {
           profileId: { type: 'string', minLength: 1 },
           name: { type: 'string', minLength: 1 },
-          engine: { type: 'string', enum: ['electron', 'extension', 'ruyi'] },
+          runtimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
           groupId: { type: ['string', 'null'] },
           proxy: { type: ['object', 'null'], additionalProperties: true },
           fingerprint: { type: ['object', 'null'], additionalProperties: true },

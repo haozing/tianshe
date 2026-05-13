@@ -18,6 +18,15 @@ describe('AppRuntime', () => {
     expect(runtime.requireLogger()).toBe(logger);
   });
 
+  it('stores the browser runtime manager explicitly', () => {
+    const runtime = new AppRuntime();
+    const browserRuntimeManager = { listRuntimeStatuses: async () => [] };
+
+    runtime.browserRuntimeManager = browserRuntimeManager as never;
+
+    expect(runtime.requireBrowserRuntimeManager()).toBe(browserRuntimeManager);
+  });
+
   it('owns a service container for incremental runtime migration', () => {
     const runtime = new AppRuntime();
     const token = { id: 'logger' };

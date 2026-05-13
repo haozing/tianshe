@@ -25,7 +25,7 @@ import {
 } from './test-utils';
 
 // Mock electron app
-vi.mock('electron', () => ({
+vi.mock('electron-webcontents', () => ({
   app: {
     getPath: vi.fn(() => '/mock/user/data'),
   },
@@ -170,7 +170,7 @@ describe('BrowserPoolManager', () => {
     it('任意 Profile 都会被归一为单实例，即使配置 quota>1', async () => {
       profiles.set(
         'single-session',
-        createMockProfile({ id: 'single-session', engine: 'electron', quota: 10 })
+        createMockProfile({ id: 'single-session', runtimeId: 'electron-webcontents', quota: 10 })
       );
 
       const handle1 = await manager.acquire('single-session');
@@ -287,7 +287,7 @@ describe('BrowserPoolManager', () => {
       const mockServiceGetter = createMockProfileServiceGetter();
       mockServiceGetter.profiles.set(
         'ruyi-session',
-        createMockProfile({ id: 'ruyi-session', engine: 'ruyi' })
+        createMockProfile({ id: 'ruyi-session', runtimeId: 'firefox-bidi' })
       );
 
       const fastFailManager = new BrowserPoolManager(mockServiceGetter.getProfileService);

@@ -8,13 +8,24 @@ import { getDefaultFingerprint } from '../../constants/fingerprint-defaults';
 const electronState = vi.hoisted(() => ({
   appPath: process.cwd(),
   userDataDir: '',
+  isPackaged: false,
+}));
+
+vi.mock('electron-webcontents', () => ({
+  app: {
+    getPath: vi.fn(() => electronState.userDataDir),
+    getAppPath: vi.fn(() => electronState.appPath),
+    isPackaged: false,
+  },
 }));
 
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => electronState.userDataDir),
     getAppPath: vi.fn(() => electronState.appPath),
-    isPackaged: false,
+    get isPackaged() {
+      return electronState.isPackaged;
+    },
   },
 }));
 
@@ -108,7 +119,7 @@ describe('createExtensionBrowserFactory shared real contract', () => {
       const pingMessage = requireEnv('AIRPA_REAL_CONTRACT_PING_MESSAGE');
 
       const report: Record<string, any> = {
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         scenario: 'shared-real-contract-v1',
         startedAt: new Date().toISOString(),
         reportPath,
@@ -137,7 +148,7 @@ describe('createExtensionBrowserFactory shared real contract', () => {
         const created = await factory({
           id: sessionId,
           partition: `persist:${sessionId}`,
-          engine: 'extension',
+          runtimeId: 'chromium-extension-relay',
           fingerprint: {
             ...fingerprint,
             identity: {
@@ -163,7 +174,7 @@ describe('createExtensionBrowserFactory shared real contract', () => {
         closeBrowser = () => created.browser.closeInternal();
         logStep('browser created');
         expect(created.browser.describeRuntime()).toMatchObject({
-          engine: 'extension',
+          runtimeId: 'chromium-extension-relay',
         });
 
         report.commonCapabilities = {

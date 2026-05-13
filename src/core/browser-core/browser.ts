@@ -164,7 +164,7 @@ export class SimpleBrowser {
     if (blockedNavigationError) {
       BrowserLogger.warn('navigation', blockedNavigationError.message);
       const context = createChildTraceContext({
-        browserEngine: 'electron',
+        browserRuntimeId: 'electron-webcontents',
         browserId: this.viewId,
         source: getCurrentTraceContext()?.source ?? 'browser-core',
       });
@@ -689,7 +689,7 @@ export class SimpleBrowser {
       if (blockedNavigationError) {
         BrowserLogger.warn('window-open', blockedNavigationError.message);
         const context = createChildTraceContext({
-          browserEngine: 'electron',
+          browserRuntimeId: 'electron-webcontents',
           browserId: this.viewId,
           source: getCurrentTraceContext()?.source ?? 'browser-core',
         });
@@ -815,7 +815,7 @@ export class SimpleBrowser {
 
         BrowserLogger.warn('window-open', blockedNavigationError.message);
         const context = createChildTraceContext({
-          browserEngine: 'electron',
+          browserRuntimeId: 'electron-webcontents',
           browserId: this.viewId,
           source: getCurrentTraceContext()?.source ?? 'browser-core',
         });

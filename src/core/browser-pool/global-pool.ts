@@ -27,9 +27,11 @@ import type {
   AcquireStrategy,
   ReleaseOptions,
   SessionConfig,
-  AutomationEngine,
+  BrowserRuntimeId,
   PooledBrowserController,
 } from './types';
+import type { BrowserRuntimeDescriptor } from '../../types/browser-interface';
+import type { ResolvedBrowserRuntime } from '../browser-runtime/types';
 import { isReadyBrowser, hasBrowserInstance } from './types';
 import {
   DEFAULT_BROWSER_POOL_CONFIG,
@@ -51,7 +53,9 @@ import { getUnknownErrorMessage } from '../../utils/error-message';
  */
 export type BrowserFactory = (session: SessionConfig) => Promise<{
   browser: PooledBrowserController;
-  engine: AutomationEngine;
+  runtimeId: BrowserRuntimeId;
+  runtimeDescriptor?: BrowserRuntimeDescriptor;
+  resolvedRuntime?: ResolvedBrowserRuntime;
   viewId?: string;
 }>;
 
@@ -243,14 +247,14 @@ export class GlobalPool {
    */
   async acquireIdle(
     sessionId: string,
-    engine: AutomationEngine,
+    runtimeId: BrowserRuntimeId,
     strategy: AcquireStrategy = 'any'
   ): Promise<ReadyBrowser | undefined> {
     return this.mutex.runExclusive(() => {
       // 只筛选 idle 状态的 ReadyBrowser
       const candidates = Array.from(this.browsers.values()).filter(
         (b): b is ReadyBrowser =>
-          b.sessionId === sessionId && b.engine === engine && b.status === 'idle'
+          b.sessionId === sessionId && b.runtimeId === runtimeId && b.status === 'idle'
       );
 
       if (candidates.length === 0) {
@@ -303,7 +307,7 @@ export class GlobalPool {
       throw new Error('GlobalPool is stopped');
     }
 
-    const engine: AutomationEngine = session.engine ?? 'electron';
+    const runtimeId: BrowserRuntimeId = session.runtimeId;
 
     // 获取创建许可（限流）
     const [, releasePermit] = await this.creationSemaphore.acquire();
@@ -336,7 +340,7 @@ export class GlobalPool {
       const placeholder: CreatingBrowser = {
         id: browserId,
         sessionId: session.id,
-        engine,
+        runtimeId,
         idleTimeoutMs: session.idleTimeoutMs,
         status: 'creating',
         createdAt: Date.now(),
@@ -361,7 +365,9 @@ export class GlobalPool {
       const {
         browser,
         viewId,
-        engine: createdEngine,
+        runtimeId: createdRuntimeId,
+        runtimeDescriptor,
+        resolvedRuntime,
       } = await Promise.race([factoryPromise, timeoutPromise]);
 
       if (timeoutId) {
@@ -381,7 +387,9 @@ export class GlobalPool {
           readyBrowser = {
             id: browserId,
             sessionId: session.id,
-            engine: createdEngine,
+            runtimeId: createdRuntimeId,
+            runtimeDescriptor,
+            resolvedRuntime,
             idleTimeoutMs: session.idleTimeoutMs,
             browser,
             viewId,
@@ -480,7 +488,9 @@ export class GlobalPool {
       const lockedBrowser: ReadyBrowser = {
         id: readyBrowser.id,
         sessionId: readyBrowser.sessionId,
-        engine: readyBrowser.engine,
+        runtimeId: readyBrowser.runtimeId,
+        runtimeDescriptor: readyBrowser.runtimeDescriptor,
+        resolvedRuntime: readyBrowser.resolvedRuntime,
         idleTimeoutMs: readyBrowser.idleTimeoutMs,
         browser: readyBrowser.browser,
         viewId: readyBrowser.viewId,
@@ -623,7 +633,7 @@ export class GlobalPool {
         const resettingBrowser: ReadyBrowser = {
           id: browser.id,
           sessionId: browser.sessionId,
-          engine: browser.engine,
+          runtimeId: browser.runtimeId,
           idleTimeoutMs: browser.idleTimeoutMs,
           browser: browser.browser,
           viewId: browser.viewId,
@@ -977,7 +987,7 @@ export class GlobalPool {
    */
   getSessionBrowserCount(
     sessionId: string,
-    engine?: AutomationEngine
+    runtimeId?: BrowserRuntimeId
   ): { total: number; idle: number; locked: number } {
     // 创建快照，确保遍历期间数据一致
     const snapshot = Array.from(this.browsers.values());
@@ -988,7 +998,7 @@ export class GlobalPool {
 
     for (const browser of snapshot) {
       if (browser.sessionId !== sessionId) continue;
-      if (engine && browser.engine !== engine) continue;
+      if (runtimeId && browser.runtimeId !== runtimeId) continue;
       if (browser.status === 'destroying' || browser.status === 'creating') continue;
 
       total++;

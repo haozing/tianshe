@@ -138,7 +138,7 @@ export function createMockBrowserFactory(
     return {
       browser,
       viewId: browser.viewId,
-      engine: session.engine ?? 'electron',
+      runtimeId: session.runtimeId ?? 'electron-webcontents',
     };
   });
 
@@ -181,7 +181,7 @@ export function createSessionConfig(overrides: Partial<SessionConfig> = {}): Ses
   return {
     id,
     partition: overrides.partition || `persist:${id}`,
-    engine: overrides.engine,
+    runtimeId: overrides.runtimeId,
     quota: overrides.quota ?? 1,
     idleTimeoutMs: overrides.idleTimeoutMs ?? 5 * 60 * 1000,
     lockTimeoutMs: overrides.lockTimeoutMs ?? 5 * 60 * 1000,
@@ -290,17 +290,17 @@ export interface MockProfileServiceOptions {
 export function createMockProfile(overrides: Partial<BrowserProfile> = {}): BrowserProfile {
   const id = overrides.id || `profile-${Math.random().toString(36).slice(2, 8)}`;
   const now = new Date();
-  const engine = overrides.engine ?? 'electron';
+  const runtimeId = overrides.runtimeId ?? 'electron-webcontents';
 
   return {
     id,
     name: overrides.name || `Profile ${id}`,
-    engine,
+    runtimeId,
     description: overrides.description ?? null,
     groupId: overrides.groupId ?? null,
     partition: overrides.partition || `persist:${id}`,
     proxy: overrides.proxy ?? null,
-    fingerprint: overrides.fingerprint || getDefaultFingerprint(engine),
+    fingerprint: overrides.fingerprint || getDefaultFingerprint(runtimeId),
     notes: overrides.notes ?? null,
     color: overrides.color ?? null,
     status: overrides.status ?? 'idle',

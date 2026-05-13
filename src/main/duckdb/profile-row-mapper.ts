@@ -5,19 +5,20 @@ import type {
   FingerprintSourceConfig,
   ProfileStatus,
   ProxyConfig,
+  BrowserRuntimeSource,
 } from '../../types/profile';
-import { normalizeAutomationEngine } from '../../types/profile';
+import { normalizeBrowserRuntimeId } from '../../types/profile';
 import { DEFAULT_BROWSER_POOL_CONFIG } from '../../constants/browser-pool';
 import {
   extractFingerprintCoreConfig,
-  materializeFingerprintConfigForEngine,
+  materializeFingerprintConfigForRuntime,
 } from '../../constants/fingerprint-defaults';
 
 export function mapProfileRowToProfile(row: any): BrowserProfile {
-  const engine = normalizeAutomationEngine(row.engine);
-  const fingerprint = materializeFingerprintConfigForEngine(
+  const runtimeId = normalizeBrowserRuntimeId(row.runtime_id);
+  const fingerprint = materializeFingerprintConfigForRuntime(
     parseProfileJson<FingerprintConfig>(row.fingerprint),
-    engine
+    runtimeId
   );
   const fingerprintCore =
     parseProfileJson<FingerprintCoreConfig | null>(row.fingerprint_core) ||
@@ -29,7 +30,10 @@ export function mapProfileRowToProfile(row: any): BrowserProfile {
   return {
     id: String(row.id),
     name: String(row.name),
-    engine,
+    runtimeId,
+    runtimeSourceOverride: row.runtime_source_override
+      ? parseProfileJson<BrowserRuntimeSource>(row.runtime_source_override)
+      : null,
     groupId: row.group_id ? String(row.group_id) : null,
     partition: String(row.partition),
     proxy: row.proxy_config ? parseProfileJson<ProxyConfig>(row.proxy_config) : null,

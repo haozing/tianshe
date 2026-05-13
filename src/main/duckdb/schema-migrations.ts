@@ -131,9 +131,14 @@ export const TAG_SCHEMA_BACKFILLS: string[] = [
 export const BROWSER_PROFILE_SCHEMA_MIGRATIONS: SchemaMigration[] = [
   {
     id: 'browser-profiles-001-runtime-pool-fields',
-    description: 'Add browser engine and pool runtime fields',
+    description: 'Add browser runtime and pool fields',
     up: [
-      addColumnIfMissingStep('browser_profiles', 'engine', `VARCHAR DEFAULT 'electron'`),
+      addColumnIfMissingStep(
+        'browser_profiles',
+        'runtime_id',
+        `VARCHAR DEFAULT 'electron-webcontents'`
+      ),
+      addColumnIfMissingStep('browser_profiles', 'runtime_source_override', 'JSON'),
       addColumnIfMissingStep('browser_profiles', 'quota', 'INTEGER DEFAULT 1'),
       addColumnIfMissingStep(
         'browser_profiles',
@@ -161,8 +166,8 @@ export const BROWSER_PROFILE_SCHEMA_MIGRATIONS: SchemaMigration[] = [
 export const BROWSER_PROFILE_SCHEMA_BACKFILLS: string[] = [
   `
     UPDATE browser_profiles
-    SET engine = 'electron'
-    WHERE COALESCE(TRIM(engine), '') = ''
+    SET runtime_id = 'electron-webcontents'
+    WHERE runtime_id IS NULL OR COALESCE(TRIM(runtime_id), '') = ''
   `,
   `
     UPDATE browser_profiles

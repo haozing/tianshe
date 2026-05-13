@@ -1,4 +1,4 @@
-import { showBrowserView } from '../core/browser-pool';
+﻿import { showBrowserView } from '../core/browser-pool';
 import type { BrowserHandle } from '../core/browser-pool';
 import { createLogger } from '../core/logger';
 import type { RestApiDependencies } from '../types/http-api';
@@ -139,7 +139,7 @@ const createBrowserAcquireStructuredError = (
         context: {
           sessionId: asTrimmedText(mcpSession.transport.sessionId) || undefined,
           profileId: readiness.profileId,
-          engine: asTrimmedText(mcpSession.browser.engine) || undefined,
+          runtimeId: asTrimmedText(mcpSession.browser.runtimeId) || undefined,
           visible: mcpSession.browser.visible,
           stage: error.stage,
           acquireReadiness: readiness,
@@ -195,7 +195,7 @@ const createBrowserAcquireStructuredError = (
       context: {
         sessionId: asTrimmedText(mcpSession.transport.sessionId) || undefined,
         profileId,
-        engine: asTrimmedText(mcpSession.browser.engine) || undefined,
+        runtimeId: asTrimmedText(mcpSession.browser.runtimeId) || undefined,
         visible: mcpSession.browser.visible,
         ...(readiness ? { acquireReadiness: readiness } : {}),
       },
@@ -540,7 +540,7 @@ export const createMcpSessionGateway = (
         sessionId: '',
         prepared: false,
         idempotent: false,
-        engine: asTrimmedText(mcpSession.browser.engine) || undefined,
+        runtimeId: asTrimmedText(mcpSession.browser.runtimeId) || undefined,
         visible: mcpSession.browser.visible,
         effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
         browserAcquired: Boolean(mcpSession.browser.browserHandle || mcpSession.browser.browserAcquirePromise),
@@ -559,13 +559,13 @@ export const createMcpSessionGateway = (
     }
 
     const currentProfileId = asTrimmedText(mcpSession.browser.partition) || undefined;
-    const currentEngine = asTrimmedText(mcpSession.browser.engine) || undefined;
+    const currentRuntimeId = asTrimmedText(mcpSession.browser.runtimeId) || undefined;
     const currentVisible = mcpSession.browser.visible;
     const browserAcquired = Boolean(mcpSession.browser.browserHandle || mcpSession.browser.browserAcquirePromise);
-    const changed: Array<'profile' | 'engine' | 'visible' | 'scopes'> = [];
+    const changed: Array<'profile' | 'runtimeId' | 'visible' | 'scopes'> = [];
     const requestedProfileId = asTrimmedText(prepareOptions.profileId) || undefined;
-    const requestedEngine = prepareOptions.engine
-      ? options.parseRequestedEngine(prepareOptions.engine)
+    const requestedRuntimeId = prepareOptions.runtimeId
+      ? options.parseRequestedRuntimeId(prepareOptions.runtimeId)
       : undefined;
     const requestedVisible = prepareOptions.visible;
     const requestedScopes =
@@ -573,7 +573,7 @@ export const createMcpSessionGateway = (
     const currentState = buildMcpSessionStateSnapshot({
       sessionId,
       profileId: currentProfileId,
-      engine: currentEngine,
+      runtimeId: currentRuntimeId,
       visible: currentVisible,
       effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
       browserAcquired: Boolean(mcpSession.browser.browserHandle),
@@ -594,7 +594,7 @@ export const createMcpSessionGateway = (
           prepared: false,
           idempotent: false,
           profileId: currentProfileId,
-          engine: currentEngine,
+          runtimeId: currentRuntimeId,
           visible: currentVisible,
           effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
           browserAcquired: true,
@@ -602,19 +602,19 @@ export const createMcpSessionGateway = (
           acquireReadiness: currentAcquireReadiness(),
           reason: 'binding_locked' as const,
           currentProfileId,
-          currentEngine,
+          currentRuntimeId,
           currentVisible,
           ...currentState,
         };
       }
 
-      if (requestedEngine && requestedEngine !== currentEngine) {
+      if (requestedRuntimeId && requestedRuntimeId !== currentRuntimeId) {
         return {
           sessionId,
           prepared: false,
           idempotent: false,
           profileId: currentProfileId,
-          engine: currentEngine,
+          runtimeId: currentRuntimeId,
           visible: currentVisible,
           effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
           browserAcquired: true,
@@ -622,7 +622,7 @@ export const createMcpSessionGateway = (
           acquireReadiness: currentAcquireReadiness(),
           reason: 'binding_locked' as const,
           currentProfileId,
-          currentEngine,
+          currentRuntimeId,
           currentVisible,
           ...currentState,
         };
@@ -634,7 +634,7 @@ export const createMcpSessionGateway = (
           prepared: false,
           idempotent: false,
           profileId: currentProfileId,
-          engine: currentEngine,
+          runtimeId: currentRuntimeId,
           visible: currentVisible,
           effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
           browserAcquired: true,
@@ -642,7 +642,7 @@ export const createMcpSessionGateway = (
           acquireReadiness: currentAcquireReadiness(),
           reason: 'binding_locked' as const,
           currentProfileId,
-          currentEngine,
+          currentRuntimeId,
           currentVisible,
           ...currentState,
         };
@@ -654,9 +654,9 @@ export const createMcpSessionGateway = (
       changed.push('profile');
     }
 
-    if (!currentState.bindingLocked && requestedEngine && requestedEngine !== currentEngine) {
-      mcpSession.browser.engine = requestedEngine;
-      changed.push('engine');
+    if (!currentState.bindingLocked && requestedRuntimeId && requestedRuntimeId !== currentRuntimeId) {
+      mcpSession.browser.runtimeId = requestedRuntimeId;
+      changed.push('runtimeId');
     }
 
     if (
@@ -678,19 +678,19 @@ export const createMcpSessionGateway = (
       prepared: true,
       idempotent: changed.length === 0,
       profileId: asTrimmedText(mcpSession.browser.partition) || undefined,
-      engine: asTrimmedText(mcpSession.browser.engine) || undefined,
+      runtimeId: asTrimmedText(mcpSession.browser.runtimeId) || undefined,
       visible: mcpSession.browser.visible,
       effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
       browserAcquired,
       changed,
       acquireReadiness: currentAcquireReadiness(),
       currentProfileId: asTrimmedText(mcpSession.browser.partition) || undefined,
-      currentEngine: asTrimmedText(mcpSession.browser.engine) || undefined,
+      currentRuntimeId: asTrimmedText(mcpSession.browser.runtimeId) || undefined,
       currentVisible: mcpSession.browser.visible,
       ...buildMcpSessionStateSnapshot({
         sessionId,
         profileId: asTrimmedText(mcpSession.browser.partition) || undefined,
-        engine: asTrimmedText(mcpSession.browser.engine) || undefined,
+        runtimeId: asTrimmedText(mcpSession.browser.runtimeId) || undefined,
         visible: mcpSession.browser.visible,
         effectiveScopes: normalizeScopes(mcpSession.auth.authScopes),
         browserAcquired: Boolean(mcpSession.browser.browserHandle),
@@ -1038,7 +1038,7 @@ export const ensureSessionBrowserHandle = async (
     try {
       browserHandle = await options.acquireBrowserFromPool(
         mcpSession.browser.partition,
-        mcpSession.browser.engine,
+        mcpSession.browser.runtimeId,
         'mcp'
       );
     } catch (error) {
@@ -1056,6 +1056,7 @@ export const ensureSessionBrowserHandle = async (
 
       await applySessionBrowserVisibility(options, mcpSession, browserHandle, mcpSession.browser.visible);
       await ensureSessionBrowserRuntimeReady(options, mcpSession, browserHandle);
+      mcpSession.browser.runtimeId = browserHandle.runtimeId;
       if (getMcpSessionAbortSignal(mcpSession)?.aborted || mcpSession.lifecycle.closing) {
         throw abortError;
       }
@@ -1082,3 +1083,4 @@ export const ensureSessionBrowserHandle = async (
     }
   }
 };
+

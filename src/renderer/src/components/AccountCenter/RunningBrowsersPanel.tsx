@@ -4,7 +4,7 @@ import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { cn } from '../../lib/utils';
 import { toast } from '../../lib/toast';
-import type { BrowserProfile, PoolBrowserInfo } from '../../../../types/profile';
+import type { BrowserProfile, BrowserRuntimeId, PoolBrowserInfo } from '../../../../types/profile';
 
 interface RunningBrowsersPanelProps {
   profiles: BrowserProfile[];
@@ -26,6 +26,17 @@ const statusDot: Record<PoolBrowserInfo['status'], string> = {
   locked: 'bg-emerald-500',
   destroying: 'bg-red-500',
 };
+
+const runtimeLabels: Record<BrowserRuntimeId, string> = {
+  'electron-webcontents': 'Electron',
+  'chromium-extension-relay': 'Chromium Extension',
+  'firefox-bidi': 'Firefox BiDi',
+  'chromium-cloak-playwright': 'Cloak Playwright',
+};
+
+function getRuntimeLabel(runtimeId: BrowserRuntimeId): string {
+  return runtimeLabels[runtimeId] ?? runtimeId;
+}
 
 function formatTime(ts: number): string {
   try {
@@ -51,7 +62,7 @@ function canOpenBrowser(browser: PoolBrowserInfo): boolean {
   if (browser.status !== 'idle' && browser.status !== 'locked') {
     return false;
   }
-  if (browser.engine === 'electron' && !browser.viewId) {
+  if (browser.runtimeId === 'electron-webcontents' && !browser.viewId) {
     return false;
   }
   return true;
@@ -60,8 +71,9 @@ function canOpenBrowser(browser: PoolBrowserInfo): boolean {
 function getOpenTitle(browser: PoolBrowserInfo): string {
   if (browser.status === 'creating') return '创建中，暂不可打开';
   if (browser.status === 'destroying') return '销毁中，暂不可打开';
-  if (browser.engine === 'electron' && !browser.viewId) return '视图未就绪，暂不可打开';
-  return browser.engine === 'electron' ? '打开' : '前置窗口';
+  if (browser.runtimeId === 'electron-webcontents' && !browser.viewId)
+    return '视图未就绪，暂不可打开';
+  return browser.runtimeId === 'electron-webcontents' ? '打开' : '前置窗口';
 }
 
 export function RunningBrowsersPanel({
@@ -435,7 +447,7 @@ export function RunningBrowsersPanel({
                             )}
                           </div>
                           <div className="text-xs text-muted-foreground truncate">
-                            Engine {browser.engine}
+                            Runtime {getRuntimeLabel(browser.runtimeId)}
                             {browser.viewId ? ` · View ${shortId(browser.viewId)}` : ''}
                           </div>
                         </div>

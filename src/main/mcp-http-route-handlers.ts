@@ -28,8 +28,8 @@ const UNSUPPORTED_MCP_TRANSPORT_INPUTS = [
   'x-airpa-tool-profile',
   'mcp-partition',
   'mcp-partition-id',
-  'mcp-engine',
-  'mcp-browser-engine',
+  'mcp-runtime-id',
+  'mcp-browser-runtime-id',
   'x-airpa-scopes',
 ] as const;
 
@@ -54,7 +54,7 @@ const rejectUnsupportedTransportInput = (
       reason: 'unsupported_transport_input',
       input: inputName,
       value: asTrimmedText(Array.isArray(inputValue) ? inputValue[0] : inputValue),
-      hint: 'Remove transport-level profile, engine, tool-surface, and scope controls. Use session_prepare to configure the current MCP session.',
+      hint: 'Remove transport-level profile, runtimeId, tool-surface, and scope controls. Use session_prepare to configure the current MCP session.',
     },
     requestId
   );

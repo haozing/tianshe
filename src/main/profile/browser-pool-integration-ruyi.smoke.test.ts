@@ -8,13 +8,24 @@ import { getDefaultFingerprint } from '../../constants/fingerprint-defaults';
 const electronState = vi.hoisted(() => ({
   appPath: process.cwd(),
   userDataDir: '',
+  isPackaged: false,
+}));
+
+vi.mock('electron-webcontents', () => ({
+  app: {
+    getPath: vi.fn(() => electronState.userDataDir),
+    getAppPath: vi.fn(() => electronState.appPath),
+    isPackaged: false,
+  },
 }));
 
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => electronState.userDataDir),
     getAppPath: vi.fn(() => electronState.appPath),
-    isPackaged: false,
+    get isPackaged() {
+      return electronState.isPackaged;
+    },
   },
 }));
 
@@ -43,7 +54,7 @@ function assertFirefoxRuntimeAvailable(): string {
 
 describe('createRuyiBrowserFactory smoke', () => {
   runSmoke(
-    'launches Firefox and drives dialog, tabs, and interception through the ruyi engine',
+    'launches Firefox and drives dialog, tabs, and interception through the firefox-bidi runtime',
     async () => {
       const firefoxPath = assertFirefoxRuntimeAvailable();
       expect(firefoxPath.length).toBeGreaterThan(0);
@@ -51,14 +62,14 @@ describe('createRuyiBrowserFactory smoke', () => {
       const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'airpa-ruyi-smoke-'));
       const smokeServer = await createBrowserEngineSmokeServer({
         title: 'Ruyi Smoke',
-        pingMessage: 'pong from ruyi engine',
+        pingMessage: 'pong from firefox-bidi runtime',
       });
 
       electronState.userDataDir = path.join(tempRoot, 'user-data-root');
 
       const factory = createRuyiBrowserFactory();
       const sessionId = `ruyi-smoke-${Date.now()}`;
-      const fingerprint = getDefaultFingerprint('ruyi');
+      const fingerprint = getDefaultFingerprint('firefox-bidi');
       let closeBrowser: (() => Promise<void>) | null = null;
       let unsubscribeRuntimeEvents: (() => void) | null = null;
 
@@ -66,7 +77,7 @@ describe('createRuyiBrowserFactory smoke', () => {
         const created = await factory({
           id: sessionId,
           partition: `persist:${sessionId}`,
-          engine: 'ruyi',
+          runtimeId: 'firefox-bidi',
           fingerprint: {
             ...fingerprint,
             identity: {
@@ -96,10 +107,10 @@ describe('createRuyiBrowserFactory smoke', () => {
           lastAccessedAt: Date.now(),
         });
 
-        expect(created.engine).toBe('ruyi');
+        expect(created.runtimeId).toBe('firefox-bidi');
         closeBrowser = () => created.browser.closeInternal();
         expect(created.browser.describeRuntime()).toMatchObject({
-          engine: 'ruyi',
+          runtimeId: 'firefox-bidi',
         });
         expect(created.browser.hasCapability('network.capture')).toBe(true);
         expect(created.browser.hasCapability('network.responseBody')).toBe(false);
@@ -187,12 +198,12 @@ describe('createRuyiBrowserFactory smoke', () => {
         await created.browser.type('#name', '', { clear: true });
         await created.browser.click('#name');
         await sleep(300);
-        await created.browser.native.type('ruyi engine smoke', { delay: 40 });
+        await created.browser.native.type('firefox-bidi runtime smoke', { delay: 40 });
         await waitForCondition(async () => {
           const value = await created.browser.evaluate<string>(
             "document.querySelector('#name').value"
           );
-          return value === 'ruyi engine smoke';
+          return value === 'firefox-bidi runtime smoke';
         }, 10_000, 'typed input value');
 
         await created.browser.select('#choice', 'beta');
@@ -226,7 +237,7 @@ describe('createRuyiBrowserFactory smoke', () => {
 
         await waitForCondition(async () => {
           const text = await created.browser.getText('#result');
-          return text.includes('pong from ruyi engine');
+          return text.includes('pong from firefox-bidi runtime');
         }, 10_000, 'fetch result text');
 
         await waitForCondition(

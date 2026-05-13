@@ -35,6 +35,7 @@
  */
 
 import type {
+  BrowserRuntimeId,
   BrowserProfile,
   ProfileListParams,
   CreateProfileParams,
@@ -51,10 +52,9 @@ import type {
 } from '../../browser-pool/ports';
 import type { InternalDevToolsOpener } from './window';
 import type { BrowserRuntimeDescriptor } from '../../../types/browser-interface';
-import type { AutomationEngine, BrowserHandle, ReleaseOptions } from '../../browser-pool/types';
-import {
-  getStaticEngineRuntimeDescriptor,
-} from '../../browser-pool/engine-capability-registry';
+import type { BrowserHandle, ReleaseOptions } from '../../browser-pool/types';
+import { BROWSER_RUNTIME_IDS, DEFAULT_BROWSER_RUNTIME_ID } from '../../../types/profile';
+import { getStaticRuntimeDescriptor } from '../../browser-pool/runtime-capability-registry';
 import { ProfileCrudNamespace } from './profile-crud-namespace';
 import {
   ProfileFingerprintNamespace,
@@ -96,7 +96,7 @@ export interface LaunchOptions {
    */
   rightDockSize?: number | string;
   /** 自动化引擎（默认 'electron'） */
-  engine?: AutomationEngine;
+  runtimeId?: BrowserRuntimeId;
 }
 
 /**
@@ -113,7 +113,7 @@ export interface LaunchPopupOptions {
   url?: string;
   signal?: AbortSignal;
   /** 自动化引擎（默认 'electron'） */
-  engine?: AutomationEngine;
+  runtimeId?: BrowserRuntimeId;
   /** 弹窗标题，仅 Electron 内嵌弹窗有效 */
   title?: string;
   /** 弹窗宽度，默认 1200，仅 Electron 内嵌弹窗有效 */
@@ -140,7 +140,7 @@ export interface WithLeaseRunContext {
   browser: BrowserHandle['browser'];
   browserId: string;
   sessionId: string;
-  engine: AutomationEngine;
+  runtimeId: BrowserRuntimeId;
   viewId?: string;
   release: (options?: ReleaseOptions) => Promise<void>;
   renew: (extensionMs?: number) => Promise<void>;
@@ -188,16 +188,14 @@ export class ProfileNamespace {
     });
   }
 
-  describeEngineRuntime(engine: AutomationEngine = 'electron'): BrowserRuntimeDescriptor {
-    return getStaticEngineRuntimeDescriptor(engine);
+  describeRuntime(runtimeId: BrowserRuntimeId = DEFAULT_BROWSER_RUNTIME_ID): BrowserRuntimeDescriptor {
+    return getStaticRuntimeDescriptor(runtimeId);
   }
 
-  listEngineRuntimes(): Record<AutomationEngine, BrowserRuntimeDescriptor> {
-    return {
-      electron: getStaticEngineRuntimeDescriptor('electron'),
-      extension: getStaticEngineRuntimeDescriptor('extension'),
-      ruyi: getStaticEngineRuntimeDescriptor('ruyi'),
-    };
+  listRuntimes(): Record<BrowserRuntimeId, BrowserRuntimeDescriptor> {
+    return Object.fromEntries(
+      BROWSER_RUNTIME_IDS.map((runtimeId) => [runtimeId, getStaticRuntimeDescriptor(runtimeId)])
+    ) as Record<BrowserRuntimeId, BrowserRuntimeDescriptor>;
   }
 
   /**
@@ -731,7 +729,9 @@ export class ProfileNamespace {
    * const defaultFp = await helpers.profile.getDefaultFingerprint();
    * console.log('默认 UA:', defaultFp.userAgent);
    */
-  async getDefaultFingerprint(engine: AutomationEngine = 'electron'): Promise<FingerprintConfig> {
-    return this.fingerprintNamespace.getDefaultFingerprint(engine);
+  async getDefaultFingerprint(
+    runtimeId: BrowserRuntimeId = DEFAULT_BROWSER_RUNTIME_ID
+  ): Promise<FingerprintConfig> {
+    return this.fingerprintNamespace.getDefaultFingerprint(runtimeId);
   }
 }

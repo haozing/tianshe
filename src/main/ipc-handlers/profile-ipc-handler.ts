@@ -19,7 +19,7 @@ import type {
   UpdateGroupParams,
   PoolBrowserInfo,
   ProfileStatus,
-  AutomationEngine,
+  BrowserRuntimeId,
 } from '../../types/profile';
 import {
   type BrowserPoolConfig,
@@ -120,7 +120,8 @@ export function registerProfileHandlers(
 
       const runtimeChanged =
         params.fingerprint !== undefined ||
-        params.engine !== undefined ||
+        params.runtimeId !== undefined ||
+        params.runtimeSourceOverride !== undefined ||
         params.proxy !== undefined ||
         params.quota !== undefined ||
         params.idleTimeoutMs !== undefined ||
@@ -332,7 +333,7 @@ export function registerProfileHandlers(
         timeout?: number;
         strategy?: 'any' | 'fresh' | 'reuse' | 'specific';
         browserId?: string;
-        engine?: AutomationEngine;
+        runtimeId?: BrowserRuntimeId;
       }
     ) => {
       try {
@@ -359,7 +360,7 @@ export function registerProfileHandlers(
                 strategy,
                 browserId: launchOptions?.browserId,
                 timeout: launchOptions?.timeout || 30000,
-                engine: launchOptions?.engine,
+                runtimeId: launchOptions?.runtimeId,
               },
               'ipc',
               launchOptions?.pluginId
@@ -375,7 +376,7 @@ export function registerProfileHandlers(
         logger.info('Browser acquired from profile pool', {
           browserId: handle.browserId,
           profileId,
-          engine: handle.engine,
+          runtimeId: handle.runtimeId,
         });
 
         return {
@@ -384,7 +385,7 @@ export function registerProfileHandlers(
             browserId: handle.browserId,
             sessionId: handle.sessionId,
             profileId,
-            engine: handle.engine,
+            runtimeId: handle.runtimeId,
           },
         };
       } catch (error) {
@@ -470,7 +471,7 @@ export function registerProfileHandlers(
         const data: PoolBrowserInfo[] = browsers.map((browser) => ({
           id: browser.id,
           sessionId: browser.sessionId,
-          engine: browser.engine,
+          runtimeId: browser.runtimeId,
           status: browser.status,
           viewId: 'viewId' in browser ? browser.viewId : undefined,
           createdAt: browser.createdAt,
@@ -526,12 +527,12 @@ export function registerProfileHandlers(
           });
         }
 
-        if (pooled.engine !== 'electron') {
+        if (pooled.runtimeId !== 'electron-webcontents') {
           if (!hasBrowserInstance(pooled)) {
             return createIPCFailureResponse(
               `Browser is not ready to show (status=${pooled.status})`,
               'BROWSER_NOT_READY',
-              { context: { browserId, status: pooled.status, engine: pooled.engine } }
+              { context: { browserId, status: pooled.status, runtimeId: pooled.runtimeId } }
             );
           }
 
@@ -539,7 +540,7 @@ export function registerProfileHandlers(
             return createIPCFailureResponse(
               'Browser does not support show/bringToFront.',
               'OPERATION_FAILED',
-              { context: { browserId, engine: pooled.engine } }
+              { context: { browserId, runtimeId: pooled.runtimeId } }
             );
           }
 
@@ -553,7 +554,7 @@ export function registerProfileHandlers(
             logger.warn('Detected closed persistent browser; destroying stale instance', {
               browserId,
               profileId: pooled.sessionId,
-              engine: pooled.engine,
+              runtimeId: pooled.runtimeId,
             });
             await poolManager.destroyBrowser(browserId).catch(() => undefined);
 
@@ -568,7 +569,7 @@ export function registerProfileHandlers(
                   {
                     strategy: 'reuse',
                     timeout: 30000,
-                    engine: pooled.engine,
+                    runtimeId: pooled.runtimeId,
                   },
                   'ipc'
                 ),
@@ -599,12 +600,12 @@ export function registerProfileHandlers(
             logger.info('Relaunched persistent browser for profile pool show', {
               browserId: relaunched.browserId,
               profileId: pooled.sessionId,
-              engine: pooled.engine,
+              runtimeId: pooled.runtimeId,
             });
             return {
               success: true,
               data: {
-                engine: pooled.engine,
+                runtimeId: pooled.runtimeId,
                 activated: true,
                 browserId: relaunched.browserId,
                 relaunched: true,
@@ -612,7 +613,7 @@ export function registerProfileHandlers(
             };
           }
 
-          return { success: true, data: { engine: pooled.engine, activated: true } };
+          return { success: true, data: { runtimeId: pooled.runtimeId, activated: true } };
         }
 
         const viewId = 'viewId' in pooled ? pooled.viewId : undefined;
@@ -620,7 +621,7 @@ export function registerProfileHandlers(
           return createIPCFailureResponse(
             `Browser view is not ready (status=${pooled.status})`,
             'BROWSER_NOT_READY',
-            { context: { browserId, status: pooled.status, engine: pooled.engine } }
+            { context: { browserId, status: pooled.status, runtimeId: pooled.runtimeId } }
           );
         }
 

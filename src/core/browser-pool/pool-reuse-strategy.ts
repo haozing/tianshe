@@ -22,25 +22,25 @@ export class PoolReuseStrategy {
 
   async acquire(request: AcquireRequest, session: SessionConfig): Promise<ReadyBrowser | undefined> {
     let pooledBrowser: ReadyBrowser | undefined;
-    const engine = request.options.engine ?? session.engine ?? 'electron';
+    const runtimeId = request.options.runtimeId ?? session.runtimeId;
 
     if (request.options.strategy === 'specific' && request.options.browserId) {
       pooledBrowser = await this.globalPool.acquireSpecific(request.options.browserId);
       if (
         pooledBrowser &&
-        (pooledBrowser.sessionId !== session.id || pooledBrowser.engine !== engine)
+        (pooledBrowser.sessionId !== session.id || pooledBrowser.runtimeId !== runtimeId)
       ) {
         logger.warn(
-          `[tryAcquireFromPool] specific browserId does not match session/engine, ignoring: ` +
+          `[tryAcquireFromPool] specific browserId does not match session/runtime, ignoring: ` +
             `browserId=${pooledBrowser.id}, browserSession=${pooledBrowser.sessionId}, requestSession=${session.id}, ` +
-            `browserEngine=${pooledBrowser.engine}, requestEngine=${engine}`
+            `browserRuntime=${pooledBrowser.runtimeId}, requestRuntime=${runtimeId}`
         );
         pooledBrowser = undefined;
       }
     } else {
       pooledBrowser = await this.globalPool.acquireIdle(
         session.id,
-        engine,
+        runtimeId,
         request.options.strategy
       );
     }
@@ -65,7 +65,7 @@ export class PoolReuseStrategy {
     if (lockedBrowser && isReadyBrowser(lockedBrowser)) {
       if (isBrowserControllerClosed(lockedBrowser.browser)) {
         logger.warn(
-          `[tryAcquireFromPool] Discarding closed pooled browser: ${pooledBrowser.id} (session=${session.id}, engine=${engine})`
+          `[tryAcquireFromPool] Discarding closed pooled browser: ${pooledBrowser.id} (session=${session.id}, runtimeId=${runtimeId})`
         );
         await this.globalPool.destroyBrowser(pooledBrowser.id);
         return undefined;

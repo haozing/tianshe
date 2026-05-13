@@ -137,7 +137,7 @@ function pickSearchContract(results: Awaited<ReturnType<BrowserSnapshotService['
   }));
 }
 
-describe('browser runtime cross-engine contracts', () => {
+describe('browser runtime cross-runtime contracts', () => {
   it('keeps snapshot contracts aligned between BrowserSnapshotService, ExtensionBrowser, and RuyiBrowser', async () => {
     const { service } = createSnapshotServiceFixture();
     const { browser: extensionBrowser } = createExtensionBrowserFixture();

@@ -7,7 +7,7 @@ import {
   createMockProfileServiceGetter,
 } from './test-utils';
 
-vi.mock('electron', () => ({
+vi.mock('electron-webcontents', () => ({
   app: {
     getPath: vi.fn(() => '/mock/user/data'),
   },
@@ -42,7 +42,7 @@ describe('BrowserPoolManager closed persistent browser reuse', () => {
   it('destroys a closed extension browser before handing it out again', async () => {
     profiles.set(
       'extension-session',
-      createMockProfile({ id: 'extension-session', engine: 'extension' })
+      createMockProfile({ id: 'extension-session', runtimeId: 'chromium-extension-relay' })
     );
 
     const firstHandle = await manager.acquire('extension-session', { strategy: 'reuse' });

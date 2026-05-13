@@ -9,6 +9,7 @@ import { HttpApiPanel } from './HttpApiPanel';
 import { OcrPoolPanel } from './OcrPoolPanel';
 import { CloudSnapshotPanel } from './CloudSnapshotPanel';
 import { InternalBrowserPanel } from './InternalBrowserPanel';
+import { BrowserRuntimePanel } from './BrowserRuntimePanel';
 import { PageFrameHeader } from '../layout/PageFrameHeader';
 import { isCloudSnapshotAvailable } from '../../lib/edition';
 
@@ -46,6 +47,9 @@ export function SettingsPage() {
             <TabsTrigger className="h-8 rounded-md px-3 py-0" value="internal-browser">
               内置浏览器
             </TabsTrigger>
+            <TabsTrigger className="h-8 rounded-md px-3 py-0" value="browser-runtime">
+              浏览器运行时
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="scheduler" className="mt-3">
@@ -68,6 +72,10 @@ export function SettingsPage() {
 
           <TabsContent value="internal-browser" className="mt-3">
             <InternalBrowserPanel />
+          </TabsContent>
+
+          <TabsContent value="browser-runtime" className="mt-3">
+            <BrowserRuntimePanel />
           </TabsContent>
         </Tabs>
       </div>

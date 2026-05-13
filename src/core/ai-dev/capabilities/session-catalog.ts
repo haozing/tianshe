@@ -1,5 +1,10 @@
-import { createStructuredError, ErrorCode } from '../../../types/error-codes';
+﻿import { createStructuredError, ErrorCode } from '../../../types/error-codes';
 import { DEFAULT_BROWSER_PROFILE } from '../../../constants/browser-pool';
+import {
+  BROWSER_RUNTIME_IDS,
+  isBrowserRuntimeId,
+  type BrowserRuntimeId,
+} from '../../../types/browser-runtime';
 import type {
   OrchestrationCapabilityDefinition,
   OrchestrationDependencies,
@@ -65,16 +70,16 @@ type EffectivePreparationProfileSource =
   | 'current_session'
   | 'default_profile'
   | 'none';
-type EffectivePreparationEngineSource = 'requested' | 'sticky_session' | 'profile_default' | 'none';
+type EffectivePreparationRuntimeSource = 'requested' | 'sticky_session' | 'profile_default' | 'none';
 
 const PROFILE_INFO_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'name', 'engine', 'status', 'isSystem'],
+  required: ['id', 'name', 'runtimeId', 'status', 'isSystem'],
   properties: {
     id: { type: 'string' },
     name: { type: 'string' },
-    engine: { type: 'string' },
+    runtimeId: { type: 'string' },
     status: { type: 'string' },
     partition: { type: 'string' },
     isSystem: { type: 'boolean' },
@@ -89,11 +94,11 @@ const BROWSER_RUNTIME_DESCRIPTOR_SCHEMA = createBrowserRuntimeDescriptorSchema()
 const SESSION_ACQUIRE_READINESS_BROWSER_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['browserId', 'status', 'engine', 'source', 'pluginId', 'requestId', 'viewId'],
+  required: ['browserId', 'status', 'runtimeId', 'source', 'pluginId', 'requestId', 'viewId'],
   properties: {
     browserId: { type: 'string' },
     status: { type: 'string' },
-    engine: { type: ['string', 'null'] },
+    runtimeId: { type: ['string', 'null'] },
     source: { type: ['string', 'null'] },
     pluginId: { type: ['string', 'null'] },
     requestId: { type: ['string', 'null'] },
@@ -147,7 +152,7 @@ const SESSION_INFO_SCHEMA = {
   properties: {
     sessionId: { type: 'string' },
     profileId: { type: 'string' },
-    engine: { type: 'string' },
+    runtimeId: { type: 'string' },
     visible: { type: 'boolean' },
     lastActivityAt: { type: 'string' },
     pendingInvocations: { type: 'number' },
@@ -167,7 +172,7 @@ const SESSION_INFO_SCHEMA = {
     viewportHealthReason: { type: 'string' },
     interactionReady: { type: 'boolean' },
     offscreenDetected: { type: 'boolean' },
-    engineRuntimeDescriptor: {
+    runtimeDescriptor: {
       anyOf: [{ type: 'null' }, BROWSER_RUNTIME_DESCRIPTOR_SCHEMA],
     },
     browserRuntimeDescriptor: {
@@ -195,11 +200,11 @@ const SESSION_INFO_SCHEMA = {
 const EFFECTIVE_PROFILE_SCHEMA = {
   type: ['object', 'null'],
   additionalProperties: false,
-  required: ['id', 'name', 'engine', 'source'],
+  required: ['id', 'name', 'runtimeId', 'source'],
   properties: {
     id: { type: 'string' },
     name: { type: 'string' },
-    engine: { type: 'string' },
+    runtimeId: { type: 'string' },
     source: {
       type: 'string',
       enum: ['resolved_query', 'current_session', 'default_profile', 'none'],
@@ -253,8 +258,8 @@ const SESSION_OUTPUT_SCHEMAS: Partial<Record<string, Record<string, unknown>>> =
       'idempotent',
       'effectiveProfile',
       'visible',
-      'effectiveEngine',
-      'effectiveEngineSource',
+      'effectiveRuntime',
+      'effectiveRuntimeSource',
       'effectiveScopes',
       'browserAcquired',
       'changed',
@@ -274,9 +279,9 @@ const SESSION_OUTPUT_SCHEMAS: Partial<Record<string, Record<string, unknown>>> =
       effectiveProfile: EFFECTIVE_PROFILE_SCHEMA,
       prepared: { type: 'boolean' },
       idempotent: { type: 'boolean' },
-      engine: { type: ['string', 'null'] },
-      effectiveEngine: { type: ['string', 'null'] },
-      effectiveEngineSource: {
+      runtimeId: { type: ['string', 'null'] },
+      effectiveRuntime: { type: ['string', 'null'] },
+      effectiveRuntimeSource: {
         type: 'string',
         enum: ['requested', 'sticky_session', 'profile_default', 'none'],
       },
@@ -303,7 +308,7 @@ const SESSION_OUTPUT_SCHEMAS: Partial<Record<string, Record<string, unknown>>> =
         type: 'array',
         items: {
           type: 'string',
-          enum: ['profile', 'engine', 'visible', 'scopes'],
+          enum: ['profile', 'runtimeId', 'visible', 'scopes'],
         },
       },
     },
@@ -463,7 +468,7 @@ const readStringArg = (
 const normalizeProfile = (profile: OrchestrationProfileInfo): OrchestrationProfileInfo => ({
   id: asText(profile.id),
   name: asText(profile.name),
-  engine: asText(profile.engine),
+  runtimeId: asText(profile.runtimeId),
   status: asText(profile.status),
   partition: asText(profile.partition) || undefined,
   isSystem: profile.isSystem === true,
@@ -479,7 +484,7 @@ const formatProfileLine = (profile: OrchestrationProfileInfo): string => {
   const fields = [
     asText(profile.id) || '-',
     asText(profile.name) || '-',
-    asText(profile.engine) || '-',
+    asText(profile.runtimeId) || '-',
     asText(profile.status) || '-',
   ];
   const extras: string[] = [];
@@ -501,7 +506,7 @@ const formatSessionLine = (
   return [
     `- ${asText(session.sessionId)}${label}`,
     `profile=${asText(session.profileId) || 'none'}`,
-    `engine=${asText(session.engine) || 'auto'}`,
+    `runtimeId=${asText(session.runtimeId) || 'auto'}`,
     `visible=${session.visible === true}`,
     `browser=${browserAcquired ? 'attached' : 'none'}`,
     `host=${asText(session.hostWindowId) || 'none'}`,
@@ -536,12 +541,9 @@ const formatSessionPreview = (
   return preview;
 };
 
-const normalizeEngine = (value: unknown): 'electron' | 'extension' | 'ruyi' | undefined => {
-  const normalized = asText(value).toLowerCase();
-  if (normalized === 'electron' || normalized === 'extension' || normalized === 'ruyi') {
-    return normalized;
-  }
-  return undefined;
+const normalizeRuntimeId = (value: unknown): BrowserRuntimeId | undefined => {
+  const normalized = asText(value);
+  return isBrowserRuntimeId(normalized) ? normalized : undefined;
 };
 
 const getCurrentSessionInfo = async (
@@ -587,74 +589,74 @@ const resolveEffectivePreparationProfile = async (
     : { profile: null, source: 'none' };
 };
 
-const resolveEffectiveEngineState = (options: {
-  requestedEngine?: string;
-  stickySessionEngine?: string;
+const resolveEffectiveRuntimeState = (options: {
+  requestedRuntimeId?: string;
+  stickySessionRuntimeId?: string;
   effectiveProfile?: OrchestrationProfileInfo | null;
 }): {
-  engine: 'electron' | 'extension' | 'ruyi' | null;
-  source: EffectivePreparationEngineSource;
+  runtimeId: BrowserRuntimeId | null;
+  source: EffectivePreparationRuntimeSource;
 } => {
-  const requestedEngine = normalizeEngine(options.requestedEngine);
-  if (requestedEngine) {
-    return { engine: requestedEngine, source: 'requested' };
+  const requestedRuntimeId = normalizeRuntimeId(options.requestedRuntimeId);
+  if (requestedRuntimeId) {
+    return { runtimeId: requestedRuntimeId, source: 'requested' };
   }
 
-  const stickySessionEngine = normalizeEngine(options.stickySessionEngine);
-  if (stickySessionEngine) {
-    return { engine: stickySessionEngine, source: 'sticky_session' };
+  const stickySessionRuntimeId = normalizeRuntimeId(options.stickySessionRuntimeId);
+  if (stickySessionRuntimeId) {
+    return { runtimeId: stickySessionRuntimeId, source: 'sticky_session' };
   }
 
-  const profileEngine = normalizeEngine(options.effectiveProfile?.engine);
-  if (profileEngine) {
-    return { engine: profileEngine, source: 'profile_default' };
+  const profileRuntimeId = normalizeRuntimeId(options.effectiveProfile?.runtimeId);
+  if (profileRuntimeId) {
+    return { runtimeId: profileRuntimeId, source: 'profile_default' };
   }
 
-  return { engine: null, source: 'none' };
+  return { runtimeId: null, source: 'none' };
 };
 
-const assertEngineCompatibleWithProfile = (options: {
+const assertRuntimeCompatibleWithProfile = (options: {
   profile: OrchestrationProfileInfo | null;
-  effectiveEngine?: string;
-  effectiveEngineSource?: EffectivePreparationEngineSource;
+  effectiveRuntime?: string;
+  effectiveRuntimeSource?: EffectivePreparationRuntimeSource;
   effectiveProfileSource?: EffectivePreparationProfileSource;
   sessionId?: string;
   currentProfileId?: string;
-  currentEngine?: string;
+  currentRuntimeId?: string;
   query?: string;
 }): void => {
   const profile = options.profile;
-  const effectiveEngine = normalizeEngine(options.effectiveEngine);
-  const profileEngine = normalizeEngine(profile?.engine);
-  if (!profile || !effectiveEngine || !profileEngine || effectiveEngine === profileEngine) {
+  const effectiveRuntime = normalizeRuntimeId(options.effectiveRuntime);
+  const profileRuntimeId = normalizeRuntimeId(profile?.runtimeId);
+  if (!profile || !effectiveRuntime || !profileRuntimeId || effectiveRuntime === profileRuntimeId) {
     return;
   }
 
   throw createStructuredError(
     ErrorCode.INVALID_PARAMETER,
-    `Profile ${asText(profile.id) || 'unknown'} is bound to engine "${profileEngine}" and cannot be prepared with engine "${effectiveEngine}"`,
+    `Profile ${asText(profile.id) || 'unknown'} is bound to runtimeId "${profileRuntimeId}" and cannot be prepared with runtimeId "${effectiveRuntime}"`,
     {
       suggestion:
-        'Choose a profile whose engine matches the requested session engine, or replay session_prepare with a compatible engine.',
-      reasonCode: 'profile_engine_mismatch',
+        'Choose a profile whose runtimeId matches the requested session runtime, or replay session_prepare with a compatible runtimeId.',
+      reasonCode: 'profile_runtime_mismatch',
       retryable: true,
       recommendedNextTools: ['profile_resolve', 'session_prepare'],
       authoritativeFields: [...SESSION_PREPARE_AUTHORITATIVE_RESULT_FIELDS],
       nextActionHints: [
-        'Switch to a compatible profile or engine pairing before retrying session_prepare.',
+        'Switch to a compatible profile or runtime pairing before retrying session_prepare.',
       ],
       context: {
-        reasonCode: 'profile_engine_mismatch',
+        reasonCode: 'profile_runtime_mismatch',
         sessionId: asText(options.sessionId) || undefined,
         query: asText(options.query) || undefined,
         profileId: asText(profile.id) || undefined,
         profileName: asText(profile.name) || undefined,
         effectiveProfileSource: options.effectiveProfileSource || 'none',
-        profileEngine,
-        requestedEngine: effectiveEngine,
-        effectiveEngineSource: options.effectiveEngineSource || 'none',
+        profileRuntimeId,
+        requestedRuntimeId: effectiveRuntime,
+        effectiveRuntimeSource: options.effectiveRuntimeSource || 'none',
         currentProfileId: asText(options.currentProfileId) || undefined,
-        currentEngine: normalizeEngine(options.currentEngine),
+        currentRuntimeId: normalizeRuntimeId(options.currentRuntimeId),
       },
     }
   );
@@ -794,7 +796,7 @@ const sessionGetCurrentHandler: CapabilityHandler<OrchestrationDependencies> = a
         session: current || null,
       },
       nextActionHints: [
-        'If the session still needs a reusable profile, engine, visibility, or sticky scopes, call session_prepare before browser_* tools.',
+        'If the session still needs a reusable profile, runtimeId, visibility, or sticky scopes, call session_prepare before browser_* tools.',
         'Inspect session.acquireReadiness before assuming the next browser_* call can bind immediately.',
         'When work is complete, ask the host to terminate the MCP session with StreamableHTTPClientTransport.terminateSession() or DELETE /mcp plus the current mcp-session-id.',
         'If you can only act through MCP tools, prefer session_end_current as the final step.',
@@ -959,13 +961,13 @@ const sessionPrepareHandler: CapabilityHandler<OrchestrationDependencies> = asyn
   }
 
   const query = readStringArg(args, 'query', { required: false });
-  const engine = readStringArg(args, 'engine', { required: false });
+  const runtimeId = readStringArg(args, 'runtimeId', { required: false });
   const visible = readOptionalBooleanArg(args, 'visible');
   const scopes = readOptionalStringArrayArg(args, 'scopes');
-  if (engine && engine !== 'electron' && engine !== 'extension' && engine !== 'ruyi') {
+  if (runtimeId && !isBrowserRuntimeId(runtimeId)) {
     throw createStructuredError(
       ErrorCode.INVALID_PARAMETER,
-      'Parameter engine must be "electron", "extension", or "ruyi"'
+      `Parameter runtimeId must be one of: ${BROWSER_RUNTIME_IDS.join(', ')}`
     );
   }
   const currentSession = await getCurrentSessionInfo(sessionGateway);
@@ -999,25 +1001,25 @@ const sessionPrepareHandler: CapabilityHandler<OrchestrationDependencies> = asyn
     resolvedProfile: resolved?.profile || null,
     currentSession,
   });
-  const effectiveEngineState = resolveEffectiveEngineState({
-    requestedEngine: engine,
-    stickySessionEngine: currentSession?.engine,
+  const effectiveRuntimeState = resolveEffectiveRuntimeState({
+    requestedRuntimeId: runtimeId,
+    stickySessionRuntimeId: currentSession?.runtimeId,
     effectiveProfile: effectiveProfileState.profile,
   });
-  assertEngineCompatibleWithProfile({
+  assertRuntimeCompatibleWithProfile({
     profile: effectiveProfileState.profile,
-    effectiveEngine: effectiveEngineState.engine || undefined,
-    effectiveEngineSource: effectiveEngineState.source,
+    effectiveRuntime: effectiveRuntimeState.runtimeId || undefined,
+    effectiveRuntimeSource: effectiveRuntimeState.source,
     effectiveProfileSource: effectiveProfileState.source,
     sessionId: asText(currentSession?.sessionId) || asText(sessionGateway.getCurrentSessionId()),
     currentProfileId: asText(currentSession?.profileId) || undefined,
-    currentEngine: normalizeEngine(currentSession?.engine),
+    currentRuntimeId: normalizeRuntimeId(currentSession?.runtimeId),
     query: resolved?.query,
   });
 
   const prepared = await prepareCurrentSession({
     ...(resolved ? { profileId: resolved.profile.id } : {}),
-    ...(engine ? { engine } : {}),
+    ...(runtimeId ? { runtimeId } : {}),
     ...(visible !== undefined ? { visible } : {}),
     ...(scopes ? { scopes } : {}),
   });
@@ -1034,26 +1036,26 @@ const sessionPrepareHandler: CapabilityHandler<OrchestrationDependencies> = asyn
     if (prepared.reason === 'binding_locked') {
       throw createStructuredError(
         ErrorCode.REQUEST_FAILED,
-        'Current MCP session already locked its browser binding and cannot change profile, engine, or visibility',
+        'Current MCP session already locked its browser binding and cannot change profile, runtimeId, or visibility',
         {
           suggestion:
-            'Replay the same profile, engine, or visibility values for an idempotent check, or create a new MCP session before switching browser binding. Use a separate session_prepare call if you only need to update scopes.',
+            'Replay the same profile, runtimeId, or visibility values for an idempotent check, or create a new MCP session before switching browser binding. Use a separate session_prepare call if you only need to update scopes.',
           reasonCode: 'binding_locked',
           retryable: true,
           recommendedNextTools: ['session_get_current', 'session_end_current', 'session_prepare'],
           authoritativeFields: [...SESSION_PREPARE_AUTHORITATIVE_RESULT_FIELDS],
           nextActionHints: [
-            'Create a new MCP session before changing profile, engine, or visibility.',
+            'Create a new MCP session before changing profile, runtimeId, or visibility.',
             'You may still replay the same binding values or update scopes only.',
           ],
           context: {
             sessionId: prepared.sessionId,
             reason: prepared.reason,
             currentProfileId: prepared.currentProfileId,
-            currentEngine: prepared.currentEngine,
+            currentRuntimeId: prepared.currentRuntimeId,
             currentVisible: prepared.currentVisible,
             requestedProfileId: resolved?.profile.id,
-            requestedEngine: engine,
+            requestedRuntimeId: runtimeId,
             requestedVisible: visible,
           },
         }
@@ -1071,13 +1073,13 @@ const sessionPrepareHandler: CapabilityHandler<OrchestrationDependencies> = asyn
       ? {
           id: asText(effectiveProfileState.profile.id),
           name: asText(effectiveProfileState.profile.name),
-          engine: asText(effectiveProfileState.profile.engine),
+          runtimeId: asText(effectiveProfileState.profile.runtimeId),
           source: effectiveProfileState.source,
         }
       : null;
-  const effectiveEngine = resolveEffectiveEngineState({
-    requestedEngine: engine,
-    stickySessionEngine: prepared.engine,
+  const effectiveRuntime = resolveEffectiveRuntimeState({
+    requestedRuntimeId: runtimeId,
+    stickySessionRuntimeId: prepared.runtimeId,
     effectiveProfile: effectiveProfileState.profile,
   });
   const acquireReadinessSummary = prepared.acquireReadiness
@@ -1096,7 +1098,7 @@ const sessionPrepareHandler: CapabilityHandler<OrchestrationDependencies> = asyn
         effectiveProfile
           ? `Effective profile: ${effectiveProfile.id} (${effectiveProfile.name}) via ${effectiveProfile.source}.`
           : 'Effective profile: none.',
-        `Session settings: stickyEngine=${prepared.engine || 'none'}, effectiveEngine=${effectiveEngine.engine || 'none'} (${effectiveEngine.source}), visible=${prepared.visible}, scopes=${scopeSummary}, browserAcquired=${prepared.browserAcquired}`,
+        `Session settings: stickyRuntime=${prepared.runtimeId || 'none'}, effectiveRuntime=${effectiveRuntime.runtimeId || 'none'} (${effectiveRuntime.source}), visible=${prepared.visible}, scopes=${scopeSummary}, browserAcquired=${prepared.browserAcquired}`,
         acquireReadinessSummary,
         `Changed fields: ${changedSummary}`,
       ]
@@ -1110,9 +1112,9 @@ const sessionPrepareHandler: CapabilityHandler<OrchestrationDependencies> = asyn
         effectiveProfile,
         prepared: prepared.prepared,
         idempotent: prepared.idempotent,
-        engine: prepared.engine || null,
-        effectiveEngine: effectiveEngine.engine,
-        effectiveEngineSource: effectiveEngine.source,
+        runtimeId: prepared.runtimeId || null,
+        effectiveRuntime: effectiveRuntime.runtimeId,
+        effectiveRuntimeSource: effectiveRuntime.source,
         visible: prepared.visible,
         effectiveScopes: prepared.effectiveScopes,
         browserAcquired: prepared.browserAcquired,
@@ -1343,13 +1345,13 @@ const SESSION_CAPABILITIES: Array<{
     definition: {
       name: 'session_prepare',
       description:
-        'Prepare the current MCP session before the first browser_* call by resolving a reusable profile, choosing engine/visibility, and updating sticky scopes.',
+        'Prepare the current MCP session before the first browser_* call by resolving a reusable profile, choosing runtimeId/visibility, and updating sticky scopes.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: {
           query: { type: 'string', minLength: 1 },
-          engine: { type: 'string', enum: ['electron', 'extension', 'ruyi'] },
+          runtimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
           visible: { type: 'boolean' },
           scopes: {
             type: 'array',
@@ -1390,3 +1392,6 @@ export function createSessionCapabilityCatalog(): Record<string, RegisteredCapab
     ])
   );
 }
+
+
+

@@ -2,7 +2,7 @@ import type { Application } from 'express';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { BrowserHandle, BrowserPoolManager } from '../core/browser-pool';
-import type { AutomationEngine } from '../core/browser-pool/types';
+import type { BrowserRuntimeId } from '../core/browser-pool/types';
 import type { RestApiConfig, RestApiDependencies } from '../types/http-api';
 import type { StructuredError } from '../types/error-codes';
 import type { InvokeTaskContext } from './http-session-manager';
@@ -27,7 +27,7 @@ export interface McpSessionBrowserState {
   browserHandle?: BrowserHandle;
   browserAcquirePromise?: Promise<BrowserHandle>;
   partition?: string;
-  engine?: AutomationEngine;
+  runtimeId?: BrowserRuntimeId;
   visible: boolean;
   hostWindowId?: string;
 }
@@ -74,7 +74,7 @@ export interface CreateMcpSessionInfoOptions {
   browserHandle?: BrowserHandle;
   browserAcquirePromise?: Promise<BrowserHandle>;
   partition?: string;
-  engine?: AutomationEngine;
+  runtimeId?: BrowserRuntimeId;
   visible?: boolean;
   browser?: Partial<McpSessionBrowserState>;
   authScopes?: string[];
@@ -115,7 +115,7 @@ export const createMcpSessionInfo = (options: CreateMcpSessionInfoOptions): McpS
     browserHandle: options.browserHandle,
     browserAcquirePromise: options.browserAcquirePromise,
     partition: options.partition,
-    engine: options.engine,
+    runtimeId: options.runtimeId,
     visible: options.visible ?? false,
     hostWindowId: options.hostWindowId,
     ...options.browser,
@@ -174,10 +174,10 @@ export interface McpAuthContext {
 }
 
 export interface McpBrowserBindingPort {
-  parseRequestedEngine: (value: string | undefined) => AutomationEngine | undefined;
+  parseRequestedRuntimeId: (value: string | undefined) => BrowserRuntimeId | undefined;
   acquireBrowserFromPool: (
     profileId?: string,
-    engine?: AutomationEngine,
+    runtimeId?: BrowserRuntimeId,
     source?: 'mcp' | 'http'
   ) => Promise<BrowserHandle>;
   getBrowserPoolManager?: () => BrowserPoolManager;

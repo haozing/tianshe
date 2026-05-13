@@ -1,4 +1,4 @@
-﻿import type { Server as HttpServer } from 'node:http';
+import type { Server as HttpServer } from 'node:http';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,7 +65,7 @@ function createMockHandle(browser: BrowserInterface): {
     browser,
     browserId: 'browser-1',
     sessionId: 'pool-session-1',
-    engine: 'extension',
+    runtimeId: 'chromium-extension-relay',
     release,
     renew: vi.fn().mockResolvedValue(true),
   } as unknown as BrowserHandle;
@@ -265,7 +265,7 @@ function pickSessionSnapshot(value: any) {
   return {
     sessionId: value?.sessionId ?? null,
     profileId: value?.profileId ?? null,
-    engine: value?.engine ?? null,
+    runtimeId: value?.runtimeId ?? null,
     visible: value?.visible ?? false,
     browserAcquired: value?.browserAcquired ?? false,
     browserAcquireInProgress: value?.browserAcquireInProgress ?? false,
@@ -277,7 +277,7 @@ function pickSessionSnapshot(value: any) {
     viewportHealthReason: value?.viewportHealthReason ?? null,
     interactionReady: value?.interactionReady ?? false,
     offscreenDetected: value?.offscreenDetected ?? false,
-    engineRuntimeDescriptor: value?.engineRuntimeDescriptor ?? null,
+    runtimeDescriptor: value?.runtimeDescriptor ?? null,
     browserRuntimeDescriptor: value?.browserRuntimeDescriptor ?? null,
     resolvedRuntimeDescriptor: value?.resolvedRuntimeDescriptor ?? null,
   };
@@ -369,7 +369,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     vi.clearAllMocks();
   });
 
-  it('enableAuth=true 娑?mcpRequireAuth=true 閺冭绱?mcp 閺?token 鏉╂柨娲?401', async () => {
+  it('enableAuth=true 濞?mcpRequireAuth=true 闁哄啳顔愮槐?mcp 闁?token 閺夆晜鏌ㄥú?401', async () => {
     await startServer(createMockBrowser(), {
       enableMcp: true,
       restApiConfig: {
@@ -416,7 +416,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(listToolsResult.tools.length).toBeGreaterThan(0);
   });
 
-  it('enableAuth=true 閺冭绱滺TTP 缂傛牗甯撶捄顖滄暠閺堫亜鐢?token 鏉╂柨娲?401', async () => {
+  it('enableAuth=true 闁哄啳顔愮槐婊篢TP 缂傚倹鐗楃敮鎾舵崉椤栨粍鏆犻柡鍫簻閻?token 閺夆晜鏌ㄥú?401', async () => {
     await startServer(createMockBrowser(), {
       restApiConfig: {
         enableAuth: true,
@@ -459,13 +459,13 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
 
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {
       profileId: 'profile-openclaw',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
     });
     expect(createResponse.status).toBe(200);
     expect(createResponse.json.success).toBe(true);
     expect(acquire).toHaveBeenCalledWith(
       'profile-openclaw',
-      expect.objectContaining({ strategy: 'any', engine: 'extension' }),
+      expect.objectContaining({ strategy: 'any', runtimeId: 'chromium-extension-relay' }),
       'http'
     );
     const sessionId = createResponse.json.data.sessionId as string;
@@ -504,7 +504,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(invokeAfterDelete.json.code).toBe(ErrorCode.NOT_FOUND);
   });
 
-  it('create session 閺€顖涘瘮闁俺绻?profile 閸氬秶袨鐟欙絾鐎?profileId', async () => {
+  it('create session returns an error when visible browser show fails', async () => {
     const browser = createMockBrowser({
       getCurrentUrl: vi.fn().mockResolvedValue('https://airpa.dev'),
     });
@@ -519,7 +519,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
             profile: {
               id: 'profile-1',
               name: '555',
-              engine: 'electron',
+              runtimeId: 'electron-webcontents',
               status: 'idle',
             },
           }),
@@ -532,18 +532,18 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
 
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {
       profileId: '555',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
     });
     expect(createResponse.status).toBe(200);
     expect(createResponse.json.success).toBe(true);
     expect(acquire).toHaveBeenCalledWith(
       'profile-1',
-      expect.objectContaining({ strategy: 'any', engine: 'extension' }),
+      expect.objectContaining({ strategy: 'any', runtimeId: 'chromium-extension-relay' }),
       'http'
     );
   });
 
-  it('閺€顖涘瘮閺屻儴顕楁导姘崇樈閻樿埖鈧椒绗?heartbeat', async () => {
+  it('闁衡偓椤栨稑鐦柡灞诲劥椤曟瀵煎宕囨▓闁绘鍩栭埀顑挎缁?heartbeat', async () => {
     await startServer(createMockBrowser());
 
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
@@ -566,20 +566,20 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(heartbeat.json.data.alive).toBe(true);
   });
 
-  it('create session 閸欏倹鏆熼弮鐘虫櫏閺冩儼绻戦崶?INVALID_PARAMETER', async () => {
+  it('create session returns an error when visible browser show fails', async () => {
     await startServer(createMockBrowser());
 
     const response = await postJson(baseUrl, '/api/v1/orchestration/sessions', {
-      engine: 'chromium',
+      runtimeId: 'chromium',
     });
 
     expect(response.status).toBe(400);
     expect(response.json.success).toBe(false);
     expect(response.json.code).toBe(ErrorCode.INVALID_PARAMETER);
-    expect(response.json.details).toContain('engine');
+    expect(response.json.details).toContain('runtimeId');
   });
 
-  it('create session 閸掓繂顫愰崠鏍с亼鐠愩儲妞傛导姘跺櫞閺€鐐セ鐟欏牆娅掗崣銉︾労', async () => {
+  it('create session returns an error when visible browser show fails', async () => {
     await startServer(
       createMockBrowser({
         show: vi.fn().mockRejectedValue(new Error('show failed')),
@@ -702,7 +702,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     });
   });
 
-  it('invoke 閸欏倹鏆熼弮鐘虫櫏閺冩儼绻戦崶?INVALID_PARAMETER', async () => {
+  it('invoke 闁告瑥鍊归弳鐔煎籍閻樿櫕娅忛柡鍐╁劶缁绘垿宕?INVALID_PARAMETER', async () => {
     await startServer(createMockBrowser());
 
     const response = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
@@ -717,7 +717,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(typeof response.json._meta.traceId).toBe('string');
   });
 
-  it('Idempotency-Key 鐎电懓绠撶粵澶庡厴閸旀稐绱版潻鏂挎礀闁插秵鏂佺紒鎾寸亯', async () => {
+  it('Idempotency-Key replays the original response for matching requests', async () => {
     const browser = createMockBrowser({
       snapshot: vi
         .fn()
@@ -762,7 +762,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(snapshot).toHaveBeenCalledTimes(1);
   });
 
-  it('duckdb 閹镐椒绠欓崠鏍х畵缁涘绱戦崥顖涙娴兼俺顕伴崘娆愬瘮娑斿懎瀵茬€涙ê鍋嶉獮鑸垫暜閹镐浇鍤滅€规矮绠?namespace', async () => {
+  it('duckdb 闁归晲妞掔粻娆撳礌閺嵮呯暤缂佹稑顦槐鎴﹀触椤栨稒顦уù鍏间亢椤曚即宕樺▎鎰槷濞戞柨鎳庣€佃尙鈧稒锚閸嬪秹鐛懜鍨殰闁归晲娴囬崵婊呪偓瑙勭煯缁?namespace', async () => {
     const getPersisted = vi.fn().mockResolvedValue(null);
     const setPersisted = vi.fn().mockResolvedValue(undefined);
     const deleteNamespace = vi.fn().mockResolvedValue(undefined);
@@ -822,7 +822,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(deleteNamespace).toHaveBeenCalledWith(sessionId);
   });
 
-  it('Idempotency-Key 婢跺秶鏁ゆ稉鏃囶嚞濮瑰倷缍嬫稉宥勭閼峰瓨妞傛潻鏂挎礀 409', async () => {
+  it('Idempotency-Key replays the original response for matching requests', async () => {
     await startServer(
       createMockBrowser({
         snapshot: vi
@@ -896,7 +896,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(snapshot).toHaveBeenCalledTimes(2);
   });
 
-  it('闂堢偛绠撶粵澶庡厴閸旀稐濞囬悽?Idempotency-Key 娴兼俺绻戦崶?INVALID_PARAMETER', async () => {
+  it('闂傚牏鍋涚粻鎾剁驳婢跺骸鍘撮柛鏃€绋愭繛鍥偨?Idempotency-Key 濞村吋淇虹换鎴﹀炊?INVALID_PARAMETER', async () => {
     await startServer(createMockBrowser());
 
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
@@ -918,7 +918,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(response.json.code).toBe(ErrorCode.INVALID_PARAMETER);
   });
 
-  it('enforceOrchestrationScopes 瀵偓閸氼垱妞傜紓鍝勭毌 scope 鏉╂柨娲?PERMISSION_DENIED', async () => {
+  it('enforceOrchestrationScopes 鐎殿喒鍋撻柛姘煎灡濡炲倻绱撻崫鍕瘜 scope 閺夆晜鏌ㄥú?PERMISSION_DENIED', async () => {
     await startServer(createMockBrowser(), {
       restApiConfig: {
         enforceOrchestrationScopes: true,
@@ -1032,7 +1032,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     );
   });
 
-  it('invoke 闂冪喎鍨┃銏犲毉閺冩儼绻戦崶?REQUEST_FAILED', async () => {
+  it('invoke 闂傚啰鍠庨崹顏勨攦閵忕姴姣夐柡鍐╁劶缁绘垿宕?REQUEST_FAILED', async () => {
     let releaseFirstCall: (() => void) | undefined;
     await startServer(
       createMockBrowser({
@@ -1075,7 +1075,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(first.json.success).toBe(true);
   });
 
-  it('invoke 鐡掑懏妞傞弮鎯扮箲閸?TIMEOUT', async () => {
+  it('invoke 閻℃帒鎳忓鍌炲籍閹壆绠查柛?TIMEOUT', async () => {
     const defaults = HTTP_SERVER_DEFAULTS as unknown as { ORCHESTRATION_INVOKE_TIMEOUT_MS: number };
     const originalTimeout = defaults.ORCHESTRATION_INVOKE_TIMEOUT_MS;
     defaults.ORCHESTRATION_INVOKE_TIMEOUT_MS = 50;
@@ -1290,7 +1290,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     `);
   });
 
-  it('v1 invoke 鐠囬攱鐪版担?schema fuzz閿涙岸娼▔鏇炲棘閺佹壆绮烘稉鈧潻鏂挎礀 INVALID_PARAMETER', async () => {
+  it('v1 invoke 閻犲洭鏀遍惇鐗堟媴?schema fuzz闁挎稒宀稿顏勨枖閺囩偛妫橀柡浣瑰缁儤绋夐埀顒佹交閺傛寧绀€ INVALID_PARAMETER', async () => {
     await startServer(createMockBrowser());
 
     const fuzzCases: unknown[] = [
@@ -1398,7 +1398,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     server = undefined;
   });
 
-  it('delete session 娑撳秴鐡ㄩ崷銊︽鏉╂柨娲?NOT_FOUND', async () => {
+  it('delete session 濞戞挸绉撮悺銊╁捶閵婏附顦ч弶鈺傛煥濞?NOT_FOUND', async () => {
     await startServer(createMockBrowser());
 
     const response = await deleteJson(baseUrl, '/api/v1/orchestration/sessions/not-exists');

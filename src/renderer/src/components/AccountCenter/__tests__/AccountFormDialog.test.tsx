@@ -22,7 +22,7 @@ function buildProfile(patch: Partial<BrowserProfile> = {}): BrowserProfile {
     id: 'profile-1',
     name: '默认环境',
     groupId: null,
-    engine: 'extension',
+    runtimeId: 'chromium-extension-relay',
     partition: 'persist:profile-1',
     proxy: null,
     fingerprint: getDefaultFingerprint(),

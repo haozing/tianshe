@@ -86,7 +86,7 @@ describe('ProfileFormDialog submit payload', () => {
       {
         id: 'profile-ext-1',
         name: 'extension-profile',
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         groupId: null,
         partition: 'persist:profile-ext-1',
         proxy: null,
@@ -162,11 +162,11 @@ describe('ProfileFormDialog submit payload', () => {
       {
         id: 'profile-ext-3',
         name: 'extension-stable-only',
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         groupId: null,
         partition: 'persist:profile-ext-3',
         proxy: null,
-        fingerprint: mergeFingerprintConfig(getDefaultFingerprint('extension'), {
+        fingerprint: mergeFingerprintConfig(getDefaultFingerprint('chromium-extension-relay'), {
           identity: {
             hardware: {
               platformVersion: '15.0.0',
@@ -250,13 +250,13 @@ describe('ProfileFormDialog submit payload', () => {
   });
 
   it('backfills missing extension WebGL contract fields before submit', async () => {
-    const base = getDefaultFingerprint('extension');
+    const base = getDefaultFingerprint('chromium-extension-relay');
     const webgl = base.identity.graphics?.webgl;
     storeState.profiles = [
       {
         id: 'profile-ext-legacy-webgl',
         name: 'extension-legacy-webgl',
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         groupId: null,
         partition: 'persist:profile-ext-legacy-webgl',
         proxy: null,
@@ -325,11 +325,11 @@ describe('ProfileFormDialog submit payload', () => {
       {
         id: 'profile-ext-derived-fields',
         name: 'extension-derived-fields',
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         groupId: null,
         partition: 'persist:profile-ext-derived-fields',
         proxy: null,
-        fingerprint: mergeFingerprintConfig(getDefaultFingerprint('extension'), {
+        fingerprint: mergeFingerprintConfig(getDefaultFingerprint('chromium-extension-relay'), {
           identity: {
             region: {
               primaryLanguage: 'zh-CN',
@@ -413,11 +413,11 @@ describe('ProfileFormDialog submit payload', () => {
       {
         id: 'profile-ext-core-source',
         name: 'extension-core-source',
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         groupId: null,
         partition: 'persist:profile-ext-core-source',
         proxy: null,
-        fingerprint: getDefaultFingerprint('extension'),
+        fingerprint: getDefaultFingerprint('chromium-extension-relay'),
         fingerprintCore: {
           osFamily: 'windows',
           browserProfile: {
@@ -518,11 +518,11 @@ describe('ProfileFormDialog submit payload', () => {
       {
         id: 'profile-ext-2',
         name: 'extension-runtime-profile',
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         groupId: null,
         partition: 'persist:profile-ext-2',
         proxy: null,
-        fingerprint: getDefaultFingerprint('extension'),
+        fingerprint: getDefaultFingerprint('chromium-extension-relay'),
         notes: null,
         tags: [],
         color: null,
@@ -590,11 +590,11 @@ describe('ProfileFormDialog submit payload', () => {
       {
         id: 'profile-ruyi-1',
         name: 'ruyi-stable-only',
-        engine: 'ruyi',
+        runtimeId: 'firefox-bidi',
         groupId: null,
         partition: 'persist:profile-ruyi-1',
         proxy: null,
-        fingerprint: mergeFingerprintConfig(getDefaultFingerprint('ruyi'), {
+        fingerprint: mergeFingerprintConfig(getDefaultFingerprint('firefox-bidi'), {
           identity: {
             display: {
               pixelRatio: 1.5,

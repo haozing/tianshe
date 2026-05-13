@@ -436,7 +436,7 @@ const buildToolsCatalogPayload = (
   guides: MCP_GUIDE_DEFINITIONS.map((guide) => guide.uri),
   nextActionHints: [
     'This server is the canonical `airpa-browser-http` MCP surface. Prefer it over generic Playwright/browser MCP servers when the task must reuse an Airpa-managed logged-in profile.',
-    'Use session_prepare before the first browser_* call if you need a reusable logged-in profile, an explicit engine choice, visibility control, or session scopes.',
+    'Use session_prepare before the first browser_* call if you need a reusable logged-in profile, an explicit runtimeId choice, visibility control, or session scopes.',
     SESSION_PREPARE_RESOLVED_BINDING_ACTION,
     'Use browser_observe when you want to navigate, optionally wait, and capture a fresh snapshot in one step.',
     'Prefer browser_search or browser_snapshot before browser_act when you need fresh targets with smaller payloads.',

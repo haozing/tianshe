@@ -6,13 +6,13 @@ import {
 import type { BrowserRuntimeDescriptor } from '../types/browser-interface';
 import { asTrimmedText } from './mcp-http-transport-utils';
 import type { McpSessionInfo, McpSessionViewportHealth } from './mcp-http-types';
-import { getStaticEngineRuntimeDescriptor } from '../core/browser-pool/engine-capability-registry';
-import { isAutomationEngine } from '../types/profile';
+import { getStaticRuntimeDescriptor } from '../core/browser-pool/runtime-capability-registry';
+import { isBrowserRuntimeId } from '../types/profile';
 
 export interface McpSessionSnapshot {
   sessionId: string | null;
   profileId: string | null;
-  engine: string | null;
+  runtimeId: string | null;
   visible: boolean;
   browserAcquired: boolean;
   browserAcquireInProgress: boolean;
@@ -24,7 +24,7 @@ export interface McpSessionSnapshot {
   viewportHealthReason: string | null;
   interactionReady: boolean;
   offscreenDetected: boolean;
-  engineRuntimeDescriptor: BrowserRuntimeDescriptor | null;
+  runtimeDescriptor: BrowserRuntimeDescriptor | null;
   browserRuntimeDescriptor: BrowserRuntimeDescriptor | null;
   resolvedRuntimeDescriptor: BrowserRuntimeDescriptor | null;
   phase: OrchestrationMcpSessionInfo['phase'];
@@ -67,11 +67,11 @@ export const buildMcpSessionSnapshot = (
   mcpSession: McpSessionInfo,
   overrides: McpSessionSnapshotOverrides = {}
 ): McpSessionSnapshot => {
-  const engine = asTrimmedText(mcpSession.browser.engine) || null;
+  const runtimeId = asTrimmedText(mcpSession.browser.runtimeId) || null;
   const browserAcquired = isMcpBrowserHandleUsable(mcpSession.browser.browserHandle);
-  const engineRuntimeDescriptor =
-    isAutomationEngine(engine)
-      ? getStaticEngineRuntimeDescriptor(engine)
+  const runtimeDescriptor =
+    isBrowserRuntimeId(runtimeId)
+      ? getStaticRuntimeDescriptor(runtimeId)
       : null;
   const browserRuntimeDescriptor =
     browserAcquired &&
@@ -79,13 +79,13 @@ export const buildMcpSessionSnapshot = (
     typeof mcpSession.browser.browserHandle.browser.describeRuntime === 'function'
       ? mcpSession.browser.browserHandle.browser.describeRuntime()
       : null;
-  const resolvedRuntimeDescriptor = browserRuntimeDescriptor || engineRuntimeDescriptor;
+  const resolvedRuntimeDescriptor = browserRuntimeDescriptor || runtimeDescriptor;
 
   return {
     ...buildMcpSessionStateSnapshot({
       sessionId: overrides.sessionId ?? mcpSession.transport.sessionId,
       profileId: mcpSession.browser.partition,
-      engine: mcpSession.browser.engine,
+      runtimeId: mcpSession.browser.runtimeId,
       visible: mcpSession.browser.visible,
       effectiveScopes: mcpSession.auth.authScopes || [],
       browserAcquired,
@@ -95,7 +95,7 @@ export const buildMcpSessionSnapshot = (
     }),
     sessionId: asTrimmedText(overrides.sessionId ?? mcpSession.transport.sessionId) || null,
     profileId: asTrimmedText(mcpSession.browser.partition) || null,
-    engine,
+    runtimeId,
     visible: mcpSession.browser.visible,
     browserAcquired,
     browserAcquireInProgress: Boolean(mcpSession.browser.browserAcquirePromise),
@@ -108,7 +108,7 @@ export const buildMcpSessionSnapshot = (
       asTrimmedText(overrides.viewportHealthReason ?? mcpSession.viewport.viewportHealthReason) || null,
     interactionReady: overrides.interactionReady ?? (mcpSession.viewport.interactionReady === true),
     offscreenDetected: overrides.offscreenDetected ?? (mcpSession.viewport.offscreenDetected === true),
-    engineRuntimeDescriptor,
+    runtimeDescriptor,
     browserRuntimeDescriptor,
     resolvedRuntimeDescriptor,
   };
@@ -131,7 +131,7 @@ export const buildOrchestrationMcpSessionInfo = (
   return {
     sessionId: snapshot.sessionId || options.sessionId,
     profileId: snapshot.profileId || undefined,
-    engine: snapshot.engine || undefined,
+    runtimeId: snapshot.runtimeId || undefined,
     visible: snapshot.visible,
     lastActivityAt: options.lastActivityAt,
     pendingInvocations: options.pendingInvocations,
@@ -148,7 +148,7 @@ export const buildOrchestrationMcpSessionInfo = (
     viewportHealthReason: snapshot.viewportHealthReason || undefined,
     interactionReady: snapshot.interactionReady,
     offscreenDetected: snapshot.offscreenDetected,
-    engineRuntimeDescriptor: snapshot.engineRuntimeDescriptor,
+    runtimeDescriptor: snapshot.runtimeDescriptor,
     browserRuntimeDescriptor: snapshot.browserRuntimeDescriptor,
     resolvedRuntimeDescriptor: snapshot.resolvedRuntimeDescriptor,
     phase: snapshot.phase,

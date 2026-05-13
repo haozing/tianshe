@@ -7,6 +7,14 @@ import {
   buildExtensionStartupErrorMessage,
 } from './browser-pool-integration-extension';
 
+vi.mock('electron-webcontents', () => ({
+  app: {
+    getPath: vi.fn(() => 'C:\\airpa-test'),
+    getAppPath: vi.fn(() => process.cwd()),
+    isPackaged: false,
+  },
+}));
+
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => 'C:\\airpa-test'),
@@ -19,7 +27,7 @@ function createSession(overrides?: Partial<SessionConfig>): SessionConfig {
   return {
     id: 'extension-test-session',
     partition: 'persist:extension-test-session',
-    engine: 'extension',
+    runtimeId: 'chromium-extension-relay',
     fingerprint: getDefaultFingerprint(),
     proxy: null,
     quota: 1,

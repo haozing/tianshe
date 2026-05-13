@@ -169,7 +169,7 @@ export const createBrowserCapabilityDescriptorSchema = () => ({
   properties: {
     supported: { type: 'boolean' },
     stability: { type: 'string', enum: ['stable', 'experimental', 'planned'] },
-    source: { type: 'string', enum: ['static-engine', 'runtime'] },
+    source: { type: 'string', enum: ['static-runtime', 'runtime'] },
     notes: { type: 'string' },
   },
 });
@@ -177,14 +177,27 @@ export const createBrowserCapabilityDescriptorSchema = () => ({
 export const createBrowserRuntimeDescriptorSchema = () => ({
   type: 'object',
   additionalProperties: false,
-  required: ['engine', 'profileMode', 'visibilityMode', 'capabilities'],
+  required: [
+    'runtimeId',
+    'browserFamily',
+    'controlProtocol',
+    'profileMode',
+    'visibilityMode',
+    'fingerprintBackend',
+    'source',
+    'capabilities',
+  ],
   properties: {
-    engine: { type: 'string', enum: ['electron', 'extension', 'ruyi'] },
+    runtimeId: { type: 'string' },
+    browserFamily: { type: 'string' },
+    controlProtocol: { type: 'string' },
     profileMode: { type: 'string', enum: ['ephemeral', 'persistent'] },
     visibilityMode: {
       type: 'string',
-      enum: ['embedded-view', 'external-window', 'direct-window'],
+      enum: ['embedded-view', 'external-window', 'direct-window', 'headless'],
     },
+    fingerprintBackend: { type: 'string' },
+    source: { type: 'object', additionalProperties: true },
     capabilities: {
       type: 'object',
       additionalProperties: false,

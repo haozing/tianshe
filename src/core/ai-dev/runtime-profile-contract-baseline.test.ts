@@ -51,8 +51,8 @@ describe('runtime/profile contract baselines', () => {
     const source = readSource('src/core/js-plugin/namespaces/profile.ts');
 
     for (const methodName of [
-      'describeEngineRuntime',
-      'listEngineRuntimes',
+      'describeRuntime',
+      'listRuntimes',
       'withLease',
       'list',
       'get',

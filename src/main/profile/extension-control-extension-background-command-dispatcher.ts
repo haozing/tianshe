@@ -119,9 +119,9 @@ export function renderCommandDispatcher(): string {
     case '${REMOTE_BROWSER_COMMAND.click}': {
       const selector = String(params.selector || '');
       const nonBlocking = !!params.nonBlocking;
-      const state = await queryElementState(tabId, selector, true);
-      if (state && state.found && state.visible && state.viewportCenter) {
-        const performNativeClick = async () => {
+      const nativeClickElement = async () => {
+        const state = await queryElementState(tabId, selector, true);
+        if (state && state.found && state.visible && state.viewportCenter) {
           await nativeClick(
             tabId,
             state.viewportCenter.x,
@@ -130,30 +130,42 @@ export function renderCommandDispatcher(): string {
             1,
             undefined
           );
-        };
-        if (nonBlocking) {
-          queueMicrotask(() => {
-            performNativeClick().catch((error) => {
-              rememberCommandError(
-                'native click failed after non-blocking dispatch: ' +
-                  (error instanceof Error ? error.message : String(error))
-              );
-            });
-          });
           return true;
         }
-        await performNativeClick();
+        return false;
+      };
+      const performClick = async () => {
+        if (nonBlocking && (await nativeClickElement())) {
+          return;
+        }
+
+        try {
+          const domClicked = await runDomTask(tabId, 'clickElement', { selector });
+          if (domClicked) {
+            return;
+          }
+        } catch {
+          // fall back to native click below
+        }
+
+        if (await nativeClickElement()) {
+          return;
+        }
+        throw new Error('Element not found or not visible: ' + selector);
+      };
+      if (nonBlocking) {
+        queueMicrotask(() => {
+          performClick().catch((error) => {
+            rememberCommandError(
+              'click failed after non-blocking dispatch: ' +
+                (error instanceof Error ? error.message : String(error))
+            );
+          });
+        });
         return true;
       }
-      try {
-        const domClicked = await runDomTask(tabId, 'clickElement', { selector });
-        if (domClicked) {
-          return true;
-        }
-      } catch {
-        // surface the original visibility failure below
-      }
-      throw new Error('Element not found or not visible: ' + selector);
+      await performClick();
+      return true;
     }
     case '${REMOTE_BROWSER_COMMAND.type}': {
         const selector = String(params.selector || '');
@@ -223,6 +235,14 @@ export function renderCommandDispatcher(): string {
       state.network.entries.clear();
       await postRelayEvent({ type: 'network-reset' });
       return true;
+    }
+    case '${REMOTE_BROWSER_COMMAND.networkSnapshot}': {
+      const state = getTabState(tabId);
+      return Array.from(state.network.entries.values()).map((entry) => ({
+        ...entry,
+        requestHeaders: entry.requestHeaders ? { ...entry.requestHeaders } : undefined,
+        responseHeaders: entry.responseHeaders ? { ...entry.responseHeaders } : undefined,
+      }));
     }
     case '${REMOTE_BROWSER_COMMAND.consoleStart}':
       await startConsoleCapture(tabId, params.level || 'all');

@@ -1,15 +1,27 @@
 import type {
   BrowserCapabilityDescriptor,
   BrowserCapabilityName,
-  BrowserEngineName,
   BrowserRuntimeDescriptor,
 } from '../../types/browser-interface';
 import { BROWSER_CAPABILITY_NAMES } from '../../types/browser-interface';
+import type {
+  BrowserControlProtocol,
+  BrowserFamily,
+  BrowserFingerprintBackend,
+  BrowserProfileMode,
+  BrowserRuntimeId,
+  BrowserRuntimeSource,
+  BrowserVisibilityMode,
+} from '../../types/browser-runtime';
 
 type StaticDescriptorInput = {
-  engine: BrowserEngineName;
-  profileMode: BrowserRuntimeDescriptor['profileMode'];
-  visibilityMode: BrowserRuntimeDescriptor['visibilityMode'];
+  runtimeId: BrowserRuntimeId;
+  browserFamily: BrowserFamily;
+  controlProtocol: BrowserControlProtocol;
+  profileMode: BrowserProfileMode;
+  visibilityMode: BrowserVisibilityMode;
+  fingerprintBackend: BrowserFingerprintBackend;
+  source: BrowserRuntimeSource;
   supported: Partial<Record<BrowserCapabilityName, boolean>>;
   notes?: Partial<Record<BrowserCapabilityName, string>>;
   stability?: Partial<Record<BrowserCapabilityName, BrowserCapabilityDescriptor['stability']>>;
@@ -28,7 +40,7 @@ function createCapabilityMap(
         stability:
           input.stability?.[name] ??
           (input.supported[name] === true ? 'stable' : 'planned'),
-        source: 'static-engine',
+        source: 'static-runtime',
         ...(input.notes?.[name] ? { notes: input.notes[name] } : {}),
       } satisfies BrowserCapabilityDescriptor,
     ])
@@ -37,21 +49,29 @@ function createCapabilityMap(
 
 function createStaticDescriptor(input: StaticDescriptorInput): BrowserRuntimeDescriptor {
   return Object.freeze({
-    engine: input.engine,
+    runtimeId: input.runtimeId,
+    browserFamily: input.browserFamily,
+    controlProtocol: input.controlProtocol,
     profileMode: input.profileMode,
     visibilityMode: input.visibilityMode,
+    fingerprintBackend: input.fingerprintBackend,
+    source: input.source,
     capabilities: Object.freeze(createCapabilityMap(input)),
   });
 }
 
 export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
-  BrowserEngineName,
+  BrowserRuntimeId,
   BrowserRuntimeDescriptor
 > = Object.freeze({
-  electron: createStaticDescriptor({
-    engine: 'electron',
+  'electron-webcontents': createStaticDescriptor({
+    runtimeId: 'electron-webcontents',
+    browserFamily: 'electron',
+    controlProtocol: 'webcontents',
     profileMode: 'ephemeral',
     visibilityMode: 'embedded-view',
+    fingerprintBackend: 'electron-stealth',
+    source: { type: 'bundled' },
     supported: {
       'cookies.read': true,
       'cookies.write': true,
@@ -64,7 +84,7 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'pdf.print': true,
       'window.showHide': true,
       'window.openPolicy': true,
-      'input.native': true,
+      'input.native': false,
       'input.touch': false,
       'text.dom': true,
       'text.ocr': true,
@@ -100,10 +120,14 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'emulation.identity': 'experimental',
     },
   }),
-  extension: createStaticDescriptor({
-    engine: 'extension',
+  'chromium-extension-relay': createStaticDescriptor({
+    runtimeId: 'chromium-extension-relay',
+    browserFamily: 'chromium',
+    controlProtocol: 'extension-relay',
     profileMode: 'persistent',
     visibilityMode: 'external-window',
+    fingerprintBackend: 'chromium-ruyi-file',
+    source: { type: 'bundled' },
     supported: {
       'cookies.read': true,
       'cookies.write': true,
@@ -141,23 +165,27 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
     },
     notes: {
       'dialog.basic':
-        'Basic JavaScript dialog handling is exposed through the Chrome extension debugger relay and remains experimental.',
+        'Basic JavaScript dialog handling is exposed through the Chromium extension debugger relay and remains experimental.',
       'dialog.promptText':
-        'Real JavaScript prompt handling through the Chrome extension debugger route is currently too unreliable to expose as a supported unified capability.',
+        'Real JavaScript prompt handling through the Chromium extension debugger route is currently too unreliable to expose as a supported unified capability.',
       'emulation.viewport':
-        'Extension viewport emulation is available as a runtime debugger override after startup, but it is not part of the supported fingerprint contract. Real-page verification confirmed width/height override and clear-to-baseline behavior; do not treat devicePixelRatio or outer-window metrics as guaranteed.',
+        'Chromium extension relay viewport emulation is available as a runtime debugger override after startup, but it is not part of the supported fingerprint contract.',
       'emulation.identity':
-        'Extension identity emulation is available as a runtime debugger override after startup, but it is not part of the supported fingerprint contract. Real-page verification confirmed timezone override and clear-to-baseline behavior; do not treat runtime userAgent or locale override as guaranteed.',
+        'Chromium extension relay identity emulation is available as a runtime debugger override after startup, but it is not part of the supported fingerprint contract.',
       'intercept.observe':
-        'Extension blocked-request observation is implemented through the Chrome debugger Fetch domain and is scoped to the bound tab.',
+        'Chromium extension relay blocked-request observation is implemented through the debugger Fetch domain and is scoped to the bound tab.',
       'intercept.control':
-        'Extension continue/fulfill/fail request control is implemented through the Chrome debugger Fetch domain and is scoped to the bound tab.',
+        'Chromium extension relay continue/fulfill/fail request control is implemented through the debugger Fetch domain and is scoped to the bound tab.',
     },
   }),
-  ruyi: createStaticDescriptor({
-    engine: 'ruyi',
+  'firefox-bidi': createStaticDescriptor({
+    runtimeId: 'firefox-bidi',
+    browserFamily: 'firefox',
+    controlProtocol: 'bidi',
     profileMode: 'persistent',
     visibilityMode: 'direct-window',
+    fingerprintBackend: 'firefox-fpfile',
+    source: { type: 'managed-download', channel: 'firefox' },
     supported: {
       'cookies.read': true,
       'cookies.write': true,
@@ -205,11 +233,11 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
     },
     notes: {
       'storage.dom':
-        'DOM storage helpers are currently surfaced only on the ruyi runtime.',
+        'DOM storage helpers are currently surfaced only on the Firefox BiDi runtime.',
       'network.responseBody':
         'Firefox BiDi runtime currently tracks response metadata only, not response bodies.',
       'download.manage':
-        'Download tracking is currently exposed through the ruyi runtime with filesystem-backed completion tracking and best-effort cancellation.',
+        'Download tracking is currently exposed through the Firefox BiDi runtime with filesystem-backed completion tracking and best-effort cancellation.',
       'pdf.print':
         'PDF export is exposed through WebDriver BiDi browsingContext.print and returns a Base64-encoded PDF payload.',
       'dialog.basic':
@@ -219,13 +247,75 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'events.runtime':
         'Runtime events are normalized from Firefox BiDi lifecycle and telemetry events instead of exposing raw BiDi methods.',
       'emulation.viewport':
-        'Ruyi viewport emulation is exposed as a runtime BiDi path after startup, but it is not part of the supported fingerprint contract. The current Firefox runtime does not reliably apply viewport overrides in real-page verification, so treat it as best-effort only.',
+        'Firefox BiDi viewport emulation is exposed as a runtime BiDi path after startup, but it is not part of the supported fingerprint contract.',
       'emulation.identity':
-        'Ruyi identity emulation is exposed as a runtime BiDi path after startup, but it is not part of the supported fingerprint contract. Real-page verification on the current Firefox runtime only confirmed locale-related behavior; do not treat userAgent/timezone/touch overrides as guaranteed.',
+        'Firefox BiDi identity emulation is exposed as a runtime BiDi path after startup, but it is not part of the supported fingerprint contract.',
       'intercept.observe':
         'Blocked-request observation is exposed through Firefox BiDi network interception and remains experimental.',
       'intercept.control':
         'Continue/fulfill/fail request control is exposed through Firefox BiDi network interception and remains experimental.',
+    },
+  }),
+  'chromium-cloak-playwright': createStaticDescriptor({
+    runtimeId: 'chromium-cloak-playwright',
+    browserFamily: 'chromium',
+    controlProtocol: 'playwright',
+    profileMode: 'persistent',
+    visibilityMode: 'external-window',
+    fingerprintBackend: 'cloak-flags',
+    source: { type: 'managed-download', channel: 'cloakbrowser' },
+    supported: {
+      'cookies.read': true,
+      'cookies.write': true,
+      'cookies.clear': true,
+      'cookies.filter': true,
+      'storage.dom': true,
+      'userAgent.read': true,
+      'snapshot.page': true,
+      'screenshot.detailed': true,
+      'pdf.print': false,
+      'window.showHide': false,
+      'window.openPolicy': false,
+      'input.native': true,
+      'input.touch': false,
+      'text.dom': true,
+      'text.ocr': false,
+      'network.capture': true,
+      'network.responseBody': false,
+      'console.capture': true,
+      'download.manage': false,
+      'dialog.basic': false,
+      'dialog.promptText': false,
+      'tabs.manage': true,
+      'events.runtime': false,
+      'emulation.viewport': true,
+      'emulation.identity': true,
+      'intercept.observe': false,
+      'intercept.control': false,
+    },
+    stability: {
+      'window.showHide': 'planned',
+      'window.openPolicy': 'planned',
+      'input.touch': 'planned',
+      'text.ocr': 'planned',
+      'network.capture': 'experimental',
+      'console.capture': 'experimental',
+      'download.manage': 'planned',
+      'dialog.basic': 'planned',
+      'dialog.promptText': 'planned',
+      'events.runtime': 'planned',
+      'emulation.viewport': 'experimental',
+      'emulation.identity': 'experimental',
+      'intercept.observe': 'planned',
+      'intercept.control': 'planned',
+    },
+    notes: {
+      'window.showHide':
+        'Cloak Playwright runs as an external browser; direct show/hide semantics need a window controller.',
+      'window.openPolicy':
+        'Window open policy requires Playwright context/page event handling before it can be exposed as a stable runtime capability.',
+      'input.native':
+        'Cloak Playwright currently exposes selector-based click/type/select through the unified API; coordinate-native mouse and keyboard actions are intentionally withheld until the Playwright controller exposes that lower-level surface.',
     },
   }),
 });
@@ -234,19 +324,23 @@ export function cloneBrowserRuntimeDescriptor(
   descriptor: BrowserRuntimeDescriptor
 ): BrowserRuntimeDescriptor {
   return {
-    engine: descriptor.engine,
+    runtimeId: descriptor.runtimeId,
+    browserFamily: descriptor.browserFamily,
+    controlProtocol: descriptor.controlProtocol,
     profileMode: descriptor.profileMode,
     visibilityMode: descriptor.visibilityMode,
+    fingerprintBackend: descriptor.fingerprintBackend,
+    source: { ...descriptor.source },
     capabilities: Object.fromEntries(
       Object.entries(descriptor.capabilities).map(([name, value]) => [name, { ...value }])
     ) as Record<BrowserCapabilityName, BrowserCapabilityDescriptor>,
   };
 }
 
-export function getStaticEngineRuntimeDescriptor(
-  engine: BrowserEngineName
+export function getStaticRuntimeDescriptor(
+  runtimeId: BrowserRuntimeId
 ): BrowserRuntimeDescriptor {
-  return cloneBrowserRuntimeDescriptor(STATIC_BROWSER_RUNTIME_DESCRIPTORS[engine]);
+  return cloneBrowserRuntimeDescriptor(STATIC_BROWSER_RUNTIME_DESCRIPTORS[runtimeId]);
 }
 
 export function applyRuntimeCapabilitySupport(

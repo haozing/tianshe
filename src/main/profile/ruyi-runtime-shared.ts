@@ -64,7 +64,7 @@ function buildProxyUrl(proxy: ProxyConfig | null | undefined): string | undefine
   const host = String(proxy.host || '').trim();
   const port = Number.parseInt(String(proxy.port ?? ''), 10);
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error('invalid proxy config for ruyi engine');
+    throw new Error('invalid proxy config for firefox-bidi runtime');
   }
   return `${proxy.type}://${host}:${port}`;
 }
@@ -300,7 +300,10 @@ export function prepareRuyiFirefoxLaunch(
   session: SessionConfig,
   options?: { startHidden?: boolean }
 ): PreparedRuyiFirefoxLaunch {
-  const fingerprint = mergeFingerprintConfig(getDefaultFingerprint('ruyi'), session.fingerprint || {});
+  const fingerprint = mergeFingerprintConfig(
+    getDefaultFingerprint('firefox-bidi'),
+    session.fingerprint || {}
+  );
   const normalizedSession: SessionConfig = {
     ...session,
     fingerprint,
@@ -328,7 +331,11 @@ export function prepareRuyiFirefoxLaunch(
 
   return {
     sessionId: session.id,
-    browserPath: assertFirefoxExecutablePath(resolveFirefoxExecutablePath()),
+    browserPath: assertFirefoxExecutablePath(
+      session.runtimeSourceOverride?.type === 'custom-path'
+        ? session.runtimeSourceOverride.executablePath
+        : resolveFirefoxExecutablePath()
+    ),
     userDataDir,
     runtimeDir,
     downloadDir,

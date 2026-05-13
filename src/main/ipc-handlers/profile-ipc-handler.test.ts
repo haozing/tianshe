@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { ipcMain } from 'electron';
+import { ipcMain } from 'electron-webcontents';
 import { registerProfileHandlers } from './profile-ipc-handler';
 import { ipcRouteRegistry } from '../ipc-route-registry';
 import { getBrowserPoolManager } from '../../core/browser-pool';
@@ -8,7 +8,7 @@ import {
   attachProfileLiveSessionLease,
 } from '../../core/browser-pool/profile-live-session-lease';
 
-vi.mock('electron', () => ({
+vi.mock('electron-webcontents', () => ({
   ipcMain: {
     handle: vi.fn(),
     removeHandler: vi.fn(),
@@ -131,7 +131,7 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
     const handle = {
       browserId: 'browser-1',
       sessionId: 'profile-1',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       browser: {},
       release: vi.fn().mockResolvedValue({
         browserId: 'browser-1',
@@ -148,7 +148,7 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
     const launchResult = (await launchHandler(null, 'profile-1', {
       strategy: 'any',
       timeout: 15000,
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
     })) as { success: boolean };
 
     expect(launchResult.success).toBe(true);

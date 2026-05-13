@@ -8,13 +8,24 @@ import { getDefaultFingerprint } from '../../constants/fingerprint-defaults';
 const electronState = vi.hoisted(() => ({
   appPath: process.cwd(),
   userDataDir: '',
+  isPackaged: false,
+}));
+
+vi.mock('electron-webcontents', () => ({
+  app: {
+    getPath: vi.fn(() => electronState.userDataDir),
+    getAppPath: vi.fn(() => electronState.appPath),
+    isPackaged: false,
+  },
 }));
 
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => electronState.userDataDir),
     getAppPath: vi.fn(() => electronState.appPath),
-    isPackaged: false,
+    get isPackaged() {
+      return electronState.isPackaged;
+    },
   },
 }));
 
@@ -41,7 +52,7 @@ function logCanaryStep(step: string): void {
 
 describe('createExtensionBrowserFactory business canary', () => {
   runCanary(
-    'drives a business-shaped order center flow through the extension engine',
+    'drives a business-shaped order center flow through the chromium extension runtime',
     async () => {
       if (process.platform !== 'win32') {
         throw new Error('Extension business canary expects the bundled Windows chrome.exe runtime');
@@ -73,7 +84,7 @@ describe('createExtensionBrowserFactory business canary', () => {
         const created = await factory({
           id: sessionId,
           partition: `persist:${sessionId}`,
-          engine: 'extension',
+          runtimeId: 'chromium-extension-relay',
           fingerprint: {
             ...fingerprint,
             identity: {
@@ -98,7 +109,7 @@ describe('createExtensionBrowserFactory business canary', () => {
 
         closeBrowser = () => created.browser.closeInternal();
         expect(created.browser.describeRuntime()).toMatchObject({
-          engine: 'extension',
+          runtimeId: 'chromium-extension-relay',
         });
         expect(created.browser.hasCapability('tabs.manage')).toBe(true);
         expect(created.browser.hasCapability('dialog.basic')).toBe(true);

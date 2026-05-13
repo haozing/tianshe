@@ -1,6 +1,6 @@
 import { createLogger } from '../logger';
 import type { IProfileService } from '../../types/service-interfaces';
-import { AUTOMATION_ENGINES } from '../../types/profile';
+import { BROWSER_RUNTIME_IDS } from '../../types/browser-runtime';
 import { getAbortMessage, profileToSessionConfig } from './acquire-session-resolver';
 import type { PoolReuseStrategy } from './pool-reuse-strategy';
 import type { BrowserCreationStrategy } from './browser-creation-strategy';
@@ -122,7 +122,9 @@ export class WaitQueueCoordinator {
 
     while (iterations < maxIterations) {
       const waitingRequestCandidates = await Promise.all(
-        AUTOMATION_ENGINES.map(async (engine) => await this.waitQueue.peek(sessionId, engine))
+        BROWSER_RUNTIME_IDS.map(
+          async (runtimeId) => await this.waitQueue.peek(sessionId, runtimeId)
+        )
       );
       const waitingRequest = waitingRequestCandidates
         .filter((value): value is NonNullable<(typeof waitingRequestCandidates)[number]> =>
@@ -141,8 +143,8 @@ export class WaitQueueCoordinator {
 
       const pooledBrowser = await this.reuseStrategy.acquire(waitingRequest.request, session);
       if (pooledBrowser) {
-        const engine = waitingRequest.request.options.engine ?? 'electron';
-        const dequeued = await this.waitQueue.dequeue(sessionId, engine);
+        const runtimeId = waitingRequest.request.options.runtimeId ?? session.runtimeId;
+        const dequeued = await this.waitQueue.dequeue(sessionId, runtimeId);
         if (dequeued) {
           dequeued.resolve({
             success: true,
@@ -156,8 +158,8 @@ export class WaitQueueCoordinator {
         const newBrowser = await this.creationStrategy.create(waitingRequest.request, session);
 
         if (newBrowser) {
-          const engine = waitingRequest.request.options.engine ?? 'electron';
-          const dequeued = await this.waitQueue.dequeue(sessionId, engine);
+          const runtimeId = waitingRequest.request.options.runtimeId ?? session.runtimeId;
+          const dequeued = await this.waitQueue.dequeue(sessionId, runtimeId);
           if (dequeued) {
             dequeued.resolve({
               success: true,

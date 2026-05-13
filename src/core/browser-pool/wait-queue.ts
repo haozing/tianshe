@@ -17,8 +17,9 @@ import type {
   AcquireResult,
   WaitingRequest,
   AcquirePriority,
-  AutomationEngine,
+  BrowserRuntimeId,
 } from './types';
+import { DEFAULT_BROWSER_RUNTIME_ID } from '../../types/browser-runtime';
 import { WAIT_QUEUE_CONFIG, PRIORITY_VALUES } from '../../constants/browser-pool';
 import { createLogger } from '../logger';
 
@@ -27,14 +28,14 @@ const logger = createLogger('WaitQueue');
 /** 优先级数值映射（引用配置常量） */
 const PRIORITY_MAP: Record<AcquirePriority, number> = PRIORITY_VALUES;
 
-const DEFAULT_ENGINE: AutomationEngine = 'electron';
+const DEFAULT_RUNTIME_ID: BrowserRuntimeId = DEFAULT_BROWSER_RUNTIME_ID;
 
-function getQueueKey(sessionId: string, engine?: AutomationEngine): string {
-  return `${sessionId}::${engine ?? DEFAULT_ENGINE}`;
+function getQueueKey(sessionId: string, runtimeId?: BrowserRuntimeId): string {
+  return `${sessionId}::${runtimeId ?? DEFAULT_RUNTIME_ID}`;
 }
 
-function getEngineFromRequest(request: AcquireRequest): AutomationEngine {
-  return request.options.engine ?? DEFAULT_ENGINE;
+function getRuntimeIdFromRequest(request: AcquireRequest): BrowserRuntimeId {
+  return request.options.runtimeId ?? DEFAULT_RUNTIME_ID;
 }
 
 /**
@@ -74,8 +75,8 @@ export class WaitQueue {
   enqueue(request: AcquireRequest): Promise<AcquireResult> {
     return new Promise((resolve) => {
       const sessionId = request.sessionId;
-      const engine = getEngineFromRequest(request);
-      const queueKey = getQueueKey(sessionId, engine);
+      const runtimeId = getRuntimeIdFromRequest(request);
+      const queueKey = getQueueKey(sessionId, runtimeId);
 
       // 创建等待请求
       const waitingRequest: WaitingRequest = {
@@ -140,8 +141,8 @@ export class WaitQueue {
           request.requestId +
           ' (session: ' +
           sessionId +
-          ', engine: ' +
-          engine +
+          ', runtimeId: ' +
+          runtimeId +
           ', priority: ' +
           request.options.priority +
           ')'
@@ -168,8 +169,11 @@ export class WaitQueue {
    * @param sessionId 会话ID
    * @returns 下一个请求或 undefined
    */
-  async dequeue(sessionId: string, engine: AutomationEngine): Promise<WaitingRequest | undefined> {
-    const queueKey = getQueueKey(sessionId, engine);
+  async dequeue(
+    sessionId: string,
+    runtimeId: BrowserRuntimeId
+  ): Promise<WaitingRequest | undefined> {
+    const queueKey = getQueueKey(sessionId, runtimeId);
     const lock = this.getSessionLock(queueKey);
 
     return lock.runExclusive(() => {
@@ -221,8 +225,11 @@ export class WaitQueue {
    * @param sessionId 会话ID
    * @returns 下一个请求或 undefined
    */
-  async peek(sessionId: string, engine: AutomationEngine): Promise<WaitingRequest | undefined> {
-    const queueKey = getQueueKey(sessionId, engine);
+  async peek(
+    sessionId: string,
+    runtimeId: BrowserRuntimeId
+  ): Promise<WaitingRequest | undefined> {
+    const queueKey = getQueueKey(sessionId, runtimeId);
     const lock = this.getSessionLock(queueKey);
 
     return lock.runExclusive(() => {
@@ -251,8 +258,8 @@ export class WaitQueue {
     }
 
     const sessionId = waitingRequest.request.sessionId;
-    const engine = getEngineFromRequest(waitingRequest.request);
-    const queueKey = getQueueKey(sessionId, engine);
+    const runtimeId = getRuntimeIdFromRequest(waitingRequest.request);
+    const queueKey = getQueueKey(sessionId, runtimeId);
     const queue = this.queues.get(queueKey);
 
     if (queue) {
@@ -428,8 +435,8 @@ export class WaitQueue {
     }
 
     const sessionId = waitingRequest.request.sessionId;
-    const engine = getEngineFromRequest(waitingRequest.request);
-    const queueKey = getQueueKey(sessionId, engine);
+    const runtimeId = getRuntimeIdFromRequest(waitingRequest.request);
+    const queueKey = getQueueKey(sessionId, runtimeId);
 
     // 确保队列已排序，以便正确计算位置
     this.ensureSorted(queueKey);

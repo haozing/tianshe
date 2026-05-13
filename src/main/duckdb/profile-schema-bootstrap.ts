@@ -8,7 +8,8 @@ import {
   runSchemaBackfills,
 } from './schema-migrations';
 import { DEFAULT_BROWSER_PROFILE } from '../../constants/browser-pool';
-import { UNBOUND_PROFILE_ID, isAutomationEngine } from '../../types/profile';
+import { UNBOUND_PROFILE_ID, isBrowserRuntimeId } from '../../types/profile';
+import { DEFAULT_BROWSER_RUNTIME_ID } from '../../types/browser-runtime';
 import type { ProfileFingerprintPersistence } from './profile-fingerprint-persistence';
 import { isCanonicalFingerprintConfig } from './profile-fingerprint-persistence';
 import type { ProfilePartitionCleanupService } from './profile-partition-cleanup-service';
@@ -45,7 +46,8 @@ export class ProfileSchemaBootstrap {
       CREATE TABLE IF NOT EXISTS browser_profiles (
         id              VARCHAR PRIMARY KEY,
         name            VARCHAR NOT NULL,
-        engine          VARCHAR DEFAULT 'electron',
+        runtime_id      VARCHAR DEFAULT 'electron-webcontents',
+        runtime_source_override JSON,
         group_id        VARCHAR,
         partition       VARCHAR NOT NULL UNIQUE,
         proxy_config    JSON,
@@ -108,7 +110,7 @@ export class ProfileSchemaBootstrap {
 
   private async cleanupInvalidStoredProfiles(): Promise<void> {
     const result = await this.conn.runAndReadAll(`
-      SELECT id, partition, engine, fingerprint
+      SELECT id, partition, runtime_id, fingerprint
       FROM browser_profiles
       ORDER BY id ASC
     `);
@@ -125,12 +127,12 @@ export class ProfileSchemaBootstrap {
         continue;
       }
 
-      const rawEngine = String(row.engine || '').trim();
-      if (!isAutomationEngine(rawEngine)) {
+      const rawRuntimeId = String(row.runtime_id || '').trim();
+      if (!isBrowserRuntimeId(rawRuntimeId)) {
         invalidProfiles.push({
           id,
           partition: String(row.partition || '').trim(),
-          reason: `unsupported engine: ${rawEngine || '(empty)'}`,
+          reason: `unsupported runtimeId: ${rawRuntimeId || '(empty)'}`,
         });
         continue;
       }
@@ -145,7 +147,7 @@ export class ProfileSchemaBootstrap {
         continue;
       }
 
-      const validation = validateFingerprintConfig(fingerprint, rawEngine);
+      const validation = validateFingerprintConfig(fingerprint, rawRuntimeId);
       if (!validation.valid) {
         invalidProfiles.push({
           id,
@@ -244,14 +246,15 @@ export class ProfileSchemaBootstrap {
         this.conn,
         `
         INSERT INTO browser_profiles (
-          id, name, engine, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
+          id, name, runtime_id, runtime_source_override, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
           notes, tags, color, status, quota, idle_timeout_ms, lock_timeout_ms, is_system,
           created_at, updated_at
-        ) VALUES (?, ?, 'electron', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `,
         [
           DEFAULT_BROWSER_PROFILE.id,
           DEFAULT_BROWSER_PROFILE.name,
+          DEFAULT_BROWSER_RUNTIME_ID,
           null,
           DEFAULT_BROWSER_PROFILE.partition,
           null,
@@ -281,7 +284,8 @@ export class ProfileSchemaBootstrap {
 
     const updateFields = [
       `name = ?`,
-      `engine = 'electron'`,
+      `runtime_id = ?`,
+      `runtime_source_override = NULL`,
       `partition = ?`,
       `notes = ?`,
       `tags = ?`,
@@ -295,6 +299,7 @@ export class ProfileSchemaBootstrap {
     ];
     const updateValues: any[] = [
       DEFAULT_BROWSER_PROFILE.name,
+      DEFAULT_BROWSER_RUNTIME_ID,
       DEFAULT_BROWSER_PROFILE.partition,
       DEFAULT_BROWSER_PROFILE.notes,
       JSON.stringify(DEFAULT_BROWSER_PROFILE.tags),

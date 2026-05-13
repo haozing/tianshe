@@ -15,6 +15,16 @@ const electronState = vi.hoisted(() => ({
   isPackaged: false,
 }));
 
+vi.mock('electron-webcontents', () => ({
+  app: {
+    getPath: vi.fn(() => electronState.userDataDir),
+    getAppPath: vi.fn(() => electronState.appPath),
+    get isPackaged() {
+      return electronState.isPackaged;
+    },
+  },
+}));
+
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => electronState.userDataDir),
@@ -35,8 +45,8 @@ function createSession(overrides?: Partial<SessionConfig>): SessionConfig {
   return {
     id: 'ruyi-firefox-session',
     partition: 'persist:ruyi-firefox-session',
-    engine: 'ruyi',
-    fingerprint: getDefaultFingerprint('ruyi'),
+    runtimeId: 'firefox-bidi',
+    fingerprint: getDefaultFingerprint('firefox-bidi'),
     proxy: null,
     quota: 1,
     idleTimeoutMs: 60_000,
@@ -105,7 +115,7 @@ describe('prepareRuyiFirefoxLaunch', () => {
           username: 'alice',
           password: 'secret',
         },
-        fingerprint: mergeFingerprintConfig(getDefaultFingerprint('ruyi'), {
+        fingerprint: mergeFingerprintConfig(getDefaultFingerprint('firefox-bidi'), {
           identity: {
             region: {
               timezone: 'Asia/Hong_Kong',
@@ -154,7 +164,7 @@ describe('prepareRuyiFirefoxLaunch', () => {
   it('normalizes legacy file-backed source configs back to generated fpfile output', async () => {
     const prepared = prepareRuyiFirefoxLaunch(
       createSession({
-        fingerprint: mergeFingerprintConfig(getDefaultFingerprint('ruyi'), {
+        fingerprint: mergeFingerprintConfig(getDefaultFingerprint('firefox-bidi'), {
           source: {
             mode: 'file',
             filePath: path.join(tempRoot, 'fixtures', 'profile.fpfile.txt'),
@@ -173,7 +183,7 @@ describe('prepareRuyiFirefoxLaunch', () => {
     const prepared = prepareRuyiFirefoxLaunch(
       createSession({
         fingerprint: {
-          ...mergeFingerprintConfig(getDefaultFingerprint('ruyi'), {
+          ...mergeFingerprintConfig(getDefaultFingerprint('firefox-bidi'), {
             identity: {
               region: {
                 timezone: 'Asia/Tokyo',
@@ -200,7 +210,7 @@ describe('prepareRuyiFirefoxLaunch', () => {
   it('builds firefox launch args for remote debugging and fpfile injection', () => {
     const prepared = prepareRuyiFirefoxLaunch(
       createSession({
-        fingerprint: mergeFingerprintConfig(getDefaultFingerprint('ruyi'), {
+        fingerprint: mergeFingerprintConfig(getDefaultFingerprint('firefox-bidi'), {
           identity: {
             display: {
               width: 1440,

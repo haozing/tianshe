@@ -236,7 +236,9 @@ export class BrowserPoolManager {
       browser: pooledBrowser.browser,
       browserId,
       sessionId,
-      engine: pooledBrowser.engine,
+      runtimeId: pooledBrowser.runtimeId,
+      runtimeDescriptor: pooledBrowser.runtimeDescriptor,
+      resolvedRuntime: pooledBrowser.resolvedRuntime,
       viewId: pooledBrowser.viewId,
       release: async (releaseOptions?: ReleaseOptions) =>
         this.release(browserId, releaseOptions, request.requestId),
@@ -473,7 +475,7 @@ export class BrowserPoolManager {
     }
 
     // 检查是否有等待者需要这个浏览器
-    const waitingRequest = await this.waitQueue.dequeue(sessionId, browser.engine);
+    const waitingRequest = await this.waitQueue.dequeue(sessionId, browser.runtimeId);
     if (waitingRequest) {
       // 有等待者，直接转移浏览器（不经过 idle 状态，避免竞态）
       await this.waitQueueCoordinator.transferBrowserToWaiter(browserId, waitingRequest, options);

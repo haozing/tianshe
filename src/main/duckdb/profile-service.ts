@@ -16,12 +16,12 @@ import type {
   ProxyConfig,
   FingerprintConfig,
   ProfileStatus,
-  AutomationEngine,
+  BrowserRuntimeId,
 } from '../../types/profile';
 import {
   UNBOUND_PROFILE_ID,
   normalizeProfileBrowserQuota,
-  normalizeAutomationEngine,
+  normalizeBrowserRuntimeId,
 } from '../../types/profile';
 import {
   DEFAULT_BROWSER_PROFILE,
@@ -80,18 +80,18 @@ export class ProfileService {
   }
 
   private buildFingerprintForPersistence(
-    engine: AutomationEngine,
+    runtimeId: BrowserRuntimeId,
     options: BuildFingerprintForPersistenceOptions = {}
   ): FingerprintConfig {
-    return this.fingerprintPersistence.buildFingerprintForPersistence(engine, options);
+    return this.fingerprintPersistence.buildFingerprintForPersistence(runtimeId, options);
   }
 
   private assertValidFingerprintConfig(
     fingerprint: FingerprintConfig,
-    engine: AutomationEngine,
+    runtimeId: BrowserRuntimeId,
     label: string
   ): void {
-    this.fingerprintPersistence.assertValidFingerprintConfig(fingerprint, engine, label);
+    this.fingerprintPersistence.assertValidFingerprintConfig(fingerprint, runtimeId, label);
   }
 
   private async purgePartitionData(partition: string): Promise<void> {
@@ -182,7 +182,8 @@ export class ProfileService {
   async create(params: CreateProfileParams): Promise<BrowserProfile> {
     const id = uuidv4();
     const partition = `persist:profile-${id}`;
-    const engine = normalizeAutomationEngine(params.engine);
+    const runtimeId = normalizeBrowserRuntimeId(params.runtimeId);
+    const runtimeSourceOverride = params.runtimeSourceOverride ?? null;
     const currentTraceContext = getCurrentTraceContext();
     const traceContext = createChildTraceContext({
       profileId: id,
@@ -197,14 +198,14 @@ export class ProfileService {
         attrs: {
           profileId: id,
           name: params.name,
-          engine,
+          runtimeId,
           groupId: params.groupId ?? null,
         },
       });
 
       try {
         // 闁告艾鐗嗛懟鐔割渶濡鍚囬柟绋挎川濮规鏌婂鍥╂瀭
-        const fingerprint = this.buildFingerprintForPersistence(engine, {
+        const fingerprint = this.buildFingerprintForPersistence(runtimeId, {
           fingerprintCore: params.fingerprintCore,
           fingerprintSource: params.fingerprintSource,
           overrides: params.fingerprint || {},
@@ -214,7 +215,7 @@ export class ProfileService {
 
         this.assertValidFingerprintConfig(
           fingerprint,
-          engine,
+          runtimeId,
           `Profile "${params.name}"`
         );
 
@@ -236,15 +237,16 @@ export class ProfileService {
           this.conn,
           `
           INSERT INTO browser_profiles (
-            id, name, engine, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
+            id, name, runtime_id, runtime_source_override, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
             notes, tags, color, status, quota, idle_timeout_ms, lock_timeout_ms, is_system,
             created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         `,
           [
             id,
             params.name,
-            engine,
+            runtimeId,
+            runtimeSourceOverride ? JSON.stringify(runtimeSourceOverride) : null,
             params.groupId || null,
             partition,
             normalizedProxy ? JSON.stringify(normalizedProxy) : null,
@@ -268,7 +270,7 @@ export class ProfileService {
         await span.succeed({
           attrs: {
             profileId: id,
-            engine,
+            runtimeId,
             groupId: params.groupId ?? null,
           },
         });
@@ -282,7 +284,7 @@ export class ProfileService {
           data: {
             profileId: id,
             name: params.name,
-            engine,
+            runtimeId,
             groupId: params.groupId ?? null,
           },
         });
@@ -291,7 +293,7 @@ export class ProfileService {
           attrs: {
             profileId: id,
             name: params.name,
-            engine,
+            runtimeId,
           },
         });
         throw error;
@@ -307,7 +309,7 @@ export class ProfileService {
       this.conn,
       `
       SELECT
-        id, name, engine, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
+        id, name, runtime_id, runtime_source_override, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
         notes, tags, color, status, last_error, last_active_at,
         total_uses, quota, idle_timeout_ms, lock_timeout_ms, is_system,
         created_at, updated_at
@@ -335,7 +337,7 @@ export class ProfileService {
   async list(params?: ProfileListParams): Promise<BrowserProfile[]> {
     let sql = `
       SELECT
-        id, name, engine, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
+        id, name, runtime_id, runtime_source_override, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
         notes, tags, color, status, last_error, last_active_at,
         total_uses, quota, idle_timeout_ms, lock_timeout_ms, is_system,
         created_at, updated_at
@@ -432,7 +434,8 @@ export class ProfileService {
       params.fingerprint !== undefined ||
       params.fingerprintCore !== undefined ||
       params.fingerprintSource !== undefined ||
-      params.engine !== undefined ||
+      params.runtimeId !== undefined ||
+      params.runtimeSourceOverride !== undefined ||
       params.proxy !== undefined ||
       params.quota !== undefined ||
       params.idleTimeoutMs !== undefined ||
@@ -456,11 +459,11 @@ export class ProfileService {
           throw new Error(`Profile not found: ${id}`);
         }
 
-        const targetEngine: AutomationEngine =
-          params.engine !== undefined
-            ? normalizeAutomationEngine(params.engine)
-            : existingProfile.engine;
-        const shouldClearExtensionBindings = targetEngine !== 'extension';
+        const targetRuntimeId: BrowserRuntimeId =
+          params.runtimeId !== undefined
+            ? normalizeBrowserRuntimeId(params.runtimeId)
+            : existingProfile.runtimeId;
+        const shouldClearExtensionBindings = targetRuntimeId !== 'chromium-extension-relay';
 
         const fields: string[] = [];
         const values: any[] = [];
@@ -470,9 +473,16 @@ export class ProfileService {
           values.push(params.name);
         }
 
-        if (params.engine !== undefined) {
-          fields.push('engine = ?');
-          values.push(targetEngine);
+        if (params.runtimeId !== undefined) {
+          fields.push('runtime_id = ?');
+          values.push(targetRuntimeId);
+        }
+
+        if (params.runtimeSourceOverride !== undefined) {
+          fields.push('runtime_source_override = ?');
+          values.push(
+            params.runtimeSourceOverride ? JSON.stringify(params.runtimeSourceOverride) : null
+          );
         }
 
         if (params.groupId !== undefined) {
@@ -490,15 +500,19 @@ export class ProfileService {
           params.fingerprint !== undefined ||
           params.fingerprintCore !== undefined ||
           params.fingerprintSource !== undefined ||
-          params.engine !== undefined;
+          params.runtimeId !== undefined;
         const nextFingerprint = shouldRecomputeFingerprint
-          ? this.buildFingerprintForPersistence(targetEngine, {
+          ? this.buildFingerprintForPersistence(targetRuntimeId, {
               fingerprintCore: params.fingerprintCore,
               fingerprintSource: params.fingerprintSource,
               baseFingerprint:
-                targetEngine === existingProfile.engine ? existingProfile.fingerprint : undefined,
+                targetRuntimeId === existingProfile.runtimeId
+                  ? existingProfile.fingerprint
+                  : undefined,
               fallbackSharedFingerprint:
-                targetEngine === existingProfile.engine ? undefined : existingProfile.fingerprint,
+                targetRuntimeId === existingProfile.runtimeId
+                  ? undefined
+                  : existingProfile.fingerprint,
               overrides: params.fingerprint,
             })
           : existingProfile.fingerprint;
@@ -508,7 +522,7 @@ export class ProfileService {
         if (shouldRecomputeFingerprint) {
           this.assertValidFingerprintConfig(
             nextFingerprint,
-            targetEngine,
+            targetRuntimeId,
             `Profile "${id}"`
           );
         }

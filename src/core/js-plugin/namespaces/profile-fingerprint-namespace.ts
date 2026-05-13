@@ -1,5 +1,10 @@
-import type { BrowserProfile, FingerprintConfig, UpdateProfileParams } from '../../../types/profile';
-import type { AutomationEngine } from '../../browser-pool/types';
+import type {
+  BrowserProfile,
+  BrowserRuntimeId,
+  FingerprintConfig,
+  UpdateProfileParams,
+} from '../../../types/profile';
+import { DEFAULT_BROWSER_RUNTIME_ID } from '../../../types/profile';
 import {
   FINGERPRINT_PRESET_OPTIONS,
   applyPreset as applyPresetConfig,
@@ -171,7 +176,7 @@ export class ProfileFingerprintNamespace {
       throw new Error(`Profile not found: ${profileId}`);
     }
 
-    const baseFingerprint = profile.fingerprint || getDefaultFingerprint(profile.engine);
+    const baseFingerprint = profile.fingerprint || getDefaultFingerprint(profile.runtimeId);
     const variant = generateVariant(baseFingerprint);
 
     logger.info('Randomizing fingerprint for profile', {
@@ -199,15 +204,15 @@ export class ProfileFingerprintNamespace {
   async validateFingerprint(
     config: Partial<FingerprintConfig>
   ): Promise<FingerprintValidationResult> {
-    const inferredEngine =
+    const inferredRuntimeId: BrowserRuntimeId =
       config.identity?.hardware?.browserFamily === 'firefox'
-        ? 'ruyi'
+        ? 'firefox-bidi'
         : config.identity?.hardware?.browserFamily === 'electron'
-          ? 'electron'
-          : 'extension';
+          ? 'electron-webcontents'
+          : 'chromium-extension-relay';
     const result = validateFingerprintConfig(
-      mergeFingerprintConfig(getDefaultFingerprint(inferredEngine), config),
-      inferredEngine
+      mergeFingerprintConfig(getDefaultFingerprint(inferredRuntimeId), config),
+      inferredRuntimeId
     );
 
     return {
@@ -216,8 +221,10 @@ export class ProfileFingerprintNamespace {
     };
   }
 
-  async getDefaultFingerprint(engine: AutomationEngine = 'electron'): Promise<FingerprintConfig> {
-    return getDefaultFingerprint(engine);
+  async getDefaultFingerprint(
+    runtimeId: BrowserRuntimeId = DEFAULT_BROWSER_RUNTIME_ID
+  ): Promise<FingerprintConfig> {
+    return getDefaultFingerprint(runtimeId);
   }
 }
 

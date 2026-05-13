@@ -15,7 +15,7 @@ const normalize = (value: unknown): string => asText(value).toLowerCase();
 const toCandidate = (profile: OrchestrationProfileInfo): Record<string, unknown> => ({
   id: asText(profile.id),
   name: asText(profile.name),
-  engine: asText(profile.engine),
+  runtimeId: asText(profile.runtimeId),
   status: asText(profile.status),
   ...(asText(profile.partition) ? { partition: asText(profile.partition) } : {}),
 });

@@ -601,7 +601,7 @@ export function HttpApiPanel() {
             <div className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
               <div>MCP URL: {mcpBaseUrl}</div>
               <div>
-                建议：先用 `session_prepare` 绑定 profile / engine / visible / scopes，再进入
+                建议：先用 `session_prepare` 绑定 profile / runtimeId / visible / scopes，再进入
                 `browser_*` 工具。
               </div>
               <div>

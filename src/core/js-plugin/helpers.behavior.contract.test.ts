@@ -4,8 +4,8 @@ import { ProfileNamespace } from './namespaces/profile';
 import type { BrowserCapabilityName } from '../../types/browser-interface';
 import {
   browserRuntimeSupports,
-  getStaticEngineRuntimeDescriptor,
-} from '../browser-pool/engine-capability-registry';
+  getStaticRuntimeDescriptor,
+} from '../browser-pool/runtime-capability-registry';
 
 const mockPoolManager = {
   getStats: vi.fn(),
@@ -41,7 +41,7 @@ describe('helpers behavior contract', () => {
     mockPoolManager.getWaitQueueStats.mockReturnValue({ totalWaiting: 0 });
     mockShowBrowserView.mockReturnValue(true);
 
-    const runtime = getStaticEngineRuntimeDescriptor('electron');
+    const runtime = getStaticRuntimeDescriptor('electron-webcontents');
     const browser = {
       goto: vi.fn(),
       show: vi.fn().mockResolvedValue(undefined),
@@ -63,7 +63,7 @@ describe('helpers behavior contract', () => {
       browser,
       browserId: 'browser-1',
       sessionId: 'profile-1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       viewId: 'pool:profile-1:1',
       release: originalRelease,
       renew: vi.fn(),
@@ -94,7 +94,7 @@ describe('helpers behavior contract', () => {
     await handle.release({ destroy: false });
 
     expect(handle.browser.describeRuntime()).toMatchObject({
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
     });
     expect(handle.browser.hasCapability('cookies.filter')).toBe(true);
     expect(() => (handle.browser as any).session).toThrowError(/browser\.session is not available/i);
@@ -126,7 +126,7 @@ describe('helpers behavior contract', () => {
     mockPoolManager.getWaitQueueStats.mockReturnValue({ totalWaiting: 0 });
 
     const onClose = vi.fn();
-    const runtime = getStaticEngineRuntimeDescriptor('extension');
+    const runtime = getStaticRuntimeDescriptor('chromium-extension-relay');
     const browser = {
       goto: vi.fn(),
       show: vi.fn().mockResolvedValue(undefined),
@@ -143,7 +143,7 @@ describe('helpers behavior contract', () => {
       browser,
       browserId: 'browser-extension',
       sessionId: 'profile-extension',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       release: vi.fn().mockResolvedValue({
         sessionId: 'profile-extension',
         remainingBrowserCount: 0,
@@ -177,7 +177,7 @@ describe('helpers behavior contract', () => {
     });
 
     expect(handle.popupId).toBe('external:browser-extension');
-    expect(handle.browser.describeRuntime()).toMatchObject({ engine: 'extension' });
+    expect(handle.browser.describeRuntime()).toMatchObject({ runtimeId: 'chromium-extension-relay' });
     expect(handle.browser.hasCapability('network.responseBody')).toBe(true);
     expect(browser.show).toHaveBeenCalledTimes(1);
     expect(mockShowBrowserViewInPopup).not.toHaveBeenCalled();

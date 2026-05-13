@@ -5,13 +5,14 @@ import { HTTP_SERVER_DEFAULTS } from '../constants/http-api';
 import { createLogger } from '../core/logger';
 import { showBrowserView, hideBrowserView } from '../core/browser-pool';
 import type { BrowserHandle } from '../core/browser-pool';
-import type { AutomationEngine } from '../core/browser-pool/types';
 import {
   createOrchestrationExecutor,
   listOrchestrationCapabilities,
   type OrchestrationExecutor,
   type OrchestrationIdempotencyEntry,
 } from '../core/ai-dev/orchestration';
+import type { BrowserRuntimeId } from '../types/browser-runtime';
+import { BROWSER_RUNTIME_IDS } from '../types/browser-runtime';
 import type { RestApiConfig, RestApiDependencies } from '../types/http-api';
 import { ErrorCode, createStructuredError, type StructuredError } from '../types/error-codes';
 import { sendStructuredError, sendSuccess, buildOrchestrationResponseMeta } from './http-response-mapper';
@@ -26,7 +27,7 @@ const orchestrationInvokeRequestSchema = z.object({
 
 const orchestrationSessionCreateRequestSchema = z.object({
   profileId: z.string().trim().min(1, 'profileId cannot be empty').optional(),
-  engine: z.enum(['electron', 'extension', 'ruyi']).optional(),
+  runtimeId: z.enum(BROWSER_RUNTIME_IDS).optional(),
   visible: z.boolean().optional().default(false),
 });
 
@@ -76,7 +77,7 @@ export interface OrchestrationSessionInfo {
   activeInvocationController?: AbortController;
   closing?: boolean;
   profileId?: string;
-  engine?: AutomationEngine;
+  runtimeId?: BrowserRuntimeId;
   authScopes?: string[];
   idempotencyCache: Map<string, OrchestrationIdempotencyEntry>;
 }
@@ -91,7 +92,7 @@ interface RegisterOrchestrationRoutesOptions {
   firstString: (value: unknown) => string;
   acquireBrowserFromPool: (
     profileId?: string,
-    engine?: AutomationEngine,
+    runtimeId?: BrowserRuntimeId,
     source?: 'mcp' | 'http'
   ) => Promise<BrowserHandle>;
   enqueueOrchestrationInvoke: <T>(
@@ -182,12 +183,12 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
         res,
         createStructuredError(ErrorCode.INVALID_PARAMETER, 'Invalid orchestration session request', {
           details: formatZodIssues(parsed.error),
-          suggestion: '请提供有效的 profileId、engine 和 visible 参数',
+          suggestion: '请提供有效的 profileId、runtimeId 和 visible 参数',
         }),
         400
       );
     }
-    const { profileId, engine, visible } = parsed.data;
+    const { profileId, runtimeId, visible } = parsed.data;
     const resolvedProfileId = await resolveProfileIdHint(options.dependencies, profileId);
 
     if (!options.browserPoolAvailable) {
@@ -200,7 +201,7 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
       );
     }
 
-    const browserHandle = await options.acquireBrowserFromPool(resolvedProfileId, engine, 'http');
+    const browserHandle = await options.acquireBrowserFromPool(resolvedProfileId, runtimeId, 'http');
     let sessionRegistered = false;
     const sessionId = randomUUID();
     try {
@@ -260,7 +261,7 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
         maxQueueSize: HTTP_SERVER_DEFAULTS.ORCHESTRATION_MAX_QUEUE_SIZE,
         lastActivity: Date.now(),
         profileId: resolvedProfileId,
-        engine,
+        runtimeId,
         authScopes: [],
         idempotencyCache: new Map(),
       });
@@ -272,7 +273,7 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
           sessionId,
           browserId: browserHandle.browserId,
           poolSessionId: browserHandle.sessionId,
-          engine: browserHandle.engine,
+          runtimeId: browserHandle.runtimeId,
           viewId: browserHandle.viewId,
         },
         undefined,
@@ -324,7 +325,7 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
       {
         sessionId,
         profileId: session.profileId,
-        engine: session.engine,
+        runtimeId: session.runtimeId,
         browserId: session.browserHandle.browserId,
         viewId: session.browserHandle.viewId,
         pendingInvocations: session.pendingInvocations,

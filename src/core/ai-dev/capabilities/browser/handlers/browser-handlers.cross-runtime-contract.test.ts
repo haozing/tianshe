@@ -65,7 +65,7 @@ function createSnapshot(url: string = 'https://example.test/') {
   };
 }
 
-function createEngineBrowser(engine: 'electron' | 'extension' | 'ruyi') {
+function createRuntimeBrowser(runtimeId: 'electron-webcontents' | 'chromium-extension-relay' | 'firefox-bidi') {
   let currentUrl = 'https://example.test/';
   return {
     goto: vi.fn().mockImplementation(async (url: string) => {
@@ -118,12 +118,12 @@ function createEngineBrowser(engine: 'electron' | 'extension' | 'ruyi') {
         return Promise.resolve({ width: 1280, height: 720 });
       }
       if (script.includes('window.__airpaClickProbes = window.__airpaClickProbes || {}')) {
-        return Promise.resolve(`${engine}-click-probe`);
+        return Promise.resolve(`${runtimeId}-click-probe`);
       }
       if (script.includes('window.__airpaClickProbes?.[')) {
         return Promise.resolve({
           events: 1,
-          lastTrusted: engine === 'electron',
+          lastTrusted: runtimeId === 'electron-webcontents',
           lastTag: 'BUTTON',
         });
       }
@@ -131,7 +131,7 @@ function createEngineBrowser(engine: 'electron' | 'extension' | 'ruyi') {
         return Promise.resolve(undefined);
       }
       if (script.includes('window.__airpaInputProbes = window.__airpaInputProbes || {}')) {
-        return Promise.resolve(`${engine}-input-probe`);
+        return Promise.resolve(`${runtimeId}-input-probe`);
       }
       if (script.includes('window.__airpaInputProbes?.[')) {
         return Promise.resolve({
@@ -289,11 +289,11 @@ function pickWaitForContract(data: Record<string, unknown>) {
   };
 }
 
-describe('browser handler cross-engine contracts', () => {
+describe('browser handler cross-runtime contracts', () => {
   it('keeps browser_observe output aligned across electron, extension, and ruyi stubs', async () => {
-    const electronBrowser = createEngineBrowser('electron');
-    const extensionBrowser = createEngineBrowser('extension');
-    const ruyiBrowser = createEngineBrowser('ruyi');
+    const electronBrowser = createRuntimeBrowser('electron-webcontents');
+    const extensionBrowser = createRuntimeBrowser('chromium-extension-relay');
+    const ruyiBrowser = createRuntimeBrowser('firefox-bidi');
 
     const [electronResult, extensionResult, ruyiResult] = await Promise.all([
       handleBrowserObserve({}, { browser: electronBrowser } as never),
@@ -309,10 +309,10 @@ describe('browser handler cross-engine contracts', () => {
     );
   });
 
-  it('keeps browser_observe navigation and wait semantics aligned across engines', async () => {
-    const electronBrowser = createEngineBrowser('electron');
-    const extensionBrowser = createEngineBrowser('extension');
-    const ruyiBrowser = createEngineBrowser('ruyi');
+  it('keeps browser_observe navigation and wait semantics aligned across runtimes', async () => {
+    const electronBrowser = createRuntimeBrowser('electron-webcontents');
+    const extensionBrowser = createRuntimeBrowser('chromium-extension-relay');
+    const ruyiBrowser = createRuntimeBrowser('firefox-bidi');
 
     const [electronResult, extensionResult, ruyiResult] = await Promise.all([
       handleBrowserObserve(
@@ -361,9 +361,9 @@ describe('browser handler cross-engine contracts', () => {
   });
 
   it('keeps browser_snapshot output aligned across electron, extension, and ruyi stubs', async () => {
-    const electronBrowser = createEngineBrowser('electron');
-    const extensionBrowser = createEngineBrowser('extension');
-    const ruyiBrowser = createEngineBrowser('ruyi');
+    const electronBrowser = createRuntimeBrowser('electron-webcontents');
+    const extensionBrowser = createRuntimeBrowser('chromium-extension-relay');
+    const ruyiBrowser = createRuntimeBrowser('firefox-bidi');
 
     const [electronResult, extensionResult, ruyiResult] = await Promise.all([
       handleBrowserSnapshot(
@@ -399,9 +399,9 @@ describe('browser handler cross-engine contracts', () => {
   });
 
   it('keeps browser_search output aligned across electron, extension, and ruyi stubs', async () => {
-    const electronBrowser = createEngineBrowser('electron');
-    const extensionBrowser = createEngineBrowser('extension');
-    const ruyiBrowser = createEngineBrowser('ruyi');
+    const electronBrowser = createRuntimeBrowser('electron-webcontents');
+    const extensionBrowser = createRuntimeBrowser('chromium-extension-relay');
+    const ruyiBrowser = createRuntimeBrowser('firefox-bidi');
 
     const [electronResult, extensionResult, ruyiResult] = await Promise.all([
       handleBrowserSearch({ query: 'search', limit: 5 }, { browser: electronBrowser } as never),
@@ -417,10 +417,10 @@ describe('browser handler cross-engine contracts', () => {
     );
   });
 
-  it('keeps browser_search exactMatch and roleFilter semantics aligned across engines', async () => {
-    const electronBrowser = createEngineBrowser('electron');
-    const extensionBrowser = createEngineBrowser('extension');
-    const ruyiBrowser = createEngineBrowser('ruyi');
+  it('keeps browser_search exactMatch and roleFilter semantics aligned across runtimes', async () => {
+    const electronBrowser = createRuntimeBrowser('electron-webcontents');
+    const extensionBrowser = createRuntimeBrowser('chromium-extension-relay');
+    const ruyiBrowser = createRuntimeBrowser('firefox-bidi');
 
     const [electronResult, extensionResult, ruyiResult] = await Promise.all([
       handleBrowserSearch(
@@ -460,9 +460,9 @@ describe('browser handler cross-engine contracts', () => {
   });
 
   it('keeps browser_act type semantics aligned across electron, extension, and ruyi stubs', async () => {
-    const electronBrowser = createEngineBrowser('electron');
-    const extensionBrowser = createEngineBrowser('extension');
-    const ruyiBrowser = createEngineBrowser('ruyi');
+    const electronBrowser = createRuntimeBrowser('electron-webcontents');
+    const extensionBrowser = createRuntimeBrowser('chromium-extension-relay');
+    const ruyiBrowser = createRuntimeBrowser('firefox-bidi');
 
     const [electronResult, extensionResult, ruyiResult] = await Promise.all([
       handleBrowserAct(
@@ -500,9 +500,9 @@ describe('browser handler cross-engine contracts', () => {
   });
 
   it('keeps browser_act click effect semantics aligned even when click transport differs', async () => {
-    const electronBrowser = createEngineBrowser('electron');
-    const extensionBrowser = createEngineBrowser('extension');
-    const ruyiBrowser = createEngineBrowser('ruyi');
+    const electronBrowser = createRuntimeBrowser('electron-webcontents');
+    const extensionBrowser = createRuntimeBrowser('chromium-extension-relay');
+    const ruyiBrowser = createRuntimeBrowser('firefox-bidi');
 
     const [electronResult, extensionResult, ruyiResult] = await Promise.all([
       handleBrowserAct(
@@ -539,10 +539,10 @@ describe('browser handler cross-engine contracts', () => {
     expect(getData(ruyiResult)).toMatchObject({ clickMethod: 'dom-click' });
   });
 
-  it('keeps browser_wait_for selector semantics aligned across engines', async () => {
-    const electronBrowser = createEngineBrowser('electron');
-    const extensionBrowser = createEngineBrowser('extension');
-    const ruyiBrowser = createEngineBrowser('ruyi');
+  it('keeps browser_wait_for selector semantics aligned across runtimes', async () => {
+    const electronBrowser = createRuntimeBrowser('electron-webcontents');
+    const extensionBrowser = createRuntimeBrowser('chromium-extension-relay');
+    const ruyiBrowser = createRuntimeBrowser('firefox-bidi');
 
     const [electronResult, extensionResult, ruyiResult] = await Promise.all([
       handleBrowserWaitFor(
@@ -587,10 +587,10 @@ describe('browser handler cross-engine contracts', () => {
     });
   });
 
-  it('keeps browser_debug_state console and network structure aligned across engines', async () => {
-    const electronBrowser = createEngineBrowser('electron');
-    const extensionBrowser = createEngineBrowser('extension');
-    const ruyiBrowser = createEngineBrowser('ruyi');
+  it('keeps browser_debug_state console and network structure aligned across runtimes', async () => {
+    const electronBrowser = createRuntimeBrowser('electron-webcontents');
+    const extensionBrowser = createRuntimeBrowser('chromium-extension-relay');
+    const ruyiBrowser = createRuntimeBrowser('firefox-bidi');
 
     const [electronResult, extensionResult, ruyiResult] = await Promise.all([
       handleBrowserDebugState(

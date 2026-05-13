@@ -29,7 +29,7 @@ import {
 import { cn } from '../../lib/utils';
 import { createRendererLogger } from '../../lib/logger';
 import { toast } from '../../lib/toast';
-import type { AutomationEngine, BrowserProfile, PoolBrowserInfo } from '../../../../types/profile';
+import type { BrowserProfile, BrowserRuntimeId, PoolBrowserInfo } from '../../../../types/profile';
 
 const logger = createRendererLogger('ProfileList');
 
@@ -95,6 +95,17 @@ const accentBorders: Partial<Record<ProfileVisualStatus, string>> = {
   destroying: 'border-rose-300/80',
   error: 'border-red-300/80',
 };
+
+const RUNTIME_LABELS: Record<BrowserRuntimeId, string> = {
+  'electron-webcontents': 'Electron',
+  'chromium-extension-relay': 'Chromium Extension',
+  'firefox-bidi': 'Firefox BiDi',
+  'chromium-cloak-playwright': 'Cloak Playwright',
+};
+
+function getRuntimeLabel(runtimeId: BrowserRuntimeId): string {
+  return RUNTIME_LABELS[runtimeId] ?? runtimeId;
+}
 
 function summarizeRuntimeByProfile(browsers: PoolBrowserInfo[]): Record<string, ProfileRuntimeSummary> {
   const summaryByProfileId: Record<string, ProfileRuntimeSummary> = {};
@@ -207,9 +218,8 @@ function ProfileCard({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isLaunching, setIsLaunching] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
-  const engine: AutomationEngine = profile.engine;
-  const engineLabel =
-    engine === 'extension' ? 'Extension' : engine === 'ruyi' ? 'Ruyi' : 'Electron';
+  const runtimeId = profile.runtimeId;
+  const runtimeLabel = getRuntimeLabel(runtimeId);
   const cloudActionBusy = cloudActionProfileId === profile.id;
   const visualStatus = resolveProfileVisualStatus(profile, runtimeSummary, hasLoadedRuntimeState);
   const isCreatingOrDestroying =
@@ -259,7 +269,7 @@ function ProfileCard({
         strategy: launchOptions?.strategy || 'reuse',
         browserId: launchOptions?.browserId,
         timeout: 30000,
-        engine,
+        runtimeId,
       });
       if (!result.success) {
         toast.error('启动失败', result.error || '未知错误');
@@ -271,7 +281,7 @@ function ProfileCard({
       logger.error('Failed to launch profile browser', {
         operation: 'profile.browser.launch',
         profileId: profile.id,
-        engine,
+        runtimeId,
         strategy: launchOptions?.strategy || 'reuse',
         browserId: launchOptions?.browserId,
         error,
@@ -289,7 +299,7 @@ function ProfileCard({
     }
 
     const running = listResult.data
-      .filter((item) => item.sessionId === profile.id && item.engine === engine)
+      .filter((item) => item.sessionId === profile.id && item.runtimeId === runtimeId)
       .sort((a, b) => {
         const scoreA = a.status === 'locked' ? 2 : a.status === 'idle' ? 1 : 0;
         const scoreB = b.status === 'locked' ? 2 : b.status === 'idle' ? 1 : 0;
@@ -328,7 +338,7 @@ function ProfileCard({
         logger.warn('Failed to activate existing persistent browser; fallback to launch', {
           operation: 'profile.browser.activateExisting',
           profileId: profile.id,
-          engine,
+          runtimeId,
           error,
         });
       }
@@ -417,7 +427,7 @@ function ProfileCard({
                   {visualStatus.label}
                 </span>
                 <span className="inline-flex rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-700">
-                  {engineLabel}
+                  {runtimeLabel}
                 </span>
                 {runtimeSummary && runtimeSummary.total > 0 ? (
                   <span className="inline-flex rounded-full border border-slate-200 bg-white/80 px-2.5 py-1 text-[11px] font-medium text-slate-500">
@@ -441,7 +451,7 @@ function ProfileCard({
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => void handleLaunch()} disabled={isLaunching}>
                   <Play className="mr-2 h-4 w-4" />
-                  Launch {engineLabel}
+                  Launch {runtimeLabel}
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={onEdit}>
                   <Pencil className="mr-2 h-4 w-4" />
@@ -488,7 +498,7 @@ function ProfileCard({
             </div>
             <div className="flex items-center gap-2">
               <Monitor className="h-4 w-4" />
-              <span className="truncate">Engine: {engineLabel}</span>
+              <span className="truncate">Runtime: {runtimeLabel}</span>
             </div>
 
             <div className="flex items-center gap-2">
@@ -579,7 +589,7 @@ function ProfileCard({
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="truncate font-medium text-slate-900">{profile.name}</h3>
             <span className="inline-flex rounded-full border border-slate-200 bg-white/80 px-2 py-0.5 text-[11px] text-slate-600">
-              {engineLabel}
+              {runtimeLabel}
             </span>
             <span className="inline-flex rounded-full border border-slate-200 bg-white/80 px-2 py-0.5 text-[11px] text-slate-600">
               {visualStatus.label}

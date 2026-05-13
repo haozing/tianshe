@@ -18,10 +18,21 @@ import type {
   FingerprintConfig,
   ProxyConfig as ProfileProxyConfig,
 } from '../../types/profile';
-import type { AutomationEngine } from '../../types/automation-engine';
+import type {
+  BrowserRuntimeId,
+  BrowserRuntimeSource,
+} from '../../types/browser-runtime';
+import type { BrowserRuntimeDescriptor } from '../../types/browser-interface';
+import type { ResolvedBrowserRuntime } from '../browser-runtime/types';
 
 // 重导出供模块使用者访问
-export type { FingerprintConfig, ProfileProxyConfig, BrowserInterface, AutomationEngine };
+export type {
+  FingerprintConfig,
+  ProfileProxyConfig,
+  BrowserInterface,
+  BrowserRuntimeId,
+  BrowserRuntimeSource,
+};
 
 /**
  * 池内浏览器的最小生命周期约束
@@ -42,8 +53,10 @@ export interface SessionConfig {
   id: string;
   /** Electron partition（创建后不可变） */
   partition: string;
-  /** 自动化引擎（默认 'electron'） */
-  engine?: AutomationEngine;
+  /** 浏览器运行时 */
+  runtimeId: BrowserRuntimeId;
+  /** 浏览器运行时来源覆盖 */
+  runtimeSourceOverride?: BrowserRuntimeSource | null;
   /** 指纹配置 */
   fingerprint?: FingerprintConfig;
   /** Profile 代理配置（可选） */
@@ -72,8 +85,10 @@ interface PooledBrowserBase {
   id: string;
   /** 所属会话ID */
   sessionId: string;
-  /** 引擎类型 */
-  engine: AutomationEngine;
+  /** 运行时类型 */
+  runtimeId: BrowserRuntimeId;
+  runtimeDescriptor?: BrowserRuntimeDescriptor;
+  resolvedRuntime?: ResolvedBrowserRuntime;
   /** 会话空闲超时（ms），用于按 Profile 维度驱逐空闲浏览器 */
   idleTimeoutMs: number;
   /** 创建时间 */
@@ -164,8 +179,8 @@ export type AcquirePriority = 'high' | 'normal' | 'low';
 export type AcquireSource = 'http' | 'mcp' | 'ipc' | 'internal' | 'plugin';
 
 export interface AcquireOptions {
-  /** 自动化引擎（默认 'electron'） */
-  engine?: AutomationEngine;
+  /** 浏览器运行时 */
+  runtimeId?: BrowserRuntimeId;
   /**
    * 浏览器选择策略
    * - 'any': 任意空闲浏览器（默认）
@@ -336,8 +351,10 @@ export interface BrowserHandle {
   browserId: string;
   /** 会话ID */
   sessionId: string;
-  /** 引擎类型 */
-  engine: AutomationEngine;
+  /** 运行时类型 */
+  runtimeId: BrowserRuntimeId;
+  runtimeDescriptor?: BrowserRuntimeDescriptor;
+  resolvedRuntime?: ResolvedBrowserRuntime;
   /** 视图ID（用于显示/隐藏浏览器视图；仅 electron 引擎存在） */
   viewId?: string;
   /**

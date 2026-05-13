@@ -2,6 +2,7 @@ import type { BrowserWindow as BrowserWindowType } from 'electron';
 import type Store from 'electron-store';
 import type { JSPluginManager } from '../core/js-plugin/manager';
 import type { HookBus } from '../core/hookbus';
+import type { BrowserRuntimeManager } from '../core/browser-runtime';
 import type { WebhookSender } from './webhook/sender';
 import type { LogStorageService } from './log-storage-service';
 import type { DownloadManager } from './download';
@@ -44,6 +45,7 @@ export class AppRuntime {
   httpServerStartPromise: Promise<void> | null = null;
   schedulerService!: SchedulerService;
   extensionPackages!: ExtensionPackagesManager;
+  browserRuntimeManager!: BrowserRuntimeManager;
   disposeResourceMonitoring?: () => void;
   hookBus!: HookBus;
   webhookSender!: WebhookSender;
@@ -83,6 +85,10 @@ export class AppRuntime {
 
   requireExtensionPackages(): ExtensionPackagesManager {
     return requireInitialized(this.extensionPackages, 'extensionPackages');
+  }
+
+  requireBrowserRuntimeManager(): BrowserRuntimeManager {
+    return requireInitialized(this.browserRuntimeManager, 'browserRuntimeManager');
   }
 
   requireHookBus(): HookBus {

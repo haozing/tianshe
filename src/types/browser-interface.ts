@@ -15,6 +15,15 @@ import type {
   Point,
   ViewportConfig,
 } from '../core/coordinate/types';
+import type {
+  BrowserControlProtocol,
+  BrowserFamily,
+  BrowserFingerprintBackend,
+  BrowserProfileMode,
+  BrowserRuntimeId,
+  BrowserRuntimeSource,
+  BrowserVisibilityMode,
+} from './browser-runtime';
 
 export type {
   ConsoleMessage,
@@ -74,7 +83,7 @@ export interface BrowserCookieFilter {
   httpOnly?: boolean;
 }
 
-export type BrowserEngineName = 'electron' | 'extension' | 'ruyi';
+export type BrowserEngineName = BrowserRuntimeId;
 
 export const BROWSER_CAPABILITY_NAMES = [
   'cookies.read',
@@ -113,14 +122,18 @@ export type BrowserCapabilityRequirement = `browserCapability:${BrowserCapabilit
 export interface BrowserCapabilityDescriptor {
   supported: boolean;
   stability: 'stable' | 'experimental' | 'planned';
-  source: 'static-engine' | 'runtime';
+  source: 'static-runtime' | 'runtime';
   notes?: string;
 }
 
 export interface BrowserRuntimeDescriptor {
-  engine: BrowserEngineName;
-  profileMode: 'ephemeral' | 'persistent';
-  visibilityMode: 'embedded-view' | 'external-window' | 'direct-window';
+  runtimeId: BrowserRuntimeId;
+  browserFamily: BrowserFamily;
+  controlProtocol: BrowserControlProtocol;
+  profileMode: BrowserProfileMode;
+  visibilityMode: BrowserVisibilityMode;
+  fingerprintBackend: BrowserFingerprintBackend;
+  source: BrowserRuntimeSource;
   capabilities: Record<BrowserCapabilityName, BrowserCapabilityDescriptor>;
 }
 

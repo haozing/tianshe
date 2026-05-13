@@ -1,4 +1,4 @@
-﻿import type { Server as HttpServer } from 'node:http';
+import type { Server as HttpServer } from 'node:http';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,7 +65,7 @@ function createMockHandle(browser: BrowserInterface): {
     browser,
     browserId: 'browser-1',
     sessionId: 'pool-session-1',
-    engine: 'extension',
+    runtimeId: 'chromium-extension-relay',
     release,
     renew: vi.fn().mockResolvedValue(true),
   } as unknown as BrowserHandle;
@@ -265,7 +265,7 @@ function pickSessionSnapshot(value: any) {
   return {
     sessionId: value?.sessionId ?? null,
     profileId: value?.profileId ?? null,
-    engine: value?.engine ?? null,
+    runtimeId: value?.runtimeId ?? null,
     visible: value?.visible ?? false,
     browserAcquired: value?.browserAcquired ?? false,
     browserAcquireInProgress: value?.browserAcquireInProgress ?? false,
@@ -277,7 +277,7 @@ function pickSessionSnapshot(value: any) {
     viewportHealthReason: value?.viewportHealthReason ?? null,
     interactionReady: value?.interactionReady ?? false,
     offscreenDetected: value?.offscreenDetected ?? false,
-    engineRuntimeDescriptor: value?.engineRuntimeDescriptor ?? null,
+    runtimeDescriptor: value?.runtimeDescriptor ?? null,
     browserRuntimeDescriptor: value?.browserRuntimeDescriptor ?? null,
     resolvedRuntimeDescriptor: value?.resolvedRuntimeDescriptor ?? null,
   };
@@ -369,7 +369,7 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
     vi.clearAllMocks();
   });
 
-  it('MCP ListTools keeps parity with orchestration capabilities', async () => {
+  it('MCP ListTools exposes the public tool contract', async () => {
     await startServer(createMockBrowser(), { enableMcp: true });
 
     mcpClient = new Client({
@@ -387,7 +387,7 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
     expect(acquire).not.toHaveBeenCalled();
   });
 
-  it('MCP ListTools 閸氬秶袨韫囶偆鍙庣粙鍐茬暰閿涘牆顨栫痪锕€娲栬ぐ鎺炵礆', async () => {
+  it('MCP ListTools exposes the public tool contract', async () => {
     await startServer(createMockBrowser(), { enableMcp: true });
 
     mcpClient = new Client({
@@ -402,7 +402,7 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
     expect(names).toEqual([...MCP_PUBLIC_TOOL_NAMES].sort());
   });
 
-  it('MCP ListTools exposes title, annotations, inputSchema and outputSchema for model-friendly clients', async () => {
+  it('MCP ListTools exposes the public tool contract', async () => {
     await startServer(createMockBrowser(), {
       enableMcp: true,
       dependencies: {
@@ -475,43 +475,43 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
       availableNow: true,
       preconditionsNow: expect.arrayContaining([
         expect.stringContaining('effectiveProfile'),
-        expect.stringContaining('effectiveEngineSource'),
+        expect.stringContaining('effectiveRuntimeSource'),
       ]),
       recommendedActions: expect.arrayContaining([
         expect.stringContaining('effectiveProfile'),
-        expect.stringContaining('profile_engine_mismatch'),
+        expect.stringContaining('profile_runtime_mismatch'),
       ]),
     });
     expect((sessionPrepareTool as any)?._meta?.['airpa/modelHints']).toMatchObject({
       readBeforeCall: expect.arrayContaining([
         expect.stringContaining('effectiveProfile'),
-        expect.stringContaining('effectiveEngineSource'),
+        expect.stringContaining('effectiveRuntimeSource'),
       ]),
       nextActions: expect.arrayContaining([
         expect.stringContaining('effectiveProfile'),
-        expect.stringContaining('profile_engine_mismatch'),
+        expect.stringContaining('profile_runtime_mismatch'),
       ]),
       authoritativeResultFields: [
         'structuredContent.data.effectiveProfile',
-        'structuredContent.data.effectiveEngine',
-        'structuredContent.data.effectiveEngineSource',
+        'structuredContent.data.effectiveRuntime',
+        'structuredContent.data.effectiveRuntimeSource',
       ],
       failureCodes: expect.arrayContaining([
         expect.objectContaining({
-          code: 'profile_engine_mismatch',
+          code: 'profile_runtime_mismatch',
           remediation: expect.stringContaining('session_prepare'),
         }),
       ]),
       resultContract: expect.arrayContaining([
         expect.stringContaining('effectiveProfile'),
-        expect.stringContaining('effectiveEngineSource'),
+        expect.stringContaining('effectiveRuntimeSource'),
       ]),
-      failureContract: expect.arrayContaining([expect.stringContaining('profile_engine_mismatch')]),
+      failureContract: expect.arrayContaining([expect.stringContaining('profile_runtime_mismatch')]),
       commonMistakes: expect.arrayContaining([
         expect.objectContaining({
           mistake: expect.stringContaining('old transport headers'),
           correction: expect.stringContaining(
-            'structuredContent.data.effectiveProfile, effectiveEngine, and effectiveEngineSource'
+            'structuredContent.data.effectiveProfile, effectiveRuntime, and effectiveRuntimeSource'
           ),
         }),
       ]),
@@ -584,8 +584,8 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
         data: {
           properties: {
             effectiveProfile: expect.any(Object),
-            effectiveEngine: expect.any(Object),
-            effectiveEngineSource: expect.any(Object),
+            effectiveRuntime: expect.any(Object),
+            effectiveRuntimeSource: expect.any(Object),
           },
         },
       },
@@ -594,7 +594,7 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
       'Prepare the current MCP session'
     );
     expect(String(sessionPrepareTool?.description || '')).not.toContain('effectiveProfile');
-    expect(String(sessionPrepareTool?.description || '')).not.toContain('profile_engine_mismatch');
+    expect(String(sessionPrepareTool?.description || '')).not.toContain('profile_runtime_mismatch');
     expect(String(sessionPrepareTool?.description || '')).not.toContain('Recommendation:');
     expect(String(browserActTool?.description || '')).not.toContain('Recommendation:');
     expect(String(browserActTool?.description || '')).not.toContain('Typical next tools:');
@@ -803,7 +803,7 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
     expect(payload.error?.data?.hint).toContain('session_prepare');
   });
 
-  it('MCP rejects transport-level mcp-engine on initialize', async () => {
+  it('MCP rejects transport-level mcp-runtime-id on initialize', async () => {
     await startServer(createMockBrowser(), { enableMcp: true });
 
     const response = await fetch(`${baseUrl}/mcp`, {
@@ -812,7 +812,7 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
         'content-type': 'application/json',
         accept: 'application/json',
         'mcp-protocol-version': MCP_PROTOCOL_UNIFIED_VERSION,
-        'mcp-engine': 'webkit',
+        'mcp-runtime-id': 'webkit',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -821,7 +821,7 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
         params: {
           protocolVersion: MCP_PROTOCOL_UNIFIED_VERSION,
           capabilities: {},
-          clientInfo: { name: 'unsupported-engine-client', version: '1.0.0' },
+          clientInfo: { name: 'unsupported-runtime-client', version: '1.0.0' },
         },
       }),
     });
@@ -832,12 +832,12 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
     };
     expect(payload.error?.data).toMatchObject({
       reason: 'unsupported_transport_input',
-      input: 'mcp-engine',
+      input: 'mcp-runtime-id',
     });
     expect(payload.error?.data?.hint).toContain('session_prepare');
   });
 
-  it('MCP initialize 閸?application/json Accept 娑撳绻戦崶鐐插讲鐟欙絾鐎?JSON閿涘牆鍚嬬€瑰綊娼?SSE 鐎广垺鍩涚粩顖ょ礆', async () => {
+  it('MCP initialize accepts application/json clients without SSE headers', async () => {
     await startServer(createMockBrowser(), { enableMcp: true });
 
     const response = await fetch(`${baseUrl}/mcp`, {
@@ -874,7 +874,7 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
     expectInitializeInstructionsLike(payload.result);
   });
 
-  it('MCP initialize without request id is rejected for strict SDK-first clients', async () => {
+  it('MCP initialize accepts application/json clients without SSE headers', async () => {
     await startServer(createMockBrowser(), { enableMcp: true });
 
     const response = await fetch(`${baseUrl}/mcp`, {
@@ -1041,7 +1041,7 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
         expect.stringContaining('terminate the MCP session'),
         expect.stringContaining('session_end_current'),
         expect.stringContaining('effectiveProfile'),
-        expect.stringContaining('effectiveEngine'),
+        expect.stringContaining('effectiveRuntime'),
         expect.stringContaining('browser_debug_state'),
       ])
     );
@@ -1060,29 +1060,29 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
       readBeforeCall: expect.arrayContaining([expect.stringContaining('effectiveProfile')]),
       nextActions: expect.arrayContaining([
         expect.stringContaining('effectiveProfile'),
-        expect.stringContaining('profile_engine_mismatch'),
+        expect.stringContaining('profile_runtime_mismatch'),
       ]),
       authoritativeResultFields: [
         'structuredContent.data.effectiveProfile',
-        'structuredContent.data.effectiveEngine',
-        'structuredContent.data.effectiveEngineSource',
+        'structuredContent.data.effectiveRuntime',
+        'structuredContent.data.effectiveRuntimeSource',
       ],
       failureCodes: expect.arrayContaining([
         expect.objectContaining({
-          code: 'profile_engine_mismatch',
+          code: 'profile_runtime_mismatch',
           remediation: expect.stringContaining('browser_* call'),
         }),
       ]),
       resultContract: expect.arrayContaining([
         expect.stringContaining('effectiveProfile'),
-        expect.stringContaining('effectiveEngineSource'),
+        expect.stringContaining('effectiveRuntimeSource'),
       ]),
-      failureContract: expect.arrayContaining([expect.stringContaining('profile_engine_mismatch')]),
+      failureContract: expect.arrayContaining([expect.stringContaining('profile_runtime_mismatch')]),
       commonMistakes: expect.arrayContaining([
         expect.objectContaining({
           mistake: expect.stringContaining('old transport headers'),
           correction: expect.stringContaining(
-            'structuredContent.data.effectiveProfile, effectiveEngine, and effectiveEngineSource'
+            'structuredContent.data.effectiveProfile, effectiveRuntime, and effectiveRuntimeSource'
           ),
         }),
       ]),
@@ -1219,8 +1219,8 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
       .join('\n');
     expect(guideText).toContain('session_prepare');
     expect(guideText).toContain('effectiveProfile');
-    expect(guideText).toContain('effectiveEngineSource');
-    expect(guideText).toContain('profile_engine_mismatch');
+    expect(guideText).toContain('effectiveRuntimeSource');
+    expect(guideText).toContain('profile_runtime_mismatch');
     expect(guideText).toContain('browser_observe');
     expect(guideText).toContain('StreamableHTTPClientTransport.terminateSession()');
     expect(guideText).toContain('session_end_current');
@@ -1289,13 +1289,13 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
     expect(detailJson.modelHints?.nextActions).toEqual(
       expect.arrayContaining([
         expect.stringContaining('effectiveProfile'),
-        expect.stringContaining('profile_engine_mismatch'),
+        expect.stringContaining('profile_runtime_mismatch'),
       ])
     );
     expect(detailJson.modelHints?.authoritativeResultFields).toEqual([
       'structuredContent.data.effectiveProfile',
-      'structuredContent.data.effectiveEngine',
-      'structuredContent.data.effectiveEngineSource',
+      'structuredContent.data.effectiveRuntime',
+      'structuredContent.data.effectiveRuntimeSource',
     ]);
     expect(detailJson.modelHints?.recommendedFlows).toEqual(
       expect.arrayContaining([
@@ -1314,8 +1314,8 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
     expect(detailJson.modelHints?.failureCodes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          code: 'profile_engine_mismatch',
-          when: expect.stringContaining('resolved profile engine'),
+          code: 'profile_runtime_mismatch',
+          when: expect.stringContaining('resolved profile runtime'),
           remediation: expect.stringContaining('browser_* call'),
         }),
       ])
@@ -1323,18 +1323,18 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
     expect(detailJson.modelHints?.resultContract).toEqual(
       expect.arrayContaining([
         expect.stringContaining('effectiveProfile'),
-        expect.stringContaining('effectiveEngineSource'),
+        expect.stringContaining('effectiveRuntimeSource'),
       ])
     );
     expect(detailJson.modelHints?.failureContract).toEqual(
-      expect.arrayContaining([expect.stringContaining('profile_engine_mismatch')])
+      expect.arrayContaining([expect.stringContaining('profile_runtime_mismatch')])
     );
     expect(detailJson.modelHints?.commonMistakes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           mistake: expect.stringContaining('old transport headers'),
           correction: expect.stringContaining(
-            'structuredContent.data.effectiveProfile, effectiveEngine, and effectiveEngineSource'
+            'structuredContent.data.effectiveProfile, effectiveRuntime, and effectiveRuntimeSource'
           ),
         }),
       ])
@@ -1375,8 +1375,8 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
     expect(gettingStartedText).toContain('canonical MCP surface');
     expect(gettingStartedText).toContain('system_bootstrap');
     expect(gettingStartedText).toContain('session_prepare');
-    expect(gettingStartedText).toContain('effectiveProfile/effectiveEngine/effectiveEngineSource');
-    expect(gettingStartedText).toContain('profile_engine_mismatch');
+    expect(gettingStartedText).toContain('effectiveProfile/effectiveRuntime/effectiveRuntimeSource');
+    expect(gettingStartedText).toContain('profile_runtime_mismatch');
     expect(gettingStartedText).toContain('browser_observe');
     expect(gettingStartedText).toContain('session_end_current');
     expect(gettingStartedText).toContain('airpa://mcp/guides/login-pages');
@@ -1396,8 +1396,8 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
       .filter((item) => item.content.type === 'text')
       .map((item) => (item.content.type === 'text' ? item.content.text : ''))
       .join('\n');
-    expect(sessionReuseText).toContain('effectiveProfile/effectiveEngine/effectiveEngineSource');
-    expect(sessionReuseText).toContain('profile_engine_mismatch');
+    expect(sessionReuseText).toContain('effectiveProfile/effectiveRuntime/effectiveRuntimeSource');
+    expect(sessionReuseText).toContain('profile_runtime_mismatch');
     expect(sessionReuseText).toContain('browser_* call');
     expect(sessionReuseText).toContain('airpa://mcp/guides/login-pages');
     expect(sessionReuseText).toContain('airpa://mcp/guides/hidden-session-debug');

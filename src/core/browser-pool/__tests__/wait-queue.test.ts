@@ -67,7 +67,7 @@ describe('WaitQueue', () => {
       const request = createRequest('session-1');
       queue.enqueue(request);
 
-      const dequeued = await queue.dequeue('session-1', 'electron');
+      const dequeued = await queue.dequeue('session-1', 'electron-webcontents');
 
       expect(dequeued).not.toBeUndefined();
       expect(dequeued!.request.requestId).toBe(request.requestId);
@@ -76,7 +76,7 @@ describe('WaitQueue', () => {
     });
 
     it('空队列出队应该返回 undefined', async () => {
-      const result = await queue.dequeue('non-existent', 'electron');
+      const result = await queue.dequeue('non-existent', 'electron-webcontents');
       expect(result).toBeUndefined();
     });
 
@@ -105,9 +105,9 @@ describe('WaitQueue', () => {
       queue.enqueue(highReq);
 
       // 应该按 high -> normal -> low 顺序出队
-      expect((await queue.dequeue('session-1', 'electron'))!.request.requestId).toBe('high');
-      expect((await queue.dequeue('session-1', 'electron'))!.request.requestId).toBe('normal');
-      expect((await queue.dequeue('session-1', 'electron'))!.request.requestId).toBe('low');
+      expect((await queue.dequeue('session-1', 'electron-webcontents'))!.request.requestId).toBe('high');
+      expect((await queue.dequeue('session-1', 'electron-webcontents'))!.request.requestId).toBe('normal');
+      expect((await queue.dequeue('session-1', 'electron-webcontents'))!.request.requestId).toBe('low');
     });
 
     it('同优先级应该按 FIFO 出队', async () => {
@@ -119,21 +119,21 @@ describe('WaitQueue', () => {
       queue.enqueue(req2);
       queue.enqueue(req3);
 
-      expect((await queue.dequeue('session-1', 'electron'))!.request.requestId).toBe('first');
-      expect((await queue.dequeue('session-1', 'electron'))!.request.requestId).toBe('second');
-      expect((await queue.dequeue('session-1', 'electron'))!.request.requestId).toBe('third');
+      expect((await queue.dequeue('session-1', 'electron-webcontents'))!.request.requestId).toBe('first');
+      expect((await queue.dequeue('session-1', 'electron-webcontents'))!.request.requestId).toBe('second');
+      expect((await queue.dequeue('session-1', 'electron-webcontents'))!.request.requestId).toBe('third');
     });
 
     it('peek 应该返回最高优先级请求但不移除', async () => {
       queue.enqueue(createRequest('session-1', { priority: 'low' }, { requestId: 'low' }));
       queue.enqueue(createRequest('session-1', { priority: 'high' }, { requestId: 'high' }));
 
-      const peeked = await queue.peek('session-1', 'electron');
+      const peeked = await queue.peek('session-1', 'electron-webcontents');
       expect(peeked!.request.requestId).toBe('high');
       expect(queue.getTotalWaitingCount()).toBe(2);
 
       // 再次 peek 应该还是同一个
-      expect((await queue.peek('session-1', 'electron'))!.request.requestId).toBe('high');
+      expect((await queue.peek('session-1', 'electron-webcontents'))!.request.requestId).toBe('high');
     });
   });
 
@@ -159,7 +159,7 @@ describe('WaitQueue', () => {
       queue.enqueue(normalReq);
 
       // starving 优先级 = 10 + 2*20 = 50，与 normal(50) 相同，FIFO 先出 starving
-      const first = await queue.dequeue('session-1', 'electron');
+      const first = await queue.dequeue('session-1', 'electron-webcontents');
       expect(first!.request.requestId).toBe('starving');
     });
 
@@ -184,8 +184,8 @@ describe('WaitQueue', () => {
 
       // low(10) + 3*boost(60) = 70 < high(100)
       // 高优先级仍然优先
-      expect((await queue.dequeue('session-1', 'electron'))!.request.requestId).toBe('high');
-      expect((await queue.dequeue('session-1', 'electron'))!.request.requestId).toBe(
+      expect((await queue.dequeue('session-1', 'electron-webcontents'))!.request.requestId).toBe('high');
+      expect((await queue.dequeue('session-1', 'electron-webcontents'))!.request.requestId).toBe(
         'very-starving'
       );
     });
@@ -212,7 +212,7 @@ describe('WaitQueue', () => {
       const request = createRequest('session-1', { timeout: 1000 });
       queue.enqueue(request);
 
-      const waiting = await queue.dequeue('session-1', 'electron');
+      const waiting = await queue.dequeue('session-1', 'electron-webcontents');
       expect(waiting).not.toBeUndefined();
 
       // 推进超过超时时间
@@ -417,7 +417,7 @@ describe('WaitQueue', () => {
 
       // 依次出队
       for (let i = 0; i < count; i++) {
-        const dequeued = await queue.dequeue('session-1', 'electron');
+        const dequeued = await queue.dequeue('session-1', 'electron-webcontents');
         expect(dequeued).not.toBeUndefined();
       }
 
@@ -432,7 +432,7 @@ describe('WaitQueue', () => {
       expect(queue.getWaitingSessionIds().length).toBe(10);
 
       // 只出队 session-5
-      await queue.dequeue('session-5', 'electron');
+      await queue.dequeue('session-5', 'electron-webcontents');
 
       expect(queue.getWaitingCount('session-5')).toBe(0);
       expect(queue.getTotalWaitingCount()).toBe(9);

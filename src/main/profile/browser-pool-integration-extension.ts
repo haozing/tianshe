@@ -9,6 +9,7 @@ import { getOcrPool } from '../../core/system-automation/ocr';
 import { createLogger } from '../../core/logger';
 import { AIRPA_RUNTIME_CONFIG } from '../../constants/runtime-config';
 import { ExtensionBrowser } from '../../core/browser-extension';
+import { getStaticRuntimeDescriptor } from '../../core/browser-pool/runtime-capability-registry';
 import {
   buildChromeLaunchArgs,
   buildManagedExtensionLaunchArgs,
@@ -185,7 +186,10 @@ export function createExtensionBrowserFactory(options?: ExtensionFactoryOptions)
       });
     }
 
-    const chromePath = resolveChromeExecutablePath();
+    const chromePath =
+      session.runtimeSourceOverride?.type === 'custom-path'
+        ? session.runtimeSourceOverride.executablePath
+        : resolveChromeExecutablePath();
     await validateChromeRuntime(chromePath);
 
     const browserId = randomUUID();
@@ -285,7 +289,14 @@ export function createExtensionBrowserFactory(options?: ExtensionFactoryOptions)
 
       return {
         browser,
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
+        runtimeDescriptor: getStaticRuntimeDescriptor('chromium-extension-relay'),
+        resolvedRuntime: {
+          runtimeId: 'chromium-extension-relay',
+          source: session.runtimeSourceOverride ?? { type: 'bundled' },
+          executablePath: chromePath,
+          userDataDir: runtimeDir,
+        },
       };
     } catch (error) {
       await cleanup().catch(() => undefined);

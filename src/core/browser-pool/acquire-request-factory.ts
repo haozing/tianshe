@@ -3,7 +3,7 @@ import { WAIT_QUEUE_CONFIG } from '../../constants/browser-pool';
 import { AcquireFailedError } from '../errors/BrowserPoolError';
 import {
   getAbortMessage,
-  validateAcquireEngine,
+  validateAcquireRuntime,
 } from './acquire-session-resolver';
 import type { AcquireOptions, AcquireRequest, AcquireSource, SessionConfig } from './types';
 
@@ -23,14 +23,12 @@ export class AcquireRequestFactory {
       ...options,
     };
 
-    validateAcquireEngine(session, acquireOptions);
+    validateAcquireRuntime(session, acquireOptions);
     if (acquireOptions.signal?.aborted) {
       throw new AcquireFailedError(getAbortMessage(acquireOptions.signal, 'Acquire cancelled'));
     }
 
-    const sessionEngine = session.engine ?? 'electron';
-    acquireOptions.engine = sessionEngine;
-    session.engine = sessionEngine;
+    acquireOptions.runtimeId = session.runtimeId;
     return acquireOptions;
   }
 

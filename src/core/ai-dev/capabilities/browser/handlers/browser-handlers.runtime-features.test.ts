@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { handleBrowserClickAt } from './coordinates';
 import { handleBrowserConsoleGet, handleBrowserConsoleStart } from './console-diagnostics';
 
-describe('browser handler engine feature contracts', () => {
+describe('browser handler runtime feature contracts', () => {
   it('browser_click_at works with explicit coordinate capabilities instead of runtime casting', async () => {
     const browser = {
       initializeCoordinateSystem: vi.fn().mockResolvedValue(undefined),

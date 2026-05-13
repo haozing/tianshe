@@ -8,13 +8,24 @@ import { getDefaultFingerprint } from '../../constants/fingerprint-defaults';
 const electronState = vi.hoisted(() => ({
   appPath: process.cwd(),
   userDataDir: '',
+  isPackaged: false,
+}));
+
+vi.mock('electron-webcontents', () => ({
+  app: {
+    getPath: vi.fn(() => electronState.userDataDir),
+    getAppPath: vi.fn(() => electronState.appPath),
+    isPackaged: false,
+  },
 }));
 
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => electronState.userDataDir),
     getAppPath: vi.fn(() => electronState.appPath),
-    isPackaged: false,
+    get isPackaged() {
+      return electronState.isPackaged;
+    },
   },
 }));
 
@@ -40,7 +51,7 @@ function assertFirefoxRuntimeAvailable(): string {
 
 describe('createRuyiBrowserFactory business canary', () => {
   runCanary(
-    'drives a business-shaped order center flow through the ruyi engine',
+    'drives a business-shaped order center flow through the firefox-bidi runtime',
     async () => {
       const firefoxPath = assertFirefoxRuntimeAvailable();
       expect(firefoxPath.length).toBeGreaterThan(0);
@@ -54,7 +65,7 @@ describe('createRuyiBrowserFactory business canary', () => {
 
       const factory = createRuyiBrowserFactory();
       const sessionId = `ruyi-canary-${Date.now()}`;
-      const fingerprint = getDefaultFingerprint('ruyi');
+      const fingerprint = getDefaultFingerprint('firefox-bidi');
       let closeBrowser: (() => Promise<void>) | null = null;
       let unsubscribeRuntimeEvents: (() => void) | null = null;
 
@@ -62,7 +73,7 @@ describe('createRuyiBrowserFactory business canary', () => {
         const created = await factory({
           id: sessionId,
           partition: `persist:${sessionId}`,
-          engine: 'ruyi',
+          runtimeId: 'firefox-bidi',
           fingerprint: {
             ...fingerprint,
             identity: {
@@ -94,7 +105,7 @@ describe('createRuyiBrowserFactory business canary', () => {
 
         closeBrowser = () => created.browser.closeInternal();
         expect(created.browser.describeRuntime()).toMatchObject({
-          engine: 'ruyi',
+          runtimeId: 'firefox-bidi',
         });
         expect(created.browser.hasCapability('tabs.manage')).toBe(true);
         expect(created.browser.hasCapability('dialog.basic')).toBe(true);

@@ -334,7 +334,7 @@ export function AccountManagementPanel({
         const created = await createAccountWithAutoProfile({
           profile: {
             name: newProfileName,
-            engine: 'extension',
+            runtimeId: 'chromium-extension-relay',
             notes: `账号 ${trimmedDisplayName} 自动创建`,
           },
           account: {

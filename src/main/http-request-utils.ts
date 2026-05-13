@@ -1,7 +1,7 @@
 import {
-  AUTOMATION_ENGINES,
-  isAutomationEngine,
-  type AutomationEngine,
+  BROWSER_RUNTIME_IDS,
+  isBrowserRuntimeId,
+  type BrowserRuntimeId,
 } from '../types/profile';
 
 export const firstString = (value: unknown): string => {
@@ -27,11 +27,11 @@ export const parseScopesHeader = (value: unknown): string[] => {
 /**
  * 解析请求里的浏览器引擎参数。
  */
-export const parseRequestedEngine = (value: string | undefined): AutomationEngine | undefined => {
+export const parseRequestedRuntimeId = (value: string | undefined): BrowserRuntimeId | undefined => {
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase();
-  if (isAutomationEngine(normalized)) return normalized;
+  if (isBrowserRuntimeId(normalized)) return normalized;
   throw new Error(
-    `Unsupported engine "${normalized}". Supported engines: ${AUTOMATION_ENGINES.join(', ')}.`
+    `Unsupported runtimeId "${normalized}". Supported runtimeIds: ${BROWSER_RUNTIME_IDS.join(', ')}.`
   );
 };

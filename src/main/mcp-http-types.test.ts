@@ -21,7 +21,7 @@ describe('McpSessionInfo grouped state', () => {
       },
       browser: {
         partition: 'profile-1',
-        engine: 'electron' as never,
+        runtimeId: 'electron-webcontents' as never,
         visible: true,
         hostWindowId: 'hidden-host-session-1',
       },
@@ -48,7 +48,7 @@ describe('McpSessionInfo grouped state', () => {
     expect(session.queue.maxQueueSize).toBe(9);
     expect(session.browser).toMatchObject({
       partition: 'profile-1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       visible: true,
       hostWindowId: 'hidden-host-session-1',
     });

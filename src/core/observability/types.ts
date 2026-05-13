@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { BrowserRuntimeId } from '../../types/browser-runtime';
 
 export type ObservationLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -24,7 +25,7 @@ export interface TraceContext {
   source?: string;
   capability?: string;
   pluginId?: string;
-  browserEngine?: 'electron' | 'extension' | 'ruyi';
+  browserRuntimeId?: BrowserRuntimeId;
   sessionId?: string;
   profileId?: string;
   datasetId?: string;
@@ -55,7 +56,7 @@ export interface RuntimeEvent {
   source?: string;
   capability?: string;
   pluginId?: string;
-  browserEngine?: 'electron' | 'extension' | 'ruyi';
+  browserRuntimeId?: BrowserRuntimeId;
   sessionId?: string;
   profileId?: string;
   datasetId?: string;
@@ -78,7 +79,7 @@ export interface RuntimeArtifact {
   source?: string;
   capability?: string;
   pluginId?: string;
-  browserEngine?: 'electron' | 'extension' | 'ruyi';
+  browserRuntimeId?: BrowserRuntimeId;
   sessionId?: string;
   profileId?: string;
   datasetId?: string;
@@ -107,7 +108,7 @@ export interface TraceSummary {
   entities: {
     capability?: string;
     pluginId?: string;
-    browserEngine?: 'electron' | 'extension' | 'ruyi';
+    browserRuntimeId?: BrowserRuntimeId;
     sessionId?: string;
     profileId?: string;
     datasetId?: string;
@@ -150,7 +151,7 @@ export interface RecentFailureSummary {
   profileId?: string;
   datasetId?: string;
   browserId?: string;
-  browserEngine?: 'electron' | 'extension' | 'ruyi';
+  browserRuntimeId?: BrowserRuntimeId;
   error?: RuntimeErrorInfo;
   finalStatus: TraceSummary['finalStatus'];
   artifactCount: number;

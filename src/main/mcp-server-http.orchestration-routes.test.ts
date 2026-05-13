@@ -1,4 +1,4 @@
-﻿import type { Server as HttpServer } from 'node:http';
+import type { Server as HttpServer } from 'node:http';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,7 +65,7 @@ function createMockHandle(browser: BrowserInterface): {
     browser,
     browserId: 'browser-1',
     sessionId: 'pool-session-1',
-    engine: 'extension',
+    runtimeId: 'chromium-extension-relay',
     release,
     renew: vi.fn().mockResolvedValue(true),
   } as unknown as BrowserHandle;
@@ -265,7 +265,7 @@ function pickSessionSnapshot(value: any) {
   return {
     sessionId: value?.sessionId ?? null,
     profileId: value?.profileId ?? null,
-    engine: value?.engine ?? null,
+    runtimeId: value?.runtimeId ?? null,
     visible: value?.visible ?? false,
     browserAcquired: value?.browserAcquired ?? false,
     browserAcquireInProgress: value?.browserAcquireInProgress ?? false,
@@ -277,7 +277,7 @@ function pickSessionSnapshot(value: any) {
     viewportHealthReason: value?.viewportHealthReason ?? null,
     interactionReady: value?.interactionReady ?? false,
     offscreenDetected: value?.offscreenDetected ?? false,
-    engineRuntimeDescriptor: value?.engineRuntimeDescriptor ?? null,
+    runtimeDescriptor: value?.runtimeDescriptor ?? null,
     browserRuntimeDescriptor: value?.browserRuntimeDescriptor ?? null,
     resolvedRuntimeDescriptor: value?.resolvedRuntimeDescriptor ?? null,
   };
@@ -985,7 +985,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     const createProfile = vi.fn().mockResolvedValue({
       id: 'profile-new',
       name: 'Shop QA',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       status: 'idle',
       partition: 'persist:profile-new',
       isSystem: false,
@@ -993,7 +993,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     const updateProfile = vi.fn().mockResolvedValue({
       id: 'profile-new',
       name: 'Shop QA Updated',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       status: 'idle',
       partition: 'persist:profile-new',
       isSystem: false,
@@ -1022,7 +1022,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
       name: 'profile_create',
       arguments: {
         name: 'Shop QA',
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         confirmRisk: true,
       },
     });
@@ -1041,7 +1041,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
       name: 'profile_update',
       arguments: {
         profileId: 'profile-new',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         allowRuntimeReset: true,
         confirmRisk: true,
       },
@@ -1076,22 +1076,22 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
 
     expect(createProfile).toHaveBeenCalledWith({
       name: 'Shop QA',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
     });
     expect(updateProfile).toHaveBeenCalledWith('profile-new', {
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
     });
     expect(deleteProfile).toHaveBeenCalledWith('profile-new');
   });
 
-  it('閺?OpenClaw capabilities 缁旑垳鍋ｅ鑼╅梽銈呰嫙鏉╂柨娲?404', async () => {
+  it('闁?OpenClaw capabilities 缂佹棏鍨抽崑锝咁啅閼碱儷鈺呮⒔閵堝懓瀚欓弶鈺傛煥濞?404', async () => {
     await startServer(createMockBrowser());
 
     const raw = await fetch(`${baseUrl}/api/v1/orchestration/capabilities/openclaw`);
     expect(raw.status).toBe(404);
   });
 
-  it('v1 orchestration 鐠侯垳鏁遍崣顖滄暏', async () => {
+  it('v1 orchestration capabilities returns successfully', async () => {
     await startServer(createMockBrowser());
 
     const response = await getJson(baseUrl, '/api/v1/orchestration/capabilities');
@@ -1099,7 +1099,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(response.json.success).toBe(true);
   });
 
-  it('閺?REST 鐠侯垳鏁卞鑼╅梽銈呰嫙鏉╂柨娲?404', async () => {
+  it('闁?REST 閻犱警鍨抽弫鍗烆啅閼碱儷鈺呮⒔閵堝懓瀚欓弶鈺傛煥濞?404', async () => {
     await startServer(createMockBrowser());
 
     const endpoints = ['/api/datasets', '/api/plugins', '/api/cross-plugin/plugins'] as const;
@@ -1177,7 +1177,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(response.json.data.mcpSdk.fingerprintInjected).toBe(true);
   });
 
-  it('OpenAPI 婵傛垹瀹抽弬鍥︽閸欘垵袙閺嬫劕鑻熼崠鍛儓 v1 orchestration 閸忔娊鏁捄顖氱窞', async () => {
+  it('OpenAPI documents the v1 orchestration capability routes', async () => {
     const raw = readFileSync('src/main/schemas/orchestration-openapi-v1.json', 'utf8');
     const doc = JSON.parse(raw) as {
       openapi: string;

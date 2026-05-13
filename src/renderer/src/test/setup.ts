@@ -19,6 +19,34 @@ if (!process.env.TIANSHEAI_USER_DATA_DIR) {
   }
 }
 
+vi.mock('electron', () => ({
+  app: {
+    getPath: vi.fn((name: string) => {
+      if (name === 'userData') return process.env.TIANSHEAI_USER_DATA_DIR;
+      return process.cwd();
+    }),
+    getAppPath: vi.fn(() => process.cwd()),
+    get isPackaged() {
+      return false;
+    },
+  },
+  BrowserWindow: {
+    getFocusedWindow: vi.fn(() => null),
+    getAllWindows: vi.fn(() => []),
+  },
+  dialog: {
+    showOpenDialog: vi.fn().mockResolvedValue({ canceled: true, filePaths: [] }),
+  },
+  ipcMain: {
+    handle: vi.fn(),
+    removeHandler: vi.fn(),
+    removeListener: vi.fn(),
+  },
+  shell: {
+    openExternal: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 // Mock Electron API for all React component tests
 if (typeof window !== 'undefined') {
   if (typeof window.ResizeObserver === 'undefined') {
@@ -105,6 +133,16 @@ if (typeof window !== 'undefined') {
       poolShowBrowser: vi.fn().mockResolvedValue({ success: true }),
       poolRelease: vi.fn().mockResolvedValue({ success: true }),
       poolDestroyProfileBrowsers: vi.fn().mockResolvedValue({ success: true }),
+    },
+    browserRuntime: {
+      listStatuses: vi.fn().mockResolvedValue({ success: true, data: [] }),
+      getStatus: vi.fn().mockResolvedValue({ success: true, data: null }),
+      selectExecutable: vi.fn().mockResolvedValue({ success: true, data: { canceled: true } }),
+      setCustomPath: vi.fn().mockResolvedValue({ success: true, data: null }),
+      setDefaultSource: vi.fn().mockResolvedValue({ success: true, data: null }),
+      installManaged: vi.fn().mockResolvedValue({ success: true, data: null }),
+      openDownloadPage: vi.fn().mockResolvedValue({ success: true, data: { url: '' } }),
+      getDefaultSource: vi.fn().mockResolvedValue({ success: true, data: { type: 'bundled' } }),
     },
     extensionPackages: {
       listPackages: vi.fn().mockResolvedValue({ success: true, data: [] }),

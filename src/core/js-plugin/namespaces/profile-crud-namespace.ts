@@ -50,7 +50,10 @@ export class ProfileCrudNamespace {
     });
     const profile = await this.deps.profileService.update(id, params);
 
-    const runtimeChanged = params.fingerprint !== undefined || params.engine !== undefined;
+    const runtimeChanged =
+      params.fingerprint !== undefined ||
+      params.runtimeId !== undefined ||
+      params.runtimeSourceOverride !== undefined;
     if (runtimeChanged) {
       await this.clearRuntimeState(id, profile);
     }

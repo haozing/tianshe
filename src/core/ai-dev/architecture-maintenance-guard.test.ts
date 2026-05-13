@@ -99,6 +99,8 @@ const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Focused split from former MCP giant test; kept under 1500 lines by split contract.',
   'src/main/mcp-server-http.transport-session.test.ts':
     'Focused split from former MCP giant test; kept under 1500 lines by split contract.',
+  'src/main/profile/browser-pool-integration-cloak.ts':
+    'New Cloak Playwright adapter owns runtime launch plus advanced Playwright role bridges; split download, dialog, interception, and event helpers after real-browser smoke tests stabilize.',
   'src/main/profile/ruyi-firefox-client.test.ts':
     'Existing oversized Ruyi Firefox client test; split launch, connection, and protocol contracts.',
   'src/main/profile/ruyi-firefox-client.ts':

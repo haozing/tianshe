@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   OrchestrationAssistantGuidance,
   OrchestrationAssistantSurface,
   OrchestrationCapabilityDefinition,
@@ -35,25 +35,25 @@ export interface CapabilityAssistantManifest {
 
 export const SESSION_PREPARE_AUTHORITATIVE_RESULT_FIELDS = [
   'structuredContent.data.effectiveProfile',
-  'structuredContent.data.effectiveEngine',
-  'structuredContent.data.effectiveEngineSource',
+  'structuredContent.data.effectiveRuntime',
+  'structuredContent.data.effectiveRuntimeSource',
 ] as const;
 
-export const SESSION_PREPARE_PROFILE_ENGINE_MISMATCH_HINT: CapabilityModelHintFailureCode = {
-  code: 'profile_engine_mismatch',
-  when: 'The requested or sticky engine conflicts with the resolved profile engine before browser acquisition.',
+export const SESSION_PREPARE_PROFILE_RUNTIME_MISMATCH_HINT: CapabilityModelHintFailureCode = {
+  code: 'profile_runtime_mismatch',
+  when: 'The requested or sticky runtime conflicts with the resolved profile runtime before browser acquisition.',
   remediation:
-    'Switch to a compatible profile or engine pairing, then retry session_prepare before any browser_* call.',
+    'Switch to a compatible profile or runtime pairing, then retry session_prepare before any browser_* call.',
 };
 
 export const SESSION_PREPARE_RESOLVED_BINDING_PRECONDITION =
-  'Successful calls return structuredContent.data.effectiveProfile, effectiveEngine, and effectiveEngineSource as the resolved session binding.';
+  'Successful calls return structuredContent.data.effectiveProfile, effectiveRuntime, and effectiveRuntimeSource as the resolved session binding.';
 
 export const SESSION_PREPARE_RESOLVED_BINDING_ACTION =
-  'Read structuredContent.data.effectiveProfile, effectiveEngine, and effectiveEngineSource before deciding whether to call browser_* or retry.';
+  'Read structuredContent.data.effectiveProfile, effectiveRuntime, and effectiveRuntimeSource before deciding whether to call browser_* or retry.';
 
-export const SESSION_PREPARE_PROFILE_ENGINE_MISMATCH_ACTION =
-  'If session_prepare fails with reasonCode=profile_engine_mismatch, switch to a compatible profile or engine before retrying.';
+export const SESSION_PREPARE_PROFILE_RUNTIME_MISMATCH_ACTION =
+  'If session_prepare fails with reasonCode=profile_runtime_mismatch, switch to a compatible profile or runtime before retrying.';
 
 const BROWSER_SNAPSHOT_AUTHORITATIVE_SIGNALS = [
   'structuredContent.data.snapshot.elements[*].elementRef',
@@ -72,11 +72,11 @@ const BROWSER_ACT_AUTHORITATIVE_SIGNALS = [
 const BROWSER_ACT_TARGET_PRIORITY = ['target.ref', 'target.selector', 'target.text'] as const;
 
 const SESSION_PREPARE_RESULT_CONTRACT = [
-  'Result contract: use structuredContent.data.effectiveProfile, effectiveEngine, and effectiveEngineSource as the authoritative resolved session binding.',
+  'Result contract: use structuredContent.data.effectiveProfile, effectiveRuntime, and effectiveRuntimeSource as the authoritative resolved session binding.',
 ] as const;
 
 const SESSION_PREPARE_FAILURE_CONTRACT = [
-  'Failure contract: incompatible profile/engine pairings fail before browser acquisition with reasonCode=profile_engine_mismatch.',
+  'Failure contract: incompatible profile/runtime pairings fail before browser acquisition with reasonCode=profile_runtime_mismatch.',
 ] as const;
 
 const BROWSER_OBSERVE_RESULT_CONTRACT = [
@@ -215,9 +215,9 @@ Object.assign(CAPABILITY_MANIFESTS, {
     guidance: {
       workflowStage: 'session',
       whenToUse:
-        'Prepare the current MCP session before the first browser_* call by resolving a reusable profile, choosing engine/visibility, and updating sticky scopes.',
+        'Prepare the current MCP session before the first browser_* call by resolving a reusable profile, choosing runtimeId/visibility, and updating sticky scopes.',
       avoidWhen:
-        'Avoid conflicting profile, engine, or visibility values after the session already acquired a browser; only identical replays and scope updates remain safe then.',
+        'Avoid conflicting profile, runtimeId, or visibility values after the session already acquired a browser; only identical replays and scope updates remain safe then.',
       preferredTargetKind: 'profile_query',
       requiresBoundProfile: false,
       transportEffect: 'session_state',
@@ -239,13 +239,13 @@ Object.assign(CAPABILITY_MANIFESTS, {
     failureContract: [...SESSION_PREPARE_FAILURE_CONTRACT],
     modelHints: {
       authoritativeResultFields: [...SESSION_PREPARE_AUTHORITATIVE_RESULT_FIELDS],
-      failureCodes: [SESSION_PREPARE_PROFILE_ENGINE_MISMATCH_HINT],
+      failureCodes: [SESSION_PREPARE_PROFILE_RUNTIME_MISMATCH_HINT],
       commonMistakes: [
         {
           mistake:
-            'Infer the resolved profile or engine from old transport headers or sticky state.',
+            'Infer the resolved profile or runtime from old transport headers or sticky state.',
           correction:
-            'Read structuredContent.data.effectiveProfile, effectiveEngine, and effectiveEngineSource from the latest session_prepare result.',
+            'Read structuredContent.data.effectiveProfile, effectiveRuntime, and effectiveRuntimeSource from the latest session_prepare result.',
         },
       ],
     },
@@ -682,3 +682,4 @@ export const withAssistantGuidance = (
       : { deprecation: manifest.deprecation }),
   };
 };
+

@@ -1,4 +1,4 @@
-import type { BrowserHandle, BrowserPoolManager } from '../core/browser-pool';
+﻿import type { BrowserHandle, BrowserPoolManager } from '../core/browser-pool';
 import {
   acquireProfileLiveSessionLease,
   attachProfileLiveSessionLease,
@@ -6,7 +6,7 @@ import {
 } from '../core/browser-pool/profile-live-session-lease';
 import { DEFAULT_BROWSER_PROFILE } from '../constants/browser-pool';
 import { ResourceAcquireTimeoutError } from '../core/resource-coordinator';
-import type { AutomationEngine, PooledBrowser } from '../core/browser-pool/types';
+import type { BrowserRuntimeId, PooledBrowser } from '../core/browser-pool/types';
 import type { RuntimeMetricsSnapshot } from './http-session-manager';
 
 interface LoggerLike {
@@ -18,7 +18,7 @@ interface AcquireBrowserFromPoolOptions {
   runtimeMetrics: RuntimeMetricsSnapshot;
   logger: LoggerLike;
   profileId?: string;
-  engine?: AutomationEngine;
+  runtimeId?: BrowserRuntimeId;
   source?: 'mcp' | 'http';
   timeoutMs?: number;
 }
@@ -30,7 +30,7 @@ type TakeoverCapablePoolManager = BrowserPoolManager & {
       strategy?: 'any' | 'reuse' | 'fresh' | 'specific';
       timeout?: number;
       priority?: 'high' | 'normal' | 'low';
-      engine?: AutomationEngine;
+      runtimeId?: BrowserRuntimeId;
       browserId?: string;
       requireViewId?: boolean;
     },
@@ -41,7 +41,7 @@ type TakeoverCapablePoolManager = BrowserPoolManager & {
 export interface BrowserAcquireReadinessBrowserInfo {
   browserId: string;
   status: string;
-  engine: AutomationEngine | null;
+  runtimeId: BrowserRuntimeId | null;
   source: string | null;
   pluginId: string | null;
   requestId: string | null;
@@ -120,7 +120,7 @@ const inspectProfileBrowsers = (
     return {
       browserId: asText((browser as { id?: unknown }).id),
       status: asText((browser as { status?: unknown }).status),
-      engine: (asText((browser as { engine?: unknown }).engine) as AutomationEngine) || null,
+      runtimeId: (asText((browser as { runtimeId?: unknown }).runtimeId) as BrowserRuntimeId) || null,
       source: lockedBy ? asText(lockedBy.source) || null : null,
       pluginId: lockedBy ? asText(lockedBy.pluginId) || null : null,
       requestId: lockedBy ? asText(lockedBy.requestId) || null : null,
@@ -205,7 +205,7 @@ const tryTakeoverLockedBrowser = async ({
   poolManager,
   profileId,
   requestedProfileId,
-  engine,
+  runtimeId,
   source,
   timeoutMs,
   logger,
@@ -213,7 +213,7 @@ const tryTakeoverLockedBrowser = async ({
   poolManager: BrowserPoolManager;
   profileId: string;
   requestedProfileId?: string;
-  engine?: AutomationEngine;
+  runtimeId?: BrowserRuntimeId;
   source: 'mcp' | 'http';
   timeoutMs: number;
   logger: LoggerLike;
@@ -235,7 +235,7 @@ const tryTakeoverLockedBrowser = async ({
   const takenOver = await takeoverLockedBrowser.call(
     poolManager,
     requestedProfileId || undefined,
-    { strategy: 'any', timeout: timeoutMs, priority: 'normal', engine },
+    { strategy: 'any', timeout: timeoutMs, priority: 'normal', runtimeId },
     source
   );
   if (!takenOver) {
@@ -252,7 +252,7 @@ const tryTakeoverProfileLeaseAndAcquire = async ({
   poolManager,
   profileId,
   requestedProfileId,
-  engine,
+  runtimeId,
   source,
   timeoutMs,
   logger,
@@ -260,7 +260,7 @@ const tryTakeoverProfileLeaseAndAcquire = async ({
   poolManager: BrowserPoolManager;
   profileId: string;
   requestedProfileId?: string;
-  engine?: AutomationEngine;
+  runtimeId?: BrowserRuntimeId;
   source: 'mcp' | 'http';
   timeoutMs: number;
   logger: LoggerLike;
@@ -278,7 +278,7 @@ const tryTakeoverProfileLeaseAndAcquire = async ({
     const handle = attachProfileLiveSessionLease(
       await poolManager.acquire(
         requestedProfileId || undefined,
-        { strategy: 'any', timeout: timeoutMs, priority: 'normal', engine },
+        { strategy: 'any', timeout: timeoutMs, priority: 'normal', runtimeId },
         source
       ),
       profileLease
@@ -292,14 +292,14 @@ const tryTakeoverProfileLeaseAndAcquire = async ({
 };
 
 /**
- * 基于 BrowserPoolManager 统一获取浏览器句柄，并记录运行时失败指标。
+ * 鍩轰簬 BrowserPoolManager 缁熶竴鑾峰彇娴忚鍣ㄥ彞鏌勶紝骞惰褰曡繍琛屾椂澶辫触鎸囨爣銆?
  */
 export const acquireBrowserFromPool = async ({
   getBrowserPoolManager,
   runtimeMetrics,
   logger,
   profileId,
-  engine,
+  runtimeId,
   source = 'mcp',
   timeoutMs,
 }: AcquireBrowserFromPoolOptions): Promise<BrowserHandle> => {
@@ -315,7 +315,7 @@ export const acquireBrowserFromPool = async ({
     poolManager,
     profileId: resolvedProfileId,
     requestedProfileId: profileId,
-    engine,
+    runtimeId,
     source,
     timeoutMs: effectiveTimeoutMs,
     logger,
@@ -334,7 +334,7 @@ export const acquireBrowserFromPool = async ({
       poolManager,
       profileId: resolvedProfileId,
       requestedProfileId: profileId,
-      engine,
+      runtimeId,
       source,
       timeoutMs: effectiveTimeoutMs,
       logger,
@@ -349,7 +349,7 @@ export const acquireBrowserFromPool = async ({
           poolManager,
           profileId: resolvedProfileId,
           requestedProfileId: profileId,
-          engine,
+          runtimeId,
           source,
           timeoutMs: effectiveTimeoutMs,
           logger,
@@ -377,7 +377,7 @@ export const acquireBrowserFromPool = async ({
     const handle = attachProfileLiveSessionLease(
       await poolManager.acquire(
         profileId || undefined,
-        { strategy: 'any', timeout: effectiveTimeoutMs, priority: 'normal', engine },
+        { strategy: 'any', timeout: effectiveTimeoutMs, priority: 'normal', runtimeId },
         source
       ),
       profileLease
@@ -391,3 +391,4 @@ export const acquireBrowserFromPool = async ({
     throw wrapped;
   }
 };
+

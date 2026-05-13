@@ -1,4 +1,4 @@
-﻿import type { Server as HttpServer } from 'node:http';
+import type { Server as HttpServer } from 'node:http';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,7 +65,7 @@ function createMockHandle(browser: BrowserInterface): {
     browser,
     browserId: 'browser-1',
     sessionId: 'pool-session-1',
-    engine: 'extension',
+    runtimeId: 'chromium-extension-relay',
     release,
     renew: vi.fn().mockResolvedValue(true),
   } as unknown as BrowserHandle;
@@ -265,7 +265,7 @@ function pickSessionSnapshot(value: any) {
   return {
     sessionId: value?.sessionId ?? null,
     profileId: value?.profileId ?? null,
-    engine: value?.engine ?? null,
+    runtimeId: value?.runtimeId ?? null,
     visible: value?.visible ?? false,
     browserAcquired: value?.browserAcquired ?? false,
     browserAcquireInProgress: value?.browserAcquireInProgress ?? false,
@@ -277,7 +277,7 @@ function pickSessionSnapshot(value: any) {
     viewportHealthReason: value?.viewportHealthReason ?? null,
     interactionReady: value?.interactionReady ?? false,
     offscreenDetected: value?.offscreenDetected ?? false,
-    engineRuntimeDescriptor: value?.engineRuntimeDescriptor ?? null,
+    runtimeDescriptor: value?.runtimeDescriptor ?? null,
     browserRuntimeDescriptor: value?.browserRuntimeDescriptor ?? null,
     resolvedRuntimeDescriptor: value?.resolvedRuntimeDescriptor ?? null,
   };
@@ -309,7 +309,10 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     release = handleResult.release;
     acquire = options.acquireImplementation
       ? vi.fn().mockImplementation(() => options.acquireImplementation!(handleResult.handle))
-      : vi.fn().mockResolvedValue(handleResult.handle);
+      : vi.fn().mockImplementation(async (_profileId, acquireOptions?: { runtimeId?: string }) => ({
+          ...handleResult.handle,
+          runtimeId: acquireOptions?.runtimeId ?? handleResult.handle.runtimeId,
+        }));
 
     const poolManager = {
       acquire,
@@ -380,7 +383,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
               return {
                 id: 'profile-1',
                 name: '555',
-                engine: 'electron',
+                runtimeId: 'electron-webcontents',
                 status: 'idle',
                 partition: 'persist:profile-1',
               };
@@ -389,7 +392,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
               return {
                 id: 'profile-2',
                 name: 'other',
-                engine: 'electron',
+                runtimeId: 'electron-webcontents',
                 status: 'idle',
                 partition: 'persist:profile-2',
               };
@@ -404,7 +407,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
                 profile: {
                   id: 'profile-1',
                   name: '555',
-                  engine: 'electron',
+                  runtimeId: 'electron-webcontents',
                   status: 'idle',
                   partition: 'persist:profile-1',
                 },
@@ -417,7 +420,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
                 profile: {
                   id: 'profile-2',
                   name: 'other',
-                  engine: 'electron',
+                  runtimeId: 'electron-webcontents',
                   status: 'idle',
                   partition: 'persist:profile-2',
                 },
@@ -443,7 +446,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
       name: 'session_prepare',
       arguments: {
         query: '555',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         visible: true,
         scopes: ['browser.read'],
       },
@@ -457,18 +460,18 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
         effectiveProfile: {
           id: 'profile-1',
           name: '555',
-          engine: 'electron',
+          runtimeId: 'electron-webcontents',
           source: 'resolved_query',
         },
         prepared: true,
         idempotent: false,
-        engine: 'electron',
-        effectiveEngine: 'electron',
-        effectiveEngineSource: 'requested',
+        runtimeId: 'electron-webcontents',
+        effectiveRuntime: 'electron-webcontents',
+        effectiveRuntimeSource: 'requested',
         visible: true,
         effectiveScopes: ['browser.read'],
         browserAcquired: false,
-        changed: ['profile', 'engine', 'visible', 'scopes'],
+        changed: ['profile', 'runtimeId', 'visible', 'scopes'],
       },
     });
     expect(acquire).not.toHaveBeenCalled();
@@ -481,16 +484,13 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     });
     expect(acquire).toHaveBeenCalledWith(
       'profile-1',
-      expect.objectContaining({ strategy: 'any', engine: 'electron' }),
+      expect.objectContaining({ strategy: 'any', runtimeId: 'electron-webcontents' }),
       'mcp'
     );
 
     const scopeUpdate = await mcpClient.callTool({
       name: 'session_prepare',
       arguments: {
-        query: '555',
-        engine: 'electron',
-        visible: true,
         scopes: ['browser.read', 'browser.write'],
       },
     });
@@ -498,12 +498,12 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
       data: {
         effectiveProfile: {
           id: 'profile-1',
-          source: 'resolved_query',
+          source: 'current_session',
         },
         prepared: true,
         idempotent: false,
-        effectiveEngine: 'electron',
-        effectiveEngineSource: 'requested',
+        effectiveRuntime: 'electron-webcontents',
+        effectiveRuntimeSource: 'sticky_session',
         browserAcquired: true,
         effectiveScopes: ['browser.read', 'browser.write'],
         changed: ['scopes'],
@@ -513,9 +513,6 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     const replay = await mcpClient.callTool({
       name: 'session_prepare',
       arguments: {
-        query: '555',
-        engine: 'electron',
-        visible: true,
         scopes: ['browser.read', 'browser.write'],
       },
     });
@@ -523,12 +520,12 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
       data: {
         effectiveProfile: {
           id: 'profile-1',
-          source: 'resolved_query',
+          source: 'current_session',
         },
         prepared: true,
         idempotent: true,
-        effectiveEngine: 'electron',
-        effectiveEngineSource: 'requested',
+        effectiveRuntime: 'electron-webcontents',
+        effectiveRuntimeSource: 'sticky_session',
         changed: [],
       },
     });
@@ -570,7 +567,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
       reason: expect.stringContaining('Sticky scope updates are still allowed.'),
     });
     expect(String(prepareToolAfterAcquire?.description || '')).toBe(
-      'Prepare the current MCP session before the first browser_* call by resolving a reusable profile, choosing engine/visibility, and updating sticky scopes.'
+      'Prepare the current MCP session before the first browser_* call by resolving a reusable profile, choosing runtimeId/visibility, and updating sticky scopes.'
     );
   });
 
@@ -628,7 +625,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     );
     expect(runtimeSession).toMatchObject({
       profileId: currentSession.profileId,
-      engine: currentSession.engine,
+      runtimeId: currentSession.runtimeId,
       visible: currentSession.visible,
       browserAcquired: currentSession.browserAcquired,
       browserAcquireInProgress: currentSession.browserAcquireInProgress,
@@ -639,7 +636,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
       viewportHealth: currentSession.viewportHealth,
       interactionReady: currentSession.interactionReady,
       offscreenDetected: currentSession.offscreenDetected,
-      engineRuntimeDescriptor: currentSession.engineRuntimeDescriptor,
+      runtimeDescriptor: currentSession.runtimeDescriptor,
       browserRuntimeDescriptor: currentSession.browserRuntimeDescriptor,
       resolvedRuntimeDescriptor: currentSession.resolvedRuntimeDescriptor,
     });
@@ -652,7 +649,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     const catalogJson = JSON.parse(catalogText) as { currentSession?: Record<string, unknown> };
     expect(pickSessionSnapshot(catalogJson.currentSession)).toMatchObject({
       profileId: currentSession.profileId,
-      engine: currentSession.engine,
+      runtimeId: currentSession.runtimeId,
       visible: currentSession.visible,
       browserAcquired: currentSession.browserAcquired,
       browserAcquireInProgress: currentSession.browserAcquireInProgress,
@@ -663,7 +660,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
       viewportHealth: currentSession.viewportHealth,
       interactionReady: currentSession.interactionReady,
       offscreenDetected: currentSession.offscreenDetected,
-      engineRuntimeDescriptor: currentSession.engineRuntimeDescriptor,
+      runtimeDescriptor: currentSession.runtimeDescriptor,
       browserRuntimeDescriptor: currentSession.browserRuntimeDescriptor,
       resolvedRuntimeDescriptor: currentSession.resolvedRuntimeDescriptor,
     });
@@ -678,7 +675,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
             {
               id: 'profile-extension',
               name: 'Extension QA',
-              engine: 'extension',
+              runtimeId: 'chromium-extension-relay',
               status: 'idle',
               partition: 'persist:profile-extension',
               isSystem: false,
@@ -686,7 +683,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
             {
               id: 'profile-ruyi',
               name: 'Firefox QA',
-              engine: 'ruyi',
+              runtimeId: 'firefox-bidi',
               status: 'idle',
               partition: 'persist:profile-ruyi',
               isSystem: false,
@@ -711,47 +708,47 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     const bootstrapResult = await mcpClient.callTool({ name: 'system_bootstrap', arguments: {} });
     expect(bootstrapResult.structuredContent).toMatchObject({
       data: {
-        browserEngines: {
-          total: 3,
+        browserRuntimes: {
+          total: 4,
           descriptors: {
-            extension: {
-              engine: 'extension',
+            'chromium-extension-relay': {
+              runtimeId: 'chromium-extension-relay',
               capabilities: {
                 'network.responseBody': {
                   supported: true,
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
               },
             },
-            ruyi: {
-              engine: 'ruyi',
+            'firefox-bidi': {
+              runtimeId: 'firefox-bidi',
               capabilities: {
                 'pdf.print': {
                   supported: true,
                   stability: 'experimental',
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
                 'input.touch': {
                   supported: true,
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
                 'events.runtime': {
                   supported: true,
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
                 'storage.dom': {
                   supported: true,
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
                 'intercept.observe': {
                   supported: true,
                   stability: 'experimental',
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
                 'intercept.control': {
                   supported: true,
                   stability: 'experimental',
-                  source: 'static-engine',
+                  source: 'static-runtime',
                 },
               },
             },
@@ -767,47 +764,47 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: 'profile-extension',
-          engineRuntimeDescriptor: expect.objectContaining({
-            engine: 'extension',
+          runtimeDescriptor: expect.objectContaining({
+            runtimeId: 'chromium-extension-relay',
             capabilities: expect.objectContaining({
               'network.responseBody': expect.objectContaining({
                 supported: true,
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
             }),
           }),
         }),
         expect.objectContaining({
           id: 'profile-ruyi',
-          engineRuntimeDescriptor: expect.objectContaining({
-            engine: 'ruyi',
+          runtimeDescriptor: expect.objectContaining({
+            runtimeId: 'firefox-bidi',
             capabilities: expect.objectContaining({
               'pdf.print': expect.objectContaining({
                 supported: true,
                 stability: 'experimental',
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
               'input.touch': expect.objectContaining({
                 supported: true,
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
               'events.runtime': expect.objectContaining({
                 supported: true,
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
               'storage.dom': expect.objectContaining({
                 supported: true,
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
               'intercept.observe': expect.objectContaining({
                 supported: true,
                 stability: 'experimental',
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
               'intercept.control': expect.objectContaining({
                 supported: true,
                 stability: 'experimental',
-                source: 'static-engine',
+                source: 'static-runtime',
               }),
             }),
           }),

@@ -15,7 +15,7 @@ import type { RuntimeMetricsSnapshot } from './http-session-manager';
 import type { HttpRuntimeState } from './http-runtime-state';
 import type { HttpSessionBridge } from './http-session-bridge';
 import type { StructuredError } from '../types/error-codes';
-import { firstString, parseRequestedEngine, parseScopesHeader } from './http-request-utils';
+import { firstString, parseRequestedRuntimeId, parseScopesHeader } from './http-request-utils';
 import { HTTP_SERVER_DEFAULTS } from '../constants/http-api';
 import { buildHealthPayload } from './http-system-routes';
 import { getHttpApiAuthToken } from './http-api-config-guard';
@@ -30,6 +30,7 @@ import type { WindowManager } from './window-manager';
 import type { FingerprintManager } from '../core/stealth/fingerprint-manager';
 import type { PluginRegistry } from '../core/js-plugin/registry';
 import type { CloudRuntimePluginProvider } from '../edition/types';
+import type { BrowserRuntimeManager } from '../core/browser-runtime';
 
 interface LoggerLike {
   info(message: string, ...args: unknown[]): void;
@@ -66,32 +67,39 @@ export const createHttpServerComposition = (
   });
   const mcpConfigured = options.restApiConfig?.enableMcp ?? false;
   const mcpEndpointEnabled = mcpConfigured;
+  const systemGateway = options.dependencies?.systemGateway ?? {
+    getHealth: async () =>
+      buildHealthPayload({
+        serverName: options.serverName,
+        serverVersion: options.serverVersion,
+        restApiConfig: options.restApiConfig,
+        mcpConfigured,
+        mcpEndpointEnabled,
+        getSessionCounts: () => ({
+          activeSessions:
+            options.runtimeState.transports.size +
+            options.runtimeState.orchestrationSessions.size,
+          mcpSessions: options.runtimeState.transports.size,
+          orchestrationSessions: options.runtimeState.orchestrationSessions.size,
+        }),
+        getRuntimeMetrics: () => options.sessionBridge.buildRuntimeMetricsPayload(),
+      }),
+    listPublicCapabilities: async () =>
+      listCanonicalPublicCapabilityNames(listOrchestrationCapabilities()),
+  };
   const effectiveDependencies: RestApiDependencies = {
     ...(options.dependencies || {}),
-    ...(options.dependencies?.systemGateway
-      ? {}
-      : {
-          systemGateway: {
-            getHealth: async () =>
-              buildHealthPayload({
-                serverName: options.serverName,
-                serverVersion: options.serverVersion,
-                restApiConfig: options.restApiConfig,
-                mcpConfigured,
-                mcpEndpointEnabled,
-                getSessionCounts: () => ({
-                  activeSessions:
-                    options.runtimeState.transports.size +
-                    options.runtimeState.orchestrationSessions.size,
-                  mcpSessions: options.runtimeState.transports.size,
-                  orchestrationSessions: options.runtimeState.orchestrationSessions.size,
-                }),
-                getRuntimeMetrics: () => options.sessionBridge.buildRuntimeMetricsPayload(),
-              }),
-            listPublicCapabilities: async () =>
-              listCanonicalPublicCapabilityNames(listOrchestrationCapabilities()),
-          },
-        }),
+    systemGateway: {
+      ...systemGateway,
+      ...(systemGateway.listBrowserRuntimeStatuses
+        ? {}
+        : options.dependencies?.browserRuntimeManager
+          ? {
+              listBrowserRuntimeStatuses: async () =>
+                options.dependencies?.browserRuntimeManager?.listRuntimeStatuses() ?? [],
+            }
+          : {}),
+    },
   };
   registerTraceContextMiddleware(app);
 
@@ -131,14 +139,14 @@ export const createHttpServerComposition = (
     },
     browser: {
       browserPoolAvailable: Boolean(options.getBrowserPoolManager),
-      parseRequestedEngine,
-      acquireBrowserFromPool: (profileId, engine, source = 'mcp') =>
+      parseRequestedRuntimeId,
+      acquireBrowserFromPool: (profileId, runtimeId, source = 'mcp') =>
         acquireBrowserFromPool({
           getBrowserPoolManager: options.getBrowserPoolManager,
           runtimeMetrics: options.runtimeMetrics,
           logger: options.logger,
           profileId,
-          engine,
+          runtimeId,
           source,
         }),
       getBrowserPoolManager: options.getBrowserPoolManager,
@@ -170,6 +178,7 @@ export interface BuildRestApiDependenciesRuntime {
   viewManager: WebContentsViewManager;
   windowManager: WindowManager;
   fingerprintManager: FingerprintManager;
+  browserRuntimeManager?: BrowserRuntimeManager;
   getBrowserPoolManager: () => BrowserPoolManager;
   getPluginRegistry: () => PluginRegistry;
   cloudRuntimePluginProvider?: CloudRuntimePluginProvider;
@@ -189,7 +198,7 @@ export function buildRestApiDependencies(
   const toOrchestrationProfile = (profile: {
     id?: unknown;
     name?: unknown;
-    engine?: unknown;
+    runtimeId?: unknown;
     status?: unknown;
     partition?: unknown;
     isSystem?: unknown;
@@ -199,7 +208,7 @@ export function buildRestApiDependencies(
   }) => ({
     id: String(profile.id || ''),
     name: String(profile.name || ''),
-    engine: String(profile.engine || ''),
+    runtimeId: String(profile.runtimeId || ''),
     status: String(profile.status || ''),
     partition: String(profile.partition || ''),
     isSystem: profile.isSystem === true,
@@ -321,7 +330,8 @@ export function buildRestApiDependencies(
   const profileService = duckdbService.getProfileService();
   const hasProfileRuntimeMutation = (params: UpdateProfileParams) =>
     params.fingerprint !== undefined ||
-    params.engine !== undefined ||
+    params.runtimeId !== undefined ||
+    params.runtimeSourceOverride !== undefined ||
     params.proxy !== undefined ||
     params.quota !== undefined ||
     params.idleTimeoutMs !== undefined ||
@@ -347,6 +357,9 @@ export function buildRestApiDependencies(
       callApi: (pluginId, apiName, params = []) =>
         runtime.getPluginRegistry().callPluginAPIFromMCP(pluginId, apiName, params),
     },
+    ...(runtime.browserRuntimeManager
+      ? { browserRuntimeManager: runtime.browserRuntimeManager }
+      : {}),
     pluginGateway: {
       listPlugins: async () => {
         const plugins = await jsPluginManager.listPlugins();

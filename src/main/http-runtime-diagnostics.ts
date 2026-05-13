@@ -225,7 +225,7 @@ export const probeLocalHttpRuntime = async ({
               }
             : {}),
           suggestedAction:
-            'Prefer the canonical `airpa-browser-http` `/mcp` endpoint, and call `session_prepare` before browser work when profile, engine, visibility, or scopes matter.',
+            'Prefer the canonical `airpa-browser-http` `/mcp` endpoint, and call `session_prepare` before browser work when profile, runtimeId, visibility, or scopes matter.',
         }
       : {
           code: 'healthy_other_airpa',

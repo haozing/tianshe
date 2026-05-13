@@ -22,7 +22,7 @@ import type {
   FingerprintConfig,
   FingerprintCoreConfig,
   ProfileGroup,
-  AutomationEngine,
+  BrowserRuntimeId,
 } from '../../../../types/profile';
 import {
   FINGERPRINT_PRESET_OPTIONS,
@@ -30,7 +30,7 @@ import {
   extractFingerprintCoreConfig,
   mergeFingerprintConfig,
   materializeFingerprintConfigFromCore,
-  materializeFingerprintConfigForEngine,
+  materializeFingerprintConfigForRuntime,
   getGPUOptions,
   SCREEN_RESOLUTIONS,
   MACOS_RETINA_RESOLUTIONS,
@@ -64,10 +64,18 @@ const PLATFORM_BY_OS: Record<FingerprintUIOS, string> = {
   Linux: 'Linux x86_64',
 };
 
-const BROWSER_OPTIONS_BY_ENGINE: Record<AutomationEngine, FingerprintUIBrowser[]> = {
-  electron: ['Chrome', 'Edge'],
-  extension: ['Chrome', 'Edge'],
-  ruyi: ['Firefox'],
+const BROWSER_OPTIONS_BY_RUNTIME: Record<BrowserRuntimeId, FingerprintUIBrowser[]> = {
+  'electron-webcontents': ['Chrome', 'Edge'],
+  'chromium-extension-relay': ['Chrome', 'Edge'],
+  'firefox-bidi': ['Firefox'],
+  'chromium-cloak-playwright': ['Chrome', 'Edge'],
+};
+
+const RUNTIME_LABELS: Record<BrowserRuntimeId, string> = {
+  'electron-webcontents': 'Electron',
+  'chromium-extension-relay': 'Chromium Extension',
+  'firefox-bidi': 'Firefox BiDi',
+  'chromium-cloak-playwright': 'Cloak Playwright',
 };
 
 const CORE_BROWSER_BY_UI: Record<
@@ -208,7 +216,7 @@ export function ProfileFormDialog({
 
   // 表单状态
   const [name, setName] = useState('');
-  const [engine, setEngine] = useState<AutomationEngine>('electron');
+  const [runtimeId, setRuntimeId] = useState<BrowserRuntimeId>('electron-webcontents');
   const [notes, setNotes] = useState('');
   const [tags, setTags] = useState('');
   const [groupId, setGroupId] = useState<string>(''); // '' 表示无分组
@@ -232,7 +240,7 @@ export function ProfileFormDialog({
 
   // 指纹配置
   const [fingerprint, setFingerprint] = useState<FingerprintConfig>(() =>
-    getDefaultFingerprint('electron')
+    getDefaultFingerprint('electron-webcontents')
   );
   const [os, setOs] = useState<'Windows' | 'macOS' | 'Linux'>('Windows');
   const [browser, setBrowser] = useState<'Chrome' | 'Firefox' | 'Edge'>('Chrome');
@@ -240,10 +248,11 @@ export function ProfileFormDialog({
 
   // WebGL 配置
   const [gpuVendor, setGpuVendor] = useState<string>(
-    () => getDefaultFingerprint('electron').identity.graphics?.webgl?.maskedVendor || ''
+    () => getDefaultFingerprint('electron-webcontents').identity.graphics?.webgl?.maskedVendor || ''
   );
   const [gpuRenderer, setGpuRenderer] = useState<string>(
-    () => getDefaultFingerprint('electron').identity.graphics?.webgl?.maskedRenderer || ''
+    () =>
+      getDefaultFingerprint('electron-webcontents').identity.graphics?.webgl?.maskedRenderer || ''
   );
   const isHydratingFingerprintRef = useRef(false);
 
@@ -251,13 +260,14 @@ export function ProfileFormDialog({
   const [activeTab, setActiveTab] = useState('basic');
   const [advancedFingerprintOpen, setAdvancedFingerprintOpen] = useState(false);
   const [advancedPerformanceOpen, setAdvancedPerformanceOpen] = useState(false);
-  const isExtensionEngine = engine === 'extension';
-  const isRuyiEngine = engine === 'ruyi';
+  const isExtensionRelayRuntime = runtimeId === 'chromium-extension-relay';
+  const isFirefoxRuntime = runtimeId === 'firefox-bidi';
+  const isCloakRuntime = runtimeId === 'chromium-cloak-playwright';
   const identity = fingerprint.identity;
   const region = identity.region;
   const hardware = identity.hardware;
   const display = identity.display;
-  const availableBrowsers = useMemo(() => BROWSER_OPTIONS_BY_ENGINE[engine], [engine]);
+  const availableBrowsers = useMemo(() => BROWSER_OPTIONS_BY_RUNTIME[runtimeId], [runtimeId]);
   const availablePresets = useMemo(
     () => FINGERPRINT_PRESET_OPTIONS.filter((preset) => availableBrowsers.includes(preset.browser)),
     [availableBrowsers]
@@ -351,11 +361,11 @@ export function ProfileFormDialog({
     const nextGpuVendor = overrides.gpuVendor ?? gpuVendor;
     const nextGpuRenderer = overrides.gpuRenderer ?? gpuRenderer;
     const nextPixelRatio =
-      engine === 'electron'
+      runtimeId === 'electron-webcontents'
         ? (overrides.pixelRatio ?? prev.identity.display.pixelRatio)
         : undefined;
 
-    return materializeFingerprintConfigForEngine(
+    return materializeFingerprintConfigForRuntime(
       mergeFingerprintConfig(prev, {
         identity: {
           region: {
@@ -386,7 +396,7 @@ export function ProfileFormDialog({
             availWidth: nextWidth,
             availHeight: Math.max(0, nextHeight - 40),
             colorDepth: prev.identity.display.colorDepth,
-            ...(engine === 'electron' ? { pixelRatio: nextPixelRatio } : {}),
+            ...(runtimeId === 'electron-webcontents' ? { pixelRatio: nextPixelRatio } : {}),
           },
           graphics: {
             webgl: {
@@ -402,7 +412,7 @@ export function ProfileFormDialog({
         },
         ...(overrides.source ? { source: overrides.source } : {}),
       }),
-      engine
+      runtimeId
     );
   };
 
@@ -452,10 +462,10 @@ export function ProfileFormDialog({
       setBrowser(preset.browser);
 
       // 合并预设配置和默认配置
-      const df = getDefaultFingerprint(engine);
-      const newFingerprint: FingerprintConfig = materializeFingerprintConfigForEngine(
+      const df = getDefaultFingerprint(runtimeId);
+      const newFingerprint: FingerprintConfig = materializeFingerprintConfigForRuntime(
         mergeFingerprintConfig(df, preset.config),
-        engine
+        runtimeId
       );
 
       setFingerprint(newFingerprint);
@@ -474,9 +484,9 @@ export function ProfileFormDialog({
     applyPreset(randomPreset.id);
   };
 
-  const handleEngineChange = (nextEngine: AutomationEngine) => {
-    setEngine(nextEngine);
-    setFingerprint((prev) => materializeFingerprintConfigForEngine(prev, nextEngine));
+  const handleRuntimeChange = (nextRuntimeId: BrowserRuntimeId) => {
+    setRuntimeId(nextRuntimeId);
+    setFingerprint((prev) => materializeFingerprintConfigForRuntime(prev, nextRuntimeId));
   };
 
   // 编辑模式：加载现有配置
@@ -489,7 +499,7 @@ export function ProfileFormDialog({
       const profile = profiles.find((p) => p.id === profileId);
       if (profile) {
         setName(profile.name);
-        setEngine(profile.engine);
+        setRuntimeId(profile.runtimeId);
         setNotes(profile.notes || '');
         setTags(profile.tags?.join(', ') || '');
         setGroupId(profile.groupId || '');
@@ -529,9 +539,9 @@ export function ProfileFormDialog({
             ? materializeFingerprintConfigFromCore(
                 profile.fingerprintCore ?? extractFingerprintCoreConfig(profile.fingerprint),
                 profile.fingerprintSource ?? profile.fingerprint.source,
-                profile.engine
+                profile.runtimeId
               )
-            : materializeFingerprintConfigForEngine(profile.fingerprint, profile.engine);
+            : materializeFingerprintConfigForRuntime(profile.fingerprint, profile.runtimeId);
         setFingerprint(normalizedFingerprint);
         setOs(
           profile.fingerprintCore
@@ -557,7 +567,7 @@ export function ProfileFormDialog({
       setAdvancedFingerprintOpen(false);
       setAdvancedPerformanceOpen(false);
       setName('');
-      setEngine('electron');
+      setRuntimeId('electron-webcontents');
       setNotes('');
       setTags('');
       setGroupId('');
@@ -574,11 +584,11 @@ export function ProfileFormDialog({
       setProxyPort('');
       setProxyUsername('');
       setProxyPassword('');
-      setFingerprint(getDefaultFingerprint('electron'));
+      setFingerprint(getDefaultFingerprint('electron-webcontents'));
       setOs('Windows');
       setBrowser('Chrome');
       {
-        const df = getDefaultFingerprint('electron');
+        const df = getDefaultFingerprint('electron-webcontents');
         setGpuVendor(df.identity.graphics?.webgl?.maskedVendor || '');
         setGpuRenderer(df.identity.graphics?.webgl?.maskedRenderer || '');
       }
@@ -714,9 +724,9 @@ export function ProfileFormDialog({
         fileFormat: 'txt' as const,
       };
 
-      fingerprintPayload = materializeFingerprintConfigForEngine(fingerprintPayload, engine);
+      fingerprintPayload = materializeFingerprintConfigForRuntime(fingerprintPayload, runtimeId);
 
-      const fingerprintValidation = validateFingerprintConfig(fingerprintPayload, engine);
+      const fingerprintValidation = validateFingerprintConfig(fingerprintPayload, runtimeId);
       if (!fingerprintValidation.valid) {
         toast.warning(`指纹配置无效: ${fingerprintValidation.warnings.join(', ')}`);
         return;
@@ -726,7 +736,7 @@ export function ProfileFormDialog({
         // 更新
         const params: UpdateProfileParams = {
           name: trimmedName,
-          engine,
+          runtimeId,
           groupId: groupId ? groupId : null,
           color: color ? color : null,
           notes: notes.trim() || null,
@@ -748,7 +758,7 @@ export function ProfileFormDialog({
         // 创建
         const params: CreateProfileParams = {
           name: trimmedName,
-          engine,
+          runtimeId,
           groupId: groupId ? groupId : null,
           color: color ? color : null,
           proxy: proxyEnabled ? proxy : null,
@@ -876,17 +886,19 @@ export function ProfileFormDialog({
                 <div className="space-y-2">
                   <Label className="text-xs font-medium text-slate-600">引擎</Label>
                   <Select
-                    value={engine}
-                    onValueChange={(v) => handleEngineChange(v as AutomationEngine)}
+                    value={runtimeId}
+                    onValueChange={(v) => handleRuntimeChange(v as BrowserRuntimeId)}
                     className={controlClassName}
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="electron">Electron</SelectItem>
-                      <SelectItem value="extension">Extension</SelectItem>
-                      <SelectItem value="ruyi">Ruyi</SelectItem>
+                      {Object.entries(RUNTIME_LABELS).map(([id, label]) => (
+                        <SelectItem key={id} value={id}>
+                          {label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                   <p className="text-xs leading-4 text-slate-500">
@@ -1138,11 +1150,13 @@ export function ProfileFormDialog({
                     </Button>
                   </div>
                   <p className="text-xs leading-4 text-slate-500">
-                    {isExtensionEngine
-                      ? 'Extension 会把统一身份配置物化为 Chromium 原生文本文件，通过 --ruyi 交给内核，并额外叠加内置控制扩展；启动真值按 FingerPrintJSBrowser README 描述字段已在真实页面验证。'
-                      : isRuyiEngine
-                        ? 'Ruyi 引擎会将配置写入 Firefox fpfile，并通过原生 Firefox/BiDi 运行时启动持久化环境；运行时 emulation 仍属于 best-effort。'
-                        : 'Electron 会忽略原生文件来源配置，只消费 identity 中的浏览器画像。'}
+                    {isExtensionRelayRuntime
+                      ? 'Chromium Extension Relay 会把统一身份配置物化为 Chromium 原生文本文件，并叠加内置控制扩展。'
+                      : isFirefoxRuntime
+                        ? 'Firefox BiDi 会将配置写入 fpfile，并通过原生 Firefox/BiDi 运行时启动持久化环境。'
+                        : isCloakRuntime
+                          ? 'Cloak Playwright 使用外部下载或指定路径的 CloakBrowser，并通过 Playwright 协议控制。'
+                          : 'Electron WebContents 使用内嵌视图，只消费 identity 中的浏览器画像。'}
                   </p>
                 </div>
 

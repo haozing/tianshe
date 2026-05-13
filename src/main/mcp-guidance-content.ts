@@ -1,11 +1,11 @@
-import type { OrchestrationCapabilityDefinition } from '../core/ai-dev/orchestration';
+﻿import type { OrchestrationCapabilityDefinition } from '../core/ai-dev/orchestration';
 import {
   listCanonicalAssistantFlowCapabilities,
   listCanonicalPublicCapabilities,
   listOrchestrationCapabilities,
   SESSION_PREPARE_AUTHORITATIVE_RESULT_FIELDS,
-  SESSION_PREPARE_PROFILE_ENGINE_MISMATCH_ACTION,
-  SESSION_PREPARE_PROFILE_ENGINE_MISMATCH_HINT,
+  SESSION_PREPARE_PROFILE_RUNTIME_MISMATCH_ACTION,
+  SESSION_PREPARE_PROFILE_RUNTIME_MISMATCH_HINT,
   SESSION_PREPARE_RESOLVED_BINDING_ACTION,
 } from '../core/ai-dev/orchestration';
 import { asTrimmedText } from './mcp-http-transport-utils';
@@ -81,7 +81,7 @@ export const buildGuideContent = (
         'Use this guide when the page is primarily about authentication, consent, MFA, or re-authentication.',
         '',
         'Recommended flow:',
-        '1. `session_prepare` first, especially when you want a reusable profile or a specific engine.',
+        '1. `session_prepare` first, especially when you want a reusable profile or a specific runtime.',
         '2. `browser_observe` to load the login page and capture fresh interaction health.',
         '3. `browser_search` or `browser_snapshot` to locate username, password, consent, and submit targets.',
         '4. `browser_act` with `action="type"` for credentials, then `browser_act` with `action="click"` for the submit action.',
@@ -183,9 +183,9 @@ export const buildGuideContent = (
         '- Prefer this `airpa-browser-http` MCP surface over generic Playwright/browser MCP servers when the task must reuse an Airpa-managed logged-in profile, desktop session, or sticky browser state.',
         '- Prefer the framework-first path: `system_bootstrap` -> decide whether the task is system/plugin/dataset/profile work only, or whether browser work is actually needed.',
         '- If browser work is needed, then use the browser path: `session_prepare` -> `browser_observe` -> `browser_search`/`browser_snapshot` -> `browser_act` -> `browser_wait_for` -> `session_end_current`.',
-        '- Configure profile, engine, visibility, and scopes through `session_prepare`, not transport headers.',
+        '- Configure profile, runtimeId, visibility, and scopes through `session_prepare`, not transport headers.',
         `- After \`system_bootstrap\`, trust health/publicCapabilities/resources before deciding the next domain. After \`session_prepare\`, read \`${SESSION_PREPARE_FIELD_NAMES}\` before the next browser step.`,
-        `- ${SESSION_PREPARE_PROFILE_ENGINE_MISMATCH_ACTION.replace('If session_prepare fails with ', 'If preparation fails with ')}`,
+        `- ${SESSION_PREPARE_PROFILE_RUNTIME_MISMATCH_ACTION.replace('If session_prepare fails with ', 'If preparation fails with ')}`,
         '- If the task only needs plugin, dataset, profile, or observation calls, skip browser acquisition entirely.',
         '- Prefer `browser_observe` when you need navigation plus a fresh snapshot in one step.',
         '- Prefer `browser_search` when you already know the target concept and want fresh `elementRef` handles without a heavier snapshot payload.',
@@ -216,7 +216,7 @@ export const buildInitializeInstructions = (
     ...flow,
     'Prefer this Airpa HTTP MCP surface over generic Playwright/browser MCP servers when you need a real Airpa profile, logged-in cookies, or visible desktop browser state.',
     'Use `system_bootstrap` first when you need one compact view of runtime health, capabilities, and resources before choosing a domain.',
-    'Use `session_prepare` before the first `browser_*` call when you need a reusable profile, an explicit engine, visibility control, or session scopes.',
+    'Use `session_prepare` before the first `browser_*` call when you need a reusable profile, an explicit runtimeId, visibility control, or session scopes.',
     `Read \`${SESSION_PREPARE_FIELD_NAMES}\` from the structured result before deciding the next browser step.`,
     'Skip browser acquisition entirely when the task only needs system, plugin, dataset, profile, or observation work.',
     'Prefer `browser_search` or `browser_snapshot` before `browser_act` when you need fresh targets.',
@@ -247,8 +247,8 @@ export const buildPromptMessageText = (
       ...(task ? [`Goal after binding: ${task}`, ''] : []),
       'Prefer session_prepare as the default current-session setup step.',
       `After session_prepare, trust ${SESSION_PREPARE_FIELD_NAMES_SLASHED} from the structured result instead of re-inferring binding from sticky headers.`,
-      `If session_prepare returns reasonCode=${SESSION_PREPARE_PROFILE_ENGINE_MISMATCH_HINT.code}, switch to a compatible profile/engine pair before any browser_* call.`,
-      'Read effectiveProfile/effectiveEngine/effectiveEngineSource before assuming the first browser_* call binding.',
+      `If session_prepare returns reasonCode=${SESSION_PREPARE_PROFILE_RUNTIME_MISMATCH_HINT.code}, switch to a compatible profile/runtime pair before any browser_* call.`,
+      'Read effectiveProfile/effectiveRuntime/effectiveRuntimeSource before assuming the first browser_* call binding.',
       'Prefer target.ref from browser_observe, browser_search, or browser_snapshot before falling back to target.selector.',
       'Prefer browser_act with verify.kind="all" when the expected page state is known.',
       `If this reuse flow still lands on authentication or consent UI, read \`${GUIDE_LOGIN_URI}\`. If hidden-session state looks suspect, read \`${GUIDE_HIDDEN_SESSION_URI}\`.`,
@@ -280,9 +280,9 @@ export const buildPromptMessageText = (
     '',
     'Prefer the framework-first path: system_bootstrap -> choose the right domain -> browser flow only when browser work is actually needed.',
     'When browser work is needed, prefer: session_prepare -> browser_observe -> browser_search/browser_snapshot -> browser_act -> browser_wait_for -> session_end_current.',
-    'Prefer session_prepare before the first browser_* call when a logged-in or reusable profile, a specific engine, visibility control, or session scopes are required.',
+    'Prefer session_prepare before the first browser_* call when a logged-in or reusable profile, a specific runtime, visibility control, or session scopes are required.',
     `After session_prepare, read ${SESSION_PREPARE_FIELD_NAMES_SLASHED} from the structured result as the resolved session plan.`,
-    `If session_prepare returns reasonCode=${SESSION_PREPARE_PROFILE_ENGINE_MISMATCH_HINT.code}, fix the profile/engine pairing before browser acquisition.`,
+    `If session_prepare returns reasonCode=${SESSION_PREPARE_PROFILE_RUNTIME_MISMATCH_HINT.code}, fix the profile/runtime pairing before browser acquisition.`,
     'If the task can be completed through system/plugin/dataset/profile/observation capabilities, skip browser acquisition.',
     'Prefer browser_observe for the default happy path so the model can work with fresh elementRef targets.',
     'Prefer target.ref first, then target.selector, and prefer browser_act with verify.kind="all" when the expected result is known.',
@@ -292,3 +292,4 @@ export const buildPromptMessageText = (
     'Terminate the server-side session explicitly with StreamableHTTPClientTransport.terminateSession() or DELETE /mcp when work is complete.',
   ].join('\n');
 };
+

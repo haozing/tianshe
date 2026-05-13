@@ -10,6 +10,7 @@ import type {
   OrchestrationProfileGateway,
   OrchestrationSystemGateway,
 } from '../core/ai-dev/orchestration/types';
+import type { BrowserRuntimeManager } from '../core/browser-runtime';
 
 export interface OrchestrationIdempotencyPersistenceStore {
   get(namespace: string, key: string): Promise<OrchestrationIdempotencyEntry | null>;
@@ -24,6 +25,7 @@ export interface OrchestrationIdempotencyPersistenceStore {
 export interface RestApiDependencies {
   viewManager?: any; // WebContentsViewManager 实例
   windowManager?: any; // WindowManager 实例
+  browserRuntimeManager?: BrowserRuntimeManager;
   systemGateway?: OrchestrationSystemGateway;
   datasetGateway?: OrchestrationDatasetGateway;
   crossPluginGateway?: OrchestrationCrossPluginGateway;

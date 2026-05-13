@@ -4,7 +4,7 @@ import { setObservationSink } from '../../core/observability/observation-service
 import type { ObservationSink, RuntimeArtifact, RuntimeEvent } from '../../core/observability/types';
 import { getDefaultFingerprint } from '../../constants/fingerprint-defaults';
 
-vi.mock('electron', () => ({
+vi.mock('electron-webcontents', () => ({
   app: {
     getPath: vi.fn(() => process.cwd()),
   },
@@ -75,7 +75,7 @@ describe('ProfileService observation hooks', () => {
     vi.spyOn(service, 'get').mockImplementation(async (id: string) => ({
       id,
       name: 'Shop QA',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       groupId: null,
       partition: `persist:profile-${id}`,
       proxy: null,
@@ -95,7 +95,7 @@ describe('ProfileService observation hooks', () => {
 
     const profile = await service.create({
       name: 'Shop QA',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
     });
 
     expect(profile.name).toBe('Shop QA');
@@ -108,26 +108,26 @@ describe('ProfileService observation hooks', () => {
       sink.events.find((event) => event.event === 'profile.lifecycle.create.started')?.attrs
     ).toMatchObject({
       name: 'Shop QA',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
     });
     expect(
       sink.events.find((event) => event.event === 'profile.lifecycle.create.succeeded')?.attrs
     ).toMatchObject({
       profileId: profile.id,
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
     });
   });
 
   it('records profile.lifecycle.update events when updating a profile', async () => {
     const sink = new MemoryObservationSink();
     setObservationSink(sink);
-    const fingerprint = getDefaultFingerprint('electron');
+    const fingerprint = getDefaultFingerprint('electron-webcontents');
 
     vi.spyOn(service, 'get')
       .mockResolvedValueOnce({
         id: 'profile-1',
         name: 'Shop QA',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         groupId: null,
         partition: 'persist:profile-1',
         proxy: null,
@@ -147,7 +147,7 @@ describe('ProfileService observation hooks', () => {
       .mockResolvedValueOnce({
         id: 'profile-1',
         name: 'Shop QA Updated',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         groupId: null,
         partition: 'persist:profile-1',
         proxy: null,
@@ -191,7 +191,7 @@ describe('ProfileService observation hooks', () => {
     vi.spyOn(service, 'get').mockResolvedValue({
       id: 'profile-1',
       name: 'Shop QA',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       groupId: null,
       partition: 'persist:profile-1',
       proxy: null,

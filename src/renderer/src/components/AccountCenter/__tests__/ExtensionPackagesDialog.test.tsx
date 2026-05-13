@@ -17,9 +17,9 @@ vi.mock('../../../lib/toast', () => ({
 
 const profileMockState = vi.hoisted(() => ({
   profiles: [
-    { id: 'ext-1', name: 'Extension-1', engine: 'extension' },
-    { id: 'ext-2', name: 'Extension-2', engine: 'extension' },
-    { id: 'el-1', name: 'Electron-1', engine: 'electron' },
+    { id: 'ext-1', name: 'Extension-1', runtimeId: 'chromium-extension-relay' },
+    { id: 'ext-2', name: 'Extension-2', runtimeId: 'chromium-extension-relay' },
+    { id: 'el-1', name: 'Electron-1', runtimeId: 'electron-webcontents' },
   ],
 }));
 
@@ -144,7 +144,7 @@ describe('ExtensionPackagesPanel', () => {
           data: (options?.runningBrowsers || []).map((browser, index) => ({
             id: browser.id,
             sessionId: browser.sessionId,
-            engine: browser.engine || 'extension',
+            runtimeId: browser.runtimeId || 'chromium-extension-relay',
             status: browser.status || 'idle',
             createdAt: index,
             lastAccessedAt: index,

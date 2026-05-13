@@ -2,8 +2,8 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserCapabilityName } from '../../../types/browser-interface';
 import {
   browserRuntimeSupports,
-  getStaticEngineRuntimeDescriptor,
-} from '../../browser-pool/engine-capability-registry';
+  getStaticRuntimeDescriptor,
+} from '../../browser-pool/runtime-capability-registry';
 
 const mockPoolManager = {
   getStats: vi.fn(),
@@ -57,8 +57,10 @@ function createNamespace(profileOverrides: Record<string, unknown> = {}) {
   };
 }
 
-function createBrowserMock(engine: 'electron' | 'extension' = 'electron') {
-  const runtime = getStaticEngineRuntimeDescriptor(engine);
+function createBrowserMock(
+  runtimeId: 'electron-webcontents' | 'chromium-extension-relay' = 'electron-webcontents'
+) {
+  const runtime = getStaticRuntimeDescriptor(runtimeId);
   return {
     goto: vi.fn(),
     show: vi.fn().mockResolvedValue(undefined),
@@ -96,12 +98,12 @@ describe('ProfileNamespace.withLease', () => {
   it('auto-renews the handle and releases to about:blank by default', async () => {
     const renew = vi.fn().mockResolvedValue(undefined);
     const release = vi.fn().mockResolvedValue(undefined);
-    const browser = createBrowserMock('electron');
+    const browser = createBrowserMock('electron-webcontents');
     mockPoolManager.acquire.mockResolvedValue({
       browser,
       browserId: 'browser-1',
       sessionId: 'p1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       release,
       renew,
     });
@@ -109,7 +111,7 @@ describe('ProfileNamespace.withLease', () => {
     const { namespace } = createNamespace();
     const resultPromise = namespace.withLease('p1', undefined, async (ctx) => {
       expect(ctx.browserId).toBe('browser-1');
-      expect(ctx.browser.describeRuntime()).toMatchObject({ engine: 'electron' });
+      expect(ctx.browser.describeRuntime()).toMatchObject({ runtimeId: 'electron-webcontents' });
       expect(() => (ctx.browser as any).session).toThrowError(/browser\.session is not available/i);
       await vi.advanceTimersByTimeAsync(20000);
       return 'ok';
@@ -126,7 +128,7 @@ describe('ProfileNamespace.withLease', () => {
       browser: {},
       browserId: 'browser-2',
       sessionId: 'p1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       release,
       renew: vi.fn(),
     });
@@ -162,7 +164,7 @@ describe('ProfileNamespace.withLease', () => {
         browser: { goto: vi.fn() },
         browserId: 'existing-browser',
         sessionId: 'p1',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         release: existingRelease,
         renew: vi.fn(),
       },
@@ -200,7 +202,7 @@ describe('ProfileNamespace.withLease', () => {
       browser: {},
       browserId: 'browser-3',
       sessionId: 'p1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       release,
       renew: vi.fn(),
     });
@@ -225,21 +227,21 @@ describe('ProfileNamespace.withLease', () => {
     );
   });
 
-  it('preserves extension engine context for non-Electron leases', async () => {
+  it('preserves chromium extension runtime context for non-Electron leases', async () => {
     const release = vi.fn().mockResolvedValue(undefined);
-    const browser = createBrowserMock('extension');
+    const browser = createBrowserMock('chromium-extension-relay');
     const show = browser.show;
     const hide = browser.hide;
     mockPoolManager.acquire.mockResolvedValue({
       browser,
       browserId: 'browser-ext',
       sessionId: 'p1',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       release,
       renew: vi.fn(),
     });
 
-    const { namespace } = createNamespace({ engine: 'extension' });
+    const { namespace } = createNamespace({ runtimeId: 'chromium-extension-relay' });
     const result = await namespace.withLease(
       'p1',
       {
@@ -248,9 +250,9 @@ describe('ProfileNamespace.withLease', () => {
       },
       async (ctx) => {
         expect(ctx.browserId).toBe('browser-ext');
-        expect(ctx.engine).toBe('extension');
+        expect(ctx.runtimeId).toBe('chromium-extension-relay');
         expect(ctx.viewId).toBeUndefined();
-        expect(ctx.browser.describeRuntime()).toMatchObject({ engine: 'extension' });
+        expect(ctx.browser.describeRuntime()).toMatchObject({ runtimeId: 'chromium-extension-relay' });
         expect(ctx.browser.hasCapability('network.responseBody')).toBe(true);
         return 'ok';
       }
@@ -267,19 +269,19 @@ describe('ProfileNamespace.withLease', () => {
     const secondRelease = vi.fn().mockResolvedValue(undefined);
     mockPoolManager.acquire
       .mockResolvedValueOnce({
-        browser: createBrowserMock('electron'),
+        browser: createBrowserMock('electron-webcontents'),
         browserId: 'browser-lease-1',
         sessionId: 'p1',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         viewId: 'view-1',
         release: firstRelease,
         renew: vi.fn(),
       })
       .mockResolvedValueOnce({
-        browser: createBrowserMock('electron'),
+        browser: createBrowserMock('electron-webcontents'),
         browserId: 'browser-lease-2',
         sessionId: 'p1',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         viewId: 'view-2',
         release: secondRelease,
         renew: vi.fn(),

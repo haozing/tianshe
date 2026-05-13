@@ -301,6 +301,6 @@ export async function validateChromeRuntime(chromePath: string): Promise<void> {
 }
 
 export function getFingerprintPreflightIssues(session: SessionConfig): string[] {
-  return getCanonicalFingerprintPreflightIssues(session.fingerprint, session.engine);
+  return getCanonicalFingerprintPreflightIssues(session.fingerprint, session.runtimeId);
 }
 

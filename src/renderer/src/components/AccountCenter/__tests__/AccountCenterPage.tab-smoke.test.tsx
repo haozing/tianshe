@@ -19,7 +19,7 @@ const profileStoreState = {
       quota: 1,
       idleTimeoutMs: 60000,
       lockTimeoutMs: 30000,
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
     },
   ],
   groups: [],

@@ -48,6 +48,7 @@ import {
 } from '../coordinate';
 import type {
   Cookie,
+  NetworkEntry,
   PageSnapshot,
   SnapshotOptions,
 } from '../browser-core/types';
@@ -77,9 +78,10 @@ import { summarizeForObservation } from '../observability/observation-service';
 import type { TraceContext } from '../observability/types';
 import {
   browserRuntimeSupports,
-  getStaticEngineRuntimeDescriptor,
-} from '../browser-pool/engine-capability-registry';
+  getStaticRuntimeDescriptor,
+} from '../browser-pool/runtime-capability-registry';
 import { sendWindowsDialogKeys } from '../../utils/platform/windows-dialog';
+import { waitForCapturedResponse } from '../browser-automation/response-wait-runtime';
 
 type WaitForSelectorState = 'attached' | 'visible' | 'hidden';
 
@@ -105,7 +107,9 @@ type PendingDialogCloseWait = {
   timeoutId: ReturnType<typeof setTimeout>;
 };
 
-const EXTENSION_BROWSER_RUNTIME = Object.freeze(getStaticEngineRuntimeDescriptor('extension'));
+const EXTENSION_BROWSER_RUNTIME = Object.freeze(
+  getStaticRuntimeDescriptor('chromium-extension-relay')
+);
 
 export class ExtensionBrowser
   extends TransportBackedBrowserBase
@@ -210,7 +214,7 @@ export class ExtensionBrowser
   }
 
   describeRuntime() {
-    return getStaticEngineRuntimeDescriptor('extension');
+    return getStaticRuntimeDescriptor('chromium-extension-relay');
   }
 
   hasCapability(name: BrowserCapabilityName): boolean {
@@ -241,7 +245,7 @@ export class ExtensionBrowser
 
   private createObservationContext(partial: Partial<TraceContext> = {}): TraceContext {
     return createBrowserObservationContext({
-      browserEngine: 'extension',
+      browserRuntimeId: 'chromium-extension-relay',
       browserId: this.getObservationBrowserId(),
       partial,
     });
@@ -256,7 +260,7 @@ export class ExtensionBrowser
   }): Promise<T> {
     return observeSharedBrowserOperation(this, {
       ...options,
-      browserEngine: 'extension',
+      browserRuntimeId: 'chromium-extension-relay',
       browserId: this.getObservationBrowserId(),
     });
   }
@@ -582,21 +586,30 @@ export class ExtensionBrowser
 
   async handleDialog(options: { accept: boolean; promptText?: string }): Promise<void> {
     const shouldWaitForClose = this.currentDialog !== null;
-    await this.dispatch('dialog.handle', {
-      ...options,
-      nonBlocking: true,
-    });
+    try {
+      await this.dispatch('dialog.handle', options);
+    } catch (error) {
+      const recovered = await this.tryNativeDialogFallback(options);
+      if (!recovered) {
+        throw error;
+      }
+      this.markDialogClosed();
+      return;
+    }
     if (shouldWaitForClose && this.currentDialog !== null) {
       try {
-        await this.waitForDialogClosed(10_000);
-      } catch (error) {
+        await this.waitForDialogClosedOrPageResume(2_500);
+      } catch (_error) {
         const recovered = await this.tryNativeDialogFallback(options);
         if (!recovered) {
-          throw error;
+          // Page.handleJavaScriptDialog succeeded, but some Chromium builds do not always
+          // relay the follow-up dialog-closed event before the next command can continue.
+          this.markDialogClosed();
+          return;
         }
       }
     }
-    this.currentDialog = null;
+    this.markDialogClosed();
   }
 
   private async waitForSelectorInternal(
@@ -873,6 +886,24 @@ export class ExtensionBrowser
     await this.dispatch('network.clear');
   }
 
+  async waitForResponse(urlPattern: string, timeout: number = 30000): Promise<NetworkEntry> {
+    return waitForCapturedResponse(urlPattern, {
+      timeoutMs: timeout,
+      pollIntervalMs: 150,
+      getEntries: async () => {
+        const snapshot = await this.dispatch<NetworkEntry[]>(
+          'network.snapshot',
+          undefined,
+          1000
+        ).catch(() => []);
+        for (const entry of snapshot) {
+          this.upsertNetworkEntry(entry);
+        }
+        return this.networkEntries;
+      },
+    });
+  }
+
   protected async onStartConsoleCapture(options?: {
     level?: 'verbose' | 'info' | 'warning' | 'error' | 'all';
   }): Promise<void> {
@@ -964,8 +995,7 @@ export class ExtensionBrowser
         this.resolvePendingDialogWaits(event.dialog);
         return;
       case 'dialog-closed':
-        this.currentDialog = null;
-        this.resolvePendingDialogCloseWaits();
+        this.markDialogClosed();
         return;
       case 'intercepted-request':
         this.appendInterceptedRequest(event.request);
@@ -1018,11 +1048,55 @@ export class ExtensionBrowser
     });
   }
 
+  private async probeDialogPageResume(timeoutMs: number): Promise<boolean> {
+    try {
+      await this.dispatch(
+        'evaluate',
+        {
+          script: 'document.readyState',
+        },
+        timeoutMs
+      );
+      this.currentDialog = null;
+      this.resolvePendingDialogCloseWaits();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async waitForDialogClosedOrPageResume(timeoutMs: number): Promise<void> {
+    if (this.currentDialog === null) {
+      return;
+    }
+    const startedAt = Date.now();
+    let closeError: Error | null = null;
+    let probes = 0;
+    while (this.currentDialog !== null && Date.now() - startedAt < timeoutMs) {
+      try {
+        await this.waitForDialogClosed(250);
+        return;
+      } catch (error) {
+        closeError = error instanceof Error ? error : new Error(String(error));
+      }
+      probes += 1;
+      if (probes <= 2 && (await this.probeDialogPageResume(500))) {
+        return;
+      }
+    }
+    throw closeError ?? new Error(`Timed out waiting for dialog to close after ${timeoutMs}ms`);
+  }
+
   private resolvePendingDialogCloseWaits(): void {
     const waiters = Array.from(this.pendingDialogCloseWaits);
     for (const waiter of waiters) {
       waiter.resolve();
     }
+  }
+
+  private markDialogClosed(): void {
+    this.currentDialog = null;
+    this.resolvePendingDialogCloseWaits();
   }
 
   private rejectPendingDialogCloseWaits(error: Error): void {
@@ -1063,19 +1137,6 @@ export class ExtensionBrowser
       // Fall through and probe whether the tab has resumed even if the close event never arrived.
     }
 
-    try {
-      await this.dispatch(
-        'evaluate',
-        {
-          script: 'document.readyState',
-        },
-        3_000
-      );
-      this.currentDialog = null;
-      this.resolvePendingDialogCloseWaits();
-      return true;
-    } catch {
-      return false;
-    }
+    return this.probeDialogPageResume(3_000);
   }
 }

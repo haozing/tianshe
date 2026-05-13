@@ -1,6 +1,6 @@
 import { createLogger } from '../logger';
 import { AcquireFailedError } from '../errors/BrowserPoolError';
-import { isNonRetryableEngineCreateError } from './browser-engine-create-policy';
+import { isNonRetryableRuntimeCreateError } from './browser-runtime-create-policy';
 import type { GlobalPool } from './global-pool';
 import type { AcquireRequest, LockInfo, ReadyBrowser, SessionConfig } from './types';
 
@@ -18,8 +18,8 @@ export class BrowserCreationStrategy {
   ) {}
 
   async create(request: AcquireRequest, session: SessionConfig): Promise<ReadyBrowser | undefined> {
-    const engine = request.options.engine ?? session.engine ?? 'electron';
-    session.engine = engine;
+    const runtimeId = request.options.runtimeId ?? session.runtimeId;
+    session.runtimeId = runtimeId;
 
     if (this.globalPool.isGlobalFull()) {
       const stats = this.globalPool.getStats();
@@ -61,8 +61,8 @@ export class BrowserCreationStrategy {
       return pooledBrowser;
     } catch (error: unknown) {
       const message = getErrorMessage(error);
-      if (isNonRetryableEngineCreateError(engine, error)) {
-        logger.error(`[tryCreateBrowser] Non-retryable ${engine} create failure: ${message}`);
+      if (isNonRetryableRuntimeCreateError(runtimeId, error)) {
+        logger.error(`[tryCreateBrowser] Non-retryable ${runtimeId} create failure: ${message}`);
         throw new AcquireFailedError(message);
       }
 

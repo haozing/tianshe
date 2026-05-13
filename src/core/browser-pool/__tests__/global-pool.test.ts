@@ -125,7 +125,7 @@ describe('GlobalPool', () => {
 
       const session = createSessionConfig({
         id: 'single-session',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         quota: 5,
       });
 
@@ -145,7 +145,7 @@ describe('GlobalPool', () => {
 
       const session = createSessionConfig({
         id: 'session-concurrent',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         quota: 10,
       });
 
@@ -169,7 +169,7 @@ describe('GlobalPool', () => {
 
       const session = createSessionConfig({
         id: 'session-destroying',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         quota: 1,
       });
 
@@ -324,7 +324,7 @@ describe('GlobalPool', () => {
       const session = createSessionConfig({ id: 'test-session' });
       await pool.createBrowser(session);
 
-      const browser = await pool.acquireIdle('test-session', 'electron');
+      const browser = await pool.acquireIdle('test-session', 'electron-webcontents');
 
       expect(browser).toBeDefined();
       expect(browser!.sessionId).toBe('test-session');
@@ -332,7 +332,7 @@ describe('GlobalPool', () => {
     });
 
     it('acquireIdle 会话不存在时应该返回 undefined', async () => {
-      const browser = await pool.acquireIdle('non-existent', 'electron');
+      const browser = await pool.acquireIdle('non-existent', 'electron-webcontents');
       expect(browser).toBeUndefined();
     });
 
@@ -380,7 +380,7 @@ describe('GlobalPool', () => {
 
       const browser = await pool.createBrowser(session);
 
-      const selected = await pool.acquireIdle('test-session', 'electron', 'fresh');
+      const selected = await pool.acquireIdle('test-session', 'electron-webcontents', 'fresh');
 
       expect(selected).toBeDefined();
       expect(selected!.id).toBe(browser.id);
@@ -391,7 +391,7 @@ describe('GlobalPool', () => {
 
       const browser = await pool.createBrowser(session);
 
-      const selected = await pool.acquireIdle('test-session', 'electron', 'reuse');
+      const selected = await pool.acquireIdle('test-session', 'electron-webcontents', 'reuse');
 
       expect(selected).toBeDefined();
       expect(selected!.id).toBe(browser.id);
@@ -403,7 +403,7 @@ describe('GlobalPool', () => {
       const browser = await pool.createBrowser(session);
 
       for (let i = 0; i < 10; i++) {
-        const selected = await pool.acquireIdle('test-session', 'electron', 'any');
+        const selected = await pool.acquireIdle('test-session', 'electron-webcontents', 'any');
         expect(selected).toBeDefined();
         expect(selected!.id).toBe(browser.id);
       }

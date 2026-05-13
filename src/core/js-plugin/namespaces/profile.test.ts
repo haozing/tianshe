@@ -85,7 +85,7 @@ describe('ProfileNamespace.launch visibility behavior', () => {
       browser,
       browserId: 'browser-1',
       sessionId: 'p1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       viewId: 'pool:p1:1',
       release: originalRelease,
       renew: vi.fn(),
@@ -132,7 +132,7 @@ describe('ProfileNamespace.launch visibility behavior', () => {
       browser,
       browserId: 'browser-2',
       sessionId: 'p2',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       viewId: 'pool:p2:1',
       release: vi.fn().mockResolvedValue({
         sessionId: 'p2',
@@ -167,7 +167,7 @@ describe('ProfileNamespace.launch visibility behavior', () => {
       browser,
       browserId: 'browser-3',
       sessionId: 'p3',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       release: originalRelease,
       renew: vi.fn(),
     });
@@ -210,7 +210,7 @@ describe('ProfileNamespace.launch visibility behavior', () => {
       browser,
       browserId: 'browser-4',
       sessionId: 'p4',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       release: vi.fn().mockResolvedValue({
         sessionId: 'p4',
         remainingBrowserCount: 0,
@@ -262,7 +262,7 @@ describe('ProfileNamespace.launch visibility behavior', () => {
       browser,
       browserId: 'browser-5',
       sessionId: 'p5',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       viewId: 'pool:p5:1',
       release: vi.fn().mockResolvedValue({
         sessionId: 'p5',
@@ -320,7 +320,7 @@ describe('ProfileNamespace.launch visibility behavior', () => {
       browser,
       browserId: 'browser-reused',
       sessionId: 'p7',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       viewId: 'pool:p7:1',
       release: vi.fn().mockResolvedValue({
         sessionId: 'p7',
@@ -366,7 +366,7 @@ describe('ProfileNamespace.launch visibility behavior', () => {
       browser,
       browserId: 'browser-busy-reused',
       sessionId: 'p8',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       viewId: 'pool:p8:1',
       release: vi.fn().mockResolvedValue({
         sessionId: 'p8',
@@ -413,7 +413,7 @@ describe('ProfileNamespace.launch visibility behavior', () => {
         },
         browserId: 'browser-popup-1',
         sessionId: 'p6',
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         release: firstRelease,
         renew: vi.fn(),
       })
@@ -425,7 +425,7 @@ describe('ProfileNamespace.launch visibility behavior', () => {
         },
         browserId: 'browser-popup-2',
         sessionId: 'p6',
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         release: secondRelease,
         renew: vi.fn(),
       });

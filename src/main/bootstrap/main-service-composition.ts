@@ -16,6 +16,7 @@ import * as datasetFolderHandlerModule from '../ipc-handlers/dataset-folder-hand
 import { registerDatasetFolderHandlersFromModule } from '../ipc-handlers/dataset-folder-handler-bootstrap';
 import { registerAccountHandlers } from '../ipc-handlers/account-ipc-handler';
 import { registerExtensionPackagesManagerHandlers } from '../ipc-handlers/extension-packages-ipc-handler';
+import { registerBrowserRuntimeHandlers } from '../ipc-handlers/browser-runtime-ipc-handler';
 import { registerProfileHandlers } from '../ipc-handlers/profile-ipc-handler';
 import { registerTagHandlers } from '../ipc-handlers/tag-ipc-handler';
 import { maybeOpenInternalBrowserDevTools } from '../internal-browser-devtools';
@@ -23,6 +24,13 @@ import { LogStorageService } from '../log-storage-service';
 import { createBrowserFactory, createBrowserDestroyer } from '../profile/browser-pool-integration';
 import { createExtensionBrowserFactory } from '../profile/browser-pool-integration-extension';
 import { createRuyiBrowserFactory } from '../profile/browser-pool-integration-ruyi';
+import { createCloakBrowserFactory } from '../profile/browser-pool-integration-cloak';
+import {
+  createBrowserRuntimeManager,
+  createBrowserRuntimeRegistry,
+} from '../../core/browser-runtime';
+import { createDefaultBrowserRuntimeProviders } from '../profile/browser-runtime-providers';
+import { ElectronStoreBrowserRuntimeStore } from '../profile/browser-runtime-store';
 import { setupProxyAuthHandler, clearProxyCredentials } from '../profile/browser-launcher';
 import { ExtensionPackagesManager } from '../profile/extension-packages-manager';
 import { SchedulerService } from '../scheduler';
@@ -310,7 +318,7 @@ function configureDownloadAndProxyRuntime(
 
 function initializeBrowserPoolRuntime(
   options: MainServiceCompositionOptions,
-  { duckdbService, extensionPackages, viewManager, windowManager }: BrowserPoolRuntimeServices
+  { duckdbService, extensionPackages, store, viewManager, windowManager }: BrowserPoolRuntimeServices
 ): void {
   const { appRuntime } = options;
   const electronBrowserFactory = createBrowserFactory(viewManager, windowManager);
@@ -319,15 +327,29 @@ function initializeBrowserPoolRuntime(
       extensionPackages.resolveLaunchExtensions(profileId),
   });
   const ruyiBrowserFactory = createRuyiBrowserFactory();
+  const cloakBrowserFactory = createCloakBrowserFactory();
+  const runtimeRegistry = createBrowserRuntimeRegistry();
+  for (const provider of createDefaultBrowserRuntimeProviders({
+    electronBrowserFactory,
+    extensionBrowserFactory,
+    ruyiBrowserFactory,
+    cloakBrowserFactory,
+  })) {
+    runtimeRegistry.register(provider);
+  }
+  appRuntime.browserRuntimeManager = createBrowserRuntimeManager(
+    runtimeRegistry,
+    new ElectronStoreBrowserRuntimeStore(store)
+  );
   const browserFactory = async (session: Parameters<typeof electronBrowserFactory>[0]) => {
-    const engine = session.engine ?? 'electron';
-    if (engine === 'extension') {
-      return extensionBrowserFactory(session);
-    }
-    if (engine === 'ruyi') {
-      return ruyiBrowserFactory(session);
-    }
-    return electronBrowserFactory(session);
+    const provider = runtimeRegistry.get(session.runtimeId);
+    const sourceOverride =
+      session.runtimeSourceOverride ??
+      appRuntime.browserRuntimeManager.getSourceOverride(session.runtimeId);
+    return provider.create({
+      ...session,
+      runtimeSourceOverride: sourceOverride,
+    });
   };
 
   appRuntime.browserPoolReadiness.markInitializing();
@@ -344,6 +366,17 @@ function initializeBrowserPoolRuntime(
       appRuntime.browserPoolReadiness.markFailed(error);
       logger.error('BrowserPoolManager initialization failed', error);
     });
+}
+
+function registerBrowserRuntimeIpcRoutes(options: MainServiceCompositionOptions): void {
+  const { appRuntime, assertPrimaryRendererSender, logStartup } = options;
+
+  logStartup('Registering Browser Runtime Handlers...');
+  registerBrowserRuntimeHandlers(() => appRuntime.requireBrowserRuntimeManager(), {
+    senderGuard: assertPrimaryRendererSender,
+  });
+  logger.info('Browser runtime handlers registered');
+  logStartup('Browser Runtime Handlers registered');
 }
 
 export async function initializeMainServices(
@@ -373,6 +406,7 @@ export async function initializeMainServices(
     configureViewLifecycle(runtimeServices);
     configureDownloadAndProxyRuntime(options, windowServices);
     initializeBrowserPoolRuntime(options, runtimeServices);
+    registerBrowserRuntimeIpcRoutes(options);
 
     appRuntime.readiness.mark('mainServices', 'ready');
     logger.info('All main services initialized successfully');

@@ -1,4 +1,4 @@
-﻿import type { Server as HttpServer } from 'node:http';
+import type { Server as HttpServer } from 'node:http';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,7 +65,7 @@ function createMockHandle(browser: BrowserInterface): {
     browser,
     browserId: 'browser-1',
     sessionId: 'pool-session-1',
-    engine: 'extension',
+    runtimeId: 'chromium-extension-relay',
     release,
     renew: vi.fn().mockResolvedValue(true),
   } as unknown as BrowserHandle;
@@ -265,7 +265,7 @@ function pickSessionSnapshot(value: any) {
   return {
     sessionId: value?.sessionId ?? null,
     profileId: value?.profileId ?? null,
-    engine: value?.engine ?? null,
+    runtimeId: value?.runtimeId ?? null,
     visible: value?.visible ?? false,
     browserAcquired: value?.browserAcquired ?? false,
     browserAcquireInProgress: value?.browserAcquireInProgress ?? false,
@@ -277,7 +277,7 @@ function pickSessionSnapshot(value: any) {
     viewportHealthReason: value?.viewportHealthReason ?? null,
     interactionReady: value?.interactionReady ?? false,
     offscreenDetected: value?.offscreenDetected ?? false,
-    engineRuntimeDescriptor: value?.engineRuntimeDescriptor ?? null,
+    runtimeDescriptor: value?.runtimeDescriptor ?? null,
     browserRuntimeDescriptor: value?.browserRuntimeDescriptor ?? null,
     resolvedRuntimeDescriptor: value?.resolvedRuntimeDescriptor ?? null,
   };
@@ -440,7 +440,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
     expect(payload.error?.data?.hint).toContain('session_prepare');
   });
 
-  it('MCP reused session rejects transport-level mcp-engine overrides', async () => {
+  it('MCP reused session rejects transport-level mcp-runtime-id overrides', async () => {
     await startServer(createMockBrowser(), { enableMcp: true });
 
     const init = await initializeMcpSession(baseUrl);
@@ -454,7 +454,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
         accept: 'application/json',
         'mcp-protocol-version': MCP_PROTOCOL_UNIFIED_VERSION,
         'mcp-session-id': init.sessionId,
-        'mcp-engine': 'electron',
+        'mcp-runtime-id': 'electron-webcontents',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -475,12 +475,12 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
     expect(payload.error?.code).toBe(-32600);
     expect(payload.error?.data).toMatchObject({
       reason: 'unsupported_transport_input',
-      input: 'mcp-engine',
+      input: 'mcp-runtime-id',
     });
     expect(payload.error?.data?.hint).toContain('session_prepare');
   });
 
-  it('MCP raw session_prepare should surface default profile engine mismatch before browser acquisition', async () => {
+  it('MCP raw session_prepare should surface default profile runtime mismatch before browser acquisition', async () => {
     await startServer(createMockBrowser(), {
       enableMcp: true,
       dependencies: {
@@ -491,7 +491,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
               return {
                 id: 'default',
                 name: 'Default Browser',
-                engine: 'electron',
+                runtimeId: 'electron-webcontents',
                 status: 'idle',
                 partition: 'persist:default',
                 isSystem: true,
@@ -512,7 +512,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
     expect(init.sessionId).toBeTruthy();
 
     const response = await callMcpToolRaw(baseUrl, init.sessionId, 'session_prepare', {
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       visible: false,
     });
 
@@ -523,12 +523,12 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
         error: {
           code: ErrorCode.INVALID_PARAMETER,
           context: {
-            reasonCode: 'profile_engine_mismatch',
+            reasonCode: 'profile_runtime_mismatch',
             effectiveProfileSource: 'default_profile',
-            effectiveEngineSource: 'requested',
+            effectiveRuntimeSource: 'requested',
             profileId: 'default',
-            profileEngine: 'electron',
-            requestedEngine: 'extension',
+            profileRuntimeId: 'electron-webcontents',
+            requestedRuntimeId: 'chromium-extension-relay',
           },
         },
       },
@@ -551,7 +551,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
                 profile: {
                   id: 'profile-1',
                   name: '555',
-                  engine: 'electron',
+                  runtimeId: 'electron-webcontents',
                   status: 'idle',
                   partition: 'persist:profile-1',
                 },
@@ -570,11 +570,11 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
     expect(init.status).toBe(200);
     expect(init.sessionId).toBeTruthy();
 
-    const stickyEngine = await callMcpToolRaw(baseUrl, init.sessionId, 'session_prepare', {
-      engine: 'extension',
+    const stickyRuntime = await callMcpToolRaw(baseUrl, init.sessionId, 'session_prepare', {
+      runtimeId: 'chromium-extension-relay',
     });
-    expect(stickyEngine.status).toBe(200);
-    expect(stickyEngine.json.result?.structuredContent?.data?.effectiveEngine).toBe('extension');
+    expect(stickyRuntime.status).toBe(200);
+    expect(stickyRuntime.json.result?.structuredContent?.data?.effectiveRuntime).toBe('chromium-extension-relay');
 
     const response = await callMcpToolRaw(baseUrl, init.sessionId, 'session_prepare', {
       query: '555',
@@ -587,13 +587,13 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
         error: {
           code: ErrorCode.INVALID_PARAMETER,
           context: {
-            reasonCode: 'profile_engine_mismatch',
+            reasonCode: 'profile_runtime_mismatch',
             effectiveProfileSource: 'resolved_query',
-            effectiveEngineSource: 'sticky_session',
+            effectiveRuntimeSource: 'sticky_session',
             profileId: 'profile-1',
-            profileEngine: 'electron',
-            requestedEngine: 'extension',
-            currentEngine: 'extension',
+            profileRuntimeId: 'electron-webcontents',
+            requestedRuntimeId: 'chromium-extension-relay',
+            currentRuntimeId: 'chromium-extension-relay',
           },
         },
       },
@@ -890,7 +890,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
               return {
                 id: 'profile-1',
                 name: '555',
-                engine: 'electron',
+                runtimeId: 'electron-webcontents',
                 status: 'idle',
                 partition: 'persist:profile-1',
               };
@@ -905,7 +905,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
                 profile: {
                   id: 'profile-1',
                   name: '555',
-                  engine: 'electron',
+                  runtimeId: 'electron-webcontents',
                   status: 'idle',
                   partition: 'persist:profile-1',
                 },
@@ -923,7 +923,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
           {
             id: 'browser-held',
             sessionId: 'profile-1',
-            engine: 'electron',
+            runtimeId: 'electron-webcontents',
             status: 'locked',
             viewId: 'view-1',
             lockedBy: {
@@ -950,7 +950,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
       name: 'session_prepare',
       arguments: {
         query: '555',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
       },
     });
     expect(prepareResult.structuredContent).toMatchObject({
@@ -1029,7 +1029,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
       browser,
       browserId: 'browser-held',
       sessionId: 'profile-1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       release: vi.fn().mockResolvedValue({
         browserId: 'browser-held',
         sessionId: 'profile-1',
@@ -1051,7 +1051,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
                 return {
                   id: 'profile-1',
                   name: '555',
-                  engine: 'electron',
+                  runtimeId: 'electron-webcontents',
                   status: 'active',
                   partition: 'persist:profile-1',
                 };
@@ -1066,7 +1066,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
                   profile: {
                     id: 'profile-1',
                     name: '555',
-                    engine: 'electron',
+                    runtimeId: 'electron-webcontents',
                     status: 'active',
                     partition: 'persist:profile-1',
                   },
@@ -1084,7 +1084,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
             {
               id: 'browser-held',
               sessionId: 'profile-1',
-              engine: 'electron',
+              runtimeId: 'electron-webcontents',
               status: 'locked',
               viewId: 'view-1',
               lockedBy: {
@@ -1112,7 +1112,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
         name: 'session_prepare',
         arguments: {
           query: '555',
-          engine: 'electron',
+          runtimeId: 'electron-webcontents',
         },
       });
 
@@ -1132,7 +1132,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
         expect.objectContaining({
           strategy: 'any',
           timeout: 30000,
-          engine: 'electron',
+          runtimeId: 'electron-webcontents',
         }),
         'mcp'
       );

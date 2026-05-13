@@ -22,6 +22,10 @@ vi.mock('../InternalBrowserPanel', () => ({
   InternalBrowserPanel: () => <div data-testid="internal-browser-panel">InternalBrowserPanel</div>,
 }));
 
+vi.mock('../BrowserRuntimePanel', () => ({
+  BrowserRuntimePanel: () => <div data-testid="browser-runtime-panel">BrowserRuntimePanel</div>,
+}));
+
 describe('SettingsPage', () => {
   it('hides cloud snapshot settings in the open edition', () => {
     render(<SettingsPage />);
@@ -33,5 +37,9 @@ describe('SettingsPage', () => {
     fireEvent.click(screen.getByRole('tab', { name: '内置浏览器' }));
 
     expect(screen.getByTestId('internal-browser-panel')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: '浏览器运行时' }));
+
+    expect(screen.getByTestId('browser-runtime-panel')).toBeInTheDocument();
   });
 });

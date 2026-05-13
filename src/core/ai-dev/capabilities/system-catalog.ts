@@ -23,7 +23,8 @@ import {
   createStructuredEnvelopeSchema,
   toCapabilityTitle,
 } from './catalog-utils';
-import { getStaticEngineRuntimeDescriptor } from '../../browser-pool/engine-capability-registry';
+import { BROWSER_RUNTIME_IDS } from '../../../types/browser-runtime';
+import { getStaticRuntimeDescriptor } from '../../browser-pool/runtime-capability-registry';
 
 const SYSTEM_CAPABILITY_VERSION = '1.0.0';
 
@@ -134,21 +135,47 @@ const PLUGIN_RESOURCE_SECTION_SCHEMA = {
 
 const BROWSER_RUNTIME_DESCRIPTOR_SCHEMA = createBrowserRuntimeDescriptorSchema();
 
-const BROWSER_ENGINE_SECTION_SCHEMA = {
+const BROWSER_RUNTIME_STATUS_SCHEMA = {
+  type: 'object',
+  additionalProperties: true,
+  required: ['runtimeId', 'installed', 'healthy', 'installState', 'source', 'errors', 'warnings'],
+  properties: {
+    runtimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
+    installed: { type: 'boolean' },
+    healthy: { type: 'boolean' },
+    installState: {
+      type: 'string',
+      enum: ['bundled', 'custom-path', 'managed-installed', 'missing', 'unknown'],
+    },
+    source: { type: 'object' },
+    version: { type: ['string', 'null'] },
+    executablePath: { type: 'string' },
+    errors: { type: 'array', items: { type: 'string' } },
+    warnings: { type: 'array', items: { type: 'string' } },
+  },
+} as const;
+
+const BROWSER_RUNTIME_SECTION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['total', 'descriptors'],
+  required: ['total', 'descriptors', 'statuses'],
   properties: {
     total: { type: 'number' },
     descriptors: {
       type: 'object',
       additionalProperties: false,
-      required: ['electron', 'extension', 'ruyi'],
-      properties: {
-        electron: BROWSER_RUNTIME_DESCRIPTOR_SCHEMA,
-        extension: BROWSER_RUNTIME_DESCRIPTOR_SCHEMA,
-        ruyi: BROWSER_RUNTIME_DESCRIPTOR_SCHEMA,
-      },
+      required: [...BROWSER_RUNTIME_IDS],
+      properties: Object.fromEntries(
+        BROWSER_RUNTIME_IDS.map((runtimeId) => [runtimeId, BROWSER_RUNTIME_DESCRIPTOR_SCHEMA])
+      ),
+    },
+    statuses: {
+      type: 'object',
+      additionalProperties: false,
+      required: [...BROWSER_RUNTIME_IDS],
+      properties: Object.fromEntries(
+        BROWSER_RUNTIME_IDS.map((runtimeId) => [runtimeId, BROWSER_RUNTIME_STATUS_SCHEMA])
+      ),
     },
   },
 } as const;
@@ -158,7 +185,7 @@ const SYSTEM_GET_HEALTH_OUTPUT_SCHEMA = createStructuredEnvelopeSchema(HEALTH_SN
 const SYSTEM_BOOTSTRAP_OUTPUT_SCHEMA = createStructuredEnvelopeSchema({
   type: 'object',
   additionalProperties: false,
-  required: ['health', 'publicCapabilities', 'capabilityFamilies', 'browserEngines', 'resources'],
+  required: ['health', 'publicCapabilities', 'capabilityFamilies', 'browserRuntimes', 'resources'],
   properties: {
     health: HEALTH_SNAPSHOT_SCHEMA,
     publicCapabilities: {
@@ -169,7 +196,7 @@ const SYSTEM_BOOTSTRAP_OUTPUT_SCHEMA = createStructuredEnvelopeSchema({
       type: 'array',
       items: { type: 'string' },
     },
-    browserEngines: BROWSER_ENGINE_SECTION_SCHEMA,
+    browserRuntimes: BROWSER_RUNTIME_SECTION_SCHEMA,
     resources: {
       type: 'object',
       additionalProperties: false,
@@ -248,19 +275,41 @@ const normalizeHealth = (
 
 const takePreview = <T>(items: T[], limit: number): T[] => items.slice(0, limit);
 
-const buildStaticBrowserEngines = () => ({
-  total: 3,
-  descriptors: {
-    electron: getStaticEngineRuntimeDescriptor('electron'),
-    extension: getStaticEngineRuntimeDescriptor('extension'),
-    ruyi: getStaticEngineRuntimeDescriptor('ruyi'),
-  },
-});
+const buildStaticBrowserRuntimes = async (gateway?: OrchestrationDependencies['systemGateway']) => {
+  const runtimeStatuses = gateway?.listBrowserRuntimeStatuses
+    ? await gateway
+        .listBrowserRuntimeStatuses()
+        .catch(() => [])
+    : [];
+  const statusMap = new Map(runtimeStatuses.map((status) => [status.runtimeId, status]));
+  return {
+  total: BROWSER_RUNTIME_IDS.length,
+  descriptors: Object.fromEntries(
+    BROWSER_RUNTIME_IDS.map((runtimeId) => [runtimeId, getStaticRuntimeDescriptor(runtimeId)])
+  ),
+  statuses: Object.fromEntries(
+    BROWSER_RUNTIME_IDS.map((runtimeId) => [
+      runtimeId,
+      statusMap.get(runtimeId) ?? {
+        runtimeId,
+        descriptor: getStaticRuntimeDescriptor(runtimeId),
+        source: getStaticRuntimeDescriptor(runtimeId).source,
+        resolvedRuntime: null,
+        installed: false,
+        healthy: false,
+        installState: 'unknown',
+        errors: ['Runtime status gateway is not configured'],
+        warnings: [],
+      },
+    ])
+  ),
+  };
+};
 
 const summarizeProfile = (profile: OrchestrationProfileInfo): Record<string, unknown> => ({
   id: profile.id,
   name: profile.name,
-  engine: profile.engine,
+  runtimeId: profile.runtimeId,
   status: profile.status,
   ...(profile.partition ? { partition: profile.partition } : {}),
 });
@@ -399,7 +448,7 @@ const systemBootstrapHandler: CapabilityHandler<OrchestrationDependencies> = asy
   const capabilityFamilies = Array.from(
     new Set(publicCapabilities.map((item) => resolveCapabilityFamily(item)))
   ).sort();
-  const browserEngines = buildStaticBrowserEngines();
+  const browserRuntimes = await buildStaticBrowserRuntimes(gateway);
 
   const profiles = deps.profileGateway
     ? await deps.profileGateway
@@ -509,14 +558,14 @@ const systemBootstrapHandler: CapabilityHandler<OrchestrationDependencies> = asy
     summary: [
       `Bootstrap captured with runtime health=${health.status}.`,
       `${publicCapabilities.length} public capability(s) across ${capabilityFamilies.length} family(ies).`,
-      `${browserEngines.total} browser engine descriptor(s) available for pre-acquire planning.`,
+      `${browserRuntimes.total} browser runtime descriptor(s) available for pre-acquire planning.`,
       `Profiles=${profiles.total}, datasets=${datasets.total}, plugins=${plugins.total}.`,
     ].join(' '),
     data: {
       health,
       publicCapabilities,
       capabilityFamilies,
-      browserEngines,
+      browserRuntimes,
       resources: {
         profiles,
         datasets,
@@ -526,14 +575,14 @@ const systemBootstrapHandler: CapabilityHandler<OrchestrationDependencies> = asy
     nextActionHints: [
       'Read health.status and runtimeAlerts before deciding whether the runtime is safe to drive.',
       'Use publicCapabilities and capabilityFamilies to decide whether the next step is system, plugin, dataset, or browser work.',
-      'Use browserEngines.descriptors before browser acquisition when you need to compare engine capability differences.',
+      'Use browserRuntimes.descriptors before browser acquisition when you need to compare runtime capability differences.',
       'Trust the resource preview counts before assuming profiles, datasets, or plugins exist in this runtime.',
     ],
     recommendedNextTools,
     authoritativeFields: [
       'structuredContent.data.health.status',
       'structuredContent.data.publicCapabilities',
-      'structuredContent.data.browserEngines.descriptors',
+      'structuredContent.data.browserRuntimes.descriptors',
       'structuredContent.data.resources',
     ],
   });

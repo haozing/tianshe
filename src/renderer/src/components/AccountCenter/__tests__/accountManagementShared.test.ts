@@ -25,7 +25,7 @@ function buildProfile(patch: Partial<BrowserProfile>): BrowserProfile {
   return {
     id: 'profile-1',
     name: '环境-1',
-    engine: 'electron',
+    runtimeId: 'electron-webcontents',
     groupId: null,
     partition: 'persist:profile-1',
     proxy: null,

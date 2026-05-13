@@ -95,10 +95,10 @@ export class ObservationQueryService {
           lastEvent?.capability
         ),
         pluginId: pickFirstDefined(rootEvent?.pluginId, firstFailure?.pluginId, lastEvent?.pluginId),
-        browserEngine: pickFirstDefined(
-          rootEvent?.browserEngine,
-          firstFailure?.browserEngine,
-          lastEvent?.browserEngine
+        browserRuntimeId: pickFirstDefined(
+          rootEvent?.browserRuntimeId,
+          firstFailure?.browserRuntimeId,
+          lastEvent?.browserRuntimeId
         ),
         sessionId: pickFirstDefined(rootEvent?.sessionId, firstFailure?.sessionId, lastEvent?.sessionId),
         profileId: pickFirstDefined(rootEvent?.profileId, firstFailure?.profileId, lastEvent?.profileId),
@@ -204,7 +204,7 @@ export class ObservationQueryService {
           ...(event.profileId ? { profileId: event.profileId } : {}),
           ...(event.datasetId ? { datasetId: event.datasetId } : {}),
           ...(event.browserId ? { browserId: event.browserId } : {}),
-          ...(event.browserEngine ? { browserEngine: event.browserEngine } : {}),
+          ...(event.browserRuntimeId ? { browserRuntimeId: event.browserRuntimeId } : {}),
           ...(event.error ? { error: event.error } : {}),
           finalStatus: summary.finalStatus,
           artifactCount: artifactCounts.get(event.traceId) || 0,

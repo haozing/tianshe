@@ -92,7 +92,7 @@ export class ProfileLaunchNamespace {
             browser: existingLease.handle.browser,
             browserId: existingLease.handle.browserId,
             sessionId: existingLease.handle.sessionId,
-            engine: existingLease.handle.engine,
+            runtimeId: existingLease.handle.runtimeId,
             viewId: existingLease.handle.viewId,
             release: existingLease.release,
             renew: existingLease.renew,
@@ -157,7 +157,7 @@ export class ProfileLaunchNamespace {
           browser: handle.browser,
           browserId: handle.browserId,
           sessionId: handle.sessionId,
-          engine: handle.engine,
+          runtimeId: handle.runtimeId,
           viewId: handle.viewId,
           release: lease.release,
           renew: lease.renew,
@@ -215,7 +215,7 @@ export class ProfileLaunchNamespace {
           browserId: options?.browserId,
           timeout: options?.timeout || 30000,
           signal: options?.signal,
-          engine: options?.engine,
+          runtimeId: options?.runtimeId,
         },
         'internal',
         this.deps.pluginId
@@ -296,7 +296,7 @@ export class ProfileLaunchNamespace {
       browserId: options?.browserId,
       timeout: options?.timeout || 30000,
       signal: options?.signal,
-      engine: options?.engine,
+      runtimeId: options?.runtimeId,
     };
     const tryAdoptExistingHandle = async () =>
       await poolManager.adoptSamePluginLockedBrowser(

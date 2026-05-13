@@ -1,14 +1,14 @@
 import type {
-  AutomationEngine,
+  BrowserRuntimeId,
   DeepPartial,
   FingerprintConfig,
   FingerprintCoreConfig,
   FingerprintSourceConfig,
 } from '../../types/profile';
-import { getDefaultFingerprint } from '../profile/presets';
 import {
   extractFingerprintCoreConfig,
-  materializeFingerprintConfigForEngine,
+  getDefaultFingerprintForRuntime,
+  materializeFingerprintConfigForRuntime,
   materializeFingerprintConfigFromCore,
   mergeFingerprintConfig,
   mergeFingerprintCoreConfig,
@@ -47,7 +47,7 @@ export class ProfileFingerprintPersistence {
     const fullVersion = `${major}.0.0.0`;
 
     if (process.platform === 'win32') {
-      return mergeFingerprintConfig(getDefaultFingerprint('electron'), {
+      return mergeFingerprintConfig(getDefaultFingerprintForRuntime('electron-webcontents'), {
         identity: {
           hardware: {
             browserFamily: 'electron',
@@ -60,7 +60,7 @@ export class ProfileFingerprintPersistence {
       });
     }
 
-    return mergeFingerprintConfig(getDefaultFingerprint('electron'), {
+    return mergeFingerprintConfig(getDefaultFingerprintForRuntime('electron-webcontents'), {
       identity: {
         hardware: {
           browserFamily: 'electron',
@@ -71,14 +71,14 @@ export class ProfileFingerprintPersistence {
   }
 
   buildFingerprintForPersistence(
-    engine: AutomationEngine,
+    runtimeId: BrowserRuntimeId,
     options: BuildFingerprintForPersistenceOptions = {}
   ): FingerprintConfig {
     if (options.fingerprintCore || options.fingerprintSource) {
       const baseFingerprint =
         options.baseFingerprint ??
         options.fallbackSharedFingerprint ??
-        getDefaultFingerprint(engine);
+        getDefaultFingerprintForRuntime(runtimeId);
       const mergedCore = mergeFingerprintCoreConfig(
         extractFingerprintCoreConfig(baseFingerprint),
         options.fingerprintCore ?? {}
@@ -87,13 +87,13 @@ export class ProfileFingerprintPersistence {
         baseFingerprint.source,
         options.fingerprintSource
       );
-      return materializeFingerprintConfigFromCore(mergedCore, mergedSource, engine);
+      return materializeFingerprintConfigFromCore(mergedCore, mergedSource, runtimeId);
     }
 
     const seed =
       options.baseFingerprint ??
       (options.fallbackSharedFingerprint
-        ? mergeFingerprintConfig(getDefaultFingerprint(engine), {
+        ? mergeFingerprintConfig(getDefaultFingerprintForRuntime(runtimeId), {
             identity: {
               region: {
                 timezone: options.fallbackSharedFingerprint.identity.region.timezone,
@@ -123,18 +123,18 @@ export class ProfileFingerprintPersistence {
               fileFormat: 'txt',
             },
           })
-        : getDefaultFingerprint(engine));
+        : getDefaultFingerprintForRuntime(runtimeId));
 
     const merged = options.overrides ? mergeFingerprintConfig(seed, options.overrides) : seed;
-    return materializeFingerprintConfigForEngine(merged, engine);
+    return materializeFingerprintConfigForRuntime(merged, runtimeId);
   }
 
   assertValidFingerprintConfig(
     fingerprint: FingerprintConfig,
-    engine: AutomationEngine,
+    runtimeId: BrowserRuntimeId,
     label: string
   ): void {
-    const validation = validateFingerprintConfig(fingerprint, engine);
+    const validation = validateFingerprintConfig(fingerprint, runtimeId);
     if (!validation.valid) {
       throw new Error(`${label} fingerprint is invalid: ${validation.warnings.join(', ')}`);
     }

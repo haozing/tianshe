@@ -1,10 +1,10 @@
-import type { RestApiDependencies } from '../types/http-api';
+﻿import type { RestApiDependencies } from '../types/http-api';
 import type {
   OrchestrationCapabilityDefinition,
   OrchestrationCapabilityRequirement,
 } from '../core/ai-dev/orchestration';
 import {
-  SESSION_PREPARE_PROFILE_ENGINE_MISMATCH_ACTION,
+  SESSION_PREPARE_PROFILE_RUNTIME_MISMATCH_ACTION,
   SESSION_PREPARE_RESOLVED_BINDING_ACTION,
   SESSION_PREPARE_RESOLVED_BINDING_PRECONDITION,
 } from '../core/ai-dev/orchestration';
@@ -12,7 +12,7 @@ import type { BrowserCapabilityName } from '../types/browser-interface';
 import type { McpSessionSnapshot } from './mcp-http-session-snapshot';
 import { buildMcpSessionSnapshot } from './mcp-http-session-snapshot';
 import type { McpSessionInfo } from './mcp-http-types';
-import { browserRuntimeSupports } from '../core/browser-pool/engine-capability-registry';
+import { browserRuntimeSupports } from '../core/browser-pool/runtime-capability-registry';
 
 export type McpToolRuntimeAvailabilityStatus =
   | 'available'
@@ -180,7 +180,7 @@ const buildSessionPrepareQueryDependencyNotice = (
   const preconditionsNow = [SESSION_PREPARE_RESOLVED_BINDING_PRECONDITION];
   const recommendedActions = [
     SESSION_PREPARE_RESOLVED_BINDING_ACTION,
-    SESSION_PREPARE_PROFILE_ENGINE_MISMATCH_ACTION,
+    SESSION_PREPARE_PROFILE_RUNTIME_MISMATCH_ACTION,
   ];
 
   if (dependencies?.profileGateway) {
@@ -194,14 +194,14 @@ const buildSessionPrepareQueryDependencyNotice = (
     status: 'available_with_notice',
     reasonCode: 'profile_query_requires_profile_gateway',
     reason:
-      'session_prepare remains available for engine, visibility, and scope updates, but query-based profile resolution requires a configured profile gateway.',
+      'session_prepare remains available for runtimeId, visibility, and scope updates, but query-based profile resolution requires a configured profile gateway.',
     preconditionsNow: [
       'Calling session_prepare with query requires a configured profile gateway.',
-      'When profileGateway is unavailable, omit query and only set engine, visible, or scopes on the current session.',
+      'When profileGateway is unavailable, omit query and only set runtimeId, visible, or scopes on the current session.',
       ...preconditionsNow,
     ],
     recommendedActions: [
-      'Call session_prepare without query when you only need to adjust engine, visibility, or sticky scopes.',
+      'Call session_prepare without query when you only need to adjust runtimeId, visibility, or sticky scopes.',
       ...recommendedActions,
     ],
   };
@@ -253,16 +253,16 @@ export const evaluateCapabilityRuntimeAvailability = (
   if (indeterminateRequirements.length > 0) {
     return buildAvailableAvailability(session, {
       status: 'available_with_notice',
-      reasonCode: 'browser_capability_pending_engine_resolution',
-      reason: `Browser feature availability depends on the engine that will be acquired for this session: ${indeterminateRequirements
+      reasonCode: 'browser_capability_pending_runtime_resolution',
+      reason: `Browser feature availability depends on the runtime that will be acquired for this session: ${indeterminateRequirements
         .map(requirementDisplayName)
         .join(', ')}.`,
       preconditionsNow: [
-        'The session does not have a resolved engine or acquired browser yet.',
-        'Call session_prepare with an explicit engine if you need deterministic browser capability selection before the first browser_* tool runs.',
+        'The session does not have a resolved runtime or acquired browser yet.',
+        'Call session_prepare with an explicit runtimeId if you need deterministic browser capability selection before the first browser_* tool runs.',
       ],
       recommendedActions: [
-        'Bind an explicit engine with session_prepare before relying on engine-specific browser features.',
+        'Bind an explicit runtimeId with session_prepare before relying on runtime-specific browser features.',
       ],
     });
   }
@@ -291,14 +291,14 @@ export const evaluateCapabilityRuntimeAvailability = (
         status: 'available_with_notice',
         reasonCode: 'binding_locked',
         reason:
-          'The session already acquired a browser, so profile, engine, and visibility changes must be idempotent replays. Sticky scope updates are still allowed.',
+          'The session already acquired a browser, so profile, runtimeId, and visibility changes must be idempotent replays. Sticky scope updates are still allowed.',
         preconditionsNow: [
           ...queryDependencyNotice.preconditionsNow,
-          'Use the same profile, engine, and visibility values for an idempotent replay after browser acquisition.',
+          'Use the same profile, runtimeId, and visibility values for an idempotent replay after browser acquisition.',
           'Only scope updates remain mutable once the browser binding is locked.',
         ],
         recommendedActions: [
-          'Create a new MCP session before switching profile, engine, or visibility after browser acquisition.',
+          'Create a new MCP session before switching profile, runtimeId, or visibility after browser acquisition.',
           'Use a dedicated session_prepare call if you only need to update scopes.',
           ...queryDependencyNotice.recommendedActions,
         ],
@@ -383,7 +383,7 @@ export const evaluateCapabilityRuntimeAvailability = (
           `Profile ${session.profileId} is already bound to this session.`,
         ],
         recommendedActions: [
-          'If you re-run session_prepare before the first browser_* call, trust effectiveProfile/effectiveEngine/effectiveEngineSource from the result as the resolved binding.',
+          'If you re-run session_prepare before the first browser_* call, trust effectiveProfile/effectiveRuntime/effectiveRuntimeSource from the result as the resolved binding.',
         ],
       });
     }
@@ -395,10 +395,10 @@ export const evaluateCapabilityRuntimeAvailability = (
         reason:
           'The first browser_* call will acquire a browser using the sticky session settings prepared so far.',
         preconditionsNow: [
-          'Profile is not bound yet, but sticky engine, visibility, or scopes may already be prepared on this session.',
+          'Profile is not bound yet, but sticky runtimeId, visibility, or scopes may already be prepared on this session.',
         ],
         recommendedActions: [
-          'Trust effectiveProfile/effectiveEngine/effectiveEngineSource from session_prepare before assuming how the first browser_* call will bind.',
+          'Trust effectiveProfile/effectiveRuntime/effectiveRuntimeSource from session_prepare before assuming how the first browser_* call will bind.',
         ],
       });
     }
@@ -414,7 +414,7 @@ export const evaluateCapabilityRuntimeAvailability = (
         ],
         recommendedActions: [
           'Use session_prepare first when the task depends on an existing logged-in browser state or sticky session scopes.',
-          'Read effectiveProfile/effectiveEngine/effectiveEngineSource from the session_prepare result before assuming which profile or engine the first browser_* call will acquire.',
+          'Read effectiveProfile/effectiveRuntime/effectiveRuntimeSource from the session_prepare result before assuming which profile or runtime the first browser_* call will acquire.',
         ],
       });
     }
@@ -448,3 +448,4 @@ export const evaluateCapabilityRuntimeAvailability = (
 
   return buildAvailableAvailability(session);
 };
+

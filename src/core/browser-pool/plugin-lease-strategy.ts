@@ -60,7 +60,7 @@ export class PluginLeaseStrategy {
         if (browser.lockedBy?.pluginId !== normalizedPluginId) return false;
         if (options?.requireViewId === true && !browser.viewId) return false;
         if (acquireOptions.browserId && browser.id !== acquireOptions.browserId) return false;
-        if (acquireOptions.engine && browser.engine !== acquireOptions.engine) return false;
+        if (acquireOptions.runtimeId && browser.runtimeId !== acquireOptions.runtimeId) return false;
         return true;
       })
       .sort((left, right) => right.lastAccessedAt - left.lastAccessedAt)[0];
@@ -107,7 +107,7 @@ export class PluginLeaseStrategy {
         if (!browser.lockedBy) return false;
         if (options?.requireViewId === true && !browser.viewId) return false;
         if (acquireOptions.browserId && browser.id !== acquireOptions.browserId) return false;
-        if (acquireOptions.engine && browser.engine !== acquireOptions.engine) return false;
+        if (acquireOptions.runtimeId && browser.runtimeId !== acquireOptions.runtimeId) return false;
         return true;
       })
       .sort((left, right) => right.lastAccessedAt - left.lastAccessedAt)[0];

@@ -135,6 +135,7 @@ describe('open/cloud edition boundary', () => {
       'electron',
       '../edition/preload',
       './api/account',
+      './api/browser-runtime',
       './api/cloud',
       './api/duckdb',
       './api/extension-packages',

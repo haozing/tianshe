@@ -90,7 +90,7 @@ async function assertExtensionProfileTargets(
     if (!profile) {
       throw new Error(`Profile not found: ${profileId}`);
     }
-    if (profile.engine !== 'extension') {
+    if (profile.runtimeId !== 'chromium-extension-relay') {
       throw new Error(`Profile does not support extension packages: ${profile.name}`);
     }
   }

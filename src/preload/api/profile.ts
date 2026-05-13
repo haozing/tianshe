@@ -1,6 +1,6 @@
 import type { IpcRenderer } from 'electron';
 import type {
-  AutomationEngine,
+  BrowserRuntimeId,
   BrowserProfile,
   CreateGroupParams,
   CreateProfileParams,
@@ -126,7 +126,7 @@ export function createProfileAPI(ipcRenderer: IpcRenderer) {
           timeout?: number;
           strategy?: 'any' | 'fresh' | 'reuse' | 'specific';
           browserId?: string;
-          engine?: AutomationEngine;
+          runtimeId?: BrowserRuntimeId;
         }
       ): Promise<{
         success: boolean;
@@ -134,7 +134,7 @@ export function createProfileAPI(ipcRenderer: IpcRenderer) {
           browserId: string;
           sessionId: string;
           profileId: string;
-          engine?: AutomationEngine;
+          runtimeId?: BrowserRuntimeId;
         };
         error?: string;
       }> => {
@@ -187,7 +187,7 @@ export function createProfileAPI(ipcRenderer: IpcRenderer) {
           popupId?: string;
           viewId?: string;
           popupWindowId?: string;
-          engine?: AutomationEngine;
+          runtimeId?: BrowserRuntimeId;
           activated?: boolean;
           browserId?: string;
           relaunched?: boolean;

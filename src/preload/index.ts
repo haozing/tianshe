@@ -10,6 +10,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent, webUtils } from 'electron
 import { resolveTiansheEditionPreloadInfo } from '../edition/preload';
 import type { DownloadInfo } from '../main/download';
 import { createAccountAPI } from './api/account';
+import { createBrowserRuntimeAPI } from './api/browser-runtime';
 import { createCloudAPI } from './api/cloud';
 import { createDuckDBAPI } from './api/duckdb';
 import { createExtensionPackagesAPI } from './api/extension-packages';
@@ -129,6 +130,8 @@ const electronAPI = {
   },
 
   ...createRuntimeAPI(ipcRenderer),
+
+  browserRuntime: createBrowserRuntimeAPI(ipcRenderer),
 
   ...createCloudAPI(ipcRenderer),
 

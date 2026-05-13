@@ -1,4 +1,4 @@
-import type { StructuredError } from '../../../types/error-codes';
+﻿import type { StructuredError } from '../../../types/error-codes';
 import type {
   BrowserCapabilityRequirement,
   BrowserInterface,
@@ -6,6 +6,7 @@ import type {
 } from '../../../types/browser-interface';
 import type { CreateProfileParams, UpdateProfileParams } from '../../../types/profile';
 import type { CapabilityCallResult } from '../capabilities/types';
+import type { BrowserRuntimeStatus } from '../../browser-runtime';
 import type {
   FailureBundle,
   RecentFailureSummary,
@@ -14,21 +15,21 @@ import type {
 } from '../../observability/types';
 
 /**
- * 能力废弃信息（用于兼容窗口治理）
+ * 鑳藉姏搴熷純淇℃伅锛堢敤浜庡吋瀹圭獥鍙ｆ不鐞嗭級
  */
 export interface OrchestrationCapabilityDeprecation {
-  /** 开始废弃版本 */
+  /** 寮€濮嬪簾寮冪増鏈?*/
   since: string;
-  /** 计划移除版本（可选） */
+  /** 璁″垝绉婚櫎鐗堟湰锛堝彲閫夛級 */
   removeIn?: string;
-  /** 替代能力名称（可选） */
+  /** 鏇夸唬鑳藉姏鍚嶇О锛堝彲閫夛級 */
   replacement?: string;
-  /** 迁移说明（可选） */
+  /** 杩佺Щ璇存槑锛堝彲閫夛級 */
   message?: string;
 }
 
 /**
- * 编排层能力规格（协议无关）
+ * 缂栨帓灞傝兘鍔涜鏍硷紙鍗忚鏃犲叧锛?
  */
 export type OrchestrationAssistantWorkflowStage =
   | 'setup'
@@ -78,46 +79,46 @@ export type OrchestrationMcpSessionPhase =
   | 'closed';
 
 export interface OrchestrationCapabilitySpec {
-  /** 能力名称（建议全局唯一） */
+  /** 鑳藉姏鍚嶇О锛堝缓璁叏灞€鍞竴锛?*/
   name: string;
-  /** 面向客户端展示的稳定标题 */
+  /** 闈㈠悜瀹㈡埛绔睍绀虹殑绋冲畾鏍囬 */
   title?: string;
-  /** 能力版本（用于兼容演进） */
+  /** 鑳藉姏鐗堟湰锛堢敤浜庡吋瀹规紨杩涳級 */
   version: string;
-  /** 输入参数 Schema（JSON Schema） */
+  /** 杈撳叆鍙傛暟 Schema锛圝SON Schema锛?*/
   inputSchema?: Record<string, unknown>;
-  /** 输出结果 Schema（JSON Schema） */
+  /** 杈撳嚭缁撴灉 Schema锛圝SON Schema锛?*/
   outputSchema: Record<string, unknown>;
-  /** 执行该能力所需的运行时依赖能力 */
+  /** 鎵ц璇ヨ兘鍔涙墍闇€鐨勮繍琛屾椂渚濊禆鑳藉姏 */
   requires?: OrchestrationCapabilityRequirement[];
-  /** 提示性注解（供 MCP/LLM 客户端优化决策） */
+  /** 鎻愮ず鎬ф敞瑙ｏ紙渚?MCP/LLM 瀹㈡埛绔紭鍖栧喅绛栵級 */
   annotations?: OrchestrationToolAnnotations;
-  /** 是否幂等（同参数重复调用是否可安全重试） */
+  /** 鏄惁骞傜瓑锛堝悓鍙傛暟閲嶅璋冪敤鏄惁鍙畨鍏ㄩ噸璇曪級 */
   idempotent?: boolean;
-  /** 重试建议 */
+  /** 閲嶈瘯寤鸿 */
   retryPolicy?: {
     retryable: boolean;
     maxAttempts: number;
   };
-  /** 调用所需权限域 */
+  /** 璋冪敤鎵€闇€鏉冮檺鍩?*/
   requiredScopes?: string[];
-  /** 闈㈠悜 MCP/LLM 瀹㈡埛绔殑鎻愮ず淇℃伅 */
+  /** 闂堛垹鎮?MCP/LLM 鐎广垺鍩涚粩顖滄畱閹绘劗銇氭穱鈩冧紖 */
   assistantGuidance?: OrchestrationAssistantGuidance;
-  /** 面向 MCP/LLM 客户端的工具表面元数据 */
+  /** 闈㈠悜 MCP/LLM 瀹㈡埛绔殑宸ュ叿琛ㄩ潰鍏冩暟鎹?*/
   assistantSurface?: OrchestrationAssistantSurface;
-  /** 废弃信息（可选） */
+  /** 搴熷純淇℃伅锛堝彲閫夛級 */
   deprecation?: OrchestrationCapabilityDeprecation;
 }
 
 /**
- * 编排层能力定义
+ * 缂栨帓灞傝兘鍔涘畾涔?
  */
 export interface OrchestrationCapabilityDefinition extends OrchestrationCapabilitySpec {
-  /** 能力描述 */
+  /** 鑳藉姏鎻忚堪 */
   description: string;
-  /** 副作用级别 */
+  /** 鍓綔鐢ㄧ骇鍒?*/
   sideEffectLevel?: 'none' | 'low' | 'high';
-  /** 估计耗时（毫秒） */
+  /** 浼拌鑰楁椂锛堟绉掞級 */
   estimatedLatencyMs?: number;
 }
 
@@ -141,14 +142,14 @@ export interface OrchestrationToolAnnotations {
 }
 
 /**
- * 编排层调用请求
+ * 缂栨帓灞傝皟鐢ㄨ姹?
  */
 export interface OrchestrationInvokeRequest {
-  /** 能力名称 */
+  /** 鑳藉姏鍚嶇О */
   name: string;
-  /** 调用参数 */
+  /** 璋冪敤鍙傛暟 */
   arguments: Record<string, unknown>;
-  /** 可选授权上下文（用于 scope 校验） */
+  /** 鍙€夋巿鏉冧笂涓嬫枃锛堢敤浜?scope 鏍￠獙锛?*/
   auth?: {
     scopes?: string[];
     source?: 'mcp' | 'http' | 'internal';
@@ -159,30 +160,30 @@ export interface OrchestrationInvokeRequest {
 export type OrchestrationIdempotencyStatus = 'stored' | 'replayed';
 
 export interface OrchestrationInvokeAttempt {
-  /** 第几次尝试（从 1 开始） */
+  /** 绗嚑娆″皾璇曪紙浠?1 寮€濮嬶級 */
   attempt: number;
-  /** 尝试开始时间戳（ms） */
+  /** 灏濊瘯寮€濮嬫椂闂存埑锛坢s锛?*/
   startedAt: number;
-  /** 尝试结束时间戳（ms） */
+  /** 灏濊瘯缁撴潫鏃堕棿鎴筹紙ms锛?*/
   finishedAt: number;
-  /** 本次耗时（ms） */
+  /** 鏈鑰楁椂锛坢s锛?*/
   durationMs: number;
-  /** 本次尝试是否成功 */
+  /** 鏈灏濊瘯鏄惁鎴愬姛 */
   ok: boolean;
-  /** 失败时错误码 */
+  /** 澶辫触鏃堕敊璇爜 */
   errorCode?: string;
 }
 
 export interface OrchestrationScopeDecision {
-  /** 是否启用 scope 强校验 */
+  /** 鏄惁鍚敤 scope 寮烘牎楠?*/
   enforced: boolean;
-  /** 能力声明所需 scope */
+  /** 鑳藉姏澹版槑鎵€闇€ scope */
   requiredScopes: string[];
-  /** 调用方提供的 scope */
+  /** 璋冪敤鏂规彁渚涚殑 scope */
   providedScopes: string[];
-  /** 缺失 scope */
+  /** 缂哄け scope */
   missingScopes: string[];
-  /** 是否允许执行 */
+  /** 鏄惁鍏佽鎵ц */
   allowed: boolean;
 }
 
@@ -192,38 +193,38 @@ export type OrchestrationIdempotencyDecisionStatus =
   | 'skipped';
 
 export interface OrchestrationIdempotencyDecision {
-  /** 是否启用幂等语义 */
+  /** 鏄惁鍚敤骞傜瓑璇箟 */
   enabled: boolean;
-  /** 幂等键（若提供） */
+  /** 骞傜瓑閿紙鑻ユ彁渚涳級 */
   key?: string;
-  /** 决策状态 */
+  /** 鍐崇瓥鐘舵€?*/
   status: OrchestrationIdempotencyDecisionStatus;
-  /** 决策原因 */
+  /** 鍐崇瓥鍘熷洜 */
   reason?: string;
 }
 
 /**
- * 编排调用元数据
+ * 缂栨帓璋冪敤鍏冩暟鎹?
  */
 export interface OrchestrationInvokeMeta {
-  /** 编排执行 trace id（用于跨层关联） */
+  /** 缂栨帓鎵ц trace id锛堢敤浜庤法灞傚叧鑱旓級 */
   traceId?: string;
-  /** 幂等键（若启用） */
+  /** 骞傜瓑閿紙鑻ュ惎鐢級 */
   idempotencyKey?: string;
-  /** 幂等状态（若启用） */
+  /** 骞傜瓑鐘舵€侊紙鑻ュ惎鐢級 */
   idempotencyStatus?: OrchestrationIdempotencyStatus;
-  /** 实际尝试次数（含首次） */
+  /** 瀹為檯灏濊瘯娆℃暟锛堝惈棣栨锛?*/
   attempts?: number;
-  /** 每次尝试的时间线 */
+  /** 姣忔灏濊瘯鐨勬椂闂寸嚎 */
   attemptTimeline?: OrchestrationInvokeAttempt[];
-  /** scope 判定细节 */
+  /** scope 鍒ゅ畾缁嗚妭 */
   scopeDecision?: OrchestrationScopeDecision;
-  /** 幂等判定细节 */
+  /** 骞傜瓑鍒ゅ畾缁嗚妭 */
   idempotencyDecision?: OrchestrationIdempotencyDecision;
 }
 
 /**
- * 幂等缓存条目
+ * 骞傜瓑缂撳瓨鏉＄洰
  */
 export interface OrchestrationIdempotencyEntry {
   requestHash: string;
@@ -235,10 +236,10 @@ export interface OrchestrationIdempotencyEntry {
 }
 
 /**
- * 编排调用可选项（协议层可按需提供）
+ * 缂栨帓璋冪敤鍙€夐」锛堝崗璁眰鍙寜闇€鎻愪緵锛?
  */
 export interface OrchestrationInvokeOptions {
-  /** 可选 trace id（协议层传入时用于链路对齐） */
+  /** 鍙€?trace id锛堝崗璁眰浼犲叆鏃剁敤浜庨摼璺榻愶級 */
   traceId?: string;
   signal?: AbortSignal;
   idempotency?: {
@@ -252,51 +253,51 @@ export interface OrchestrationInvokeOptions {
 }
 
 /**
- * 编排 API 标准化输出
+ * 缂栨帓 API 鏍囧噯鍖栬緭鍑?
  *
- * `text` 便于自动编排直接消费文本信息。
+ * `text` 渚夸簬鑷姩缂栨帓鐩存帴娑堣垂鏂囨湰淇℃伅銆?
  */
 export interface OrchestrationInvokeOutput {
-  /** 文本内容片段（按原始 content 顺序） */
+  /** 鏂囨湰鍐呭鐗囨锛堟寜鍘熷 content 椤哄簭锛?*/
   text: string[];
-  /** 是否包含图片 */
+  /** 鏄惁鍖呭惈鍥剧墖 */
   hasImage: boolean;
-  /** 图片数量 */
+  /** 鍥剧墖鏁伴噺 */
   imageCount: number;
-  /** 结构化结果（若能力返回） */
+  /** 缁撴瀯鍖栫粨鏋滐紙鑻ヨ兘鍔涜繑鍥烇級 */
   structuredContent?: Record<string, unknown>;
 }
 
 /**
- * 编排 API 统一响应
+ * 缂栨帓 API 缁熶竴鍝嶅簲
  */
 export interface OrchestrationInvokeApiResult {
-  /** 调用是否成功 */
+  /** 璋冪敤鏄惁鎴愬姛 */
   ok: boolean;
-  /** 能力名称 */
+  /** 鑳藉姏鍚嶇О */
   capability: string;
-  /** 标准化输出 */
+  /** 鏍囧噯鍖栬緭鍑?*/
   output: OrchestrationInvokeOutput;
-  /** 结构化错误（失败时） */
+  /** 缁撴瀯鍖栭敊璇紙澶辫触鏃讹級 */
   error?: StructuredError;
-  /** 调用元数据（幂等/重试） */
+  /** 璋冪敤鍏冩暟鎹紙骞傜瓑/閲嶈瘯锛?*/
   _meta?: OrchestrationInvokeMeta;
 }
 
 /**
- * 编排层执行器
+ * 缂栨帓灞傛墽琛屽櫒
  */
 export interface OrchestrationExecutor {
-  /** 列出可用能力 */
+  /** 鍒楀嚭鍙敤鑳藉姏 */
   listCapabilities(): OrchestrationCapabilityDefinition[];
-  /** 检查能力是否存在 */
+  /** 妫€鏌ヨ兘鍔涙槸鍚﹀瓨鍦?*/
   hasCapability(name: string): boolean;
-  /** 执行能力 */
+  /** 鎵ц鑳藉姏 */
   invoke(
     request: OrchestrationInvokeRequest,
     options?: OrchestrationInvokeOptions
   ): Promise<CapabilityCallResult>;
-  /** 执行能力（统一 API 响应） */
+  /** 鎵ц鑳藉姏锛堢粺涓€ API 鍝嶅簲锛?*/
   invokeApi(
     request: OrchestrationInvokeRequest,
     options?: OrchestrationInvokeOptions
@@ -377,6 +378,7 @@ export interface OrchestrationSystemHealthSnapshot {
 export interface OrchestrationSystemGateway {
   getHealth(): Promise<OrchestrationSystemHealthSnapshot>;
   listPublicCapabilities(): Promise<string[]> | string[];
+  listBrowserRuntimeStatuses?(): Promise<BrowserRuntimeStatus[]>;
 }
 
 export interface OrchestrationCrossPluginApiInfo {
@@ -401,14 +403,14 @@ export interface OrchestrationCrossPluginCallResult<T = unknown> {
 export interface OrchestrationProfileInfo {
   id: string;
   name: string;
-  engine: string;
+  runtimeId: string;
   status: string;
   partition?: string;
   isSystem?: boolean;
   totalUses?: number;
   lastActiveAt?: string;
   updatedAt?: string;
-  engineRuntimeDescriptor?: BrowserRuntimeDescriptor | null;
+  runtimeDescriptor?: BrowserRuntimeDescriptor | null;
 }
 
 export interface OrchestrationProfileResolveResult {
@@ -503,7 +505,7 @@ export interface OrchestrationProfileGateway {
 export interface OrchestrationMcpSessionInfo {
   sessionId: string;
   profileId?: string;
-  engine?: string;
+  runtimeId?: string;
   visible?: boolean;
   lastActivityAt: string;
   pendingInvocations: number;
@@ -520,7 +522,7 @@ export interface OrchestrationMcpSessionInfo {
   viewportHealthReason?: string;
   interactionReady?: boolean;
   offscreenDetected?: boolean;
-  engineRuntimeDescriptor?: BrowserRuntimeDescriptor | null;
+  runtimeDescriptor?: BrowserRuntimeDescriptor | null;
   browserRuntimeDescriptor?: BrowserRuntimeDescriptor | null;
   resolvedRuntimeDescriptor?: BrowserRuntimeDescriptor | null;
   phase?: OrchestrationMcpSessionPhase;
@@ -549,7 +551,7 @@ export interface OrchestrationMcpSessionInteractionReadyResult
 export interface OrchestrationMcpSessionAcquireReadinessBrowser {
   browserId: string;
   status: string;
-  engine: string | null;
+  runtimeId: string | null;
   source: string | null;
   pluginId: string | null;
   requestId: string | null;
@@ -572,11 +574,11 @@ export interface OrchestrationMcpSessionPrepareResult {
   prepared: boolean;
   idempotent: boolean;
   profileId?: string;
-  engine?: string;
+  runtimeId?: string;
   visible: boolean;
   effectiveScopes: string[];
   browserAcquired: boolean;
-  changed: Array<'profile' | 'engine' | 'visible' | 'scopes'>;
+  changed: Array<'profile' | 'runtimeId' | 'visible' | 'scopes'>;
   phase: OrchestrationMcpSessionPhase;
   bindingLocked: boolean;
   acquireReadiness?: OrchestrationMcpSessionAcquireReadiness | null;
@@ -584,7 +586,7 @@ export interface OrchestrationMcpSessionPrepareResult {
     | 'current_session_unavailable'
     | 'binding_locked';
   currentProfileId?: string;
-  currentEngine?: string;
+  currentRuntimeId?: string;
   currentVisible?: boolean;
 }
 
@@ -604,7 +606,7 @@ export interface OrchestrationMcpSessionGateway {
   prepareCurrentSession?(
     options: {
       profileId?: string;
-      engine?: string;
+      runtimeId?: string;
       visible?: boolean;
       scopes?: string[];
     }
@@ -632,9 +634,9 @@ export interface OrchestrationObservationGateway {
 }
 
 /**
- * 编排层依赖
+ * 缂栨帓灞備緷璧?
  *
- * 编排层保持自己的依赖契约，避免与 MCP 类型耦合。
+ * 缂栨帓灞備繚鎸佽嚜宸辩殑渚濊禆濂戠害锛岄伩鍏嶄笌 MCP 绫诲瀷鑰﹀悎銆?
  */
 export interface OrchestrationDependencies {
   browser?: BrowserInterface;
@@ -648,7 +650,8 @@ export interface OrchestrationDependencies {
   observationGateway?: OrchestrationObservationGateway;
   mcpSessionGateway?: OrchestrationMcpSessionGateway;
   mcpSessionContext?: OrchestrationBrowserSessionContext;
-  /** 是否强制执行 requiredScopes 检查（默认 false，兼容模式） */
+  /** 鏄惁寮哄埗鎵ц requiredScopes 妫€鏌ワ紙榛樿 false锛屽吋瀹规ā寮忥級 */
   enforceScopes?: boolean;
   [key: string]: unknown;
 }
+

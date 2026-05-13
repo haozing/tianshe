@@ -1,9 +1,9 @@
-import type { OrchestrationMcpSessionPhase } from './types';
+﻿import type { OrchestrationMcpSessionPhase } from './types';
 
 export interface McpSessionStateInput {
   sessionId?: string | null;
   profileId?: string | null;
-  engine?: string | null;
+  runtimeId?: string | null;
   visible?: boolean;
   effectiveScopes?: readonly string[] | null;
   browserAcquired?: boolean;
@@ -21,7 +21,7 @@ const hasPreparationState = (state: McpSessionStateInput): boolean => {
   if (String(state.profileId || '').trim()) {
     return true;
   }
-  if (String(state.engine || '').trim()) {
+  if (String(state.runtimeId || '').trim()) {
     return true;
   }
   if (state.visible === true) {
@@ -69,3 +69,4 @@ export const buildMcpSessionStateSnapshot = (
   phase: resolveMcpSessionPhase(state),
   bindingLocked: isMcpSessionBindingLocked(state),
 });
+

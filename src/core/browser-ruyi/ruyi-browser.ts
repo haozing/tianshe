@@ -87,8 +87,8 @@ import { summarizeForObservation } from '../observability/observation-service';
 import type { TraceContext } from '../observability/types';
 import {
   browserRuntimeSupports,
-  getStaticEngineRuntimeDescriptor,
-} from '../browser-pool/engine-capability-registry';
+  getStaticRuntimeDescriptor,
+} from '../browser-pool/runtime-capability-registry';
 import {
   getMimeTypeForScreenshotFormat,
   normalizeScreenshotCaptureMode,
@@ -103,7 +103,7 @@ type RuyiBrowserOptions = {
   ocrProviderFactory?: OCRProviderFactory;
 };
 
-const RUYI_BROWSER_RUNTIME = Object.freeze(getStaticEngineRuntimeDescriptor('ruyi'));
+const RUYI_BROWSER_RUNTIME = Object.freeze(getStaticRuntimeDescriptor('firefox-bidi'));
 const RUYI_CLICK_DOM_TIMEOUT_MS = 3000;
 const RUYI_DIALOG_DETECTION_TIMEOUT_MS = 500;
 
@@ -287,7 +287,7 @@ export class RuyiBrowser
   }
 
   describeRuntime() {
-    return getStaticEngineRuntimeDescriptor('ruyi');
+    return getStaticRuntimeDescriptor('firefox-bidi');
   }
 
   hasCapability(name: BrowserCapabilityName): boolean {
@@ -296,7 +296,7 @@ export class RuyiBrowser
 
   private createObservationContext(partial: Partial<TraceContext> = {}): TraceContext {
     return createBrowserObservationContext({
-      browserEngine: 'ruyi',
+      browserRuntimeId: 'firefox-bidi',
       browserId: this.observationBrowserId,
       partial,
     });
@@ -312,7 +312,7 @@ export class RuyiBrowser
   }): Promise<T> {
     return observeSharedBrowserOperation(this, {
       ...options,
-      browserEngine: 'ruyi',
+      browserRuntimeId: 'firefox-bidi',
       browserId: this.observationBrowserId,
     });
   }

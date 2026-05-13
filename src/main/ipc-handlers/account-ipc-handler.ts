@@ -295,10 +295,10 @@ export function registerAccountHandlers(
         const pooledBrowser = poolManager.listBrowsers().find((b) => b.id === handle.browserId);
         const viewId = pooledBrowser?.viewId || handle.browserId;
 
-        // 持久化引擎没有 WebContentsView，尝试前置原生窗口
+        // Persistent runtimes do not expose WebContentsView; bring the native window forward.
         if (
           showPopup &&
-          handle.engine !== 'electron' &&
+          handle.runtimeId !== 'electron-webcontents' &&
           typeof handle.browser.show === 'function'
         ) {
           try {
@@ -312,9 +312,10 @@ export function registerAccountHandlers(
           }
         }
 
-        // 如果需要弹窗显示（仅 Electron 引擎）
+        // Popup embedding is only available for the Electron WebContents runtime.
         let popupId: string | null = null;
-        const canShowPopup = showPopup && handle.engine === 'electron' && Boolean(viewId);
+        const canShowPopup =
+          showPopup && handle.runtimeId === 'electron-webcontents' && Boolean(viewId);
         const accountLabel = account.displayName || account.name;
         if (canShowPopup && viewId) {
           // 提取域名用于弹窗标题

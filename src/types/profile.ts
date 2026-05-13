@@ -10,7 +10,7 @@
  * Keep these types runtime-agnostic and stable.
  */
 
-import type { AutomationEngine } from './automation-engine';
+import type { BrowserRuntimeId, BrowserRuntimeSource } from './browser-runtime';
 
 // ============================================
 // Common
@@ -24,16 +24,28 @@ export type ProfileIPCResponse<T> = {
 
 export type ProfileStatus = 'idle' | 'active' | 'error';
 
-export type { AutomationEngine } from './automation-engine';
+export type {
+  BrowserRuntimeId,
+  BrowserRuntimeSource,
+  BrowserFamily,
+  BrowserControlProtocol,
+  BrowserProfileMode,
+  BrowserVisibilityMode,
+  BrowserFingerprintBackend,
+  BrowserBrand,
+} from './browser-runtime';
 export {
-  AUTOMATION_ENGINES,
-  PERSISTENT_AUTOMATION_ENGINES,
-  isAutomationEngine,
-  isPersistentAutomationEngine,
+  BROWSER_RUNTIME_IDS,
+  PERSISTENT_BROWSER_RUNTIME_IDS,
+  DEFAULT_BROWSER_RUNTIME_ID,
+  isBrowserRuntimeId,
+  isPersistentBrowserRuntimeId,
   normalizeProfileBrowserQuota,
-  normalizeAutomationEngine,
+  normalizeBrowserRuntimeId,
+  getBrowserFamilyForRuntime,
+  getDefaultRuntimeSource,
   PROFILE_BROWSER_INSTANCE_LIMIT,
-} from './automation-engine';
+} from './browser-runtime';
 
 // ============================================
 // Fingerprint
@@ -308,7 +320,8 @@ export interface ExtensionPackagesMeta {
 export interface BrowserProfile {
   id: string;
   name: string;
-  engine: AutomationEngine;
+  runtimeId: BrowserRuntimeId;
+  runtimeSourceOverride?: BrowserRuntimeSource | null;
 
   groupId: string | null;
   partition: string;
@@ -360,7 +373,8 @@ export interface ProfileGroup {
 
 export interface CreateProfileParams {
   name: string;
-  engine?: AutomationEngine;
+  runtimeId?: BrowserRuntimeId;
+  runtimeSourceOverride?: BrowserRuntimeSource | null;
   groupId?: string | null;
   proxy?: ProxyConfig | null;
   fingerprint?: DeepPartial<FingerprintConfig>;
@@ -376,7 +390,8 @@ export interface CreateProfileParams {
 
 export interface UpdateProfileParams {
   name?: string;
-  engine?: AutomationEngine;
+  runtimeId?: BrowserRuntimeId;
+  runtimeSourceOverride?: BrowserRuntimeSource | null;
   groupId?: string | null;
   proxy?: ProxyConfig | null;
   fingerprint?: DeepPartial<FingerprintConfig>;
@@ -619,7 +634,7 @@ export interface PoolLockInfo {
 export interface PoolBrowserInfo {
   id: string;
   sessionId: string;
-  engine: AutomationEngine;
+  runtimeId: BrowserRuntimeId;
   status: PoolBrowserStatus;
   viewId?: string;
 

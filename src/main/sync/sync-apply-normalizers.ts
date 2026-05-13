@@ -50,12 +50,16 @@ export function fallbackName(prefix: string, globalUid: string): string {
   return `${prefix}-${suffix}`;
 }
 
-export function normalizeProfileEngine(
+export function normalizeProfileRuntimeId(
   value: string | undefined
-): 'electron' | 'extension' | 'ruyi' | undefined {
+): BrowserRuntimeId | undefined {
   if (!value) return undefined;
-  if (value === 'electron' || value === 'extension' || value === 'ruyi') {
+  if (isBrowserRuntimeId(value)) {
     return value;
   }
-  throw new Error(`Unsupported profile engine from sync payload: ${value}`);
+  throw new Error(`Unsupported profile runtimeId from sync payload: ${value}`);
 }
+import {
+  isBrowserRuntimeId,
+  type BrowserRuntimeId,
+} from '../../types/browser-runtime';

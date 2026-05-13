@@ -8,13 +8,24 @@ import { getDefaultFingerprint } from '../../constants/fingerprint-defaults';
 const electronState = vi.hoisted(() => ({
   appPath: process.cwd(),
   userDataDir: '',
+  isPackaged: false,
+}));
+
+vi.mock('electron-webcontents', () => ({
+  app: {
+    getPath: vi.fn(() => electronState.userDataDir),
+    getAppPath: vi.fn(() => electronState.appPath),
+    isPackaged: false,
+  },
 }));
 
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => electronState.userDataDir),
     getAppPath: vi.fn(() => electronState.appPath),
-    isPackaged: false,
+    get isPackaged() {
+      return electronState.isPackaged;
+    },
   },
 }));
 
@@ -111,7 +122,7 @@ describe('createRuyiBrowserFactory shared real contract', () => {
       const pingMessage = requireEnv('AIRPA_REAL_CONTRACT_PING_MESSAGE');
 
       const report: Record<string, any> = {
-        engine: 'ruyi',
+        runtimeId: 'firefox-bidi',
         scenario: 'shared-real-contract-v1',
         startedAt: new Date().toISOString(),
         reportPath,
@@ -127,14 +138,14 @@ describe('createRuyiBrowserFactory shared real contract', () => {
 
       const factory = createRuyiBrowserFactory();
       const sessionId = `ruyi-real-contract-${Date.now()}`;
-      const fingerprint = getDefaultFingerprint('ruyi');
+      const fingerprint = getDefaultFingerprint('firefox-bidi');
       let closeBrowser: (() => Promise<void>) | null = null;
 
       try {
         const created = await factory({
           id: sessionId,
           partition: `persist:${sessionId}`,
-          engine: 'ruyi',
+          runtimeId: 'firefox-bidi',
           fingerprint: {
             ...fingerprint,
             identity: {
@@ -167,7 +178,7 @@ describe('createRuyiBrowserFactory shared real contract', () => {
         closeBrowser = () => created.browser.closeInternal();
         logStep('browser created');
         expect(created.browser.describeRuntime()).toMatchObject({
-          engine: 'ruyi',
+          runtimeId: 'firefox-bidi',
         });
 
         report.commonCapabilities = {

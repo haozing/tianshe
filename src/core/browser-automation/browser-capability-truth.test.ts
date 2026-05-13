@@ -4,7 +4,7 @@ import { ExtensionBrowser } from '../browser-extension/extension-browser';
 import { RuyiBrowser } from '../browser-ruyi';
 import { IntegratedBrowser } from './integrated-browser';
 import type { RuyiFirefoxEvent } from '../../main/profile/ruyi-firefox-client';
-import { getStaticEngineRuntimeDescriptor } from '../browser-pool/engine-capability-registry';
+import { getStaticRuntimeDescriptor } from '../browser-pool/runtime-capability-registry';
 import {
   assertBrowserPdfCapability,
   assertBrowserTextOcrCapability,
@@ -160,7 +160,7 @@ describe('browser capability truth', () => {
     const browser = createIntegratedBrowser();
 
     expect(browser.describeRuntime()).toMatchObject({
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
     });
     expect(browser.hasCapability('network.capture')).toBe(true);
     expect(browser.hasCapability('network.responseBody')).toBe(false);
@@ -246,7 +246,7 @@ describe('browser capability truth', () => {
   it('ExtensionBrowser truthfully reports response-body capture and preserves captured response bodies', async () => {
     const { browser, relay, emit } = createExtensionBrowserFixture();
 
-    expect(browser.describeRuntime()).toEqual(getStaticEngineRuntimeDescriptor('extension'));
+    expect(browser.describeRuntime()).toEqual(getStaticRuntimeDescriptor('chromium-extension-relay'));
     expect(browser.hasCapability('network.capture')).toBe(true);
     expect(browser.hasCapability('network.responseBody')).toBe(true);
     expect(browser.hasCapability('dialog.basic')).toBe(true);
@@ -456,7 +456,7 @@ describe('browser capability truth', () => {
       return undefined;
     });
 
-    expect(browser.describeRuntime()).toEqual(getStaticEngineRuntimeDescriptor('ruyi'));
+    expect(browser.describeRuntime()).toEqual(getStaticRuntimeDescriptor('firefox-bidi'));
     expect(browser.hasCapability('tabs.manage')).toBe(true);
     expect(browser.hasCapability('dialog.basic')).toBe(true);
     expect(browser.hasCapability('dialog.promptText')).toBe(true);

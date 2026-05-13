@@ -19,6 +19,7 @@ import { getDefaultFingerprint } from './presets';
 import { mergeFingerprintConfig } from '../../constants/fingerprint-defaults';
 import type { ProxyConfig as ProfileProxyConfig } from '../../types/profile';
 import { clearProxyCredentials, setProxyCredentials } from './browser-launcher';
+import { getStaticRuntimeDescriptor } from '../../core/browser-pool/runtime-capability-registry';
 
 const logger = createLogger('BrowserPoolIntegration');
 
@@ -69,7 +70,7 @@ export function createBrowserFactory(
   return async (session: SessionConfig) => {
     const viewId = `pool:${session.id}:${Date.now()}`;
 
-    const defaultFingerprint = getDefaultFingerprint('electron');
+    const defaultFingerprint = getDefaultFingerprint('electron-webcontents');
     const fingerprint = session.fingerprint
       ? mergeFingerprintConfig(defaultFingerprint, session.fingerprint)
       : defaultFingerprint;
@@ -123,7 +124,16 @@ export function createBrowserFactory(
       viewId,
     });
 
-    return { browser, viewId, engine: 'electron' };
+    return {
+      browser,
+      viewId,
+      runtimeId: 'electron-webcontents',
+      runtimeDescriptor: getStaticRuntimeDescriptor('electron-webcontents'),
+      resolvedRuntime: {
+        runtimeId: 'electron-webcontents',
+        source: { type: 'bundled' },
+      },
+    };
   };
 }
 

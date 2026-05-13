@@ -48,7 +48,7 @@ describe('http-browser-pool-adapter', () => {
       runtimeMetrics,
       logger: createLogger(),
       profileId: 'profile-1',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       source: 'mcp',
     });
 
@@ -57,7 +57,7 @@ describe('http-browser-pool-adapter', () => {
       runtimeMetrics,
       logger: createLogger(),
       profileId: 'profile-1',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       source: 'mcp',
     });
 
@@ -102,7 +102,7 @@ describe('http-browser-pool-adapter', () => {
       runtimeMetrics,
       logger: createLogger(),
       profileId: 'profile-1',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       source: 'mcp',
     });
 
@@ -111,7 +111,7 @@ describe('http-browser-pool-adapter', () => {
       runtimeMetrics,
       logger: createLogger(),
       profileId: 'profile-2',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       source: 'mcp',
     });
 
@@ -156,14 +156,14 @@ describe('http-browser-pool-adapter', () => {
       runtimeMetrics,
       logger: createLogger(),
       profileId: 'profile-1',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       source: 'http',
     });
 
     expect(result).toBe(handle);
     expect(poolManager.acquire).toHaveBeenCalledWith(
       'profile-1',
-      expect.objectContaining({ strategy: 'any', timeout: 30000, engine: 'extension' }),
+      expect.objectContaining({ strategy: 'any', timeout: 30000, runtimeId: 'chromium-extension-relay' }),
       'http'
     );
     expect(runtimeMetrics.browserAcquireFailureCount).toBe(0);
@@ -210,7 +210,7 @@ describe('http-browser-pool-adapter', () => {
         {
           id: 'browser-held',
           sessionId: 'profile-1',
-          engine: 'electron',
+          runtimeId: 'electron-webcontents',
           status: 'locked',
           viewId: 'view-1',
           lockedBy: {
@@ -229,7 +229,7 @@ describe('http-browser-pool-adapter', () => {
         runtimeMetrics,
         logger: createLogger(),
         profileId: 'profile-1',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         source: 'mcp',
         timeoutMs: 25,
       }).catch((error) => {
@@ -275,7 +275,7 @@ describe('http-browser-pool-adapter', () => {
         {
           id: 'browser-held',
           sessionId: 'profile-1',
-          engine: 'electron',
+          runtimeId: 'electron-webcontents',
           status: 'locked',
           viewId: 'view-1',
           lockedBy: {
@@ -293,7 +293,7 @@ describe('http-browser-pool-adapter', () => {
       runtimeMetrics,
       logger: createLogger(),
       profileId: 'profile-1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       source: 'mcp',
       timeoutMs: 25,
     });
@@ -301,7 +301,7 @@ describe('http-browser-pool-adapter', () => {
     expect(handle.browserId).toBe('browser-held');
     expect((poolManager as any).takeoverLockedBrowser).toHaveBeenCalledWith(
       'profile-1',
-      expect.objectContaining({ strategy: 'any', timeout: 25, engine: 'electron' }),
+      expect.objectContaining({ strategy: 'any', timeout: 25, runtimeId: 'electron-webcontents' }),
       'mcp'
     );
     expect(poolManager.acquire).not.toHaveBeenCalled();
@@ -345,7 +345,7 @@ describe('http-browser-pool-adapter', () => {
       runtimeMetrics,
       logger: createLogger(),
       profileId: 'profile-1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       source: 'mcp',
       timeoutMs: 25,
     });
@@ -353,7 +353,7 @@ describe('http-browser-pool-adapter', () => {
     expect(handle.browserId).toBe('browser-fresh');
     expect(poolManager.acquire).toHaveBeenCalledWith(
       'profile-1',
-      expect.objectContaining({ strategy: 'any', timeout: 25, engine: 'electron' }),
+      expect.objectContaining({ strategy: 'any', timeout: 25, runtimeId: 'electron-webcontents' }),
       'mcp'
     );
 

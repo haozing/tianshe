@@ -917,14 +917,14 @@ describe('orchestration capability registry', () => {
           {
             id: 'profile-1',
             name: '555',
-            engine: 'electron',
+            runtimeId: 'electron-webcontents',
             status: 'idle',
             partition: 'persist:profile-1',
           },
           {
             id: 'profile-2',
             name: 'marketing',
-            engine: 'extension',
+            runtimeId: 'chromium-extension-relay',
             status: 'active',
             partition: 'persist:profile-2',
           },
@@ -938,7 +938,7 @@ describe('orchestration capability registry', () => {
                 profile: {
                   id: 'profile-1',
                   name: '555',
-                  engine: 'electron',
+                  runtimeId: 'electron-webcontents',
                   status: 'idle',
                   partition: 'persist:profile-1',
                 },
@@ -947,7 +947,7 @@ describe('orchestration capability registry', () => {
         createProfile: async () => ({
           id: 'profile-new',
           name: 'Shop QA',
-          engine: 'electron',
+          runtimeId: 'electron-webcontents',
           status: 'idle',
           partition: 'persist:profile-new',
           isSystem: false,
@@ -955,7 +955,7 @@ describe('orchestration capability registry', () => {
         updateProfile: async () => ({
           id: 'profile-1',
           name: '555',
-          engine: 'electron',
+          runtimeId: 'electron-webcontents',
           status: 'idle',
           partition: 'persist:profile-1',
           isSystem: false,
@@ -996,13 +996,13 @@ describe('orchestration capability registry', () => {
       prepared: true,
       idempotent: false,
       profileId: 'profile-1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       visible: false,
       effectiveScopes: ['browser.read', 'browser.write'],
       browserAcquired: false,
       phase: 'prepared_unacquired',
       bindingLocked: false,
-      changed: ['profile', 'engine', 'visible', 'scopes'],
+      changed: ['profile', 'runtimeId', 'visible', 'scopes'],
     });
     const closeSession = vi.fn().mockResolvedValue({
       closed: true,
@@ -1019,7 +1019,7 @@ describe('orchestration capability registry', () => {
           {
             sessionId: 'session-current',
             profileId: 'profile-1',
-            engine: 'electron',
+            runtimeId: 'electron-webcontents',
             visible: false,
             lastActivityAt: '2026-03-20T00:00:00.000Z',
             pendingInvocations: 0,
@@ -1047,7 +1047,7 @@ describe('orchestration capability registry', () => {
                 profile: {
                   id: 'profile-1',
                   name: '555',
-                  engine: 'electron',
+                  runtimeId: 'electron-webcontents',
                   status: 'idle',
                   partition: 'persist:profile-1',
                 },
@@ -1056,7 +1056,7 @@ describe('orchestration capability registry', () => {
         createProfile: async () => ({
           id: 'profile-new',
           name: 'Shop QA',
-          engine: 'electron',
+          runtimeId: 'electron-webcontents',
           status: 'idle',
           partition: 'persist:profile-new',
           isSystem: false,
@@ -1064,7 +1064,7 @@ describe('orchestration capability registry', () => {
         updateProfile: async () => ({
           id: 'profile-1',
           name: '555',
-          engine: 'electron',
+          runtimeId: 'electron-webcontents',
           status: 'idle',
           partition: 'persist:profile-1',
           isSystem: false,
@@ -1092,7 +1092,7 @@ describe('orchestration capability registry', () => {
       name: 'session_prepare',
       arguments: {
         query: '555',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         visible: false,
         scopes: ['browser.read', 'browser.write'],
       },
@@ -1104,18 +1104,18 @@ describe('orchestration capability registry', () => {
         effectiveProfile: {
           id: 'profile-1',
           name: '555',
-          engine: 'electron',
+          runtimeId: 'electron-webcontents',
           source: 'resolved_query',
         },
-        effectiveEngine: 'electron',
-        effectiveEngineSource: 'requested',
+        effectiveRuntime: 'electron-webcontents',
+        effectiveRuntimeSource: 'requested',
         phase: 'prepared_unacquired',
         bindingLocked: false,
       },
     });
     expect(prepareCurrentSession).toHaveBeenCalledWith({
       profileId: 'profile-1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       visible: false,
       scopes: ['browser.read', 'browser.write'],
     });
@@ -1140,7 +1140,7 @@ describe('orchestration capability registry', () => {
     const createProfile = vi.fn().mockResolvedValue({
       id: 'profile-new',
       name: 'Shop QA',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       status: 'idle',
       partition: 'persist:profile-new',
       isSystem: false,
@@ -1148,7 +1148,7 @@ describe('orchestration capability registry', () => {
     const updateProfile = vi.fn().mockResolvedValue({
       id: 'profile-new',
       name: 'Shop QA Updated',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       status: 'idle',
       partition: 'persist:profile-new',
       isSystem: false,
@@ -1170,7 +1170,7 @@ describe('orchestration capability registry', () => {
       name: 'profile_create',
       arguments: {
         name: 'Shop QA',
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         confirmRisk: true,
       },
     });
@@ -1190,7 +1190,7 @@ describe('orchestration capability registry', () => {
       name: 'profile_update',
       arguments: {
         profileId: 'profile-new',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         allowRuntimeReset: true,
         confirmRisk: true,
       },
@@ -1222,10 +1222,10 @@ describe('orchestration capability registry', () => {
 
     expect(createProfile).toHaveBeenCalledWith({
       name: 'Shop QA',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
     });
     expect(updateProfile).toHaveBeenCalledWith('profile-new', {
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
     });
     expect(deleteProfile).toHaveBeenCalledWith('profile-new');
   });
@@ -1234,7 +1234,7 @@ describe('orchestration capability registry', () => {
     const updateProfile = vi.fn().mockResolvedValue({
       id: 'profile-new',
       name: 'Shop QA Updated',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       status: 'idle',
       partition: 'persist:profile-new',
       isSystem: false,
@@ -1247,7 +1247,7 @@ describe('orchestration capability registry', () => {
         createProfile: async () => ({
           id: 'profile-new',
           name: 'Shop QA',
-          engine: 'extension',
+          runtimeId: 'chromium-extension-relay',
           status: 'idle',
           partition: 'persist:profile-new',
           isSystem: false,
@@ -1261,7 +1261,7 @@ describe('orchestration capability registry', () => {
       name: 'profile_update',
       arguments: {
         profileId: 'profile-new',
-        engine: 'electron',
+        runtimeId: 'electron-webcontents',
         confirmRisk: true,
       },
     });

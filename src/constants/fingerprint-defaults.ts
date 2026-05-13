@@ -12,7 +12,7 @@
  */
 
 import type {
-  AutomationEngine,
+  BrowserRuntimeId,
   BrowserIdentityBrowserFamily,
   BrowserIdentityFontSystem,
   BrowserIdentityOsFamily,
@@ -24,6 +24,7 @@ import type {
   OSType,
   BrowserType,
 } from '../types/profile';
+import { DEFAULT_BROWSER_RUNTIME_ID } from '../types/profile';
 
 // =====================================================
 // 指纹预设选项（用于 UI 显示）
@@ -929,16 +930,17 @@ export const TIMEZONE_OPTIONS = [
   { value: 'Australia/Sydney', label: '悉尼时间 (UTC+10/+11)' },
 ];
 
-const DEFAULT_PRESET_ID_BY_ENGINE: Record<AutomationEngine, string> = {
-  electron: 'windows-chrome-120',
-  extension: 'windows-chrome-141',
-  ruyi: 'windows-firefox-151',
+const DEFAULT_PRESET_ID_BY_RUNTIME: Record<BrowserRuntimeId, string> = {
+  'electron-webcontents': 'windows-chrome-120',
+  'chromium-extension-relay': 'windows-chrome-141',
+  'firefox-bidi': 'windows-firefox-151',
+  'chromium-cloak-playwright': 'windows-chrome-141',
 };
 
-function resolveDefaultPresetOption(engine: AutomationEngine): FingerprintPresetOption {
+function resolveDefaultPresetOption(runtimeId: BrowserRuntimeId): FingerprintPresetOption {
   const option =
     FINGERPRINT_PRESET_OPTIONS.find(
-      (preset) => preset.id === DEFAULT_PRESET_ID_BY_ENGINE[engine]
+      (preset) => preset.id === DEFAULT_PRESET_ID_BY_RUNTIME[runtimeId]
     ) ?? FINGERPRINT_PRESET_OPTIONS[0];
   if (!option) {
     throw new Error('Missing fingerprint preset options');
@@ -946,19 +948,23 @@ function resolveDefaultPresetOption(engine: AutomationEngine): FingerprintPreset
   return option;
 }
 
-const DEFAULT_FINGERPRINT_CONFIG_BY_ENGINE: Readonly<Record<AutomationEngine, FingerprintConfig>> =
+const DEFAULT_FINGERPRINT_CONFIG_BY_RUNTIME: Readonly<Record<BrowserRuntimeId, FingerprintConfig>> =
   Object.freeze({
-    electron: normalizeFingerprintConfigForEngine(
-      cloneFingerprintConfig(resolveDefaultPresetOption('electron').config),
-      'electron'
+    'electron-webcontents': normalizeFingerprintConfigForRuntime(
+      cloneFingerprintConfig(resolveDefaultPresetOption('electron-webcontents').config),
+      'electron-webcontents'
     ),
-    extension: normalizeFingerprintConfigForEngine(
-      cloneFingerprintConfig(resolveDefaultPresetOption('extension').config),
-      'extension'
+    'chromium-extension-relay': normalizeFingerprintConfigForRuntime(
+      cloneFingerprintConfig(resolveDefaultPresetOption('chromium-extension-relay').config),
+      'chromium-extension-relay'
     ),
-    ruyi: normalizeFingerprintConfigForEngine(
-      cloneFingerprintConfig(resolveDefaultPresetOption('ruyi').config),
-      'ruyi'
+    'firefox-bidi': normalizeFingerprintConfigForRuntime(
+      cloneFingerprintConfig(resolveDefaultPresetOption('firefox-bidi').config),
+      'firefox-bidi'
+    ),
+    'chromium-cloak-playwright': normalizeFingerprintConfigForRuntime(
+      cloneFingerprintConfig(resolveDefaultPresetOption('chromium-cloak-playwright').config),
+      'chromium-cloak-playwright'
     ),
   });
 
@@ -966,13 +972,13 @@ const DEFAULT_FINGERPRINT_CONFIG_BY_ENGINE: Readonly<Record<AutomationEngine, Fi
  * 默认指纹配置 - Extension/Electron 默认走 Chromium 桌面画像
  */
 export const DEFAULT_FINGERPRINT_CONFIG: FingerprintConfig =
-  DEFAULT_FINGERPRINT_CONFIG_BY_ENGINE.extension;
+  DEFAULT_FINGERPRINT_CONFIG_BY_RUNTIME['chromium-extension-relay'];
 
-function getBrowserFamilyForEngine(engine: AutomationEngine): BrowserIdentityBrowserFamily {
-  if (engine === 'ruyi') {
+function getBrowserFamilyForRuntime(runtimeId: BrowserRuntimeId): BrowserIdentityBrowserFamily {
+  if (runtimeId === 'firefox-bidi') {
     return 'firefox';
   }
-  if (engine === 'electron') {
+  if (runtimeId === 'electron-webcontents') {
     return 'electron';
   }
   return 'chromium';
@@ -1002,7 +1008,7 @@ function detectBrowserType(config: FingerprintConfig): BrowserType {
 
 function resolvePresetOptionForCore(
   core: FingerprintCoreConfig,
-  engine: AutomationEngine
+  runtimeId: BrowserRuntimeId
 ): FingerprintPresetOption {
   const targetOs = toPresetOptionOS(core.osFamily);
   const targetBrowser = toPresetOptionBrowser(core.browserProfile.browser);
@@ -1038,7 +1044,7 @@ function resolvePresetOptionForCore(
         (a, b) =>
           parseBrowserVersionWeight(b.config.identity.hardware.browserVersion) -
           parseBrowserVersionWeight(a.config.identity.hardware.browserVersion)
-      )[0] ?? resolveDefaultPresetOption(engine)
+    )[0] ?? resolveDefaultPresetOption(runtimeId)
   );
 }
 
@@ -1112,11 +1118,11 @@ export function mergeFingerprintCoreConfig(
 export function materializeFingerprintConfigFromCore(
   core: FingerprintCoreConfig,
   _source: Partial<FingerprintSourceConfig> | undefined,
-  engine: AutomationEngine
+  runtimeId: BrowserRuntimeId
 ): FingerprintConfig {
-  const preset = resolvePresetOptionForCore(core, engine);
+  const preset = resolvePresetOptionForCore(core, runtimeId);
 
-  return materializeFingerprintConfigForEngine(
+  return materializeFingerprintConfigForRuntime(
     mergeFingerprintConfig(cloneFingerprintConfig(preset.config), {
       identity: {
         hardware: {
@@ -1144,16 +1150,16 @@ export function materializeFingerprintConfigFromCore(
         fileFormat: 'txt',
       },
     }),
-    engine
+    runtimeId
   );
 }
 
-export function materializeFingerprintConfigForEngine(
+export function materializeFingerprintConfigForRuntime(
   config: FingerprintConfig,
-  engine: AutomationEngine
+  runtimeId: BrowserRuntimeId
 ): FingerprintConfig {
   const materialized = cloneFingerprintConfig(config);
-  const browserFamily = getBrowserFamilyForEngine(engine);
+  const browserFamily = getBrowserFamilyForRuntime(runtimeId);
   const osFamily = materialized.identity.hardware.osFamily;
   const languages = uniqStrings(materialized.identity.region.languages);
   const primaryLanguage =
@@ -1176,7 +1182,7 @@ export function materializeFingerprintConfigForEngine(
       : 24;
 
   if (
-    engine === 'electron' &&
+    runtimeId === 'electron-webcontents' &&
     !(
       typeof materialized.identity.display.pixelRatio === 'number' &&
       Number.isFinite(materialized.identity.display.pixelRatio) &&
@@ -1199,21 +1205,21 @@ export function materializeFingerprintConfigForEngine(
     webdriver: 0,
   };
 
-  return normalizeFingerprintConfigForEngine(materialized, engine);
+  return normalizeFingerprintConfigForRuntime(materialized, runtimeId);
 }
 
-export function normalizeFingerprintConfigForEngine(
+export function normalizeFingerprintConfigForRuntime(
   config: FingerprintConfig,
-  engine: AutomationEngine
+  runtimeId: BrowserRuntimeId
 ): FingerprintConfig {
   const normalized = cloneFingerprintConfig(config);
-  const browserFamily = getBrowserFamilyForEngine(engine);
+  const browserFamily = getBrowserFamilyForRuntime(runtimeId);
 
   normalized.identity.hardware.browserFamily = browserFamily;
 
   normalized.source.mode = 'generated';
 
-  if (engine === 'extension') {
+  if (runtimeId === 'chromium-extension-relay' || runtimeId === 'chromium-cloak-playwright') {
     normalized.identity.hardware.platformVersion = undefined;
     normalized.identity.hardware.fontSystem = undefined;
     normalized.identity.display.pixelRatio = undefined;
@@ -1248,7 +1254,7 @@ export function normalizeFingerprintConfigForEngine(
     };
   }
 
-  if (engine === 'ruyi') {
+  if (runtimeId === 'firefox-bidi') {
     normalized.identity.display.pixelRatio = undefined;
     normalized.identity.input = undefined;
   }
@@ -1262,18 +1268,26 @@ export function normalizeFingerprintConfigForEngine(
  * 获取默认指纹配置的副本
  * 每次调用返回新对象，避免意外修改
  */
-export function getDefaultFingerprint(engine: AutomationEngine = 'extension'): FingerprintConfig {
-  return normalizeFingerprintConfigForEngine(
+export function getDefaultFingerprint(
+  runtimeId: BrowserRuntimeId = 'chromium-extension-relay'
+): FingerprintConfig {
+  return normalizeFingerprintConfigForRuntime(
     cloneFingerprintConfig(
-      DEFAULT_FINGERPRINT_CONFIG_BY_ENGINE[engine] ?? DEFAULT_FINGERPRINT_CONFIG
+      DEFAULT_FINGERPRINT_CONFIG_BY_RUNTIME[runtimeId] ??
+        DEFAULT_FINGERPRINT_CONFIG_BY_RUNTIME[DEFAULT_BROWSER_RUNTIME_ID] ??
+        DEFAULT_FINGERPRINT_CONFIG
     ),
-    engine
+    runtimeId
   );
 }
 
-export function getDefaultFingerprintForEngine(engine: AutomationEngine): FingerprintConfig {
-  return getDefaultFingerprint(engine);
+export function getDefaultFingerprintForRuntime(runtimeId: BrowserRuntimeId): FingerprintConfig {
+  return getDefaultFingerprint(runtimeId);
 }
+
+export const materializeFingerprintConfigForEngine = materializeFingerprintConfigForRuntime;
+export const normalizeFingerprintConfigForEngine = normalizeFingerprintConfigForRuntime;
+export const getDefaultFingerprintForEngine = getDefaultFingerprintForRuntime;
 
 function randomChoice<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];

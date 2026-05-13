@@ -50,7 +50,7 @@ function createOptions(
   return {
     transports,
     dependencies: undefined,
-    parseRequestedEngine: vi.fn(),
+    parseRequestedRuntimeId: vi.fn(),
     acquireBrowserFromPool,
     getBrowserPoolManager,
     cleanupSession: vi.fn().mockResolvedValue(undefined),
@@ -85,7 +85,7 @@ describe('mcp session runtime', () => {
   });
 
   it('listSessions includes acquire readiness for bound profiles', async () => {
-    const session = createSession({ partition: 'profile-1', engine: 'electron' as never });
+    const session = createSession({ partition: 'profile-1', runtimeId: 'electron-webcontents' as never });
     const transports = new Map<string, McpSessionInfo>([['session-1', session]]);
     const gateway = createMcpSessionGateway(
       createOptions(transports, vi.fn(), vi.fn().mockReturnValue({
@@ -93,7 +93,7 @@ describe('mcp session runtime', () => {
           {
             id: 'browser-held',
             sessionId: 'profile-1',
-            engine: 'electron',
+            runtimeId: 'electron-webcontents',
             status: 'locked',
             viewId: 'view-1',
             lockedBy: {
@@ -164,7 +164,7 @@ describe('mcp session runtime', () => {
     );
     const options: McpSessionRuntimeOptions = {
       transports,
-      parseRequestedEngine: vi.fn(),
+      parseRequestedRuntimeId: vi.fn(),
       acquireBrowserFromPool,
       cleanupSession: vi.fn().mockResolvedValue(undefined),
       dependencies: {
@@ -266,20 +266,20 @@ describe('mcp session runtime', () => {
     });
   });
 
-  it('prepareCurrentSession applies profile, engine, visibility, and scopes before browser acquisition', async () => {
+  it('prepareCurrentSession applies profile, runtimeId, visibility, and scopes before browser acquisition', async () => {
     const session = createSession({ authScopes: ['browser.read'] });
     const transports = new Map<string, McpSessionInfo>([['session-1', session]]);
     const options: McpSessionRuntimeOptions = {
       transports,
       dependencies: undefined,
-      parseRequestedEngine: vi.fn((value?: string) => value as never),
+      parseRequestedRuntimeId: vi.fn((value?: string) => value as never),
       acquireBrowserFromPool: vi.fn(),
       getBrowserPoolManager: vi.fn().mockReturnValue({
         listBrowsers: vi.fn().mockReturnValue([
           {
             id: 'browser-held',
             sessionId: 'profile-1',
-            engine: 'extension',
+            runtimeId: 'chromium-extension-relay',
             status: 'locked',
             viewId: 'view-1',
             lockedBy: {
@@ -296,7 +296,7 @@ describe('mcp session runtime', () => {
 
     const prepared = await gateway.prepareCurrentSession?.({
       profileId: 'profile-1',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       visible: true,
       scopes: ['browser.read', 'browser.write'],
     });
@@ -306,7 +306,7 @@ describe('mcp session runtime', () => {
       prepared: true,
       idempotent: false,
       profileId: 'profile-1',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       visible: true,
       effectiveScopes: ['browser.read', 'browser.write'],
       browserAcquired: false,
@@ -318,12 +318,12 @@ describe('mcp session runtime', () => {
       },
       phase: 'prepared_unacquired',
       bindingLocked: false,
-      changed: ['profile', 'engine', 'visible', 'scopes'],
+      changed: ['profile', 'runtimeId', 'visible', 'scopes'],
     });
 
     const replay = await gateway.prepareCurrentSession?.({
       profileId: 'profile-1',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       visible: true,
       scopes: ['browser.read', 'browser.write'],
     });
@@ -344,7 +344,7 @@ describe('mcp session runtime', () => {
   it('prepareCurrentSession allows scope updates after browser acquisition but rejects conflicting profile changes', async () => {
     const session = createSession({
       partition: 'profile-1',
-      engine: 'electron' as never,
+      runtimeId: 'electron-webcontents' as never,
       visible: false,
       authScopes: ['browser.read'],
       browserHandle: createBrowserHandle({ isClosed: false }),
@@ -353,7 +353,7 @@ describe('mcp session runtime', () => {
     const options: McpSessionRuntimeOptions = {
       transports,
       dependencies: undefined,
-      parseRequestedEngine: vi.fn((value?: string) => value as never),
+      parseRequestedRuntimeId: vi.fn((value?: string) => value as never),
       acquireBrowserFromPool: vi.fn(),
       cleanupSession: vi.fn().mockResolvedValue(undefined),
     };
@@ -361,7 +361,7 @@ describe('mcp session runtime', () => {
 
     const scopeUpdate = await gateway.prepareCurrentSession?.({
       profileId: 'profile-1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       visible: false,
       scopes: ['browser.read', 'browser.write'],
     });
@@ -415,7 +415,7 @@ describe('mcp session runtime', () => {
   it('ensureSessionBrowserHandle translates acquire contention into a structured MCP error', async () => {
     const session = createSession({
       partition: 'profile-1',
-      engine: 'electron' as never,
+      runtimeId: 'electron-webcontents' as never,
     });
     const transports = new Map<string, McpSessionInfo>([['session-1', session]]);
     const options = createOptions(
@@ -435,7 +435,7 @@ describe('mcp session runtime', () => {
               {
                 browserId: 'browser-held',
                 status: 'locked',
-                engine: 'electron',
+                runtimeId: 'electron-webcontents',
                 source: 'plugin',
                 pluginId: 'plugin-1',
                 requestId: 'req-1',

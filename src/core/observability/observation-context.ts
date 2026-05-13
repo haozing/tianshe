@@ -29,7 +29,7 @@ export function createRootTraceContext(partial: Partial<TraceContext> = {}): Tra
     ...(partial.source ? { source: partial.source } : {}),
     ...(partial.capability ? { capability: partial.capability } : {}),
     ...(partial.pluginId ? { pluginId: partial.pluginId } : {}),
-    ...(partial.browserEngine ? { browserEngine: partial.browserEngine } : {}),
+    ...(partial.browserRuntimeId ? { browserRuntimeId: partial.browserRuntimeId } : {}),
     ...(partial.sessionId ? { sessionId: partial.sessionId } : {}),
     ...(partial.profileId ? { profileId: partial.profileId } : {}),
     ...(partial.datasetId ? { datasetId: partial.datasetId } : {}),
@@ -55,8 +55,8 @@ export function createChildTraceContext(partial: Partial<TraceContext> = {}): Tr
       ? { capability: partial.capability ?? parent?.capability }
       : {}),
     ...(partial.pluginId || parent?.pluginId ? { pluginId: partial.pluginId ?? parent?.pluginId } : {}),
-    ...(partial.browserEngine || parent?.browserEngine
-      ? { browserEngine: partial.browserEngine ?? parent?.browserEngine }
+    ...(partial.browserRuntimeId || parent?.browserRuntimeId
+      ? { browserRuntimeId: partial.browserRuntimeId ?? parent?.browserRuntimeId }
       : {}),
     ...(partial.sessionId || parent?.sessionId
       ? { sessionId: partial.sessionId ?? parent?.sessionId }

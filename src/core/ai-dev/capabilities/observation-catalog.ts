@@ -11,6 +11,7 @@ import {
   createStructuredEnvelopeSchema,
   toCapabilityTitle,
 } from './catalog-utils';
+import { BROWSER_RUNTIME_IDS } from '../../../types/browser-runtime';
 
 const OBSERVATION_CAPABILITY_VERSION = '1.0.0';
 
@@ -58,7 +59,7 @@ const RUNTIME_EVENT_SCHEMA = {
     source: { type: 'string' },
     capability: { type: 'string' },
     pluginId: { type: 'string' },
-    browserEngine: { type: 'string', enum: ['electron', 'extension', 'ruyi'] },
+    browserRuntimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
     sessionId: { type: 'string' },
     profileId: { type: 'string' },
     datasetId: { type: 'string' },
@@ -93,7 +94,7 @@ const TRACE_ENTITIES_SCHEMA = {
   properties: {
     capability: { type: 'string' },
     pluginId: { type: 'string' },
-    browserEngine: { type: 'string', enum: ['electron', 'extension', 'ruyi'] },
+    browserRuntimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
     sessionId: { type: 'string' },
     profileId: { type: 'string' },
     datasetId: { type: 'string' },
@@ -185,7 +186,7 @@ const RECENT_FAILURE_SUMMARY_SCHEMA = {
     profileId: { type: 'string' },
     datasetId: { type: 'string' },
     browserId: { type: 'string' },
-    browserEngine: { type: 'string', enum: ['electron', 'extension', 'ruyi'] },
+    browserRuntimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
     error: RUNTIME_ERROR_SCHEMA,
     finalStatus: {
       type: 'string',

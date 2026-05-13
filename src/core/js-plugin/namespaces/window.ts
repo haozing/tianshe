@@ -118,7 +118,7 @@ export class WindowNamespace {
     }
 
     const mergedFingerprint = mergeFingerprintConfig(
-      getDefaultFingerprint('electron'),
+      getDefaultFingerprint('electron-webcontents'),
       profile.fingerprint
     );
 

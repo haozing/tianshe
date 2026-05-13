@@ -12,12 +12,26 @@ import {
 const electronState = vi.hoisted(() => ({
   userDataDir: '',
   appPath: process.cwd(),
+  isPackaged: false,
+}));
+
+vi.mock('electron-webcontents', () => ({
+  app: {
+    getPath: vi.fn(() => electronState.userDataDir),
+    getAppPath: vi.fn(() => electronState.appPath),
+    get isPackaged() {
+      return electronState.isPackaged;
+    },
+  },
 }));
 
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => electronState.userDataDir),
     getAppPath: vi.fn(() => electronState.appPath),
+    get isPackaged() {
+      return electronState.isPackaged;
+    },
   },
 }));
 
@@ -27,7 +41,7 @@ function createSession(overrides?: Partial<SessionConfig>): SessionConfig {
   return {
     id: 'ruyi-session',
     partition: 'persist:ruyi-session',
-    engine: 'extension',
+    runtimeId: 'chromium-extension-relay',
     fingerprint: getDefaultFingerprint(),
     proxy: null,
     quota: 1,

@@ -1,4 +1,4 @@
-import type { AutomationEngine } from '../../types/automation-engine';
+import type { BrowserRuntimeId } from '../../types/browser-runtime';
 import type { FingerprintConfig } from '../../types/profile';
 import { getFingerprintRequiredPaths } from './fingerprint-engine-contracts';
 
@@ -38,19 +38,19 @@ function hasRequiredFingerprintValue(fingerprint: FingerprintConfig, path: strin
 }
 
 function normalizeBrowserEngine(
-  engine: AutomationEngine | undefined,
+  runtimeId: BrowserRuntimeId | undefined,
   fingerprint: FingerprintConfig
-): 'electron' | 'extension' | 'ruyi' {
-  if (engine === 'extension' || engine === 'ruyi' || engine === 'electron') {
-    return engine;
+): BrowserRuntimeId {
+  if (runtimeId) {
+    return runtimeId;
   }
   if (fingerprint.identity.hardware.browserFamily === 'firefox') {
-    return 'ruyi';
+    return 'firefox-bidi';
   }
   if (fingerprint.identity.hardware.browserFamily === 'electron') {
-    return 'electron';
+    return 'electron-webcontents';
   }
-  return 'extension';
+  return 'chromium-extension-relay';
 }
 
 function validateSpeechBundle(fingerprint: FingerprintConfig, warnings: string[]): void {
@@ -83,7 +83,7 @@ function validateSpeechBundle(fingerprint: FingerprintConfig, warnings: string[]
 
 export function getFingerprintPreflightIssues(
   fingerprint: FingerprintConfig | undefined,
-  engine?: AutomationEngine
+  runtimeId?: BrowserRuntimeId
 ): string[] {
   if (!fingerprint) {
     return [
@@ -94,7 +94,7 @@ export function getFingerprintPreflightIssues(
 
   const issues: string[] = [];
   const identity = fingerprint.identity;
-  const runtime = normalizeBrowserEngine(engine, fingerprint);
+  const runtime = normalizeBrowserEngine(runtimeId, fingerprint);
   const webgl = identity.graphics?.webgl;
 
   for (const path of getFingerprintRequiredPaths(runtime)) {
@@ -108,15 +108,15 @@ export function getFingerprintPreflightIssues(
 
 export function validateFingerprintConfig(
   fingerprint: FingerprintConfig,
-  engine?: AutomationEngine
+  runtimeId?: BrowserRuntimeId
 ): FingerprintValidationResult {
-  const warnings = [...getFingerprintPreflightIssues(fingerprint, engine)];
+  const warnings = [...getFingerprintPreflightIssues(fingerprint, runtimeId)];
   const identity = fingerprint.identity;
   const ua = identity.hardware.userAgent;
   const platform = identity.hardware.platform;
   const webgl = identity.graphics?.webgl;
   const languages = identity.region.languages;
-  const runtime = normalizeBrowserEngine(engine, fingerprint);
+  const runtime = normalizeBrowserEngine(runtimeId, fingerprint);
 
   if (languages.length > 0 && identity.region.primaryLanguage !== languages[0]) {
     warnings.push('region.primaryLanguage-mismatch');
@@ -142,10 +142,15 @@ export function validateFingerprintConfig(
     warnings.push('hardware.userAgent-os-mismatch:linux');
   }
 
-  if (runtime === 'ruyi' && !/Firefox\//i.test(ua)) {
+  if (runtime === 'firefox-bidi' && !/Firefox\//i.test(ua)) {
     warnings.push('hardware.userAgent-browser-mismatch:firefox');
   }
-  if ((runtime === 'extension' || runtime === 'electron') && !/(Chrome|Edg)\//i.test(ua)) {
+  if (
+    (runtime === 'chromium-extension-relay' ||
+      runtime === 'chromium-cloak-playwright' ||
+      runtime === 'electron-webcontents') &&
+    !/(Chrome|Edg)\//i.test(ua)
+  ) {
     warnings.push('hardware.userAgent-browser-mismatch:chromium');
   }
 

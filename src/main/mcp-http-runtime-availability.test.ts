@@ -54,7 +54,7 @@ describe('mcp http runtime availability', () => {
   it('builds normalized session context for catalog payloads', () => {
     const session = createSession({
       partition: ' profile-1 ',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       authScopes: ['browser.read'],
       closing: true,
       terminateAfterResponse: true,
@@ -63,7 +63,7 @@ describe('mcp http runtime availability', () => {
     expect(buildMcpRuntimeSessionContext(session)).toMatchObject({
       sessionId: 'session-1',
       profileId: 'profile-1',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       visible: false,
       browserAcquired: false,
       browserAcquireInProgress: false,
@@ -76,7 +76,7 @@ describe('mcp http runtime availability', () => {
       interactionReady: false,
       offscreenDetected: false,
       resolvedRuntimeDescriptor: {
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         capabilities: {
           'text.ocr': {
             supported: true,
@@ -175,11 +175,11 @@ describe('mcp http runtime availability', () => {
       requires: ['browser', 'browserCapability:network.responseBody'],
     });
     const session = createSession({
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
       browserHandle: {
         browser: {
           describeRuntime: () => ({
-            engine: 'electron',
+            runtimeId: 'electron-webcontents',
             profileMode: 'ephemeral',
             visibilityMode: 'embedded-view',
             capabilities: {

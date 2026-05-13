@@ -1,6 +1,7 @@
 import { DEFAULT_BROWSER_PROFILE } from '../../constants/browser-pool';
 import type { IProfileService } from '../../types/service-interfaces';
 import { normalizeProfileBrowserQuota, type BrowserProfile } from '../../types/profile';
+import { DEFAULT_BROWSER_RUNTIME_ID } from '../../types/browser-runtime';
 import { AcquireFailedError, ProfileNotFoundError } from '../errors/BrowserPoolError';
 import type { AcquireOptions, SessionConfig } from './types';
 
@@ -10,13 +11,16 @@ export interface ResolvedAcquireSession {
 }
 
 export function profileToSessionConfig(profile: BrowserProfile): SessionConfig {
-  const engine = profile.engine ?? 'electron';
+  const runtimeId = profile.runtimeId ?? DEFAULT_BROWSER_RUNTIME_ID;
   const quota = normalizeProfileBrowserQuota(profile.quota).quota;
 
   return {
     id: profile.id,
     partition: profile.partition,
-    engine,
+    runtimeId,
+    runtimeSourceOverride: profile.runtimeSourceOverride
+      ? structuredClone(profile.runtimeSourceOverride)
+      : null,
     fingerprint: profile.fingerprint ? structuredClone(profile.fingerprint) : undefined,
     proxy: profile.proxy ? structuredClone(profile.proxy) : null,
     quota,
@@ -65,11 +69,13 @@ export class AcquireSessionResolver {
   }
 }
 
-export function validateAcquireEngine(session: SessionConfig, acquireOptions: AcquireOptions): void {
-  const sessionEngine = session.engine ?? 'electron';
-  if (acquireOptions.engine && acquireOptions.engine !== sessionEngine) {
+export function validateAcquireRuntime(
+  session: SessionConfig,
+  acquireOptions: AcquireOptions
+): void {
+  if (acquireOptions.runtimeId && acquireOptions.runtimeId !== session.runtimeId) {
     throw new AcquireFailedError(
-      `Engine mismatch for profile ${session.id}: profile is bound to "${sessionEngine}", requested "${acquireOptions.engine}"`
+      `Runtime mismatch for profile ${session.id}: profile is bound to "${session.runtimeId}", requested "${acquireOptions.runtimeId}"`
     );
   }
 }

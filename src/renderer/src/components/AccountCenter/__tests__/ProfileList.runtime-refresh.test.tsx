@@ -23,7 +23,7 @@ function buildProfile(patch: Partial<BrowserProfile> = {}): BrowserProfile {
   return {
     id: 'profile-1',
     name: '环境-1',
-    engine: 'electron',
+    runtimeId: 'electron-webcontents',
     groupId: null,
     partition: 'persist:profile-1',
     proxy: null,
@@ -92,7 +92,7 @@ describe('ProfileList runtime refresh', () => {
         {
           id: 'browser-1',
           sessionId: 'profile-1',
-          engine: 'extension',
+          runtimeId: 'chromium-extension-relay',
           status: 'idle',
           lastAccessedAt: 1,
         },
@@ -103,7 +103,7 @@ describe('ProfileList runtime refresh', () => {
       <ProfileList
         profiles={[
           buildProfile({
-            engine: 'extension',
+            runtimeId: 'chromium-extension-relay',
             status: 'active',
           }),
         ]}
@@ -134,7 +134,7 @@ describe('ProfileList runtime refresh', () => {
         {
           id: 'browser-1',
           sessionId: 'profile-1',
-          engine: 'electron',
+          runtimeId: 'electron-webcontents',
           status: 'idle',
           lastAccessedAt: 1,
         },

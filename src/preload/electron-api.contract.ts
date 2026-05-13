@@ -6,6 +6,7 @@ type NamespaceKey =
   | 'duckdb'
   | 'queryTemplate'
   | 'jsPlugin'
+  | 'browserRuntime'
   | 'cloudAuth'
   | 'cloudSnapshot'
   | 'cloudPlugin'
@@ -60,6 +61,12 @@ const namespaceChecks: NamespaceChecks = {
     extra: {},
     declaredMatches: null as unknown as PreloadElectronAPI['jsPlugin'],
     preloadMatches: null as unknown as DeclaredElectronAPI['jsPlugin'],
+  },
+  browserRuntime: {
+    missing: {},
+    extra: {},
+    declaredMatches: null as unknown as PreloadElectronAPI['browserRuntime'],
+    preloadMatches: null as unknown as DeclaredElectronAPI['browserRuntime'],
   },
   cloudAuth: {
     missing: {},

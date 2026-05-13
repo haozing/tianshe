@@ -8,13 +8,24 @@ import { getDefaultFingerprint } from '../../constants/fingerprint-defaults';
 const electronState = vi.hoisted(() => ({
   appPath: process.cwd(),
   userDataDir: '',
+  isPackaged: false,
+}));
+
+vi.mock('electron-webcontents', () => ({
+  app: {
+    getPath: vi.fn(() => electronState.userDataDir),
+    getAppPath: vi.fn(() => electronState.appPath),
+    isPackaged: false,
+  },
 }));
 
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => electronState.userDataDir),
     getAppPath: vi.fn(() => electronState.appPath),
-    isPackaged: false,
+    get isPackaged() {
+      return electronState.isPackaged;
+    },
   },
 }));
 
@@ -35,7 +46,7 @@ const runSmoke = shouldRunSmoke ? it : it.skip;
 
 describe('createExtensionBrowserFactory smoke', () => {
   runSmoke(
-    'launches bundled Chrome and drives a basic page flow through the extension engine',
+    'launches bundled Chrome and drives a basic page flow through the chromium extension runtime',
     async () => {
       if (process.platform !== 'win32') {
         throw new Error('Extension smoke test currently expects the bundled Windows chrome.exe runtime');
@@ -49,7 +60,7 @@ describe('createExtensionBrowserFactory smoke', () => {
       const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'airpa-extension-smoke-'));
       const smokeServer = await createBrowserEngineSmokeServer({
         title: 'Extension Smoke',
-        pingMessage: 'pong from extension engine',
+        pingMessage: 'pong from chromium extension runtime',
       });
       const originalExtraLaunchArgs = [...AIRPA_RUNTIME_CONFIG.extension.extraLaunchArgs];
       electronState.userDataDir = path.join(tempRoot, 'user-data-root');
@@ -68,7 +79,7 @@ describe('createExtensionBrowserFactory smoke', () => {
         const created = await factory({
           id: sessionId,
           partition: `persist:${sessionId}`,
-          engine: 'extension',
+          runtimeId: 'chromium-extension-relay',
           fingerprint: {
             ...fingerprint,
             identity: {
@@ -91,10 +102,10 @@ describe('createExtensionBrowserFactory smoke', () => {
           lastAccessedAt: Date.now(),
         });
 
-        expect(created.engine).toBe('extension');
+        expect(created.runtimeId).toBe('chromium-extension-relay');
         closeBrowser = () => created.browser.closeInternal();
         expect(created.browser.describeRuntime()).toMatchObject({
-          engine: 'extension',
+          runtimeId: 'chromium-extension-relay',
         });
         expect(created.browser.hasCapability('cookies.filter')).toBe(true);
         expect(created.browser.hasCapability('network.capture')).toBe(true);
@@ -139,13 +150,13 @@ describe('createExtensionBrowserFactory smoke', () => {
         await created.browser.type('#name', '', { clear: true });
         await created.browser.click('#name');
         const nativeTypeStartedAt = Date.now();
-        await created.browser.native.type('extension engine smoke', { delay: 60 });
+        await created.browser.native.type('chromium extension runtime smoke', { delay: 60 });
         expect(Date.now() - nativeTypeStartedAt).toBeGreaterThanOrEqual(900);
         await waitForCondition(async () => {
           const value = await created.browser.evaluate<string>(
             "document.querySelector('#name').value"
           );
-          return value === 'extension engine smoke';
+          return value === 'chromium extension runtime smoke';
         }, 10_000, 'typed input value');
 
         await created.browser.select('#choice', 'beta');
@@ -158,19 +169,19 @@ describe('createExtensionBrowserFactory smoke', () => {
         const responseEntry = await created.browser.waitForResponse('/api/ping', 30_000);
         expect(responseEntry.url).toContain('/api/ping');
         expect(responseEntry.status).toBe(200);
-        expect(responseEntry.responseBody).toContain('pong from extension engine');
+        expect(responseEntry.responseBody).toContain('pong from chromium extension runtime');
         expect(created.browser.getNetworkEntries().every((entry) => entry.url.includes('/api/ping'))).toBe(
           true
         );
         expect(
           created.browser
             .getNetworkEntries()
-            .every((entry) => typeof entry.responseBody === 'string' && entry.responseBody.includes('pong from extension engine'))
+            .every((entry) => typeof entry.responseBody === 'string' && entry.responseBody.includes('pong from chromium extension runtime'))
         ).toBe(true);
 
         await waitForCondition(async () => {
           const text = await created.browser.getText('#result');
-          return text.includes('pong from extension engine');
+          return text.includes('pong from chromium extension runtime');
         }, 10_000, 'fetch result text');
 
         const alertWait = created.browser.waitForDialog({ timeoutMs: 30_000 });

@@ -17,7 +17,7 @@ import {
   DEFAULT_SCOPE_KEY,
   fallbackName,
   hasOwn,
-  normalizeProfileEngine,
+  normalizeProfileRuntimeId,
   normalizeScopeKey,
   toNullableString,
   toOptionalBoolean,
@@ -270,7 +270,7 @@ export class SyncLocalApplyService {
 
     const payload = toPayloadObject(change.payload);
     const hasNameField = hasOwn(payload, 'name');
-    const hasEngineField = hasOwn(payload, 'engine');
+    const hasRuntimeIdField = hasOwn(payload, 'runtimeId');
     const hasGroupField =
       hasOwn(payload, 'groupId') || hasOwn(payload, 'groupGlobalUid') || hasOwn(payload, 'groupUid');
     const hasNotesField = hasOwn(payload, 'notes');
@@ -281,8 +281,8 @@ export class SyncLocalApplyService {
     const hasLockTimeoutField = hasOwn(payload, 'lockTimeoutMs');
 
     const nameFromPayload = hasNameField ? toOptionalString(payload.name) : undefined;
-    const engineRaw = hasEngineField ? toOptionalString(payload.engine) : undefined;
-    const engine = normalizeProfileEngine(engineRaw);
+    const runtimeIdRaw = hasRuntimeIdField ? toOptionalString(payload.runtimeId) : undefined;
+    const runtimeId = normalizeProfileRuntimeId(runtimeIdRaw);
     const groupId = hasGroupField
       ? await this.resolveProfileGroupLocalIdFromPayload(payload)
       : undefined;
@@ -297,7 +297,7 @@ export class SyncLocalApplyService {
     if (mapping) {
       const updates: UpdateProfileParams = {
         ...(hasNameField && nameFromPayload ? { name: nameFromPayload } : {}),
-        ...(hasEngineField && engine ? { engine } : {}),
+        ...(hasRuntimeIdField && runtimeId ? { runtimeId } : {}),
         ...(hasGroupField && groupId !== undefined ? { groupId } : {}),
         ...(notes !== undefined ? { notes } : {}),
         ...(tags ? { tags } : {}),
@@ -318,7 +318,7 @@ export class SyncLocalApplyService {
       const name = nameFromPayload || fallbackName('profile', change.globalUid);
       const created = await this.deps.profileService.create({
         name,
-        ...(engine ? { engine } : {}),
+        ...(runtimeId ? { runtimeId } : {}),
         ...(groupId !== undefined ? { groupId } : {}),
         ...(notes !== undefined ? { notes } : {}),
         ...(tags ? { tags } : {}),

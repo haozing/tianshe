@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { ipcMain } from 'electron';
+import { ipcMain } from 'electron-webcontents';
 import { registerAccountHandlers } from './account-ipc-handler';
 import { ipcRouteRegistry } from '../ipc-route-registry';
 import { UNBOUND_PROFILE_ID, type Account, type SavedSite } from '../../types/profile';
@@ -9,7 +9,7 @@ import {
   attachProfileLiveSessionLease,
 } from '../../core/browser-pool/profile-live-session-lease';
 
-vi.mock('electron', () => ({
+vi.mock('electron-webcontents', () => ({
   ipcMain: {
     handle: vi.fn(),
     removeHandler: vi.fn(),
@@ -38,7 +38,7 @@ vi.mock('../../core/logger', () => ({
 interface BrowserHandle {
   browserId: string;
   sessionId: string;
-  engine: 'electron' | 'extension';
+  runtimeId: 'electron-webcontents' | 'chromium-extension-relay';
   browser: {
     goto: Mock;
     show?: Mock;
@@ -114,7 +114,7 @@ describe('registerAccountHandlers - account:login', () => {
   const buildBrowserHandle = (patch: Partial<BrowserHandle> = {}): BrowserHandle => ({
     browserId: 'browser-1',
     sessionId: 'session-1',
-    engine: 'electron',
+    runtimeId: 'electron-webcontents',
     browser: {
       goto: vi.fn().mockResolvedValue(undefined),
     },
@@ -440,7 +440,7 @@ describe('registerAccountHandlers - account:login', () => {
   it('should bring extension browser to front and skip popup mounting', async () => {
     const show = vi.fn().mockResolvedValue(undefined);
     const handle = buildBrowserHandle({
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
       browser: {
         goto: vi.fn().mockResolvedValue(undefined),
         show,

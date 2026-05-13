@@ -1,4 +1,5 @@
 import type { IpcRenderer, IpcRendererEvent } from 'electron';
+import type { BrowserRuntimeId } from '../../types/profile';
 
 export function createCloudAPI(ipcRenderer: IpcRenderer) {
   return {
@@ -215,7 +216,7 @@ export function createCloudAPI(ipcRenderer: IpcRenderer) {
           profileUid?: string;
           cloudUid: string;
           name: string;
-          engine: 'electron' | 'extension' | 'ruyi';
+          runtimeId: BrowserRuntimeId;
           ownerUserId: number;
           ownerUserName?: string;
           visibility: 'public' | 'private';
@@ -246,7 +247,7 @@ export function createCloudAPI(ipcRenderer: IpcRenderer) {
           profileUid?: string;
           cloudUid: string;
           name: string;
-          engine: 'electron' | 'extension' | 'ruyi';
+          runtimeId: BrowserRuntimeId;
           ownerUserId: number;
           ownerUserName?: string;
           visibility: 'public' | 'private';

@@ -12,13 +12,24 @@ import {
 const electronState = vi.hoisted(() => ({
   appPath: process.cwd(),
   userDataDir: '',
+  isPackaged: false,
+}));
+
+vi.mock('electron-webcontents', () => ({
+  app: {
+    getPath: vi.fn(() => electronState.userDataDir),
+    getAppPath: vi.fn(() => electronState.appPath),
+    isPackaged: false,
+  },
 }));
 
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => electronState.userDataDir),
     getAppPath: vi.fn(() => electronState.appPath),
-    isPackaged: false,
+    get isPackaged() {
+      return electronState.isPackaged;
+    },
   },
 }));
 
@@ -85,7 +96,7 @@ async function recordStep<T>(
 }
 
 function buildFingerprint() {
-  return mergeFingerprintConfig(getDefaultFingerprint('extension'), {
+  return mergeFingerprintConfig(getDefaultFingerprint('chromium-extension-relay'), {
     identity: {
       region: {
         timezone: 'Asia/Hong_Kong',
@@ -135,7 +146,7 @@ function createSession(id: string, fingerprint: SessionConfig['fingerprint']): S
   return {
     id,
     partition: `persist:${id}`,
-    engine: 'extension',
+    runtimeId: 'chromium-extension-relay',
     fingerprint,
     proxy: null,
     quota: 1,
@@ -256,7 +267,7 @@ describe('createExtensionBrowserFactory fingerprint robustness', () => {
 
       const reportPath = requireEnv('AIRPA_FINGERPRINT_REAL_REPORT_PATH');
       const report: Record<string, unknown> = {
-        engine: 'extension',
+        runtimeId: 'chromium-extension-relay',
         scenario: 'fingerprint-robustness-v1',
         startedAt: new Date().toISOString(),
         reportPath,
@@ -306,7 +317,7 @@ describe('createExtensionBrowserFactory fingerprint robustness', () => {
         );
         closeGenerated = () => generated.browser.closeInternal();
         expect(generated.browser.describeRuntime()).toMatchObject({
-          engine: 'extension',
+          runtimeId: 'chromium-extension-relay',
         });
         expect(generated.browser.hasCapability('emulation.identity')).toBe(true);
         expect(generated.browser.hasCapability('emulation.viewport')).toBe(true);

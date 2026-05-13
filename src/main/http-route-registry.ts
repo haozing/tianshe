@@ -1,7 +1,7 @@
 import type { Application, Request, Response } from 'express';
 import type { RestApiConfig, RestApiDependencies } from '../types/http-api';
 import type { BrowserHandle, BrowserPoolManager } from '../core/browser-pool';
-import type { AutomationEngine } from '../core/browser-pool/types';
+import type { BrowserRuntimeId } from '../core/browser-pool/types';
 import { registerMcpRoutes } from './mcp-http-adapter';
 import type { McpSessionInfo } from './mcp-http-types';
 import {
@@ -40,10 +40,10 @@ interface HttpAuthRouteContext {
 
 interface HttpBrowserRouteContext {
   browserPoolAvailable: boolean;
-  parseRequestedEngine: (value: string | undefined) => AutomationEngine | undefined;
+  parseRequestedRuntimeId: (value: string | undefined) => BrowserRuntimeId | undefined;
   acquireBrowserFromPool: (
     profileId?: string,
-    engine?: AutomationEngine,
+    runtimeId?: BrowserRuntimeId,
     source?: 'mcp' | 'http'
   ) => Promise<BrowserHandle>;
   getBrowserPoolManager?: () => BrowserPoolManager;
@@ -128,7 +128,7 @@ export const registerHttpRoutes = (options: RegisterHttpRoutesOptions): void => 
         normalizeStructuredError: options.errors.normalizeStructuredError,
       },
       browserBinding: {
-        parseRequestedEngine: options.browser.parseRequestedEngine,
+        parseRequestedRuntimeId: options.browser.parseRequestedRuntimeId,
         acquireBrowserFromPool: options.browser.acquireBrowserFromPool,
         getBrowserPoolManager: options.browser.getBrowserPoolManager,
       },

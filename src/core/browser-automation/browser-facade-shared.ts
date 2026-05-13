@@ -136,12 +136,12 @@ export function createViewportOCRService(
 }
 
 export function createBrowserObservationContext(options: {
-  browserEngine: BrowserEngineName;
+  browserRuntimeId: BrowserEngineName;
   browserId: string;
   partial?: Partial<TraceContext>;
 }): TraceContext {
   return createChildTraceContext({
-    browserEngine: options.browserEngine,
+    browserRuntimeId: options.browserRuntimeId,
     browserId: options.browserId,
     ...(options.partial || {}),
   });
@@ -151,7 +151,7 @@ export async function observeBrowserOperation<T>(
   browser: BrowserInterface,
   options: {
     context?: TraceContext;
-    browserEngine: BrowserEngineName;
+    browserRuntimeId: BrowserEngineName;
     browserId: string;
     event: string;
     attrs?: Record<string, unknown>;
@@ -163,11 +163,11 @@ export async function observeBrowserOperation<T>(
   const context =
     options.context ??
     createBrowserObservationContext({
-      browserEngine: options.browserEngine,
+      browserRuntimeId: options.browserRuntimeId,
       browserId: options.browserId,
     });
   const baseAttrs = {
-    engine: options.browserEngine,
+    runtimeId: options.browserRuntimeId,
     browserId: options.browserId,
     ...(options.attrs || {}),
   };

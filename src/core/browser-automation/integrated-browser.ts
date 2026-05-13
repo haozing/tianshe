@@ -120,8 +120,8 @@ import { summarizeForObservation } from '../observability/observation-service';
 import type { TraceContext } from '../observability/types';
 import {
   browserRuntimeSupports,
-  getStaticEngineRuntimeDescriptor,
-} from '../browser-pool/engine-capability-registry';
+  getStaticRuntimeDescriptor,
+} from '../browser-pool/runtime-capability-registry';
 
 export type { TextClickResult, TextMatchNormalizedResult, TextQueryOptions, TextQueryRegion };
 
@@ -144,7 +144,9 @@ function isRecoverableCaptureError(error: unknown): boolean {
   ].some((token) => message.includes(token));
 }
 
-const INTEGRATED_BROWSER_RUNTIME = Object.freeze(getStaticEngineRuntimeDescriptor('electron'));
+const INTEGRATED_BROWSER_RUNTIME = Object.freeze(
+  getStaticRuntimeDescriptor('electron-webcontents')
+);
 
 /**
  * IntegratedBrowser - 集成浏览器实现
@@ -255,7 +257,7 @@ export class IntegratedBrowser implements BrowserInterface {
   }
 
   describeRuntime() {
-    return getStaticEngineRuntimeDescriptor('electron');
+    return getStaticRuntimeDescriptor('electron-webcontents');
   }
 
   hasCapability(name: BrowserCapabilityName): boolean {
@@ -264,7 +266,7 @@ export class IntegratedBrowser implements BrowserInterface {
 
   private createObservationContext(partial: Partial<TraceContext> = {}): TraceContext {
     return createBrowserObservationContext({
-      browserEngine: 'electron',
+      browserRuntimeId: 'electron-webcontents',
       browserId: this.getViewId(),
       partial,
     });
@@ -279,7 +281,7 @@ export class IntegratedBrowser implements BrowserInterface {
   }): Promise<T> {
     return observeSharedBrowserOperation(this, {
       ...options,
-      browserEngine: 'electron',
+      browserRuntimeId: 'electron-webcontents',
       browserId: this.getViewId(),
     });
   }

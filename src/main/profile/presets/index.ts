@@ -5,7 +5,7 @@
  */
 
 import type {
-  AutomationEngine,
+  BrowserRuntimeId,
   FingerprintPreset,
   FingerprintConfig,
 } from '../../../types/profile';
@@ -34,8 +34,10 @@ export function getDefaultPreset(): FingerprintPreset {
   return presets.find((p) => p.id === 'windows-chrome-141') || presets[0];
 }
 
-export function getDefaultFingerprint(engine: AutomationEngine = 'extension'): FingerprintConfig {
-  return getDefaultFingerprintFromConstants(engine);
+export function getDefaultFingerprint(
+  runtimeId: BrowserRuntimeId = 'chromium-extension-relay'
+): FingerprintConfig {
+  return getDefaultFingerprintFromConstants(runtimeId);
 }
 
 export function getPresetsByOS(os: 'windows' | 'macos' | 'linux'): FingerprintPreset[] {

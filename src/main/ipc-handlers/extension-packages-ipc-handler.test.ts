@@ -84,7 +84,7 @@ describe('registerExtensionPackagesManagerHandlers', () => {
     profileService.get.mockResolvedValue({
       id: 'el-1',
       name: 'Electron 1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
     });
 
     const handler = getHandler('extension-packages:list-profile-bindings');
@@ -99,7 +99,7 @@ describe('registerExtensionPackagesManagerHandlers', () => {
     profileService.get.mockResolvedValue({
       id: 'el-1',
       name: 'Electron 1',
-      engine: 'electron',
+      runtimeId: 'electron-webcontents',
     });
 
     const handler = getHandler('extension-packages:batch-unbind');
@@ -118,7 +118,7 @@ describe('registerExtensionPackagesManagerHandlers', () => {
     profileService.get.mockResolvedValue({
       id: 'ext-1',
       name: 'Extension 1',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
     });
     manager.bindPackagesToProfiles.mockResolvedValue(undefined);
     (getBrowserPoolManager as Mock).mockReturnValue({
@@ -151,7 +151,7 @@ describe('registerExtensionPackagesManagerHandlers', () => {
     profileService.get.mockResolvedValue({
       id: 'ext-1',
       name: 'Extension 1',
-      engine: 'extension',
+      runtimeId: 'chromium-extension-relay',
     });
     manager.unbindExtensionsFromProfiles.mockResolvedValue({
       removedBindings: 2,

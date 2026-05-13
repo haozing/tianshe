@@ -1,4 +1,4 @@
-import type { AutomationEngine } from '../../types/automation-engine';
+import type { BrowserRuntimeId } from '../../types/browser-runtime';
 
 export type FingerprintFieldGroup = {
   label: string;
@@ -21,8 +21,8 @@ export type FingerprintEngineContract = {
   activeInvocation: FingerprintActiveInvocationContract[];
 };
 
-const FINGERPRINT_ENGINE_CONTRACTS: Record<AutomationEngine, FingerprintEngineContract> = {
-  electron: {
+const FINGERPRINT_RUNTIME_CONTRACTS: Record<BrowserRuntimeId, FingerprintEngineContract> = {
+  'electron-webcontents': {
     startupSummary:
       'Electron 继续沿用原有 stealth/CDP 投影，不走原生文件注入；启动指纹承诺只对齐现有 Electron 投影与真实页面已验证的字段。',
     startupGuaranteeNote:
@@ -83,7 +83,7 @@ const FINGERPRINT_ENGINE_CONTRACTS: Record<AutomationEngine, FingerprintEngineCo
       },
     ],
   },
-  extension: {
+  'chromium-extension-relay': {
     startupSummary:
       'Extension 启动指纹仅对齐当前 Chromium 141 runtime 已稳定验证的原生 --ruyi/fp.txt 字段；默认只生成 stable-only 启动字段。',
     startupGuaranteeNote:
@@ -155,7 +155,7 @@ const FINGERPRINT_ENGINE_CONTRACTS: Record<AutomationEngine, FingerprintEngineCo
       },
     ],
   },
-  ruyi: {
+  'firefox-bidi': {
     startupSummary:
       'Ruyi 启动指纹对齐 firefox-fingerprintBrowser README 描述的 fpfile 字段；当前默认只保留 README 范围内已稳定验证的启动字段。',
     startupGuaranteeNote:
@@ -240,12 +240,56 @@ const FINGERPRINT_ENGINE_CONTRACTS: Record<AutomationEngine, FingerprintEngineCo
       },
     ],
   },
+  'chromium-cloak-playwright': {
+    startupSummary:
+      'Cloak Playwright 启动指纹通过 CloakBrowser 官方 wrapper/flags 投影；不使用 Chromium extension relay 的 --ruyi/fp.txt 文件。',
+    startupGuaranteeNote:
+      'Cloak 的真实指纹能力以 CloakBrowser 当前 binary 和官方参数支持为准；timezone、locale、platform、screen、hardware 等字段应通过真实页面契约测试验证。',
+    startupFieldGroups: [
+      {
+        label: 'Navigator / Locale',
+        fields: ['userAgent', 'platform', 'languages', 'timezone'],
+      },
+      {
+        label: 'Screen / Device',
+        fields: ['width', 'height', 'hardwareConcurrency', 'deviceMemory'],
+      },
+      {
+        label: 'Cloak Flags',
+        fields: ['fingerprintSeed', 'geoip', 'humanize'],
+        notes: '这些字段属于 Cloak wrapper/flags 层，不属于通用浏览器指纹文件。',
+      },
+    ],
+    requiredPaths: [
+      'identity.hardware.userAgent',
+      'identity.hardware.platform',
+      'identity.region.primaryLanguage',
+      'identity.region.languages',
+      'identity.region.timezone',
+      'identity.hardware.hardwareConcurrency',
+      'identity.display.width',
+      'identity.display.height',
+    ],
+    activeInvocation: [
+      {
+        label: 'Playwright 上下文身份配置',
+        supported: true,
+        stability: 'experimental',
+        summary:
+          'Cloak/Playwright 可以在 context 创建时传递 locale、timezone、viewport 等配置，但最终以 Cloak binary 和真实页面结果为准。',
+      },
+    ],
+  },
 };
 
-export function getFingerprintEngineContract(engine: AutomationEngine): FingerprintEngineContract {
-  return FINGERPRINT_ENGINE_CONTRACTS[engine];
+export function getFingerprintRuntimeContract(
+  runtimeId: BrowserRuntimeId
+): FingerprintEngineContract {
+  return FINGERPRINT_RUNTIME_CONTRACTS[runtimeId];
 }
 
-export function getFingerprintRequiredPaths(engine: AutomationEngine): string[] {
-  return FINGERPRINT_ENGINE_CONTRACTS[engine].requiredPaths;
+export function getFingerprintRequiredPaths(runtimeId: BrowserRuntimeId): string[] {
+  return FINGERPRINT_RUNTIME_CONTRACTS[runtimeId].requiredPaths;
 }
+
+export const getFingerprintEngineContract = getFingerprintRuntimeContract;

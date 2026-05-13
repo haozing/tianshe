@@ -47,7 +47,7 @@ export function ExtensionPackagesPanel({
   const cloudCatalogAvailable = isCloudBrowserExtensionCatalogAvailable();
 
   const extensionProfiles = useMemo(
-    () => profiles.filter((item) => item.engine === 'extension'),
+    () => profiles.filter((item) => item.runtimeId === 'chromium-extension-relay'),
     [profiles]
   );
 

@@ -106,8 +106,9 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
   ...createSizeRepairTargets(
     'main-runtime',
     'Split main-process composition, profile runtime, and window management.',
-    'Index/bootstrap code only wires services and each runtime file has a single owner.',
+    'Index/bootstrap code only wires services and runtime bridges are split by lifecycle, events, and domain capability.',
     [
+      'src/main/profile/browser-pool-integration-cloak.ts',
       'src/main/profile/ruyi-firefox-client.test.ts',
     ]
   ),
