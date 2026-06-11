@@ -11,6 +11,7 @@
  */
 
 import { DuckDBConnection } from '@duckdb/node-api';
+import fs from 'fs-extra';
 import { DatasetStorageService, sanitizeDatasetId } from './dataset-storage-service';
 import { DatasetMetadataService } from './dataset-metadata-service';
 import { DatasetSchemaService } from './dataset-schema-service';
@@ -33,6 +34,7 @@ import {
   getFileSize,
   quoteIdentifier,
   quoteQualifiedName,
+  runInDuckDbTransaction,
 } from './utils';
 import { generateId } from '../../utils/id-generator';
 import type {
@@ -114,7 +116,11 @@ export class DatasetService {
     );
 
     // 🔹 功能层：导入、导出、查询
-    this.importService = new DatasetImportService(conn, this.metadataService);
+    this.importService = new DatasetImportService(
+      conn,
+      this.metadataService,
+      this.storageService
+    );
     this.exportService = new DatasetExportService(
       conn,
       this.metadataService,
@@ -264,6 +270,7 @@ export class DatasetService {
   initTable = () => this.metadataService.initTable();
   listDatasets = () => this.metadataService.listDatasets();
   getDatasetInfo = (id: string) => this.metadataService.getDatasetInfo(id);
+  reconcileDatasetRowCount = (id: string) => this.metadataService.reconcileRowCount(id);
   renameDataset = (id: string, name: string) => this.metadataService.renameDataset(id, name);
   analyzeDatasetTypes = (id: string) => this.metadataService.analyzeDatasetTypes(id);
 
@@ -452,30 +459,40 @@ export class DatasetService {
     return this.storageService.executeInQueue(datasetId, async () => {
       const escapedPath = outputPath.replace(/\\/g, '\\\\').replace(/'/g, "''");
       const attachKey = `ds_${datasetId}`;
+      let created = false;
 
       // ATTACH 数据库文件
       await this.conn.run(`ATTACH '${escapedPath}' AS ${quoteIdentifier(attachKey)}`);
 
+      let createError: unknown = null;
       try {
         const schema = await this.createBaseDatasetTable(attachKey);
 
-        const tabGroupId = await this.tabGroupService.createGroupForDataset(datasetId, datasetName);
+        const tabGroupId = await runInDuckDbTransaction(this.conn, async () => {
+          const createdTabGroupId = await this.tabGroupService.createGroupForDataset(
+            datasetId,
+            datasetName
+          );
 
-        // 保存元数据
-        await this.metadataService.saveMetadata({
-          id: datasetId,
-          name: datasetName,
-          filePath: outputPath,
-          rowCount: 0,
-          columnCount: schema.length,
-          sizeBytes: await getFileSize(outputPath),
-          createdAt: Date.now(),
-          schema,
-          folderId: options?.folderId ?? null,
-          tabGroupId,
-          tabOrder: 0,
-          isGroupDefault: true,
+          // 保存元数据
+          await this.metadataService.saveMetadata({
+            id: datasetId,
+            name: datasetName,
+            filePath: outputPath,
+            rowCount: 0,
+            columnCount: schema.length,
+            sizeBytes: await getFileSize(outputPath),
+            createdAt: Date.now(),
+            schema,
+            folderId: options?.folderId ?? null,
+            tabGroupId: createdTabGroupId,
+            tabOrder: 0,
+            isGroupDefault: true,
+          });
+
+          return createdTabGroupId;
         });
+        created = true;
 
         logger.info('Created empty dataset', {
           datasetId,
@@ -491,11 +508,50 @@ export class DatasetService {
         });
 
         return datasetId;
+      } catch (error) {
+        createError = error;
+        throw error;
       } finally {
         // DETACH 数据库
-        await this.conn.run(`DETACH ${quoteIdentifier(attachKey)}`);
+        try {
+          await this.conn.run(`DETACH ${quoteIdentifier(attachKey)}`);
+        } catch (detachError) {
+          if (createError) {
+            logger.warn('Failed to detach empty dataset after create failure', {
+              datasetId,
+              error: detachError,
+            });
+          } else {
+            throw detachError;
+          }
+        }
+
+        if (createError && !created) {
+          await this.cleanupFailedEmptyDatasetFiles(datasetId, outputPath);
+        }
       }
     });
+  }
+
+  private async cleanupFailedEmptyDatasetFiles(
+    datasetId: string,
+    outputPath: string
+  ): Promise<void> {
+    const files = [outputPath, `${outputPath}.wal`];
+
+    for (const filePath of files) {
+      try {
+        if (await fs.pathExists(filePath)) {
+          await fs.remove(filePath);
+        }
+      } catch (cleanupError) {
+        logger.warn('Failed to cleanup empty dataset file after create failure', {
+          datasetId,
+          filePath,
+          error: cleanupError,
+        });
+      }
+    }
   }
 
   /**

@@ -9,6 +9,7 @@ describe('http-runtime-state', () => {
     expect(state.runtimeMetrics).toEqual({
       queueOverflowCount: 0,
       invokeTimeoutCount: 0,
+      abandonedInvocationCount: 0,
       browserAcquireFailureCount: 0,
       browserAcquireTimeoutCount: 0,
     });

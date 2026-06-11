@@ -644,7 +644,7 @@ export class PluginContext {
    * 清理所有资源（在插件卸载时调用）
    * @internal
    */
-  dispose(): void {
+  async dispose(): Promise<void> {
     // 清理消息订阅
     for (const unsubscribe of this.messageUnsubscribers) {
       try {
@@ -669,8 +669,10 @@ export class PluginContext {
     this.customModuleLoaders.clear();
 
     // 清理字节码临时文件
-    this.bytecodeRunner.cleanupAll().catch((err) => {
+    try {
+      await this.bytecodeRunner.cleanupAll();
+    } catch (err) {
       logger.error('Error cleaning up bytecode runner', err);
-    });
+    }
   }
 }

@@ -137,6 +137,18 @@ describe('BrowserPoolManager', () => {
       await handle.release();
     });
 
+    it('未初始化获取浏览器应该快速抛出明确错误', async () => {
+      const mockServiceGetter = createMockProfileServiceGetter();
+      mockServiceGetter.profiles.set('test-session', createMockProfile({ id: 'test-session' }));
+      const uninitializedManager = new BrowserPoolManager(mockServiceGetter.getProfileService);
+
+      await expect(uninitializedManager.acquire('test-session')).rejects.toThrow(
+        'Browser pool not initialized'
+      );
+
+      await uninitializedManager.stop();
+    });
+
     it('不指定 profileId 应该使用默认浏览器', async () => {
       const handle = await manager.acquire(undefined);
 
@@ -418,6 +430,30 @@ describe('BrowserPoolManager', () => {
       expect(statsB!.lockedCount).toBe(0);
       expect(statsB!.idleCount).toBe(1);
     });
+
+    it('releaseByPlugin 释放浏览器后应该唤醒其他插件等待者', async () => {
+      profiles.set('plugin-session', createMockProfile({ id: 'plugin-session', quota: 1 }));
+
+      const handleA = await manager.acquire('plugin-session', {}, 'plugin', 'plugin-A');
+      const pendingAcquire = manager.acquire(
+        'plugin-session',
+        { timeout: 1000 },
+        'plugin',
+        'plugin-B'
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(manager.getWaitQueueStats().totalWaiting).toBe(1);
+
+      const result = await manager.releaseByPlugin('plugin-A');
+      const handleB = await pendingAcquire;
+
+      expect(result.browsers).toBe(1);
+      expect(handleB.browserId).toBe(handleA.browserId);
+      expect(manager.getWaitQueueStats().totalWaiting).toBe(0);
+
+      await handleB.release();
+    });
   });
 
   describe('统计信息', () => {
@@ -490,6 +526,64 @@ describe('BrowserPoolManager', () => {
   });
 
   describe('Profile 状态同步', () => {
+    it('锁超时释放后应该唤醒等待队列', async () => {
+      profiles.set(
+        'lock-timeout-session',
+        createMockProfile({ id: 'lock-timeout-session', lockTimeoutMs: 1000 })
+      );
+
+      const handle1 = await manager.acquire('lock-timeout-session');
+      const pendingAcquire = manager.acquire('lock-timeout-session', { timeout: 5000 });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(manager.getWaitQueueStats().totalWaiting).toBe(1);
+
+      const lockedBrowser = manager
+        .listBrowsers()
+        .find((browser: any) => browser.id === handle1.browserId);
+      expect(lockedBrowser).toBeDefined();
+      (lockedBrowser as any).lockedAt = Date.now() - 2000;
+
+      const globalPool = (manager as any).globalPool;
+      const releasedCount = await globalPool.checkLockTimeout();
+      const handle2 = await pendingAcquire;
+
+      expect(releasedCount).toBe(1);
+      expect(handle2.browserId).toBe(handle1.browserId);
+      expect(manager.getWaitQueueStats().totalWaiting).toBe(0);
+
+      await handle2.release();
+    });
+
+    it('reset 失败时不应把旧浏览器交接给等待者', async () => {
+      profiles.set('reset-failure-session', createMockProfile({ id: 'reset-failure-session' }));
+
+      const handle1 = await manager.acquire('reset-failure-session');
+      const firstBrowserId = handle1.browserId;
+      const firstBrowser = manager
+        .listBrowsers()
+        .find((browser: any) => browser.id === firstBrowserId);
+      expect(firstBrowser).toBeDefined();
+      (firstBrowser as any).browser.reset = vi.fn(async () => {
+        throw new Error('reset failed');
+      });
+
+      const pendingAcquire = manager.acquire('reset-failure-session', { timeout: 5000 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(manager.getWaitQueueStats().totalWaiting).toBe(1);
+
+      await handle1.release({ clearStorage: true, navigateTo: 'about:blank' });
+      const handle2 = await pendingAcquire;
+
+      expect(handle2.browserId).not.toBe(firstBrowserId);
+      expect(manager.listBrowsers().some((browser: any) => browser.id === firstBrowserId)).toBe(
+        false
+      );
+      expect(manager.getWaitQueueStats().totalWaiting).toBe(0);
+
+      await handle2.release();
+    });
+
     it('健康检查清理异常浏览器后应该把 Profile 状态回写为 idle', async () => {
       profiles.set('health-session', createMockProfile({ id: 'health-session' }));
 

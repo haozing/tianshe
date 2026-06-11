@@ -23,6 +23,8 @@ export interface CommandExecutionGuardContext {
 
 export type CommandExecutionGuard = (context: CommandExecutionGuardContext) => Promise<void> | void;
 
+const DEFAULT_COMMAND_DRAIN_TIMEOUT_MS = 30_000;
+
 export interface PluginExecutionCoordinatorDeps {
   lifecycle: PluginLifecycleManager;
   uiExtManager: UIExtensionManager;
@@ -32,6 +34,8 @@ export interface PluginExecutionCoordinatorDeps {
 
 export class PluginExecutionCoordinator {
   private commandExecutionGuards: CommandExecutionGuard[] = [];
+  private runningCommandCounts = new Map<string, number>();
+  private runningCommandWaiters = new Map<string, Set<() => void>>();
 
   constructor(private deps: PluginExecutionCoordinatorDeps) {}
 
@@ -51,6 +55,73 @@ export class PluginExecutionCoordinator {
     return this.deps.getRuntimeStatus(pluginId);
   }
 
+  getRunningCommandCount(pluginId: string): number {
+    return this.runningCommandCounts.get(pluginId) ?? 0;
+  }
+
+  assertNoRunningCommands(pluginId: string, operation: string): void {
+    const running = this.getRunningCommandCount(pluginId);
+    if (running > 0) {
+      throw new Error(
+        `Cannot ${operation} plugin ${pluginId}: ${running} command(s) still running`
+      );
+    }
+  }
+
+  async waitForRunningCommands(
+    pluginId: string,
+    timeoutMs: number = DEFAULT_COMMAND_DRAIN_TIMEOUT_MS
+  ): Promise<void> {
+    if (this.getRunningCommandCount(pluginId) === 0) {
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const waiters = this.runningCommandWaiters.get(pluginId) ?? new Set<() => void>();
+      let timeout: NodeJS.Timeout | undefined;
+      const done = () => {
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+        waiters.delete(done);
+        resolve();
+      };
+      waiters.add(done);
+      this.runningCommandWaiters.set(pluginId, waiters);
+      timeout = setTimeout(() => {
+        waiters.delete(done);
+        reject(
+          new Error(
+            `Timed out waiting for ${this.getRunningCommandCount(pluginId)} command(s) to finish in plugin ${pluginId}`
+          )
+        );
+      }, timeoutMs);
+    });
+  }
+
+  private beginCommandExecution(pluginId: string): void {
+    this.runningCommandCounts.set(pluginId, this.getRunningCommandCount(pluginId) + 1);
+  }
+
+  private endCommandExecution(pluginId: string): void {
+    const nextCount = Math.max(0, this.getRunningCommandCount(pluginId) - 1);
+    if (nextCount > 0) {
+      this.runningCommandCounts.set(pluginId, nextCount);
+      return;
+    }
+
+    this.runningCommandCounts.delete(pluginId);
+    const waiters = this.runningCommandWaiters.get(pluginId);
+    if (!waiters) {
+      return;
+    }
+
+    this.runningCommandWaiters.delete(pluginId);
+    for (const resolve of waiters) {
+      resolve();
+    }
+  }
+
   /**
    * 执行命令
    */
@@ -64,98 +135,103 @@ export class PluginExecutionCoordinator {
       },
     });
 
-    return await withTraceContext(traceContext, async () => {
-      const span = await observationService.startSpan({
-        context: traceContext,
-        component: 'plugin-manager',
-        event: 'plugin.invoke',
-        attrs: {
-          pluginId,
-          apiName: commandId,
-          invocationType: 'command',
-          source: 'command',
-          callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
-          params: summarizeForObservation(params, 2),
-        },
-      });
+    this.beginCommandExecution(pluginId);
+    try {
+      return await withTraceContext(traceContext, async () => {
+        const span = await observationService.startSpan({
+          context: traceContext,
+          component: 'plugin-manager',
+          event: 'plugin.invoke',
+          attrs: {
+            pluginId,
+            apiName: commandId,
+            invocationType: 'command',
+            source: 'command',
+            callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
+            params: summarizeForObservation(params, 2),
+          },
+        });
 
-      for (const guard of this.commandExecutionGuards) {
-        await guard({ pluginId, commandId, params });
-      }
-
-      const info = await this.getPluginInfo(pluginId);
-      if (!info) {
-        throw new Error(`Plugin not found: ${pluginId}`);
-      }
-      if (info.enabled === false) {
-        throw new Error(`Plugin ${pluginId} is disabled`);
-      }
-
-      const context = this.lifecycle.getContext(pluginId);
-      if (!context) {
-        throw new Error(`Plugin ${pluginId} is not activated`);
-      }
-
-      const handler = context.getCommand(commandId);
-      if (!handler) {
-        throw new Error(`Command ${commandId} not found in plugin ${pluginId}`);
-      }
-
-      const pluginLogger = this.lifecycle.getLogger(pluginId);
-      const endTimer = pluginLogger?.timer(`Command: ${commandId}`);
-
-      pluginLogger?.command(commandId, 'start', { params });
-
-      try {
-        const helpers = this.lifecycle.getHelpers(pluginId);
-        if (!helpers) {
-          throw new Error(`Helpers not found for plugin ${pluginId}`);
+        for (const guard of this.commandExecutionGuards) {
+          await guard({ pluginId, commandId, params });
         }
 
-        const result = await handler(params, helpers);
+        const info = await this.getPluginInfo(pluginId);
+        if (!info) {
+          throw new Error(`Plugin not found: ${pluginId}`);
+        }
+        if (info.enabled === false) {
+          throw new Error(`Plugin ${pluginId} is disabled`);
+        }
 
-        endTimer?.();
-        pluginLogger?.command(commandId, 'success', { result });
-        await span.succeed({
-          attrs: {
-            pluginId,
-            apiName: commandId,
-            invocationType: 'command',
-            source: 'command',
-            callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
-            result: summarizeForObservation(result, 2),
-          },
-        });
+        const context = this.lifecycle.getContext(pluginId);
+        if (!context) {
+          throw new Error(`Plugin ${pluginId} is not activated`);
+        }
 
-        return result;
-      } catch (error: unknown) {
-        endTimer?.();
-        pluginLogger?.command(commandId, 'error', error);
-        const runtimeStatus = await this.getRuntimeStatus(pluginId).catch(() => null);
-        const artifact = await attachErrorContextArtifact({
-          span,
-          component: 'plugin-manager',
-          label: 'plugin command failure context',
-          data: {
-            pluginId,
-            apiName: commandId,
-            invocationType: 'command',
-            runtimeStatus: summarizeForObservation(runtimeStatus, 2),
-          },
-        });
-        await span.fail(error, {
-          artifactRefs: [artifact.artifactId],
-          attrs: {
-            pluginId,
-            apiName: commandId,
-            invocationType: 'command',
-            source: 'command',
-            callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
-          },
-        });
-        throw error;
-      }
-    });
+        const handler = context.getCommand(commandId);
+        if (!handler) {
+          throw new Error(`Command ${commandId} not found in plugin ${pluginId}`);
+        }
+
+        const pluginLogger = this.lifecycle.getLogger(pluginId);
+        const endTimer = pluginLogger?.timer(`Command: ${commandId}`);
+
+        pluginLogger?.command(commandId, 'start', { params });
+
+        try {
+          const helpers = this.lifecycle.getHelpers(pluginId);
+          if (!helpers) {
+            throw new Error(`Helpers not found for plugin ${pluginId}`);
+          }
+
+          const result = await handler(params, helpers);
+
+          endTimer?.();
+          pluginLogger?.command(commandId, 'success', { result });
+          await span.succeed({
+            attrs: {
+              pluginId,
+              apiName: commandId,
+              invocationType: 'command',
+              source: 'command',
+              callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
+              result: summarizeForObservation(result, 2),
+            },
+          });
+
+          return result;
+        } catch (error: unknown) {
+          endTimer?.();
+          pluginLogger?.command(commandId, 'error', error);
+          const runtimeStatus = await this.getRuntimeStatus(pluginId).catch(() => null);
+          const artifact = await attachErrorContextArtifact({
+            span,
+            component: 'plugin-manager',
+            label: 'plugin command failure context',
+            data: {
+              pluginId,
+              apiName: commandId,
+              invocationType: 'command',
+              runtimeStatus: summarizeForObservation(runtimeStatus, 2),
+            },
+          });
+          await span.fail(error, {
+            artifactRefs: [artifact.artifactId],
+            attrs: {
+              pluginId,
+              apiName: commandId,
+              invocationType: 'command',
+              source: 'command',
+              callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
+            },
+          });
+          throw error;
+        }
+      });
+    } finally {
+      this.endCommandExecution(pluginId);
+    }
   }
 
   registerCommandExecutionGuard(guard: CommandExecutionGuard): () => void {

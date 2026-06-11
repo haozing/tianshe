@@ -243,6 +243,12 @@ class StageWorker<TItem = any> {
 
       return this.queue!.add(
         async (taskCtx) => {
+          const claimed = await this.claimItem(rowId);
+          if (!claimed) {
+            logger.debug(`Stage "${this.stage.name}" skipped unclaimed row: ${rowId}`);
+            return { success: false, skip: true, skipReason: 'claim_failed' };
+          }
+
           this.config.onItemStart?.(item);
 
           const stageCtx: StageContext = {
@@ -293,6 +299,28 @@ class StageWorker<TItem = any> {
     await Promise.allSettled(tasks);
   }
 
+  private async claimItem(rowId: number | string): Promise<boolean> {
+    const { fromStatus } = this.stage;
+    const { tableId, statusField, helpers } = this.config;
+    const fromStatuses = Array.isArray(fromStatus) ? fromStatus : [fromStatus];
+    const claimStatus = this.stage.processingStatus ?? `processing:${this.stage.name}`;
+
+    if (helpers.database.claimById) {
+      return await helpers.database.claimById(
+        tableId,
+        rowId,
+        statusField,
+        fromStatuses,
+        claimStatus
+      );
+    }
+
+    await helpers.database.updateById(tableId, rowId, {
+      [statusField]: claimStatus,
+    });
+    return true;
+  }
+
   private async applyResult(
     rowId: number,
     result: StageResult,
@@ -301,28 +329,24 @@ class StageWorker<TItem = any> {
   ): Promise<void> {
     const { tableId, statusField, errorField, helpers } = this.config;
 
-    try {
-      if (result.skip) {
-        // 跳过：只更新 updates（如果有）
-        if (result.updates) {
-          await helpers.database.updateById(tableId, rowId, result.updates);
-        }
-      } else if (result.success) {
-        // 成功：更新状态 + updates
-        await helpers.database.updateById(tableId, rowId, {
-          [statusField]: toStatus,
-          ...result.updates,
-        });
-      } else {
-        // 失败：更新错误状态（使用可配置的错误字段名）
-        await helpers.database.updateById(tableId, rowId, {
-          [statusField]: errorStatus,
-          [errorField]: result.error || '处理失败',
-          ...result.updates,
-        });
+    if (result.skip) {
+      // 跳过：只更新 updates（如果有）
+      if (result.updates) {
+        await helpers.database.updateById(tableId, rowId, result.updates);
       }
-    } catch (error) {
-      logger.error(`Failed to apply result for row ${rowId}:`, error);
+    } else if (result.success) {
+      // 成功：更新状态 + updates
+      await helpers.database.updateById(tableId, rowId, {
+        [statusField]: toStatus,
+        ...result.updates,
+      });
+    } else {
+      // 失败：更新错误状态（使用可配置的错误字段名）
+      await helpers.database.updateById(tableId, rowId, {
+        [statusField]: errorStatus,
+        [errorField]: result.error || '处理失败',
+        ...result.updates,
+      });
     }
   }
 

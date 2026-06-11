@@ -602,6 +602,19 @@ export class UIExtensionManager {
         (function() {
           'use strict';
 
+          const pageLogger = {
+            info: (...args) => {
+              if (window.console && typeof window.console.info === 'function') {
+                window.console.info(...args);
+              }
+            },
+            error: (...args) => {
+              if (window.console && typeof window.console.error === 'function') {
+                window.console.error(...args);
+              }
+            }
+          };
+
           // ===== 消息通信基础设施 =====
           const pendingMessages = new Map();
           let messageIdCounter = 0;
@@ -685,12 +698,12 @@ export class UIExtensionManager {
 
           // ===== 页面加载完成后初始化插件 API =====
           window.addEventListener('DOMContentLoaded', async () => {
-            logger.info('🚀 [Plugin Page] Initializing plugin API for: ${pluginId}');
+            pageLogger.info('[Plugin Page] Initializing plugin API for: ${pluginId}');
 
             try {
               // 1. 获取插件暴露的 API 列表
               const apiList = await sendMessage('getExposedAPIs', {});
-              logger.info('[Plugin Page] Available APIs:', apiList);
+              pageLogger.info('[Plugin Page] Available APIs:', apiList);
 
               // 2. 为插件创建命名空间
               window.pluginAPI['${pluginId}'] = {};
@@ -702,8 +715,8 @@ export class UIExtensionManager {
                 };
               }
 
-              logger.info('[OK] [Plugin Page] Plugin API initialized successfully');
-              logger.info('[Plugin Page] API namespace:', window.pluginAPI['${pluginId}']);
+              pageLogger.info('[OK] [Plugin Page] Plugin API initialized successfully');
+              pageLogger.info('[Plugin Page] API namespace:', window.pluginAPI['${pluginId}']);
 
               // 4. 通知父窗口页面已准备就绪
               window.parent.postMessage({
@@ -713,6 +726,7 @@ export class UIExtensionManager {
               }, '*');
 
             } catch (error) {
+              pageLogger.error('[Plugin Page] Plugin API initialization failed:', error);
               // 显示错误提示
               document.body.insertAdjacentHTML('afterbegin', \`
                 <div style="position: fixed; top: 0; left: 0; right: 0; background: #f44336; color: white; padding: 12px; text-align: center; z-index: 9999;">

@@ -203,6 +203,7 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
 
     const browserHandle = await options.acquireBrowserFromPool(resolvedProfileId, runtimeId, 'http');
     let sessionRegistered = false;
+    let destroyOnInitFailure = false;
     const sessionId = randomUUID();
     try {
       if (visible) {
@@ -218,15 +219,19 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
             'main',
             'pool'
           );
+          destroyOnInitFailure = true;
           if (!shown) {
             logger.warn(`Failed to show browser view for orchestration session: ${browserHandle.viewId}`);
           }
         } else if (browserHandle.browser.show) {
+          destroyOnInitFailure = true;
           await browserHandle.browser.show();
         }
       } else if (browserHandle.viewId && options.dependencies?.viewManager) {
+        destroyOnInitFailure = true;
         hideBrowserView(browserHandle.viewId, options.dependencies.viewManager);
       } else if (browserHandle.browser.hide) {
+        destroyOnInitFailure = true;
         await browserHandle.browser.hide();
       }
 
@@ -282,7 +287,7 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
     } catch (error) {
       if (!sessionRegistered) {
         try {
-          await browserHandle.release();
+          await browserHandle.release(destroyOnInitFailure ? { destroy: true } : undefined);
         } catch (releaseError) {
           logger.error(
             `Failed to release browser handle after orchestration session init error (${sessionId}):`,

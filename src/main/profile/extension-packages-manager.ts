@@ -7,6 +7,7 @@ import { app } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
 import { resolveUserDataDir } from '../../constants/runtime-config';
 import { normalizeExtensionPackageId } from '../../core/extension-packages/policy';
+import { createLogger } from '../../core/logger';
 import {
   decodeBase64Archive,
   findManifestRootDir,
@@ -25,6 +26,8 @@ import {
   type UpsertExtensionPackageParams,
   type UpsertProfileExtensionBindingParams,
 } from '../duckdb/extension-packages-service';
+
+const logger = createLogger('ExtensionPackagesManager');
 
 export interface ImportLocalExtensionInput {
   path: string;
@@ -67,6 +70,12 @@ type PendingInlineArchive = {
   archiveBase64: string;
   archiveSha256?: string;
   name?: string;
+};
+
+type PendingPackageInstall = UpsertExtensionPackageParams & {
+  targetDir: string;
+  stagingDir: string;
+  backupDir: string;
 };
 
 export class ExtensionPackagesManager {
@@ -293,7 +302,7 @@ export class ExtensionPackagesManager {
       throw new Error(`Archive hash mismatch: expected ${expectedHash}, got ${archiveSha256}`);
     }
 
-    const installed = await this.importFromArchivePath({
+    const pendingInstall = await this.prepareImportFromArchivePath({
       archivePath,
       expectedVersion: String(input.version || '').trim() || undefined,
       sourceType: 'cloud',
@@ -301,16 +310,12 @@ export class ExtensionPackagesManager {
       archiveSha256,
     });
 
-    return this.extensionService.upsertPackage({
-      extensionId: installed.extensionId,
-      name: String(input.name || '').trim() || installed.name,
-      version: installed.version,
+    return this.commitPackageInstall({
+      ...pendingInstall,
+      name: String(input.name || '').trim() || pendingInstall.name,
       sourceType: 'cloud',
       sourceUrl: String(input.sourceUrl || '').trim() || null,
       archiveSha256,
-      manifest: installed.manifest,
-      extractDir: installed.extractDir,
-      enabled: true,
     });
   }
 
@@ -384,8 +389,7 @@ export class ExtensionPackagesManager {
         const refCount = await this.extensionService.countBindingsByExtensionId(extensionId);
         if (refCount > 0) continue;
 
-        const removed = await this.extensionService.removePackagesByExtensionIds([extensionId]);
-        await fs.remove(path.join(this.getPackagesDir(), extensionId));
+        const removed = await this.removePackageFilesBeforeMetadata(extensionId);
         if (removed.length > 0) {
           removedPackages.push(...removed);
         }
@@ -412,10 +416,7 @@ export class ExtensionPackagesManager {
       const refCount = await this.extensionService.countBindingsByExtensionId(extensionId);
       if (refCount > 0) continue;
 
-      const deletedPackages = await this.extensionService.removePackagesByExtensionIds([
-        extensionId,
-      ]);
-      await fs.remove(path.join(this.getPackagesDir(), extensionId));
+      const deletedPackages = await this.removePackageFilesBeforeMetadata(extensionId);
       removed.push(...deletedPackages);
     }
 
@@ -601,12 +602,12 @@ export class ExtensionPackagesManager {
 
     const stats = await fs.stat(sourcePath);
     if (stats.isDirectory()) {
-      const installed = await this.importFromDirectory({
+      const pendingInstall = await this.prepareImportFromDirectory({
         sourceDir: sourcePath,
         extensionIdHint: input.extensionIdHint,
         sourceType: 'local',
       });
-      return this.extensionService.upsertPackage(installed);
+      return this.commitPackageInstall(pendingInstall);
     }
 
     const ext = path.extname(sourcePath).toLowerCase();
@@ -614,12 +615,12 @@ export class ExtensionPackagesManager {
       throw new Error(`Unsupported extension archive format: ${ext}. Only .zip is supported.`);
     }
 
-    const installed = await this.importFromArchivePath({
+    const pendingInstall = await this.prepareImportFromArchivePath({
       archivePath: sourcePath,
       extensionIdHint: input.extensionIdHint,
       sourceType: 'local',
     });
-    return this.extensionService.upsertPackage(installed);
+    return this.commitPackageInstall(pendingInstall);
   }
 
   private async expandLocalImportInputs(
@@ -683,14 +684,14 @@ export class ExtensionPackagesManager {
     return out;
   }
 
-  private async importFromArchivePath(params: {
+  private async prepareImportFromArchivePath(params: {
     archivePath: string;
     extensionIdHint?: string;
     expectedVersion?: string;
     sourceType: ImportSourceType;
     sourceUrl?: string;
     archiveSha256?: string;
-  }): Promise<UpsertExtensionPackageParams> {
+  }): Promise<PendingPackageInstall> {
     const tempDir = path.join(this.getTmpDir(), `extract_${Date.now()}_${uuidv4()}`);
     await fs.ensureDir(tempDir);
     try {
@@ -703,9 +704,11 @@ export class ExtensionPackagesManager {
         );
       }
       const targetDir = this.getVersionedPackageDir(payload.extensionId, payload.version);
-      await fs.remove(targetDir);
-      await fs.ensureDir(path.dirname(targetDir));
-      await fs.copy(payload.manifestRootDir, targetDir, { overwrite: true });
+      const stagingDir = this.getPackageStagingDir(payload.extensionId, payload.version);
+      const backupDir = this.getPackageBackupDir(payload.extensionId, payload.version);
+      await fs.remove(stagingDir);
+      await fs.ensureDir(path.dirname(stagingDir));
+      await fs.copy(payload.manifestRootDir, stagingDir, { overwrite: true });
 
       return {
         extensionId: payload.extensionId,
@@ -717,25 +720,30 @@ export class ExtensionPackagesManager {
         manifest: payload.manifest,
         extractDir: targetDir,
         enabled: true,
+        targetDir,
+        stagingDir,
+        backupDir,
       };
     } finally {
       await fs.remove(tempDir);
     }
   }
 
-  private async importFromDirectory(params: {
+  private async prepareImportFromDirectory(params: {
     sourceDir: string;
     extensionIdHint?: string;
     sourceType: ImportSourceType;
-  }): Promise<UpsertExtensionPackageParams> {
+  }): Promise<PendingPackageInstall> {
     const payload = await this.readExtensionPayloadFromDirectory(
       params.sourceDir,
       params.extensionIdHint
     );
     const targetDir = this.getVersionedPackageDir(payload.extensionId, payload.version);
-    await fs.remove(targetDir);
-    await fs.ensureDir(path.dirname(targetDir));
-    await fs.copy(payload.manifestRootDir, targetDir, { overwrite: true });
+    const stagingDir = this.getPackageStagingDir(payload.extensionId, payload.version);
+    const backupDir = this.getPackageBackupDir(payload.extensionId, payload.version);
+    await fs.remove(stagingDir);
+    await fs.ensureDir(path.dirname(stagingDir));
+    await fs.copy(payload.manifestRootDir, stagingDir, { overwrite: true });
 
     return {
       extensionId: payload.extensionId,
@@ -747,6 +755,9 @@ export class ExtensionPackagesManager {
       manifest: payload.manifest,
       extractDir: targetDir,
       enabled: true,
+      targetDir,
+      stagingDir,
+      backupDir,
     };
   }
 
@@ -789,6 +800,155 @@ export class ExtensionPackagesManager {
     };
   }
 
+  private async commitPackageInstall(install: PendingPackageInstall): Promise<ExtensionPackage> {
+    const { targetDir, stagingDir, backupDir, ...upsertParams } = install;
+    let backupCreated = false;
+    let targetInstalled = false;
+
+    try {
+      await fs.ensureDir(path.dirname(targetDir));
+      await fs.remove(backupDir);
+
+      if (await fs.pathExists(targetDir)) {
+        await fs.move(targetDir, backupDir, { overwrite: true });
+        backupCreated = true;
+      }
+
+      await fs.move(stagingDir, targetDir, { overwrite: true });
+      targetInstalled = true;
+
+      const pkg = await this.extensionService.upsertPackage({
+        ...upsertParams,
+        extractDir: targetDir,
+      });
+
+      if (backupCreated) {
+        await fs.remove(backupDir).catch((cleanupError) => {
+          logger.warn('Failed to remove extension package backup after successful install', {
+            backupDir,
+            error: cleanupError,
+          });
+        });
+      }
+
+      return pkg;
+    } catch (error) {
+      await this.rollbackPackageInstall({
+        targetDir,
+        stagingDir,
+        backupDir,
+        backupCreated,
+        targetInstalled,
+      });
+      throw error;
+    }
+  }
+
+  private async rollbackPackageInstall(params: {
+    targetDir: string;
+    stagingDir: string;
+    backupDir: string;
+    backupCreated: boolean;
+    targetInstalled: boolean;
+  }): Promise<void> {
+    const { targetDir, stagingDir, backupDir, backupCreated, targetInstalled } = params;
+
+    try {
+      await fs.remove(stagingDir);
+    } catch (cleanupError) {
+      logger.warn('Failed to remove extension package staging dir after failed install', {
+        stagingDir,
+        error: cleanupError,
+      });
+    }
+
+    if (targetInstalled) {
+      try {
+        await fs.remove(targetDir);
+      } catch (cleanupError) {
+        logger.warn('Failed to remove extension package target dir after failed install', {
+          targetDir,
+          error: cleanupError,
+        });
+      }
+    }
+
+    if (backupCreated) {
+      try {
+        await fs.move(backupDir, targetDir, { overwrite: true });
+      } catch (restoreError) {
+        logger.error('Failed to restore extension package backup after failed install', {
+          backupDir,
+          targetDir,
+          error: restoreError,
+        });
+      }
+    } else {
+      try {
+        await fs.remove(backupDir);
+      } catch (cleanupError) {
+        logger.warn('Failed to remove extension package backup dir after failed install', {
+          backupDir,
+          error: cleanupError,
+        });
+      }
+    }
+  }
+
+  private async removePackageFilesBeforeMetadata(extensionId: string): Promise<ExtensionPackage[]> {
+    await this.ensureRepositoryDirs();
+
+    const packageDir = path.join(this.getPackagesDir(), extensionId);
+    const backupDir = this.getPackageRemovalBackupDir(extensionId);
+    let backupCreated = false;
+
+    try {
+      await fs.remove(backupDir);
+      await fs.ensureDir(path.dirname(backupDir));
+
+      if (await fs.pathExists(packageDir)) {
+        await fs.move(packageDir, backupDir, { overwrite: true });
+        backupCreated = true;
+      }
+
+      const removed = await this.extensionService.removePackagesByExtensionIds([extensionId]);
+
+      if (backupCreated) {
+        await fs.remove(backupDir).catch((cleanupError) => {
+          logger.warn('Failed to remove extension package deletion backup', {
+            backupDir,
+            error: cleanupError,
+          });
+        });
+      }
+
+      return removed;
+    } catch (error) {
+      if (backupCreated) {
+        try {
+          await fs.remove(packageDir);
+          await fs.move(backupDir, packageDir, { overwrite: true });
+        } catch (restoreError) {
+          logger.error('Failed to restore extension package directory after metadata delete failure', {
+            extensionId,
+            backupDir,
+            packageDir,
+            error: restoreError,
+          });
+        }
+      } else {
+        await fs.remove(backupDir).catch((cleanupError) => {
+          logger.warn('Failed to remove unused extension package deletion backup', {
+            backupDir,
+            error: cleanupError,
+          });
+        });
+      }
+
+      throw error;
+    }
+  }
+
   private async installCloudArchiveBuffer(input: {
     extensionId: string;
     version?: string;
@@ -821,7 +981,7 @@ export class ExtensionPackagesManager {
     await fs.writeFile(archivePath, bytes);
 
     try {
-      const installed = await this.importFromArchivePath({
+      const pendingInstall = await this.prepareImportFromArchivePath({
         archivePath,
         extensionIdHint: normalizedExtensionId,
         expectedVersion: input.version,
@@ -829,16 +989,13 @@ export class ExtensionPackagesManager {
         sourceUrl: input.sourceUrl ?? undefined,
         archiveSha256: sha256,
       });
-      return this.extensionService.upsertPackage({
-        extensionId: installed.extensionId,
-        name: input.name || installed.name,
-        version: installed.version,
+
+      return this.commitPackageInstall({
+        ...pendingInstall,
+        name: input.name || pendingInstall.name,
         sourceType: 'cloud',
         sourceUrl: input.sourceUrl ?? null,
         archiveSha256: sha256,
-        manifest: installed.manifest,
-        extractDir: installed.extractDir,
-        enabled: true,
       });
     } finally {
       await fs.remove(archivePath);
@@ -873,6 +1030,31 @@ export class ExtensionPackagesManager {
 
   private getVersionedPackageDir(extensionId: string, version: string): string {
     return path.join(this.getPackagesDir(), extensionId, version);
+  }
+
+  private getPackageStagingDir(extensionId: string, version: string): string {
+    return path.join(
+      this.getTmpDir(),
+      `install_${this.toSafePathSegment(extensionId)}_${this.toSafePathSegment(version)}_${Date.now()}_${uuidv4()}`
+    );
+  }
+
+  private getPackageBackupDir(extensionId: string, version: string): string {
+    return path.join(
+      this.getTmpDir(),
+      `backup_${this.toSafePathSegment(extensionId)}_${this.toSafePathSegment(version)}_${Date.now()}_${uuidv4()}`
+    );
+  }
+
+  private getPackageRemovalBackupDir(extensionId: string): string {
+    return path.join(
+      this.getTmpDir(),
+      `remove_${this.toSafePathSegment(extensionId)}_${Date.now()}_${uuidv4()}`
+    );
+  }
+
+  private toSafePathSegment(value: string): string {
+    return value.replace(/[^a-zA-Z0-9._-]/g, '_') || 'package';
   }
 
   private resolveUserDataDir(): string {

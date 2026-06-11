@@ -84,7 +84,34 @@ export class WaitQueueCoordinator {
 
     const browser = this.globalPool.getBrowser(browserId);
     if (browser && isReadyBrowser(browser)) {
-      await resetBrowserState(browser.browser, options, '[BrowserPoolManager]');
+      const resetSucceeded = await resetBrowserState(
+        browser.browser,
+        options,
+        '[BrowserPoolManager]'
+      );
+
+      if (!resetSucceeded) {
+        logger.warn('Browser reset failed before waiter handoff; destroying browser: ' + browserId);
+        await this.globalPool.destroyBrowser(browserId);
+        const replacement = await this.creationStrategy.create(waiter.request, session);
+        if (replacement) {
+          waiter.resolve({
+            success: true,
+            browser: replacement.browser,
+            browserId: replacement.id,
+            sessionId: session.id,
+            waitedMs: Date.now() - waiter.enqueuedAt,
+          });
+          return;
+        }
+
+        waiter.resolve({
+          success: false,
+          error: 'Browser reset failed before handoff',
+          waitedMs: Date.now() - waiter.enqueuedAt,
+        });
+        return;
+      }
     }
 
     const lockInfo: LockInfo = {

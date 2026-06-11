@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRootTraceContext, withTraceContext } from './observation-context';
 import { observationService, setObservationSink } from './observation-service';
 import type { ObservationSink, RuntimeArtifact, RuntimeEvent } from './types';
@@ -19,6 +19,7 @@ class MemoryObservationSink implements ObservationSink {
 describe('ObservationService', () => {
   afterEach(() => {
     setObservationSink(null);
+    vi.useRealTimers();
   });
 
   it('records events against the active trace context', async () => {
@@ -100,6 +101,26 @@ describe('ObservationService', () => {
       traceId: 'trace-obs-2',
       type: 'snapshot',
       label: 'click failure snapshot',
+    });
+  });
+
+  it('returns events after a bounded wait when the sink is stuck', async () => {
+    vi.useFakeTimers();
+    setObservationSink({
+      recordEvent: vi.fn(() => new Promise<void>(() => undefined)),
+      recordArtifact: vi.fn(),
+    });
+
+    const eventPromise = observationService.event({
+      component: 'test',
+      event: 'slow.sink',
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+
+    await expect(eventPromise).resolves.toMatchObject({
+      component: 'test',
+      event: 'slow.sink',
     });
   });
 });

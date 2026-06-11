@@ -93,8 +93,7 @@ export async function attachBrowserFailureBundle(
 
   if (
     artifacts.length < maxArtifacts &&
-    typeof browser.screenshotDetailed === 'function' &&
-    !artifacts.some((artifact) => artifact.type === 'snapshot')
+    typeof browser.screenshotDetailed === 'function'
   ) {
     try {
       const screenshot = await browser.screenshotDetailed({

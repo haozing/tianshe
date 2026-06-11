@@ -1153,6 +1153,9 @@ describe('Dataset operations integration', () => {
     );
     expect(Number(remainingRows[0]?.count ?? 0)).toBe(2);
 
+    const datasetInfo = await metadataService.getDatasetInfo(datasetId);
+    expect(datasetInfo?.rowCount).toBe(2);
+
     const remainingStatuses = parseRows<{ status: string }>(
       await conn.runAndReadAll(`SELECT DISTINCT status FROM ds_${datasetId}.data ORDER BY status`)
     );

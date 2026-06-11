@@ -189,6 +189,35 @@ describe('TaskQueue', () => {
       expect(success).toBe(false);
     });
 
+    it('取消 pending 任务后不应再执行任务函数', async () => {
+      const serialQueue = createTaskQueue({ concurrency: 1, timeout: 0 });
+      let releaseFirst!: () => void;
+      const pendingTask = vi.fn(async () => 'should-not-run');
+
+      const firstTask = serialQueue.add(
+        () =>
+          new Promise<string>((resolve) => {
+            releaseFirst = () => resolve('first-done');
+          })
+      );
+      const pendingPromise = serialQueue.add(pendingTask, { taskId: 'pending-cancel' });
+
+      await new Promise((r) => setTimeout(r, 20));
+
+      const success = await serialQueue.cancelTask('pending-cancel');
+      expect(success).toBe(true);
+      await expect(pendingPromise).rejects.toBeInstanceOf(TaskCancelledError);
+
+      releaseFirst();
+      await firstTask;
+      await serialQueue.onIdle();
+
+      expect(pendingTask).not.toHaveBeenCalled();
+      expect(serialQueue.getTask('pending-cancel')).toBeNull();
+
+      await serialQueue.stop();
+    });
+
     it('应该能使用外部 AbortSignal 取消任务', async () => {
       const controller = new AbortController();
 

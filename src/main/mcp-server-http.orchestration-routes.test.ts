@@ -1157,6 +1157,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(response.json.data.runtimeCounters).toMatchObject({
       queueOverflowCount: 0,
       invokeTimeoutCount: 0,
+      abandonedInvocationCount: 0,
       browserAcquireFailureCount: 0,
       browserAcquireTimeoutCount: 0,
     });

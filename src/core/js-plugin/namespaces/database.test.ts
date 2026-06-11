@@ -296,6 +296,38 @@ describe('DatabaseNamespace', () => {
     });
   });
 
+  describe('claimById', () => {
+    it('应该通过条件状态更新抢占行', async () => {
+      mockDuckDB.executeSQLWithParams.mockResolvedValue([{ _row_id: 5 }]);
+
+      const claimed = await database.claimById(
+        'dataset-123',
+        5,
+        'status',
+        ['pending', 'retry'],
+        'processing:stage1'
+      );
+
+      expect(claimed).toBe(true);
+      expect(mockDuckDB.withDatasetAttached).toHaveBeenCalledWith(
+        'dataset-123',
+        expect.any(Function)
+      );
+      expect(mockDuckDB.executeSQLWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('WHERE _row_id = ? AND status IN (?, ?)'),
+        ['processing:stage1', 5, 'pending', 'retry']
+      );
+    });
+
+    it('状态已被其他 worker 抢占时应该返回 false', async () => {
+      mockDuckDB.executeSQLWithParams.mockResolvedValue([]);
+
+      await expect(
+        database.claimById('dataset-123', 5, 'status', ['pending'], 'processing:stage1')
+      ).resolves.toBe(false);
+    });
+  });
+
   // ========== delete ==========
   describe('delete', () => {
     it('应该拒绝遗留 where 字符串接口', async () => {

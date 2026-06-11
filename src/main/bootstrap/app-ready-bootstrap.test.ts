@@ -147,7 +147,7 @@ describe('app-ready-bootstrap', () => {
         stageTimeoutMs: { initializeServices: 25, default: 10_000 },
       });
 
-      await vi.advanceTimersByTimeAsync(25);
+      await vi.advanceTimersByTimeAsync(25 + 1_500);
       await bootstrapPromise;
 
       expect(handleInitializationFailure).toHaveBeenCalledWith(
@@ -158,6 +158,107 @@ describe('app-ready-bootstrap', () => {
       expect(error.stage).toBe('initializeServices');
       expect(error.timeoutMs).toBe(25);
       expect(initializePluginIPC).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts a timed-out stage and waits for it to settle before failure handling', async () => {
+    vi.useFakeTimers();
+    try {
+      const steps: string[] = [];
+      const handleInitializationFailure = vi.fn(() => steps.push('handle-init-failure'));
+      const initializeServices = vi.fn(async ({ signal } = {}) => {
+        steps.push('initialize:start');
+        await new Promise<void>((resolve) => {
+          signal?.addEventListener(
+            'abort',
+            () => {
+              steps.push('initialize:aborted');
+              resolve();
+            },
+            { once: true }
+          );
+        });
+        steps.push('initialize:settled');
+      });
+
+      const bootstrapPromise = runAppReadyBootstrap({
+        logStartup: (message) => steps.push(`startup:${message}`),
+        hideApplicationMenu: vi.fn(),
+        initializeServices,
+        initializePluginIPC: vi.fn(),
+        initializeSchedulerIPC: vi.fn(),
+        initializeObservationIPC: vi.fn(),
+        initializeHttpApiIPC: vi.fn(),
+        initializeOcrPoolIPC: vi.fn(),
+        initializePlugins: vi.fn(),
+        createWindow: vi.fn(),
+        setupWindowResizeListener: vi.fn(),
+        initializeIPC: vi.fn(),
+        shouldInitializeUpdater: () => false,
+        initializeUpdater: vi.fn(),
+        startResourceMonitoring: vi.fn(),
+        initializeBrowserControlApi: vi.fn(),
+        handleInitializationFailure,
+        consoleRef: { log: vi.fn(), error: vi.fn() },
+        stageTimeoutMs: { initializeServices: 25, default: 10_000 },
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+      await bootstrapPromise;
+
+      expect(steps).toContain('initialize:aborted');
+      expect(steps.indexOf('initialize:settled')).toBeLessThan(
+        steps.indexOf('handle-init-failure')
+      );
+      expect(handleInitializationFailure).toHaveBeenCalledWith(
+        expect.any(AppReadyBootstrapStageTimeoutError)
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('records late stage risk when a timed-out stage ignores abort beyond the drain budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const startupMessages: string[] = [];
+      const handleInitializationFailure = vi.fn();
+      const initializePluginIPC = vi.fn();
+      const bootstrapPromise = runAppReadyBootstrap({
+        logStartup: (message) => startupMessages.push(message),
+        hideApplicationMenu: vi.fn(),
+        initializeServices: () => new Promise(() => undefined),
+        initializePluginIPC,
+        initializeSchedulerIPC: vi.fn(),
+        initializeObservationIPC: vi.fn(),
+        initializeHttpApiIPC: vi.fn(),
+        initializeOcrPoolIPC: vi.fn(),
+        initializePlugins: vi.fn(),
+        createWindow: vi.fn(),
+        setupWindowResizeListener: vi.fn(),
+        initializeIPC: vi.fn(),
+        shouldInitializeUpdater: () => false,
+        initializeUpdater: vi.fn(),
+        startResourceMonitoring: vi.fn(),
+        initializeBrowserControlApi: vi.fn(),
+        handleInitializationFailure,
+        consoleRef: { log: vi.fn(), error: vi.fn() },
+        stageTimeoutMs: { initializeServices: 25, default: 10_000 },
+        lateStageDrainTimeoutMs: 40,
+      });
+
+      await vi.advanceTimersByTimeAsync(65);
+      await bootstrapPromise;
+
+      expect(handleInitializationFailure).toHaveBeenCalledWith(
+        expect.any(AppReadyBootstrapStageTimeoutError)
+      );
+      expect(initializePluginIPC).not.toHaveBeenCalled();
+      expect(startupMessages).toContain(
+        'Bootstrap stage initializeServices still running after timeout drain budget (40ms); continuing failure handling with startup marked failed'
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -189,7 +290,7 @@ describe('app-ready-bootstrap', () => {
         stageTimeoutMs: { default: 15 },
       });
 
-      await vi.advanceTimersByTimeAsync(15);
+      await vi.advanceTimersByTimeAsync(15 + 1_500);
       await bootstrapPromise;
 
       const error = handleInitializationFailure.mock

@@ -15,6 +15,7 @@ import path from 'path';
 import fs from 'fs-extra';
 import { Worker } from 'worker_threads';
 import { DatasetMetadataService } from './dataset-metadata-service';
+import { DatasetStorageService } from './dataset-storage-service';
 import {
   getDatasetPath,
   getFileSize,
@@ -40,7 +41,8 @@ export class DatasetImportService {
 
   constructor(
     private conn: DuckDBConnection,
-    private metadataService: DatasetMetadataService
+    private metadataService: DatasetMetadataService,
+    private storageService?: DatasetStorageService
   ) {}
 
   private clearImportTracking(datasetId: string): void {
@@ -370,23 +372,31 @@ export class DatasetImportService {
         message: '正在插入数据到目标数据集...',
       });
 
-      const recordsInserted = await (async () => {
+      const insertRecords = async () => {
         try {
-          return await this.crossDatabaseInsert(tempDatasetId, tempOutputPath, targetDatasetId);
+          const recordsInserted = await this.crossDatabaseInsert(
+            tempDatasetId,
+            tempOutputPath,
+            targetDatasetId
+          );
+          try {
+            await this.metadataService.incrementRowCount(targetDatasetId, recordsInserted);
+          } catch (countError) {
+            await this.reconcileRowCountAfterImportDeltaFailure(
+              targetDatasetId,
+              recordsInserted,
+              countError
+            );
+          }
+          return recordsInserted;
         } finally {
           stopInsertHeartbeat();
         }
-      })();
+      };
 
-      try {
-        await this.metadataService.incrementRowCount(targetDatasetId, recordsInserted);
-      } catch (countError) {
-        logger.warn('Failed to increment dataset row_count after importing records', {
-          targetDatasetId,
-          recordsInserted,
-          errorMessage: getErrorMessage(countError),
-        });
-      }
+      const recordsInserted = this.storageService
+        ? await this.storageService.executeInQueue(targetDatasetId, insertRecords)
+        : await insertRecords();
 
       onProgress?.({
         datasetId: targetDatasetId,
@@ -512,6 +522,34 @@ export class DatasetImportService {
         originalResolve(value);
       }) as typeof resolve;
     });
+  }
+
+  private async reconcileRowCountAfterImportDeltaFailure(
+    targetDatasetId: string,
+    recordsInserted: number,
+    error: unknown
+  ): Promise<void> {
+    try {
+      const safeTargetId = sanitizeDatasetId(targetDatasetId);
+      const dataset = await this.metadataService.getDatasetInfo(safeTargetId);
+      if (!dataset) {
+        throw new Error(`Target dataset not found while reconciling row_count: ${targetDatasetId}`);
+      }
+      const actualRowCount = await this.metadataService.reconcileRowCountInCurrentQueue(dataset);
+      logger.warn('Reconciled dataset row_count after import delta update failed', {
+        targetDatasetId: safeTargetId,
+        recordsInserted,
+        actualRowCount,
+        errorMessage: getErrorMessage(error),
+      });
+    } catch (reconcileError) {
+      logger.error('Failed to reconcile dataset row_count after import delta update failed', {
+        targetDatasetId,
+        recordsInserted,
+        originalErrorMessage: getErrorMessage(error),
+        reconcileErrorMessage: getErrorMessage(reconcileError),
+      });
+    }
   }
 
   /**

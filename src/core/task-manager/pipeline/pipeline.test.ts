@@ -14,6 +14,7 @@ function createMockHelpers(): IPipelineHelpers {
     database: {
       query: vi.fn().mockResolvedValue([]),
       updateById: vi.fn().mockResolvedValue(undefined),
+      claimById: vi.fn().mockResolvedValue(true),
     },
   };
 }
@@ -705,6 +706,107 @@ describe('Pipeline', () => {
 
       // Should only update the updates field, not change status
       expect(mockUpdateById).toHaveBeenCalledWith('table-123', 1, { skipped: true });
+    });
+
+    it('should not run handler when row claim fails', async () => {
+      vi.useRealTimers();
+
+      const mockQuery = helpers.database.query as ReturnType<typeof vi.fn>;
+      const mockUpdateById = helpers.database.updateById as ReturnType<typeof vi.fn>;
+      const mockClaimById = helpers.database.claimById as ReturnType<typeof vi.fn>;
+      const handler = vi.fn().mockResolvedValue({ success: true });
+
+      const item = { _row_id: 1, name: 'Test' };
+      mockQuery.mockResolvedValueOnce([item]).mockResolvedValue([]);
+      mockClaimById.mockResolvedValueOnce(false);
+
+      const stage: PipelineStage = {
+        name: 'stage1',
+        fromStatus: 'pending',
+        toStatus: 'completed',
+        errorStatus: 'failed',
+        handler,
+        pollInterval: 50,
+      };
+
+      const pipeline = createPipeline(
+        {
+          name: 'Test',
+          tableId: 'table-123',
+          statusField: 'status',
+          stages: [stage],
+        },
+        helpers
+      );
+
+      await pipeline.start();
+      await wait(100);
+      await pipeline.stop();
+
+      expect(mockClaimById).toHaveBeenCalledWith(
+        'table-123',
+        1,
+        'status',
+        ['pending'],
+        'processing:stage1'
+      );
+      expect(handler).not.toHaveBeenCalled();
+      expect(mockUpdateById).not.toHaveBeenCalled();
+    });
+
+    it('should report item error when applying a successful result fails', async () => {
+      vi.useRealTimers();
+
+      const mockQuery = helpers.database.query as ReturnType<typeof vi.fn>;
+      const mockUpdateById = helpers.database.updateById as ReturnType<typeof vi.fn>;
+      const onItemComplete = vi.fn();
+      const onItemError = vi.fn();
+
+      const item = { _row_id: 1, name: 'Test' };
+      mockQuery.mockResolvedValueOnce([item]).mockResolvedValue([]);
+      mockUpdateById
+        .mockRejectedValueOnce(new Error('apply failed'))
+        .mockResolvedValueOnce(undefined);
+
+      const stage: PipelineStage = {
+        name: 'stage1',
+        fromStatus: 'pending',
+        toStatus: 'completed',
+        errorStatus: 'failed',
+        handler: vi.fn().mockResolvedValue({
+          success: true,
+          updates: { result: 'done' },
+        }),
+        pollInterval: 50,
+      };
+
+      const pipeline = createPipeline(
+        {
+          name: 'Test',
+          tableId: 'table-123',
+          statusField: 'status',
+          errorField: 'error_msg',
+          stages: [stage],
+          onItemComplete,
+          onItemError,
+        },
+        helpers
+      );
+
+      await pipeline.start();
+      await wait(100);
+      await pipeline.stop();
+
+      expect(onItemComplete).not.toHaveBeenCalled();
+      expect(onItemError).toHaveBeenCalledWith('stage1', item, expect.any(Error));
+      expect(mockUpdateById).toHaveBeenLastCalledWith(
+        'table-123',
+        1,
+        expect.objectContaining({
+          status: 'failed',
+          error_msg: 'apply failed',
+        })
+      );
     });
 
     it('should handle multiple fromStatus values', async () => {

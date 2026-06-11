@@ -65,6 +65,17 @@ vi.mock('./utils', () => ({
   parseRows: vi.fn(() => []),
   quoteIdentifier: vi.fn((value: string) => `"${value}"`),
   quoteQualifiedName: vi.fn((schema: string, table: string) => `"${schema}"."${table}"`),
+  runInDuckDbTransaction: vi.fn(async (conn: any, work: () => Promise<any>) => {
+    await conn.run('BEGIN TRANSACTION');
+    try {
+      const result = await work();
+      await conn.run('COMMIT');
+      return result;
+    } catch (error) {
+      await conn.run('ROLLBACK');
+      throw error;
+    }
+  }),
 }));
 
 import { DatasetImportService } from './dataset-import-service';
@@ -147,6 +158,87 @@ describe('dataset-import-service failure cleanup', () => {
         fallbackPath: expect.stringContaining('import-worker.js'),
         candidates: expect.arrayContaining([expect.stringContaining('import-worker.js')]),
       })
+    );
+  });
+
+  it('serializes import-records insert and row_count update through the target dataset queue', async () => {
+    const metadataService = {
+      getDatasetInfo: vi.fn().mockResolvedValue({
+        id: 'target_dataset',
+        filePath: 'D:\\tmp\\target_dataset.db',
+      }),
+      incrementRowCount: vi.fn().mockResolvedValue(undefined),
+    };
+    const storageService = {
+      executeInQueue: vi.fn(async (_datasetId: string, work: () => Promise<any>) => work()),
+    };
+    const conn = {
+      run: vi.fn().mockResolvedValue({}),
+      runAndReadAll: vi
+        .fn()
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({}),
+    };
+    const parseRows = await import('./utils').then((mod) => vi.mocked(mod.parseRows));
+    parseRows
+      .mockReturnValueOnce([{ column_name: 'name' }])
+      .mockReturnValueOnce([{ count: 2 }]);
+
+    const service = new DatasetImportService(
+      conn as any,
+      metadataService as any,
+      storageService as any
+    );
+    const promise = service.importRecordsFromFile('target_dataset', 'D:\\imports\\records.csv');
+    const worker = await waitForWorker();
+
+    await worker.emit('message', { type: 'complete' });
+
+    await expect(promise).resolves.toEqual({ recordsInserted: 2 });
+    expect(storageService.executeInQueue).toHaveBeenCalledWith(
+      'target_dataset',
+      expect.any(Function)
+    );
+    expect(metadataService.incrementRowCount).toHaveBeenCalledWith('target_dataset', 2);
+  });
+
+  it('reconciles imported row_count when delta update fails', async () => {
+    const metadataService = {
+      getDatasetInfo: vi.fn().mockResolvedValue({
+        id: 'target_dataset',
+        filePath: 'D:\\tmp\\target_dataset.db',
+      }),
+      incrementRowCount: vi.fn().mockRejectedValue(new Error('row_count failed')),
+      reconcileRowCountInCurrentQueue: vi.fn().mockResolvedValue(2),
+    };
+    const storageService = {
+      executeInQueue: vi.fn(async (_datasetId: string, work: () => Promise<any>) => work()),
+    };
+    const conn = {
+      run: vi.fn().mockResolvedValue({}),
+      runAndReadAll: vi
+        .fn()
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({}),
+    };
+    const parseRows = await import('./utils').then((mod) => vi.mocked(mod.parseRows));
+    parseRows
+      .mockReturnValueOnce([{ column_name: 'name' }])
+      .mockReturnValueOnce([{ count: 2 }]);
+
+    const service = new DatasetImportService(
+      conn as any,
+      metadataService as any,
+      storageService as any
+    );
+    const promise = service.importRecordsFromFile('target_dataset', 'D:\\imports\\records.csv');
+    const worker = await waitForWorker();
+
+    await worker.emit('message', { type: 'complete' });
+
+    await expect(promise).resolves.toEqual({ recordsInserted: 2 });
+    expect(metadataService.reconcileRowCountInCurrentQueue).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'target_dataset' })
     );
   });
 });

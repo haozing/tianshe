@@ -88,28 +88,60 @@ export class DatasetExportWriter {
     throw new Error('Unsupported export format: ' + format);
   }
 
-private async exportToCSV(
+  private async exportWithAtomicOutput(
+    outputPath: string,
+    writeTempFile: (tempPath: string) => Promise<void>
+  ): Promise<void> {
+    const tempPath = this.createTempOutputPath(outputPath);
+    let committed = false;
+
+    try {
+      await fs.ensureDir(path.dirname(outputPath));
+      await writeTempFile(tempPath);
+      await fs.move(tempPath, outputPath, { overwrite: true });
+      committed = true;
+    } finally {
+      if (!committed) {
+        await fs.remove(tempPath).catch((cleanupError) => {
+          logger.warn('Failed to remove dataset export temp file', {
+            tempPath,
+            error: cleanupError,
+          });
+        });
+      }
+    }
+  }
+
+  private createTempOutputPath(outputPath: string): string {
+    const parsed = path.parse(outputPath);
+    const suffix = `${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    return path.join(parsed.dir, `.${parsed.base}.tmp-${suffix}`);
+  }
+
+  private async exportToCSV(
     sql: string,
     outputPath: string,
     options: ExportOptions
   ): Promise<void> {
-    const escapedPath = escapeSqlStringLiteral(outputPath.replace(/\\/g, '/'));
-    const delimiter = escapeSqlStringLiteral(options.delimiter || ',');
-    const header = options.includeHeader !== false;
-
-    const copySQL = `
-      COPY (${sql})
-      TO '${escapedPath}'
-      (FORMAT CSV, HEADER ${header}, DELIMITER '${delimiter}');
-    `;
-
     logger.info('Exporting dataset to CSV', { outputPath });
-    await this.conn.run(copySQL);
-    await this.rewriteTextFileEncoding(outputPath, options.encoding);
+    await this.exportWithAtomicOutput(outputPath, async (tempPath) => {
+      const escapedPath = escapeSqlStringLiteral(tempPath.replace(/\\/g, '/'));
+      const delimiter = escapeSqlStringLiteral(options.delimiter || ',');
+      const header = options.includeHeader !== false;
+
+      const copySQL = `
+        COPY (${sql})
+        TO '${escapedPath}'
+        (FORMAT CSV, HEADER ${header}, DELIMITER '${delimiter}');
+      `;
+
+      await this.conn.run(copySQL);
+      await this.rewriteTextFileEncoding(tempPath, options.encoding);
+    });
     logger.info('Dataset CSV export completed', { outputPath });
   }
 
-private async exportToExcel(
+  private async exportToExcel(
     sql: string,
     outputPath: string,
     options: { maxRowsPerFile: number },
@@ -132,7 +164,9 @@ private async exportToExcel(
         percentage: 30,
       });
 
-      await this.exportSingleExcel(sql, outputPath);
+      await this.exportWithAtomicOutput(outputPath, (tempPath) =>
+        this.exportSingleExcel(sql, tempPath)
+      );
 
       onProgress?.({
         current: 1,
@@ -148,6 +182,7 @@ private async exportToExcel(
     const filesCount = Math.ceil(totalRows / maxRowsPerFile);
     const { dir, name, ext } = path.parse(outputPath);
     const files: string[] = [];
+    const stagedFiles: Array<{ tempPath: string; outputPath: string }> = [];
 
     logger.info('Splitting dataset export into Excel parts', {
       outputPath,
@@ -156,30 +191,50 @@ private async exportToExcel(
       maxRowsPerFile,
     });
 
-    for (let i = 0; i < filesCount; i++) {
-      const offset = i * maxRowsPerFile;
-      const limit = maxRowsPerFile;
-      const filePath = path.join(dir, `${name}_part${i + 1}${ext}`);
+    try {
+      for (let i = 0; i < filesCount; i++) {
+        const offset = i * maxRowsPerFile;
+        const limit = maxRowsPerFile;
+        const filePath = path.join(dir, `${name}_part${i + 1}${ext}`);
 
-      // 报告进度
-      const currentPercentage = 30 + Math.floor((i / filesCount) * 50); // 30-80%
-      onProgress?.({
-        current: i + 1,
-        total: filesCount,
-        message: `正在导出第 ${i + 1}/${filesCount} 个文件...`,
-        percentage: currentPercentage,
-      });
+        // 报告进度
+        const currentPercentage = 30 + Math.floor((i / filesCount) * 50); // 30-80%
+        onProgress?.({
+          current: i + 1,
+          total: filesCount,
+          message: `正在导出第 ${i + 1}/${filesCount} 个文件...`,
+          percentage: currentPercentage,
+        });
 
-      // 分页查询并导出
-      const pagedSQL = `${sql} LIMIT ${limit} OFFSET ${offset}`;
-      await this.exportSingleExcel(pagedSQL, filePath);
+        // 分页查询并导出
+        const pagedSQL = `${sql} LIMIT ${limit} OFFSET ${offset}`;
+        const tempPath = this.createTempOutputPath(filePath);
+        stagedFiles.push({ tempPath, outputPath: filePath });
+        await this.exportSingleExcel(pagedSQL, tempPath);
 
-      files.push(filePath);
-      logger.info('Dataset Excel export part completed', {
-        outputPath: filePath,
-        part: i + 1,
-        totalParts: filesCount,
-      });
+        logger.info('Dataset Excel export part completed', {
+          outputPath: filePath,
+          part: i + 1,
+          totalParts: filesCount,
+        });
+      }
+
+      for (const stagedFile of stagedFiles) {
+        await fs.ensureDir(path.dirname(stagedFile.outputPath));
+        await fs.move(stagedFile.tempPath, stagedFile.outputPath, { overwrite: true });
+        files.push(stagedFile.outputPath);
+      }
+    } finally {
+      await Promise.all(
+        stagedFiles.map((stagedFile) =>
+          fs.remove(stagedFile.tempPath).catch((cleanupError) => {
+            logger.warn('Failed to cleanup staged Excel export temp file', {
+              tempPath: stagedFile.tempPath,
+              error: cleanupError,
+            });
+          })
+        )
+      );
     }
 
     // 所有文件导出完成
@@ -193,7 +248,7 @@ private async exportToExcel(
     return { files, totalRows };
   }
 
-private async exportSingleExcel(sql: string, outputPath: string): Promise<void> {
+  private async exportSingleExcel(sql: string, outputPath: string): Promise<void> {
     // 动态导入 exceljs（避免不必要的依赖）
     let ExcelJS: any;
     try {
@@ -261,61 +316,67 @@ private async exportSingleExcel(sql: string, outputPath: string): Promise<void> 
     }
   }
 
-private async exportToTXT(
+  private async exportToTXT(
     sql: string,
     outputPath: string,
     options: ExportOptions
   ): Promise<void> {
-    const escapedPath = escapeSqlStringLiteral(outputPath.replace(/\\/g, '/'));
-
-    // TXT 格式：无表头，无分隔符，无引号
-    // 如果是多列，只导出第一列
-    const copySQL = `
-      COPY (${sql})
-      TO '${escapedPath}'
-      (FORMAT CSV, HEADER false, DELIMITER '', QUOTE '');
-    `;
-
     logger.info('Exporting dataset to TXT', { outputPath });
-    await this.conn.run(copySQL);
-    await this.rewriteTextFileEncoding(outputPath, options.encoding);
+    await this.exportWithAtomicOutput(outputPath, async (tempPath) => {
+      const escapedPath = escapeSqlStringLiteral(tempPath.replace(/\\/g, '/'));
+
+      // TXT 格式：无表头，无分隔符，无引号
+      // 如果是多列，只导出第一列
+      const copySQL = `
+        COPY (${sql})
+        TO '${escapedPath}'
+        (FORMAT CSV, HEADER false, DELIMITER '', QUOTE '');
+      `;
+
+      await this.conn.run(copySQL);
+      await this.rewriteTextFileEncoding(tempPath, options.encoding);
+    });
     logger.info('Dataset TXT export completed', { outputPath });
   }
 
-private async exportToParquet(sql: string, outputPath: string): Promise<void> {
-    const escapedPath = escapeSqlStringLiteral(outputPath.replace(/\\/g, '/'));
-
-    const copySQL = `
-      COPY (${sql})
-      TO '${escapedPath}'
-      (FORMAT PARQUET, COMPRESSION 'SNAPPY');
-    `;
-
+  private async exportToParquet(sql: string, outputPath: string): Promise<void> {
     logger.info('Exporting dataset to Parquet', { outputPath });
-    await this.conn.run(copySQL);
+    await this.exportWithAtomicOutput(outputPath, async (tempPath) => {
+      const escapedPath = escapeSqlStringLiteral(tempPath.replace(/\\/g, '/'));
+
+      const copySQL = `
+        COPY (${sql})
+        TO '${escapedPath}'
+        (FORMAT PARQUET, COMPRESSION 'SNAPPY');
+      `;
+
+      await this.conn.run(copySQL);
+    });
     logger.info('Dataset Parquet export completed', { outputPath });
   }
 
-private async exportToJSON(
+  private async exportToJSON(
     sql: string,
     outputPath: string,
     options: ExportOptions
   ): Promise<void> {
-    const escapedPath = escapeSqlStringLiteral(outputPath.replace(/\\/g, '/'));
-
-    const copySQL = `
-      COPY (${sql})
-      TO '${escapedPath}'
-      (FORMAT JSON, ARRAY true);
-    `;
-
     logger.info('Exporting dataset to JSON', { outputPath });
-    await this.conn.run(copySQL);
-    await this.rewriteTextFileEncoding(outputPath, options.encoding);
+    await this.exportWithAtomicOutput(outputPath, async (tempPath) => {
+      const escapedPath = escapeSqlStringLiteral(tempPath.replace(/\\/g, '/'));
+
+      const copySQL = `
+        COPY (${sql})
+        TO '${escapedPath}'
+        (FORMAT JSON, ARRAY true);
+      `;
+
+      await this.conn.run(copySQL);
+      await this.rewriteTextFileEncoding(tempPath, options.encoding);
+    });
     logger.info('Dataset JSON export completed', { outputPath });
   }
 
-private async rewriteTextFileEncoding(
+  private async rewriteTextFileEncoding(
     outputPath: string,
     encoding?: ExportOptions['encoding']
   ): Promise<void> {
@@ -338,13 +399,13 @@ private async rewriteTextFileEncoding(
     await fs.writeFile(outputPath, iconv.encode(text, encoding));
   }
 
-private async getRowCount(sql: string): Promise<number> {
+  private async getRowCount(sql: string): Promise<number> {
     const result = await this.conn.runAndReadAll(`SELECT COUNT(*) as count FROM (${sql})`);
     const rows = parseRows<{ count: number }>(result);
     return Number(rows[0].count);
   }
 
-private async getColumns(sql: string): Promise<string[]> {
+  private async getColumns(sql: string): Promise<string[]> {
     // 检查 SQL 是否已经包含 LIMIT（避免重复添加）
     const hasLimit = /\bLIMIT\s+\d+/i.test(sql);
 

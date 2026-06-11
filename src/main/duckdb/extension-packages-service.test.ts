@@ -208,6 +208,64 @@ describe('ExtensionPackagesService', () => {
     });
   });
 
+  it('resolves latest enabled package by semantic version before timestamps', async () => {
+    const listStmt = createStatement({
+      runAndReadAll: vi.fn().mockResolvedValue(
+        createReader([
+          {
+            id: 'pkg-low-newer',
+            extension_id: 'ext.demo',
+            name: 'Demo',
+            version: '1.9.0',
+            source_type: 'local',
+            source_url: null,
+            archive_sha256: null,
+            manifest_json: null,
+            extract_dir: 'C:\\tmp\\ext.demo\\1.9.0',
+            enabled: true,
+            created_at: new Date('2026-03-20T00:00:00.000Z'),
+            updated_at: new Date('2026-03-25T00:00:00.000Z'),
+          },
+          {
+            id: 'pkg-pre',
+            extension_id: 'ext.demo',
+            name: 'Demo',
+            version: '2.0.0-beta.1',
+            source_type: 'local',
+            source_url: null,
+            archive_sha256: null,
+            manifest_json: null,
+            extract_dir: 'C:\\tmp\\ext.demo\\2.0.0-beta.1',
+            enabled: true,
+            created_at: new Date('2026-03-21T00:00:00.000Z'),
+            updated_at: new Date('2026-03-24T00:00:00.000Z'),
+          },
+          {
+            id: 'pkg-stable',
+            extension_id: 'ext.demo',
+            name: 'Demo',
+            version: '2.0.0',
+            source_type: 'local',
+            source_url: null,
+            archive_sha256: null,
+            manifest_json: null,
+            extract_dir: 'C:\\tmp\\ext.demo\\2.0.0',
+            enabled: true,
+            created_at: new Date('2026-03-21T00:00:00.000Z'),
+            updated_at: new Date('2026-03-22T00:00:00.000Z'),
+          },
+        ])
+      ),
+    });
+    const { conn } = createTransactionalConn([listStmt]);
+    const service = new ExtensionPackagesService(conn as never);
+
+    const latest = await service.getLatestEnabledPackageByExtensionId('ext.demo');
+
+    expect(latest?.id).toBe('pkg-stable');
+    expect(latest?.version).toBe('2.0.0');
+  });
+
   it('repairs a legacy extension_packages table through schema migrations', async () => {
     const db = await DuckDBInstance.create(':memory:');
     const conn = await DuckDBConnection.create(db);

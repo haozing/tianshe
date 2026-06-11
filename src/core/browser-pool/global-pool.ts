@@ -66,6 +66,12 @@ export type BrowserFactory = (session: SessionConfig) => Promise<{
  */
 export type BrowserDestroyer = (browser: PooledBrowserController, viewId?: string) => Promise<void>;
 export type SessionBrowsersChangedCallback = (sessionId: string) => Promise<void> | void;
+export type LockTimeoutReleasedCallback = (event: {
+  browserId: string;
+  sessionId: string;
+  pluginId?: string;
+  requestId?: string;
+}) => Promise<void> | void;
 
 const logger = createLogger('GlobalPool');
 
@@ -115,6 +121,9 @@ export class GlobalPool {
 
   /** Session 浏览器集合变化回调 */
   private sessionBrowsersChangedCallback?: SessionBrowsersChangedCallback;
+
+  /** 锁超时释放回调 */
+  private lockTimeoutReleasedCallback?: LockTimeoutReleasedCallback;
 
   /** 是否已停止 */
   private stopped = false;
@@ -198,6 +207,15 @@ export class GlobalPool {
    */
   setSessionBrowsersChangedCallback(callback?: SessionBrowsersChangedCallback): void {
     this.sessionBrowsersChangedCallback = callback;
+  }
+
+  /**
+   * 设置锁超时释放回调。
+   *
+   * GlobalPool 只负责把锁释放回 idle；上层 BrowserPoolManager 负责唤醒等待队列。
+   */
+  setLockTimeoutReleasedCallback(callback?: LockTimeoutReleasedCallback): void {
+    this.lockTimeoutReleasedCallback = callback;
   }
 
   private async notifySessionBrowsersChanged(sessionId?: string): Promise<void> {
@@ -659,8 +677,15 @@ export class GlobalPool {
     }
 
     // 锁外执行重置（如果浏览器支持）
+    let resetSucceeded = true;
     if (browserForReset) {
-      await resetBrowserState(browserForReset, options, '[GlobalPool]');
+      resetSucceeded = await resetBrowserState(browserForReset, options, '[GlobalPool]');
+    }
+
+    if (!resetSucceeded) {
+      logger.warn(`Browser reset failed during release; destroying browser: ${browserId}`);
+      await this.destroyBrowser(browserId);
+      return;
     }
 
     if (!shouldMarkIdleAfterReset) {
@@ -840,7 +865,12 @@ export class GlobalPool {
   async checkLockTimeout(): Promise<number> {
     const release = await this.mutex.acquire();
 
-    const toRelease: string[] = [];
+    const toRelease: Array<{
+      browserId: string;
+      sessionId: string;
+      pluginId?: string;
+      requestId?: string;
+    }> = [];
     const now = Date.now();
 
     try {
@@ -851,7 +881,12 @@ export class GlobalPool {
         const timeout = browser.lockedBy.timeoutMs || this.config.defaultLockTimeoutMs;
 
         if (lockDuration > timeout) {
-          toRelease.push(browser.id);
+          toRelease.push({
+            browserId: browser.id,
+            sessionId: browser.sessionId,
+            pluginId: browser.lockedBy.pluginId,
+            requestId: browser.lockedBy.requestId,
+          });
           logger.warn(`Lock timeout detected: ${browser.id}`, {
             lockedForSeconds: Math.round(lockDuration / 1000),
           });
@@ -862,8 +897,11 @@ export class GlobalPool {
     }
 
     // 在锁外执行释放
-    for (const browserId of toRelease) {
-      await this.releaseBrowser(browserId, { navigateTo: 'about:blank' });
+    for (const releaseInfo of toRelease) {
+      await this.releaseBrowser(releaseInfo.browserId, { navigateTo: 'about:blank' });
+      if (this.lockTimeoutReleasedCallback) {
+        await this.lockTimeoutReleasedCallback(releaseInfo);
+      }
     }
 
     return toRelease.length;

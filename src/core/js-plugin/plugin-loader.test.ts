@@ -110,10 +110,14 @@ const createMockCallbacks = (): PluginImportCallbacks => ({
   createFolderAndTables: vi.fn().mockResolvedValue({
     folderId: 'test-folder-id',
     tableNameToDatasetId: null,
+    tableResults: [],
   }),
   saveUIContributions: vi.fn().mockResolvedValue(undefined),
   unregisterUIContributions: vi.fn().mockResolvedValue(undefined),
   loadPlugin: vi.fn().mockResolvedValue(undefined),
+  cleanupMetadata: vi.fn().mockResolvedValue(undefined),
+  cleanupFolder: vi.fn().mockResolvedValue(undefined),
+  rollbackTables: vi.fn().mockResolvedValue(undefined),
 });
 
 // ============================================================================
@@ -687,6 +691,18 @@ describe('PluginLoader', () => {
       expect(result.error).toContain('Failed to save plugin to database');
     });
 
+    it('metadata 保存失败时应该清理已安装的插件目录', async () => {
+      const manifest = createTestManifest();
+      vi.mocked(readManifest).mockResolvedValue(manifest);
+      vi.mocked(mockDuckDB.executeWithParams).mockRejectedValueOnce(new Error('Database error'));
+      vi.mocked(fs.pathExists).mockResolvedValue(true);
+
+      const result = await loader.import(sourcePath);
+
+      expect(result.success).toBe(false);
+      expect(fs.remove).toHaveBeenCalledWith(path.join(loader.getPluginsDir(), 'test_plugin'));
+    });
+
     it('应该处理创建文件夹失败', async () => {
       const manifest = createTestManifest();
       const callbacks = createMockCallbacks();
@@ -713,6 +729,40 @@ describe('PluginLoader', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
+    });
+
+    it('插件加载失败时应该回滚首次安装留下的 UI、表、文件夹、metadata 和目录', async () => {
+      const manifest = createTestManifest({
+        contributes: {
+          commands: [{ id: 'test.command', title: 'Test Command' }],
+        },
+      } as any);
+      const callbacks = createMockCallbacks();
+      const tableResults = [
+        {
+          datasetId: 'plugin__test_plugin__orders',
+          tableName: 'Orders',
+          action: 'created' as const,
+        },
+      ];
+
+      vi.mocked(readManifest).mockResolvedValue(manifest);
+      vi.mocked(callbacks.createFolderAndTables).mockResolvedValueOnce({
+        folderId: 'folder-id',
+        tableNameToDatasetId: new Map([['Orders', 'plugin__test_plugin__orders']]),
+        tableResults,
+      });
+      vi.mocked(callbacks.loadPlugin).mockRejectedValueOnce(new Error('Module load failed'));
+      vi.mocked(fs.pathExists).mockResolvedValue(true);
+
+      const result = await loader.import(sourcePath, undefined, callbacks);
+
+      expect(result.success).toBe(false);
+      expect(callbacks.unregisterUIContributions).toHaveBeenLastCalledWith('test_plugin');
+      expect(callbacks.rollbackTables).toHaveBeenCalledWith(tableResults);
+      expect(callbacks.cleanupFolder).toHaveBeenCalledWith('test_plugin', 'folder-id');
+      expect(callbacks.cleanupMetadata).toHaveBeenCalledWith('test_plugin');
+      expect(fs.remove).toHaveBeenCalledWith(path.join(loader.getPluginsDir(), 'test_plugin'));
     });
 
     it('应该捕获并返回通用错误', async () => {

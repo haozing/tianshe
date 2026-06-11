@@ -383,6 +383,20 @@ export class DatasetStorageService {
             errorMessage: getUnknownErrorMessage(error),
             error,
           });
+          try {
+            await fileStorage.enqueueDeferredDatasetFileCleanup(
+              safeDatasetId,
+              dataset.filePath,
+              error
+            );
+          } catch (backlogError: unknown) {
+            logger.error('Failed to enqueue deferred plugin table file cleanup', {
+              datasetId: safeDatasetId,
+              filePath: dataset.filePath,
+              originalErrorMessage: getUnknownErrorMessage(error),
+              backlogErrorMessage: getUnknownErrorMessage(backlogError),
+            });
+          }
           // 不抛出错误，继续删除元数据
         }
       } else {
@@ -646,6 +660,15 @@ export class DatasetStorageService {
           datasetId: safeDatasetId,
           errorMessage: getUnknownErrorMessage(error),
         });
+        try {
+          await fileStorage.enqueueDeferredDatasetFilesCleanup(safeDatasetId, error);
+        } catch (backlogError: unknown) {
+          logger.error('Failed to enqueue deferred dataset attachment cleanup', {
+            datasetId: safeDatasetId,
+            originalErrorMessage: getUnknownErrorMessage(error),
+            backlogErrorMessage: getUnknownErrorMessage(backlogError),
+          });
+        }
       }
 
       // 步骤8: 删除元数据记录（由调用者提供的回调执行）

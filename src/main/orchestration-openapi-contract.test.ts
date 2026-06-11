@@ -102,6 +102,10 @@ describe('orchestration OpenAPI drift contract', () => {
     for (const status of ['400', '401', '403', '404', '408', '409', '429']) {
       expect(Object.keys(invokeResponses)).toContain(status);
     }
+
+    expect(
+      doc.components.parameters.XAirpaIdempotencyNamespaceHeader.description
+    ).toContain('Custom namespaces are durable across orchestration session deletion');
   });
 
   it('不再声明 openclaw 兼容端点', () => {

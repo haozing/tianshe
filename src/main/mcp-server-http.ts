@@ -59,6 +59,7 @@ export interface HttpMcpServerConfig {
 export class AirpaHttpMcpServer {
   private app: express.Application;
   private httpServer: HttpServer | null = null;
+  private startPromise: Promise<void> | null = null;
   private runtimeState = createHttpRuntimeState();
   private transports = this.runtimeState.transports;
   private orchestrationSessions = this.runtimeState.orchestrationSessions;
@@ -112,26 +113,47 @@ export class AirpaHttpMcpServer {
    * 启动服务器
    */
   async start(): Promise<void> {
-    const started = await startHttpServer({
-      app: this.app,
-      port: this.config.port,
-      bindAddress: HTTP_SERVER_DEFAULTS.BIND_ADDRESS,
-      mcpEnabled: this.restApiConfig?.enableMcp ?? false,
-      availableToolsCount: listOrchestrationCapabilities().length,
-      sessionSupportEnabled: Boolean(this.getBrowserPoolManager),
-      sessionTimeoutMs: HTTP_SERVER_DEFAULTS.SESSION_TIMEOUT,
-      sessionCleanupIntervalMs: HTTP_SERVER_DEFAULTS.SESSION_CLEANUP_INTERVAL,
-      onCleanupInactiveSessions: () => this.sessionBridge.cleanupInactiveSessions(),
-      logger,
-    });
-    this.httpServer = started.httpServer;
-    this.cleanupTimer = started.cleanupTimer;
+    if (this.httpServer) {
+      logger.debug('HTTP MCP Server start ignored because server is already running');
+      return;
+    }
+
+    if (this.startPromise) {
+      return await this.startPromise;
+    }
+
+    this.startPromise = (async () => {
+      const started = await startHttpServer({
+        app: this.app,
+        port: this.config.port,
+        bindAddress: HTTP_SERVER_DEFAULTS.BIND_ADDRESS,
+        mcpEnabled: this.restApiConfig?.enableMcp ?? false,
+        availableToolsCount: listOrchestrationCapabilities().length,
+        sessionSupportEnabled: Boolean(this.getBrowserPoolManager),
+        sessionTimeoutMs: HTTP_SERVER_DEFAULTS.SESSION_TIMEOUT,
+        sessionCleanupIntervalMs: HTTP_SERVER_DEFAULTS.SESSION_CLEANUP_INTERVAL,
+        onCleanupInactiveSessions: () => this.sessionBridge.cleanupInactiveSessions(),
+        logger,
+      });
+      this.httpServer = started.httpServer;
+      this.cleanupTimer = started.cleanupTimer;
+    })();
+
+    try {
+      await this.startPromise;
+    } finally {
+      this.startPromise = null;
+    }
   }
 
   /**
    * 停止服务器
    */
   async stop(): Promise<void> {
+    if (this.startPromise) {
+      await this.startPromise.catch(() => undefined);
+    }
+
     const stopped = await stopHttpServer({
       httpServer: this.httpServer,
       cleanupTimer: this.cleanupTimer,

@@ -64,6 +64,7 @@ function createMockTaskService() {
     getExecutions: vi.fn().mockResolvedValue([]),
     getRecentExecutions: vi.fn().mockResolvedValue([]),
     cleanupOldExecutions: vi.fn().mockResolvedValue(0),
+    markStaleExecutionsCancelled: vi.fn().mockResolvedValue(0),
     getStats: vi.fn().mockResolvedValue({
       total: 0,
       active: 0,
@@ -122,9 +123,18 @@ describe('SchedulerService', () => {
     it('init 应该启动清理定时器', async () => {
       await scheduler.init();
 
+      expect(mockTaskService.markStaleExecutionsCancelled).toHaveBeenCalledTimes(1);
       // 验证 cleanupOldExecutions 被调用（初始化时会执行一次清理）
       expect(mockTaskService.cleanupOldExecutions).toHaveBeenCalledTimes(1);
       expect(mockTaskService.cleanupOldExecutions).toHaveBeenCalledWith(30);
+    });
+
+    it('init 应该先取消遗留 pending/running executions 再恢复 active tasks', async () => {
+      await scheduler.init();
+
+      const staleOrder = mockTaskService.markStaleExecutionsCancelled.mock.invocationCallOrder[0];
+      const activeOrder = mockTaskService.getActiveTasks.mock.invocationCallOrder[0];
+      expect(staleOrder).toBeLessThan(activeOrder);
     });
 
     it('dispose 应该清理定时器', async () => {
@@ -586,6 +596,122 @@ describe('SchedulerService', () => {
         runCount: 6, // 原来是5，+1
         failCount: 3, // 原来是2，+1
       });
+    });
+  });
+
+  describe('定时器和运行中任务控制', () => {
+    it('timer fire 遇到同一任务已运行时仍应重排 interval 任务', async () => {
+      vi.useRealTimers();
+
+      const task = createTestTask({
+        id: 'interval-running-task',
+        intervalMs: 60000,
+        nextRunAt: Date.now(),
+        timeoutMs: 10000,
+      });
+
+      mockTaskService.getTask.mockResolvedValue(task);
+      mockTaskService.createExecution.mockResolvedValue({
+        id: 'exec-running',
+        taskId: task.id,
+        status: 'running',
+        startedAt: Date.now(),
+        triggerType: 'manual',
+      } as TaskExecution);
+
+      let resolveHandler!: () => void;
+      const handler = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveHandler = resolve;
+          })
+      );
+      scheduler.registerHandler(task.pluginId, task.handlerId, handler);
+
+      const running = scheduler.triggerTask(task.id);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      await expect((scheduler as any).onTimerFired(task.id)).resolves.toBeUndefined();
+
+      expect(mockTaskService.updateTask).toHaveBeenCalledWith(task.id, {
+        nextRunAt: expect.any(Number),
+      });
+
+      resolveHandler();
+      await running;
+    });
+
+    it('timer fire 在 executeTask 早期失败后仍应禁用 once 任务', async () => {
+      vi.useRealTimers();
+
+      const task = createTestTask({
+        id: 'once-task',
+        scheduleType: 'once',
+        intervalMs: undefined,
+        runAt: Date.now(),
+        nextRunAt: Date.now(),
+      });
+
+      mockTaskService.getTask.mockResolvedValue(task);
+      mockTaskService.createExecution.mockRejectedValueOnce(new Error('create execution failed'));
+
+      await expect((scheduler as any).onTimerFired(task.id)).resolves.toBeUndefined();
+
+      expect(mockTaskService.updateTask).toHaveBeenCalledWith(task.id, { status: 'disabled' });
+    });
+
+    it('cancel running task 应等待旧 handler 收尾并在此期间拒绝同任务重入', async () => {
+      vi.useRealTimers();
+
+      const task = createTestTask({
+        id: 'cancel-running-task',
+        timeoutMs: 10000,
+      });
+
+      mockTaskService.getTask.mockResolvedValue(task);
+      mockTaskService.createExecution.mockResolvedValue({
+        id: 'exec-cancel',
+        taskId: task.id,
+        status: 'running',
+        startedAt: Date.now(),
+        triggerType: 'manual',
+      } as TaskExecution);
+
+      let resolveHandler!: () => void;
+      let receivedSignal: AbortSignal | null = null;
+      const handler = vi.fn(
+        async (ctx) => {
+          receivedSignal = ctx.signal;
+          await new Promise<void>((resolve) => {
+            resolveHandler = resolve;
+          });
+          return { ok: true };
+        }
+      );
+      scheduler.registerHandler(task.pluginId, task.handlerId, handler);
+
+      const running = scheduler.triggerTask(task.id);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const cancelPromise = scheduler.cancelTask(task.id);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(receivedSignal?.aborted).toBe(true);
+      expect(mockTaskService.deleteTask).not.toHaveBeenCalled();
+      await expect(scheduler.triggerTask(task.id)).rejects.toThrow(
+        `Task ${task.id} is already running`
+      );
+
+      resolveHandler();
+      await cancelPromise;
+      const result = await running;
+
+      expect(result.status).toBe('cancelled');
+      expect(mockTaskService.deleteTask).toHaveBeenCalledWith(task.id);
+      expect(mockTaskService.updateTask).not.toHaveBeenCalledWith(
+        task.id,
+        expect.objectContaining({ lastRunStatus: expect.any(String) })
+      );
     });
   });
 

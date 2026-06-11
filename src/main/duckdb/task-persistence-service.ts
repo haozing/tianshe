@@ -1,7 +1,9 @@
 /**
- * TaskPersistenceService - 任务持久化服务
- * 负责：任务状态的CRUD操作
- * 单一职责：任务持久化和状态管理
+ * TaskPersistenceService - legacy workflow task store.
+ *
+ * This table is a persistence facade only. It is not wired to SchedulerService,
+ * does not register handlers, and does not automatically resume unfinished rows.
+ * Runtime scheduled task recovery lives in ScheduledTaskService + SchedulerService.
  */
 
 import { DuckDBConnection } from '@duckdb/node-api';
@@ -9,6 +11,8 @@ import { parseRows } from './utils';
 import { runPrepared, allPrepared } from './statement-executor';
 
 export class TaskPersistenceService {
+  readonly runtimeRole = 'legacy-persistence-only';
+
   constructor(private conn: DuckDBConnection) {}
 
   /**
@@ -99,7 +103,10 @@ export class TaskPersistenceService {
   }
 
   /**
-   * 加载未完成的任务（用于恢复）
+   * Loads unfinished legacy workflow rows for callers that explicitly inspect this table.
+   *
+   * Important: this method does not resume or execute tasks by itself. Do not use it as
+   * SchedulerService recovery; scheduled task recovery is handled by scheduled_tasks/task_executions.
    */
   async loadUnfinishedTasks(): Promise<any[]> {
     const result = await this.conn.runAndReadAll(

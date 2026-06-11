@@ -906,6 +906,44 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
     expect(payload.error?.data?.hint).toContain('standard MCP SDK');
   });
 
+  it('MCP rejects initialize inside JSON-RPC batch requests', async () => {
+    await startServer(createMockBrowser(), { enableMcp: true });
+
+    const response = await postJson(
+      baseUrl,
+      '/mcp',
+      [
+        {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: MCP_PROTOCOL_UNIFIED_VERSION,
+            capabilities: {},
+            clientInfo: { name: 'batch-client', version: '1.0.0' },
+          },
+        },
+        {
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/list',
+          params: {},
+        },
+      ],
+      {
+        accept: 'application/json',
+        'mcp-protocol-version': MCP_PROTOCOL_UNIFIED_VERSION,
+      }
+    );
+
+    expect(response.status).toBe(400);
+    expect(response.json.error?.message).toContain('single JSON-RPC request');
+    expect(response.json.error?.data).toMatchObject({
+      reason: 'initialize_batch_not_supported',
+      initializeIndex: 0,
+    });
+  });
+
   it('MCP initialize, catalog, and health expose the same runtime fingerprint', async () => {
     await startServer(createMockBrowser(), { enableMcp: true });
 

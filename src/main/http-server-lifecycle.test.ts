@@ -161,4 +161,45 @@ describe('http-server-lifecycle', () => {
     expect(stopped.httpServer).toBeNull();
     expect(stopped.cleanupTimer).toBeNull();
   });
+
+  it('stopHttpServer 在单个 session cleanup 失败后仍关闭 server', async () => {
+    const app = express();
+    const logger = createLogger();
+    const started = await startHttpServer({
+      app,
+      port: 0,
+      bindAddress: '127.0.0.1',
+      mcpEnabled: false,
+      availableToolsCount: 0,
+      sessionSupportEnabled: false,
+      sessionTimeoutMs: 30000,
+      sessionCleanupIntervalMs: 1000,
+      onCleanupInactiveSessions: vi.fn(),
+      logger,
+    });
+    serversToClose.push(started.httpServer);
+
+    const transports = new Map<string, {}>([['mcp-session-1', {}]]);
+    const orchestrationSessions = new Map<string, {}>([['orch-session-1', {}]]);
+
+    const stopped = await stopHttpServer({
+      httpServer: started.httpServer,
+      cleanupTimer: started.cleanupTimer,
+      transports,
+      orchestrationSessions,
+      cleanupMcpSession: vi.fn().mockRejectedValue(new Error('mcp cleanup failed')),
+      cleanupOrchestrationSession: vi.fn().mockResolvedValue(undefined),
+      logger,
+    });
+
+    expect(stopped.httpServer).toBeNull();
+    expect(stopped.cleanupTimer).toBeNull();
+    expect(started.httpServer.listening).toBe(false);
+    expect(transports.size).toBe(0);
+    expect(orchestrationSessions.size).toBe(0);
+    expect(logger.error).toHaveBeenCalledWith(
+      'HTTP session cleanup task failed during stop: 0',
+      expect.any(Error)
+    );
+  });
 });

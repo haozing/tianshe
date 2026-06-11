@@ -19,7 +19,11 @@ import { SQLValidator } from './sql-validator';
 import { DependencyManager } from './dependency-manager';
 import { ValidationEngine } from './validation-engine';
 import type { Dataset, ValidationRule } from './types';
-import { escapeSqlStringLiteral, quoteIdentifier, quoteQualifiedName } from './utils';
+import {
+  escapeSqlStringLiteral,
+  quoteIdentifier,
+  quoteQualifiedName,
+} from './utils';
 import { runPrepared } from './statement-executor';
 import { getUnknownErrorMessage } from '../ipc-utils';
 import { createLogger } from '../../core/logger';
@@ -42,6 +46,70 @@ export class DatasetSchemaService {
     private dependencyManager: DependencyManager,
     private validationEngine: ValidationEngine
   ) {}
+
+  private getDatasetTableRef(datasetId: string): string {
+    return quoteQualifiedName(`ds_${datasetId}`, 'data');
+  }
+
+  private async ensureDatasetAttached(datasetId: string, filePath: string): Promise<void> {
+    const escapedPath = filePath.replace(/\\/g, '\\\\').replace(/'/g, "''");
+    await this.storageService.smartAttach(datasetId, escapedPath);
+  }
+
+  private async tryDropPhysicalColumn(
+    datasetId: string,
+    filePath: string,
+    columnName: string,
+    reason: string
+  ): Promise<void> {
+    try {
+      await this.ensureDatasetAttached(datasetId, filePath);
+      await this.conn.run(
+        `ALTER TABLE ${this.getDatasetTableRef(datasetId)} DROP COLUMN ${quoteIdentifier(columnName)}`
+      );
+      logger.info('Dropped dataset physical column during compensation', {
+        datasetId,
+        columnName,
+        reason,
+      });
+    } catch (error: unknown) {
+      logger.error('Failed to compensate dataset physical column creation', {
+        datasetId,
+        columnName,
+        reason,
+        errorMessage: getUnknownErrorMessage(error),
+      });
+    }
+  }
+
+  private async tryRenamePhysicalColumn(
+    datasetId: string,
+    filePath: string,
+    fromName: string,
+    toName: string,
+    reason: string
+  ): Promise<void> {
+    try {
+      await this.ensureDatasetAttached(datasetId, filePath);
+      await this.conn.run(
+        `ALTER TABLE ${this.getDatasetTableRef(datasetId)} RENAME COLUMN ${quoteIdentifier(fromName)} TO ${quoteIdentifier(toName)}`
+      );
+      logger.info('Renamed dataset physical column during compensation', {
+        datasetId,
+        fromName,
+        toName,
+        reason,
+      });
+    } catch (error: unknown) {
+      logger.error('Failed to compensate dataset physical column rename', {
+        datasetId,
+        fromName,
+        toName,
+        reason,
+        errorMessage: getUnknownErrorMessage(error),
+      });
+    }
+  }
 
   // ==================== 主列操作方法 ====================
 
@@ -149,50 +217,6 @@ export class DatasetSchemaService {
       const needsPhysicalColumn =
         storageMode === 'physical' && !['button', 'attachment'].includes(fieldType);
 
-      if (needsPhysicalColumn) {
-        // 4.1 创建物理列
-        await this.createPhysicalColumn({
-          datasetId: safeDatasetId,
-          filePath: dataset.filePath,
-          columnName,
-          duckdbType,
-          nullable,
-        });
-
-        // 4.2 应用验证规则（转换为数据库约束）
-        if (validationRules.length > 0) {
-          try {
-            await this.validationEngine.applyValidationRules({
-              datasetId: safeDatasetId,
-              filePath: dataset.filePath,
-              columnName,
-              rules: validationRules,
-            });
-            logger.info('Applied dataset column validation rules', {
-              datasetId: safeDatasetId,
-              columnName,
-              ruleCount: validationRules.length,
-            });
-          } catch (error: unknown) {
-            logger.warn('Failed to apply dataset column validation rules', {
-              datasetId: safeDatasetId,
-              columnName,
-              errorMessage: getUnknownErrorMessage(error),
-            });
-            // 不中断流程，只是警告
-          }
-        }
-
-        // 4.3 处理特殊字段类型
-        await this.handleSpecialFieldTypes(
-          safeDatasetId,
-          dataset.filePath,
-          columnName,
-          fieldType,
-          metadata
-        );
-      }
-
       // ========== 第5步：更新 schema 元数据 ==========
       const newColumn: any = {
         name: columnName,
@@ -223,22 +247,81 @@ export class DatasetSchemaService {
       }
 
       const updatedSchema = [...(dataset.schema || []), newColumn];
-      await this.metadataService.updateDatasetSchema(safeDatasetId, updatedSchema);
-      this.dependencyManager.rebuildFromSchema(updatedSchema);
+      let physicalColumnCreated = false;
+      try {
+        if (needsPhysicalColumn) {
+          // 4.1 创建物理列
+          await this.createPhysicalColumn({
+            datasetId: safeDatasetId,
+            filePath: dataset.filePath,
+            columnName,
+            duckdbType,
+            nullable,
+          });
+          physicalColumnCreated = true;
 
-      // ========== 第6步：处理默认值（仅数据列） ==========
-      if (
-        storageMode === 'physical' &&
-        metadata.defaultValue !== undefined &&
-        metadata.defaultValue !== null &&
-        metadata.defaultValue !== ''
-      ) {
-        await this.fillDefaultValue(
-          safeDatasetId,
-          dataset.filePath,
-          columnName,
-          metadata.defaultValue
-        );
+          // 4.2 应用验证规则（转换为数据库约束）
+          if (validationRules.length > 0) {
+            try {
+              await this.validationEngine.applyValidationRules({
+                datasetId: safeDatasetId,
+                filePath: dataset.filePath,
+                columnName,
+                rules: validationRules,
+              });
+              logger.info('Applied dataset column validation rules', {
+                datasetId: safeDatasetId,
+                columnName,
+                ruleCount: validationRules.length,
+              });
+            } catch (error: unknown) {
+              logger.warn('Failed to apply dataset column validation rules', {
+                datasetId: safeDatasetId,
+                columnName,
+                errorMessage: getUnknownErrorMessage(error),
+              });
+              // 不中断流程，只是警告
+            }
+          }
+
+          // 4.3 处理特殊字段类型
+          await this.handleSpecialFieldTypes(
+            safeDatasetId,
+            dataset.filePath,
+            columnName,
+            fieldType,
+            metadata
+          );
+        }
+
+        await this.metadataService.updateDatasetSchema(safeDatasetId, updatedSchema);
+
+        // ========== 第6步：处理默认值（仅数据列） ==========
+        if (
+          storageMode === 'physical' &&
+          metadata.defaultValue !== undefined &&
+          metadata.defaultValue !== null &&
+          metadata.defaultValue !== ''
+        ) {
+          await this.fillDefaultValue(
+            safeDatasetId,
+            dataset.filePath,
+            columnName,
+            metadata.defaultValue
+          );
+        }
+        this.dependencyManager.rebuildFromSchema(updatedSchema);
+      } catch (error) {
+        this.dependencyManager.rebuildFromSchema(dataset.schema || []);
+        if (physicalColumnCreated) {
+          await this.tryDropPhysicalColumn(
+            safeDatasetId,
+            dataset.filePath,
+            columnName,
+            'addColumn failed after physical column creation'
+          );
+        }
+        throw error;
       }
 
       // ========== 第7步：复制数据（如果指定了源列） ==========
@@ -363,47 +446,6 @@ export class DatasetSchemaService {
       }
 
       const isPhysicalColumn = this.isPhysicalStoredColumn(column);
-      if (isPhysicalColumn) {
-        const escapedPath = dataset.filePath.replace(/\\/g, '\\\\').replace(/'/g, "''");
-        await this.storageService.smartAttach(safeDatasetId, escapedPath);
-
-        const tableRef = quoteQualifiedName(`ds_${safeDatasetId}`, 'data');
-
-        if (isRenaming) {
-          await this.conn.run(
-            `ALTER TABLE ${tableRef} RENAME COLUMN ${quoteIdentifier(columnName)} TO ${quoteIdentifier(targetName)}`
-          );
-        }
-
-        const typeChanged = updatedColumn.duckdbType !== column.duckdbType;
-        if (typeChanged) {
-          await this.conn.run(
-            `ALTER TABLE ${tableRef} ALTER COLUMN ${quoteIdentifier(targetName)} SET DATA TYPE ${updatedColumn.duckdbType}`
-          );
-        }
-
-        if (nullable !== undefined && nullable !== column.nullable) {
-          if (nullable) {
-            await this.conn.run(
-              `ALTER TABLE ${tableRef} ALTER COLUMN ${quoteIdentifier(targetName)} DROP NOT NULL`
-            );
-          } else {
-            await this.conn.run(
-              `ALTER TABLE ${tableRef} ALTER COLUMN ${quoteIdentifier(targetName)} SET NOT NULL`
-            );
-          }
-        }
-
-        if (fieldType !== undefined && fieldType !== column.fieldType) {
-          await this.handleSpecialFieldTypes(
-            safeDatasetId,
-            dataset.filePath,
-            targetName,
-            updatedColumn.fieldType,
-            updatedColumn.metadata || {}
-          );
-        }
-      }
 
       let updatedSchema = [...dataset.schema];
       updatedSchema[columnIndex] = updatedColumn;
@@ -412,50 +454,103 @@ export class DatasetSchemaService {
         updatedSchema = rewriteColumnReferencesInSchema(updatedSchema, columnName, targetName);
       }
 
-      const updatedTargetColumn =
-        updatedSchema.find((col) => col.name === targetName) || updatedColumn;
-      if (updatedTargetColumn.storageMode === 'computed' && updatedTargetColumn.computeConfig) {
-        const escapedPath = dataset.filePath.replace(/\\/g, '\\\\').replace(/'/g, "''");
-        await this.storageService.smartAttach(safeDatasetId, escapedPath);
-        await this.validateComputeConfig(safeDatasetId, updatedTargetColumn.computeConfig);
+      let physicalColumnRenamed = false;
+      try {
+        if (isPhysicalColumn) {
+          await this.ensureDatasetAttached(safeDatasetId, dataset.filePath);
 
-        const schemaColumnNames = new Set(updatedSchema.map((col) => col.name));
-        const rawDependsOn = extractDependenciesFromComputeConfig(
-          updatedTargetColumn.computeConfig
-        );
-        if (updatedTargetColumn.computeConfig.type !== 'custom') {
-          const missingDependencies = rawDependsOn.filter((dep) => !schemaColumnNames.has(dep));
-          if (missingDependencies.length > 0) {
-            throw new Error(`依赖列不存在: ${missingDependencies.join(', ')}`);
+          const tableRef = this.getDatasetTableRef(safeDatasetId);
+
+          if (isRenaming) {
+            await this.conn.run(
+              `ALTER TABLE ${tableRef} RENAME COLUMN ${quoteIdentifier(columnName)} TO ${quoteIdentifier(targetName)}`
+            );
+            physicalColumnRenamed = true;
+          }
+
+          const typeChanged = updatedColumn.duckdbType !== column.duckdbType;
+          if (typeChanged) {
+            await this.conn.run(
+              `ALTER TABLE ${tableRef} ALTER COLUMN ${quoteIdentifier(targetName)} SET DATA TYPE ${updatedColumn.duckdbType}`
+            );
+          }
+
+          if (nullable !== undefined && nullable !== column.nullable) {
+            if (nullable) {
+              await this.conn.run(
+                `ALTER TABLE ${tableRef} ALTER COLUMN ${quoteIdentifier(targetName)} DROP NOT NULL`
+              );
+            } else {
+              await this.conn.run(
+                `ALTER TABLE ${tableRef} ALTER COLUMN ${quoteIdentifier(targetName)} SET NOT NULL`
+              );
+            }
+          }
+
+          if (fieldType !== undefined && fieldType !== column.fieldType) {
+            await this.handleSpecialFieldTypes(
+              safeDatasetId,
+              dataset.filePath,
+              targetName,
+              updatedColumn.fieldType,
+              updatedColumn.metadata || {}
+            );
           }
         }
-        const dependsOn = rawDependsOn.filter((dep) => schemaColumnNames.has(dep));
-        const schemaWithoutSelf = updatedSchema.filter(
-          (col) => col.name !== updatedTargetColumn.name
-        );
-        this.dependencyManager.rebuildFromSchema(schemaWithoutSelf as any);
-        const cycleCheck = this.dependencyManager.checkCyclicDependency(
-          updatedTargetColumn.name,
-          dependsOn
-        );
-        if (cycleCheck.hasCycle) {
-          throw new Error(`检测到循环依赖: ${cycleCheck.cycle?.join(' → ')}`);
-        }
-      }
 
-      if (isRenaming) {
-        const escapedPath = dataset.filePath.replace(/\\/g, '\\\\').replace(/'/g, "''");
-        await this.storageService.smartAttach(safeDatasetId, escapedPath);
-        for (const schemaColumn of updatedSchema) {
-          if (schemaColumn.storageMode !== 'computed' || !schemaColumn.computeConfig) {
-            continue;
+        const updatedTargetColumn =
+          updatedSchema.find((col) => col.name === targetName) || updatedColumn;
+        if (updatedTargetColumn.storageMode === 'computed' && updatedTargetColumn.computeConfig) {
+          await this.ensureDatasetAttached(safeDatasetId, dataset.filePath);
+          await this.validateComputeConfig(safeDatasetId, updatedTargetColumn.computeConfig);
+
+          const schemaColumnNames = new Set(updatedSchema.map((col) => col.name));
+          const rawDependsOn = extractDependenciesFromComputeConfig(updatedTargetColumn.computeConfig);
+          if (updatedTargetColumn.computeConfig.type !== 'custom') {
+            const missingDependencies = rawDependsOn.filter((dep) => !schemaColumnNames.has(dep));
+            if (missingDependencies.length > 0) {
+              throw new Error(`依赖列不存在: ${missingDependencies.join(', ')}`);
+            }
           }
-          await this.validateComputeConfig(safeDatasetId, schemaColumn.computeConfig);
+          const dependsOn = rawDependsOn.filter((dep) => schemaColumnNames.has(dep));
+          const schemaWithoutSelf = updatedSchema.filter(
+            (col) => col.name !== updatedTargetColumn.name
+          );
+          this.dependencyManager.rebuildFromSchema(schemaWithoutSelf as any);
+          const cycleCheck = this.dependencyManager.checkCyclicDependency(
+            updatedTargetColumn.name,
+            dependsOn
+          );
+          if (cycleCheck.hasCycle) {
+            throw new Error(`检测到循环依赖: ${cycleCheck.cycle?.join(' → ')}`);
+          }
         }
-      }
 
-      await this.metadataService.updateDatasetSchema(safeDatasetId, updatedSchema);
-      this.dependencyManager.rebuildFromSchema(updatedSchema);
+        if (isRenaming) {
+          await this.ensureDatasetAttached(safeDatasetId, dataset.filePath);
+          for (const schemaColumn of updatedSchema) {
+            if (schemaColumn.storageMode !== 'computed' || !schemaColumn.computeConfig) {
+              continue;
+            }
+            await this.validateComputeConfig(safeDatasetId, schemaColumn.computeConfig);
+          }
+        }
+
+        await this.metadataService.updateDatasetSchema(safeDatasetId, updatedSchema);
+        this.dependencyManager.rebuildFromSchema(updatedSchema);
+      } catch (error) {
+        this.dependencyManager.rebuildFromSchema(dataset.schema);
+        if (physicalColumnRenamed) {
+          await this.tryRenamePhysicalColumn(
+            safeDatasetId,
+            dataset.filePath,
+            targetName,
+            columnName,
+            'updateColumn failed after physical column rename'
+          );
+        }
+        throw error;
+      }
 
       logger.info('Updated dataset column', {
         datasetId: safeDatasetId,
@@ -501,21 +596,6 @@ export class DatasetSchemaService {
       const isPhysicalColumn =
         column.storageMode !== 'computed' && !['button', 'attachment'].includes(column.fieldType);
 
-      if (isPhysicalColumn) {
-        // 数据集表统一使用独立文件 + ds_<id>.data（包括 plugin__ 数据集）
-        const escapedPath = dataset.filePath.replace(/\\/g, '\\\\').replace(/'/g, "''");
-        await this.storageService.smartAttach(safeDatasetId, escapedPath);
-
-        const quotedColumn = quoteIdentifier(columnName);
-        await this.conn.run(
-          `ALTER TABLE ${quoteQualifiedName(`ds_${safeDatasetId}`, 'data')} DROP COLUMN ${quotedColumn}`
-        );
-        logger.info('Dropped physical dataset column', {
-          datasetId: safeDatasetId,
-          columnName,
-        });
-      }
-
       // 更新 schema 元数据
       const updatedSchema = dataset.schema!.filter((col) => {
         // 移除目标列
@@ -525,8 +605,41 @@ export class DatasetSchemaService {
         return true;
       });
 
-      await this.metadataService.updateDatasetSchema(safeDatasetId, updatedSchema);
-      this.dependencyManager.rebuildFromSchema(updatedSchema);
+      let metadataUpdated = false;
+      try {
+        await this.metadataService.updateDatasetSchema(safeDatasetId, updatedSchema);
+        metadataUpdated = true;
+
+        if (isPhysicalColumn) {
+          // 数据集表统一使用独立文件 + ds_<id>.data（包括 plugin__ 数据集）
+          await this.ensureDatasetAttached(safeDatasetId, dataset.filePath);
+
+          const quotedColumn = quoteIdentifier(columnName);
+          await this.conn.run(
+            `ALTER TABLE ${this.getDatasetTableRef(safeDatasetId)} DROP COLUMN ${quotedColumn}`
+          );
+          logger.info('Dropped physical dataset column', {
+            datasetId: safeDatasetId,
+            columnName,
+          });
+        }
+
+        this.dependencyManager.rebuildFromSchema(updatedSchema);
+      } catch (error) {
+        this.dependencyManager.rebuildFromSchema(dataset.schema);
+        if (metadataUpdated) {
+          try {
+            await this.metadataService.updateDatasetSchema(safeDatasetId, dataset.schema);
+          } catch (restoreError: unknown) {
+            logger.error('Failed to restore dataset schema metadata after deleteColumn failure', {
+              datasetId: safeDatasetId,
+              columnName,
+              errorMessage: getUnknownErrorMessage(restoreError),
+            });
+          }
+        }
+        throw error;
+      }
 
       const deletedColumns =
         force && dependencies.length > 0

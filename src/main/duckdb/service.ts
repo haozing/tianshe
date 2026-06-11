@@ -231,6 +231,16 @@ export class DuckDBService implements IDatasetResolver {
     await this.syncOutboxService.initTable();
     await this.syncMetadataService.initTable();
     await this.runtimeObservationService.initTable();
+    try {
+      const cleanupResult = await this.runtimeObservationService.cleanupRetention();
+      if (cleanupResult.eventsDeleted > 0 || cleanupResult.artifactsDeleted > 0) {
+        logger.info('Runtime observation retention cleanup completed', cleanupResult);
+      }
+    } catch (error) {
+      logger.warn('Runtime observation retention cleanup failed', {
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    }
     // ProfileGroupService 的表结构由 ProfileService.initTable() 创建
 
     // 初始化插件相关表
@@ -321,6 +331,17 @@ export class DuckDBService implements IDatasetResolver {
       throw new Error('RuntimeObservationService not initialized');
     }
     return this.runtimeObservationService;
+  }
+
+  async cleanupRuntimeObservations(daysToKeep: number = 7): Promise<{
+    cutoffTimestamp: number;
+    eventsDeleted: number;
+    artifactsDeleted: number;
+  }> {
+    if (!this.runtimeObservationService) {
+      throw new Error('RuntimeObservationService not initialized');
+    }
+    return await this.runtimeObservationService.cleanupRetention({ daysToKeep });
   }
 
   // ========== 自动化服务代理方法 ==========

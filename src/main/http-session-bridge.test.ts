@@ -31,6 +31,7 @@ describe('http-session-bridge', () => {
     const runtimeMetrics = {
       queueOverflowCount: 2,
       invokeTimeoutCount: 1,
+      abandonedInvocationCount: 0,
       browserAcquireFailureCount: 3,
       browserAcquireTimeoutCount: 1,
     };
@@ -97,6 +98,7 @@ describe('http-session-bridge', () => {
       runtimeMetrics: {
         queueOverflowCount: 0,
         invokeTimeoutCount: 0,
+        abandonedInvocationCount: 0,
         browserAcquireFailureCount: 0,
         browserAcquireTimeoutCount: 0,
       },
@@ -151,6 +153,7 @@ describe('http-session-bridge', () => {
       runtimeMetrics: {
         queueOverflowCount: 0,
         invokeTimeoutCount: 0,
+        abandonedInvocationCount: 0,
         browserAcquireFailureCount: 0,
         browserAcquireTimeoutCount: 0,
       },
@@ -196,6 +199,7 @@ describe('http-session-bridge', () => {
       runtimeMetrics: {
         queueOverflowCount: 0,
         invokeTimeoutCount: 0,
+        abandonedInvocationCount: 0,
         browserAcquireFailureCount: 0,
         browserAcquireTimeoutCount: 0,
       },

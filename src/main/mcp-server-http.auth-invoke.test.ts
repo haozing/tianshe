@@ -593,7 +593,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(response.status).toBe(500);
     expect(response.json.success).toBe(false);
     await waitForAssertion(() => {
-      expect(release).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledWith({ destroy: true });
     });
   });
 
@@ -820,6 +820,87 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const deleteResponse = await deleteJson(baseUrl, `/api/v1/orchestration/sessions/${sessionId}`);
     expect(deleteResponse.status).toBe(200);
     expect(deleteNamespace).toHaveBeenCalledWith(sessionId);
+    expect(deleteNamespace).not.toHaveBeenCalledWith('order-1001');
+  });
+
+  it('keeps persisted custom idempotency namespaces across session deletion', async () => {
+    const persistedEntries = new Map<string, unknown>();
+    const getPersisted = vi.fn().mockImplementation(async (namespace: string, key: string) => {
+      return persistedEntries.get(`${namespace}:${key}`) || null;
+    });
+    const setPersisted = vi
+      .fn()
+      .mockImplementation(async (namespace: string, key: string, entry: unknown) => {
+        persistedEntries.set(`${namespace}:${key}`, entry);
+      });
+    const deleteNamespace = vi.fn().mockResolvedValue(undefined);
+    const pruneExpired = vi.fn().mockResolvedValue(0);
+    const snapshot = vi
+      .fn()
+      .mockResolvedValue(createSnapshotResult('https://example.com/custom-idem', 'Custom Idem'));
+
+    await startServer(createMockBrowser({ snapshot }), {
+      restApiConfig: {
+        orchestrationIdempotencyStore: 'duckdb',
+      },
+      dependencies: {
+        idempotencyPersistence: {
+          get: getPersisted,
+          set: setPersisted,
+          deleteNamespace,
+          pruneExpired,
+        },
+      },
+    });
+
+    const firstCreate = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
+    const firstSessionId = firstCreate.json.data.sessionId as string;
+    const headers = {
+      'Idempotency-Key': 'persisted-key-cross-session',
+      'x-airpa-idempotency-namespace': 'order-cross-session',
+    };
+
+    const firstInvoke = await postJson(
+      baseUrl,
+      '/api/v1/orchestration/invoke',
+      {
+        sessionId: firstSessionId,
+        name: 'browser_snapshot',
+        arguments: {},
+      },
+      headers
+    );
+    expect(firstInvoke.status).toBe(200);
+    expect(firstInvoke.json._meta.idempotencyStatus).toBe('stored');
+
+    const deleteResponse = await deleteJson(
+      baseUrl,
+      `/api/v1/orchestration/sessions/${firstSessionId}`
+    );
+    expect(deleteResponse.status).toBe(200);
+    expect(deleteNamespace).toHaveBeenCalledWith(firstSessionId);
+    expect(deleteNamespace).not.toHaveBeenCalledWith('order-cross-session');
+
+    const secondCreate = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
+    const secondSessionId = secondCreate.json.data.sessionId as string;
+    const replay = await postJson(
+      baseUrl,
+      '/api/v1/orchestration/invoke',
+      {
+        sessionId: secondSessionId,
+        name: 'browser_snapshot',
+        arguments: {},
+      },
+      headers
+    );
+
+    expect(replay.status).toBe(200);
+    expect(replay.json._meta.idempotencyStatus).toBe('replayed');
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(getPersisted).toHaveBeenCalledWith(
+      'order-cross-session',
+      'persisted-key-cross-session'
+    );
   });
 
   it('Idempotency-Key replays the original response for matching requests', async () => {

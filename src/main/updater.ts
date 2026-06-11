@@ -20,6 +20,8 @@ import { redactSensitiveText } from '../utils/redaction';
 // 强制更新的最低版本（低于此版本必须更新）
 const MINIMUM_VERSION = '1.0.0';
 type UpdateErrorOperation = 'check' | 'download' | 'update';
+type AutoUpdaterEventName = Parameters<typeof autoUpdater.on>[0];
+type AutoUpdaterListener = (...args: any[]) => void;
 
 const UPDATE_CONFIG_MISSING_PATTERN = /update config not found/i;
 const AUTH_FAILURE_PATTERN =
@@ -120,6 +122,10 @@ export class UpdateManager {
   private updateCheckInterval: NodeJS.Timeout | null = null;
   private isForceUpdate: boolean = false;
   private updateConfigAvailable: boolean = false;
+  private autoUpdaterListeners: Array<{
+    eventName: AutoUpdaterEventName;
+    listener: AutoUpdaterListener;
+  }> = [];
 
   constructor(logger: LogStorageService, mainWindow: BrowserWindow) {
     this.logger = logger;
@@ -186,12 +192,14 @@ export class UpdateManager {
    * 注册更新事件
    */
   private registerEvents(): void {
-    autoUpdater.on('checking-for-update', () => {
+    this.removeRegisteredAutoUpdaterListeners();
+
+    this.registerAutoUpdaterListener('checking-for-update', () => {
       this.logger.info('updater', 'Checking for updates...');
       this.sendToRenderer('checking');
     });
 
-    autoUpdater.on('update-available', (info: UpdateInfo) => {
+    this.registerAutoUpdaterListener('update-available', (info: UpdateInfo) => {
       this.logger.info('updater', 'Update available', {
         version: info.version,
         releaseDate: info.releaseDate,
@@ -213,12 +221,12 @@ export class UpdateManager {
       }
     });
 
-    autoUpdater.on('update-not-available', (info: UpdateInfo) => {
+    this.registerAutoUpdaterListener('update-not-available', (info: UpdateInfo) => {
       this.logger.info('updater', 'Update not available', { version: info.version });
       this.sendToRenderer('not-available', { version: info.version });
     });
 
-    autoUpdater.on('download-progress', (progress: ProgressInfo) => {
+    this.registerAutoUpdaterListener('download-progress', (progress: ProgressInfo) => {
       const percent = Math.round(progress.percent);
       this.logger.info('updater', `Downloading: ${percent}%`, {
         transferred: progress.transferred,
@@ -234,7 +242,7 @@ export class UpdateManager {
       });
     });
 
-    autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
+    this.registerAutoUpdaterListener('update-downloaded', (info: UpdateInfo) => {
       this.logger.info('updater', 'Update downloaded', { version: info.version });
       this.sendToRenderer('downloaded', {
         version: info.version,
@@ -250,7 +258,7 @@ export class UpdateManager {
       }
     });
 
-    autoUpdater.on('error', (error: Error) => {
+    this.registerAutoUpdaterListener('error', (error: Error) => {
       const userMessage = getUserFacingUpdateErrorMessage(error, 'update');
       this.logger.error('updater', 'Update error', {
         ...buildUpdateErrorLogContext(error),
@@ -264,6 +272,31 @@ export class UpdateManager {
 
       // 强制更新失败时，由渲染进程的 ForceUpdateModal 提供重试选项
     });
+  }
+
+  private registerAutoUpdaterListener(
+    eventName: AutoUpdaterEventName,
+    listener: AutoUpdaterListener
+  ): void {
+    autoUpdater.on(eventName, listener);
+    this.autoUpdaterListeners.push({ eventName, listener });
+  }
+
+  private removeRegisteredAutoUpdaterListeners(): void {
+    const updater = autoUpdater as typeof autoUpdater & {
+      off?: (eventName: AutoUpdaterEventName, listener: AutoUpdaterListener) => void;
+      removeListener?: (eventName: AutoUpdaterEventName, listener: AutoUpdaterListener) => void;
+    };
+
+    for (const { eventName, listener } of this.autoUpdaterListeners) {
+      if (typeof updater.off === 'function') {
+        updater.off(eventName, listener);
+      } else if (typeof updater.removeListener === 'function') {
+        updater.removeListener(eventName, listener);
+      }
+    }
+
+    this.autoUpdaterListeners = [];
   }
 
   /**
@@ -360,7 +393,9 @@ export class UpdateManager {
 
     this.updateCheckInterval = setInterval(() => {
       this.logger.info('updater', 'Periodic update check triggered');
-      this.checkForUpdates();
+      void this.checkForUpdates().catch((error: unknown) => {
+        this.logger.warn('updater', 'Periodic update check failed', buildUpdateErrorLogContext(error));
+      });
     }, intervalMs);
 
     this.logger.info('updater', `Periodic check started (interval: ${intervalMs / 1000}s)`);
@@ -391,6 +426,7 @@ export class UpdateManager {
    */
   cleanup(): void {
     this.stopPeriodicCheck();
+    this.removeRegisteredAutoUpdaterListeners();
     this.logger.info('updater', 'UpdateManager cleaned up');
   }
 }

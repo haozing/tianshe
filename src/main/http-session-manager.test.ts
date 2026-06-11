@@ -22,6 +22,7 @@ const createLogger = () => ({
 const createRuntimeMetrics = (): RuntimeMetricsSnapshot => ({
   queueOverflowCount: 0,
   invokeTimeoutCount: 0,
+  abandonedInvocationCount: 0,
   browserAcquireFailureCount: 0,
   browserAcquireTimeoutCount: 0,
 });
@@ -72,6 +73,116 @@ describe('http-session-manager', () => {
     expect(runtimeMetrics.invokeTimeoutCount).toBe(1);
     expect(session.queue.pendingInvocations).toBe(0);
     expect(session.queue.activeInvocations).toBe(0);
+  });
+
+  it('does not start the next invoke until a timed-out task has actually drained', async () => {
+    vi.useFakeTimers();
+    const runtimeMetrics = createRuntimeMetrics();
+    const logger = createLogger();
+    const session = createMcpSession();
+    const events: string[] = [];
+    let finishFirst!: () => void;
+
+    const firstInvoke = enqueueInvokeTask({
+      sessionLabel: 'mcp-serial-timeout',
+      session: getMcpInvokeQueueState(session),
+      task: async () => {
+        events.push('first:start');
+        await new Promise<void>((resolve) => {
+          finishFirst = resolve;
+        });
+        events.push('first:end');
+        return 'first';
+      },
+      options: { timeoutMs: 30, drainTimeoutMs: 1_000 },
+      runtimeMetrics,
+      logger,
+    });
+    const firstExpectation = expect(firstInvoke).rejects.toMatchObject({
+      code: ErrorCode.TIMEOUT,
+      context: expect.objectContaining({ reason: 'invoke_timeout' }),
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    const secondInvoke = enqueueInvokeTask({
+      sessionLabel: 'mcp-serial-timeout',
+      session: getMcpInvokeQueueState(session),
+      task: async () => {
+        events.push('second:start');
+        return 'second';
+      },
+      options: { timeoutMs: 1_000, drainTimeoutMs: 1_000 },
+      runtimeMetrics,
+      logger,
+    });
+    const secondExpectation = expect(secondInvoke).resolves.toBe('second');
+
+    await vi.advanceTimersByTimeAsync(30);
+    await firstExpectation;
+    expect(events).toEqual(['first:start']);
+    expect(session.queue.pendingInvocations).toBe(2);
+    expect(session.queue.activeInvocations).toBe(1);
+
+    finishFirst();
+    await vi.advanceTimersByTimeAsync(1);
+    await secondExpectation;
+    expect(events).toEqual(['first:start', 'first:end', 'second:start']);
+    expect(runtimeMetrics.abandonedInvocationCount ?? 0).toBe(0);
+    expect(session.queue.pendingInvocations).toBe(0);
+    expect(session.queue.activeInvocations).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it('closes the session when a timed-out task ignores abort beyond the drain budget', async () => {
+    vi.useFakeTimers();
+    const runtimeMetrics = createRuntimeMetrics();
+    const logger = createLogger();
+    const session = createMcpSession();
+    const events: string[] = [];
+
+    const firstInvoke = enqueueInvokeTask({
+      sessionLabel: 'mcp-abandoned',
+      session: getMcpInvokeQueueState(session),
+      task: async () => {
+        events.push('first:start');
+        return await new Promise<string>(() => undefined);
+      },
+      options: { timeoutMs: 30, drainTimeoutMs: 40 },
+      runtimeMetrics,
+      logger,
+    });
+    const firstExpectation = expect(firstInvoke).rejects.toMatchObject({
+      code: ErrorCode.TIMEOUT,
+      context: expect.objectContaining({ reason: 'invoke_timeout' }),
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    const secondInvoke = enqueueInvokeTask({
+      sessionLabel: 'mcp-abandoned',
+      session: getMcpInvokeQueueState(session),
+      task: async () => {
+        events.push('second:start');
+        return 'second';
+      },
+      options: { timeoutMs: 1_000, drainTimeoutMs: 40 },
+      runtimeMetrics,
+      logger,
+    });
+    const secondExpectation = expect(secondInvoke).rejects.toMatchObject({
+      code: ErrorCode.OPERATION_FAILED,
+      context: expect.objectContaining({ reason: 'invoke_abandoned' }),
+    });
+
+    await vi.advanceTimersByTimeAsync(30);
+    await firstExpectation;
+    await vi.advanceTimersByTimeAsync(40);
+    await secondExpectation;
+    expect(events).toEqual(['first:start']);
+    expect(runtimeMetrics.abandonedInvocationCount).toBe(1);
+    expect(session.lifecycle.closing).toBe(true);
+    expect(session.queue.pendingInvocations).toBe(0);
+    expect(session.queue.activeInvocations).toBe(0);
+    vi.useRealTimers();
   });
 
   it('cleanupMcpSession aborts in-flight invoke and forces browser release', async () => {

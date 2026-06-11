@@ -84,6 +84,44 @@ describe('ShutdownCoordinator', () => {
     }
   });
 
+  it('logs late completion after a shutdown step times out', async () => {
+    vi.useFakeTimers();
+    try {
+      let finishStep: (() => void) | undefined;
+      const consoleRef = { error: vi.fn() };
+      const coordinator = new ShutdownCoordinator({
+        consoleRef,
+        defaultStepTimeoutMs: 25,
+        steps: [
+          {
+            label: 'slow-cleanup',
+            run: () =>
+              new Promise<void>((resolve) => {
+                finishStep = resolve;
+              }),
+          },
+        ],
+      });
+
+      const runPromise = coordinator.run();
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(runPromise).resolves.toMatchObject({
+        ok: false,
+        steps: [{ label: 'slow-cleanup', status: 'timed-out' }],
+      });
+
+      finishStep?.();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(consoleRef.error).toHaveBeenCalledWith(
+        expect.stringContaining('[WARN] slow-cleanup completed after shutdown timeout')
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('exposes a typed timeout error for callers that need to inspect failures', () => {
     const error = new ShutdownStepTimeoutError('duckdb', 50);
 

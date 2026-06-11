@@ -1,6 +1,8 @@
 import type { Rectangle } from 'electron';
 import { isDevelopmentMode } from '../constants/runtime-config';
 import { createLogger } from '../core/logger';
+import { createChildTraceContext } from '../core/observability/observation-context';
+import { observationService } from '../core/observability/observation-service';
 import type { WindowManager } from './window-manager';
 import type { WebContentsViewInfo } from './webcontentsview-manager';
 
@@ -23,8 +25,6 @@ export class WebContentsViewViewportDebugger {
   constructor(private deps: WebContentsViewViewportDebuggerDeps) {}
 
   schedule(viewId: string, reason: string): void {
-    if (!isDevelopmentMode()) return;
-
     const viewInfo = this.deps.pool.get(viewId);
     if (!viewInfo?.attachedTo || !viewInfo.bounds) return;
 
@@ -115,7 +115,7 @@ export class WebContentsViewViewportDebugger {
     if (this.lastViewportDebugKey.get(viewId) === key) return;
     this.lastViewportDebugKey.set(viewId, key);
 
-    logger.debug('Viewport diagnostics', {
+    const diagnostics = {
       viewId,
       reason,
       pluginId: viewInfo.metadata?.pluginId,
@@ -125,7 +125,72 @@ export class WebContentsViewViewportDebugger {
       actualBounds,
       viewport,
       window: windowState,
-    });
+    };
+
+    if (isDevelopmentMode()) {
+      logger.debug('Viewport diagnostics', diagnostics);
+    }
+
+    const issue = this.detectViewportIssue(desired, actualBounds, viewport);
+    if (issue) {
+      await observationService.attachArtifact({
+        context: createChildTraceContext({
+          source: 'webcontents-view',
+          pluginId: viewInfo.metadata?.pluginId,
+        }),
+        component: 'webcontents-view',
+        type: 'error_context',
+        label: 'WebContentsView viewport diagnostics',
+        attrs: {
+          viewId,
+          issue,
+          reason,
+        },
+        data: {
+          issue,
+          ...diagnostics,
+        },
+      });
+    }
   }
 
+  private detectViewportIssue(
+    desired: Rectangle,
+    actualBounds:
+      | Rectangle
+      | undefined,
+    viewport:
+      | {
+          innerWidth: number;
+          innerHeight: number;
+          clientWidth: number | null;
+          clientHeight: number | null;
+          dpr: number;
+        }
+      | { error: string }
+      | undefined
+  ): string | null {
+    if (!actualBounds) {
+      return 'actual_bounds_unavailable';
+    }
+    if (actualBounds.width <= 0 || actualBounds.height <= 0) {
+      return 'actual_bounds_zero';
+    }
+    if (
+      Math.abs(actualBounds.width - desired.width) > 1 ||
+      Math.abs(actualBounds.height - desired.height) > 1
+    ) {
+      return 'bounds_mismatch';
+    }
+    if (!viewport) {
+      return null;
+    }
+    if ('error' in viewport) {
+      return 'viewport_probe_failed';
+    }
+    if (viewport.innerWidth <= 0 || viewport.innerHeight <= 0) {
+      return 'dom_viewport_zero';
+    }
+    return null;
+  }
 }

@@ -262,6 +262,49 @@ export class DatasetMetadataService {
     );
   }
 
+  async setRowCount(datasetId: string, rowCount: number): Promise<void> {
+    const normalizedRowCount = Math.max(0, Math.trunc(Number(rowCount) || 0));
+
+    await runPrepared(this.conn, 'UPDATE datasets SET row_count = ? WHERE id = ?', [
+      normalizedRowCount,
+      datasetId,
+    ]);
+  }
+
+  async reconcileRowCountInCurrentQueue(dataset: Dataset): Promise<number> {
+    const safeDatasetId = sanitizeDatasetId(dataset.id);
+    const escapedPath = dataset.filePath.replace(/\\/g, '\\\\').replace(/'/g, "''");
+    await this.storageService.smartAttach(safeDatasetId, escapedPath);
+
+    const tableName = quoteQualifiedName(`ds_${safeDatasetId}`, 'data');
+    const result = await this.conn.runAndReadAll(
+      `SELECT COUNT(*) AS row_count FROM ${tableName}`
+    );
+    const rows = parseRows(result);
+    const actualRowCount = Number(rows[0]?.row_count ?? 0);
+    if (!Number.isFinite(actualRowCount)) {
+      throw new Error(`Invalid row_count while reconciling dataset ${safeDatasetId}`);
+    }
+
+    await this.setRowCount(safeDatasetId, actualRowCount);
+    logger.info('Reconciled dataset row_count from physical table count', {
+      datasetId: safeDatasetId,
+      rowCount: actualRowCount,
+    });
+    return actualRowCount;
+  }
+
+  async reconcileRowCount(datasetId: string): Promise<number> {
+    const safeDatasetId = sanitizeDatasetId(datasetId);
+    return this.storageService.executeInQueue(safeDatasetId, async () => {
+      const dataset = await this.getDatasetInfo(safeDatasetId);
+      if (!dataset) {
+        throw new Error(`Dataset not found: ${datasetId}`);
+      }
+      return await this.reconcileRowCountInCurrentQueue(dataset);
+    });
+  }
+
   /**
    * 🗑️ 删除元数据记录
    * 级联删除所有关联表的记录，确保数据一致性

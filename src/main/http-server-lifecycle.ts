@@ -113,7 +113,12 @@ export const stopHttpServer = async <McpSession, OrchestrationSession>(
   }
   options.orchestrationSessions.clear();
 
-  await Promise.all(cleanupTasks);
+  const cleanupResults = await Promise.allSettled(cleanupTasks);
+  cleanupResults.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      options.logger.error(`HTTP session cleanup task failed during stop: ${index}`, result.reason);
+    }
+  });
 
   if (options.httpServer) {
     await new Promise<void>((resolve, reject) => {

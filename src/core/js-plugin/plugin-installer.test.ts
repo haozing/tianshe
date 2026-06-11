@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { PluginInstaller } from './plugin-installer';
+import { PluginInstaller, PluginTableCleanupError } from './plugin-installer';
 import type { JSPluginManifest, DataTableDefinition } from '../../types/js-plugin';
 
 // Mock logger
@@ -132,6 +132,57 @@ describe('PluginInstaller', () => {
 
       expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith('CHECKPOINT', []);
     });
+
+    it('多表创建中途失败时应该回滚之前已创建的表', async () => {
+      const manifest = createTestManifest({
+        dataTables: [
+          createTestTableDefinition({ name: 'First', code: 'first_table' }),
+          createTestTableDefinition({ name: 'Bad', code: 'bad-table' }),
+        ],
+      });
+      mockDuckDB.executeSQLWithParams.mockResolvedValue([]);
+
+      await expect(installer.createTables(manifest, 'folder-1')).rejects.toThrow(
+        'Invalid table code'
+      );
+
+      expect(mockDuckDB.deleteDataset).toHaveBeenCalledWith('plugin__test-plugin__first_table');
+    });
+
+    it('多表创建中途失败时应该撤销已恢复的孤儿表关联', async () => {
+      const manifest = createTestManifest({
+        dataTables: [
+          createTestTableDefinition({
+            name: 'Orphan',
+            code: 'orphan_table',
+            columns: [{ name: 'name', type: 'VARCHAR' }],
+          }),
+          createTestTableDefinition({ name: 'Bad', code: 'bad-table' }),
+        ],
+      });
+      const fsModule = await import('fs-extra');
+      vi.mocked(fsModule.default.pathExists).mockResolvedValue(true);
+      vi.mocked(fsModule.pathExists).mockResolvedValue(true);
+      mockDuckDB.executeSQLWithParams.mockResolvedValueOnce([
+        {
+          id: 'plugin__test-plugin__orphan_table',
+          name: 'Orphan',
+          file_path: '/mock/path.db',
+          created_by_plugin: null,
+          folder_id: 'old-folder',
+          schema: JSON.stringify([{ name: 'name', duckdbType: 'VARCHAR' }]),
+        },
+      ]);
+
+      await expect(installer.createTables(manifest, 'folder-1')).rejects.toThrow(
+        'Invalid table code'
+      );
+
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE datasets SET created_by_plugin = NULL'),
+        ['old-folder', 'plugin__test-plugin__orphan_table']
+      );
+    });
   });
 
   // ========== createSingleTable ==========
@@ -192,6 +243,31 @@ describe('PluginInstaller', () => {
 
       expect(result.datasetId).toBe('plugin__my-plugin__my_table');
     });
+
+    it('metadata 保存失败时应该清理刚创建的物理数据库文件', async () => {
+      const tableDef = createTestTableDefinition({ code: 'cleanup_table' });
+      const fsModule = await import('fs-extra');
+      vi.mocked(fsModule.default.pathExists).mockImplementation(async (targetPath: string) =>
+        String(targetPath).includes('cleanup_table.db')
+      );
+      vi.mocked(fsModule.pathExists).mockImplementation(async (targetPath: string) =>
+        String(targetPath).includes('cleanup_table.db')
+      );
+      mockDuckDB.executeSQLWithParams.mockResolvedValue([]);
+      mockDuckDB.executeWithParams.mockImplementation(async (sql: string) => {
+        if (sql.includes('INSERT INTO datasets')) {
+          throw new Error('metadata failed');
+        }
+      });
+
+      await expect(
+        installer.createSingleTable('test-plugin', tableDef, 'folder-1')
+      ).rejects.toThrow('metadata failed');
+
+      expect(fsModule.remove).toHaveBeenCalledWith(
+        expect.stringContaining('plugin__test-plugin__cleanup_table.db')
+      );
+    });
   });
 
   // ========== deletePluginTables ==========
@@ -224,6 +300,54 @@ describe('PluginInstaller', () => {
         expect.stringContaining('DELETE FROM dataset_folders'),
         ['test-plugin']
       );
+    });
+
+    it('单表删除失败时应该抛出结构化错误并保留插件文件夹 metadata', async () => {
+      mockDuckDB.executeSQLWithParams.mockResolvedValue([
+        { id: 'table-1', name: 'Table 1' },
+        { id: 'table-2', name: 'Table 2' },
+      ]);
+      mockDuckDB.deleteDataset.mockImplementation(async (datasetId: string) => {
+        if (datasetId === 'table-1') {
+          throw new Error('locked');
+        }
+      });
+
+      await expect(installer.deletePluginTables('test-plugin')).rejects.toMatchObject({
+        name: 'PluginTableCleanupError',
+        pluginId: 'test-plugin',
+        operation: 'delete',
+        failures: [
+          expect.objectContaining({
+            datasetId: 'table-1',
+            stage: 'delete_table',
+            error: 'locked',
+          }),
+        ],
+      } satisfies Partial<PluginTableCleanupError>);
+
+      expect(mockDuckDB.deleteDataset).toHaveBeenCalledWith('table-2');
+      expect(mockDuckDB.executeWithParams).not.toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM dataset_folders'),
+        ['test-plugin']
+      );
+    });
+
+    it('插件文件夹删除失败时应该抛出结构化错误', async () => {
+      mockDuckDB.executeSQLWithParams.mockResolvedValue([]);
+      mockDuckDB.executeWithParams.mockRejectedValueOnce(new Error('folder db failed'));
+
+      await expect(installer.deletePluginTables('test-plugin')).rejects.toMatchObject({
+        name: 'PluginTableCleanupError',
+        pluginId: 'test-plugin',
+        operation: 'delete',
+        failures: [
+          expect.objectContaining({
+            stage: 'delete_folder',
+            error: 'folder db failed',
+          }),
+        ],
+      } satisfies Partial<PluginTableCleanupError>);
     });
   });
 
@@ -259,6 +383,46 @@ describe('PluginInstaller', () => {
         expect.stringContaining('UPDATE dataset_folders SET plugin_id = NULL'),
         ['test-plugin']
       );
+    });
+
+    it('表解绑失败时应该抛出结构化错误', async () => {
+      mockDuckDB.executeSQLWithParams.mockResolvedValue([
+        { id: 'table-1', name: 'Table 1', folder_id: 'folder-1' },
+      ]);
+      mockDuckDB.executeWithParams.mockRejectedValueOnce(new Error('unlink failed'));
+
+      await expect(installer.orphanPluginTables('test-plugin')).rejects.toMatchObject({
+        name: 'PluginTableCleanupError',
+        pluginId: 'test-plugin',
+        operation: 'orphan',
+        failures: [
+          expect.objectContaining({
+            stage: 'orphan_tables',
+            error: 'unlink failed',
+          }),
+        ],
+      } satisfies Partial<PluginTableCleanupError>);
+    });
+
+    it('插件文件夹转换失败时应该抛出结构化错误', async () => {
+      mockDuckDB.executeSQLWithParams.mockResolvedValue([
+        { id: 'table-1', name: 'Table 1', folder_id: 'folder-1' },
+      ]);
+      mockDuckDB.executeWithParams
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('folder update failed'));
+
+      await expect(installer.orphanPluginTables('test-plugin')).rejects.toMatchObject({
+        name: 'PluginTableCleanupError',
+        pluginId: 'test-plugin',
+        operation: 'orphan',
+        failures: [
+          expect.objectContaining({
+            stage: 'orphan_folder',
+            error: 'folder update failed',
+          }),
+        ],
+      } satisfies Partial<PluginTableCleanupError>);
     });
   });
 

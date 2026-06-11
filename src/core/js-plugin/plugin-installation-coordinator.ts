@@ -20,6 +20,7 @@ import { attachErrorContextArtifact } from '../observability/error-context-artif
 import { assertTrustedFirstPartyPluginImport } from './trust-policy';
 import type { PluginImportOptions, PluginLoader } from './plugin-loader';
 import type { PluginLifecycleManager } from './plugin-lifecycle';
+import type { PluginTableCreationResult } from './plugin-installer';
 import type { PluginInstaller } from './plugin-installer';
 import type { UIExtensionManager } from './ui-extension-manager';
 import { getUnknownErrorMessage } from '../../utils/error-message';
@@ -156,26 +157,50 @@ export class PluginInstallationCoordinator {
           result = await this.loader.import(sourcePath, importOptions, {
             getPluginInfo: (id) => this.getPluginInfo(id),
             createFolderAndTables: async (manifest) => {
+              const tableResults: PluginTableCreationResult[] = [];
+              let folderId: string | null = null;
               // 创建插件专属文件夹
               const folderService = this.duckdb.getFolderService();
-              const folderId = await folderService.createFolder(manifest.name, null, manifest.id, {
+              folderId = await folderService.createFolder(manifest.name, null, manifest.id, {
                 icon: manifest.icon || '🔌',
                 description: manifest.description || '',
               });
               logger.info(`  ✓ Created plugin folder: ${manifest.name} (${folderId})`);
 
-              // 创建数据表
-              let tableNameToDatasetId: Map<string, string> | null = null;
-              if (manifest.dataTables && manifest.dataTables.length > 0) {
-                tableNameToDatasetId = await this.installer.createTables(manifest, folderId);
-              }
+              try {
+                // 创建数据表
+                let tableNameToDatasetId: Map<string, string> | null = null;
+                if (manifest.dataTables && manifest.dataTables.length > 0) {
+                  tableNameToDatasetId = await this.installer.createTables(
+                    manifest,
+                    folderId,
+                    undefined,
+                    {
+                      onTableResult: (result) => tableResults.push(result),
+                    }
+                  );
+                }
 
-              return { folderId, tableNameToDatasetId };
+                return { folderId, tableNameToDatasetId, tableResults };
+              } catch (error: unknown) {
+                await this.cleanupFirstInstallFolder(manifest.id, folderId).catch(
+                  (cleanupError) => {
+                    logger.error('Failed to cleanup plugin folder after table creation failure', {
+                      pluginId: manifest.id,
+                      error: getUnknownErrorMessage(cleanupError) || String(cleanupError),
+                    });
+                  }
+                );
+                throw error;
+              }
             },
             saveUIContributions: (manifest, tableNameToDatasetId) =>
               this.uiExtManager.saveUIContributions(manifest, tableNameToDatasetId),
             unregisterUIContributions: (id) => this.uiExtManager.unregisterUIContributions(id),
             loadPlugin: (id) => this.load(id),
+            rollbackTables: (results) => this.installer.rollbackTableCreationResults(results),
+            cleanupFolder: (id, folderId) => this.cleanupFirstInstallFolder(id, folderId),
+            cleanupMetadata: (id) => this.cleanupFirstInstallMetadata(id),
           });
         } else if (sourceType !== 'cloud_managed' && existing.sourceType === 'cloud_managed') {
           result = {
@@ -416,6 +441,38 @@ export class PluginInstallationCoordinator {
       return null;
     }
     return this.getPluginInfo(normalizedManifestId);
+  }
+
+  private async cleanupFirstInstallFolder(
+    pluginId: string,
+    folderId?: string | null
+  ): Promise<void> {
+    if (folderId) {
+      await this.duckdb.executeWithParams(`DELETE FROM dataset_folders WHERE id = ?`, [folderId]);
+      return;
+    }
+
+    await this.duckdb.executeWithParams(`DELETE FROM dataset_folders WHERE plugin_id = ?`, [
+      pluginId,
+    ]);
+  }
+
+  private async cleanupFirstInstallMetadata(pluginId: string): Promise<void> {
+    await this.uiExtManager.unregisterUIContributions(pluginId).catch(() => {});
+
+    const loadedPlugin = this.lifecycle.getPlugin(pluginId);
+    if (loadedPlugin) {
+      await this.deactivate(pluginId, { force: true }).catch((deactivateError) => {
+        logger.error('Failed to deactivate plugin during first-install cleanup', {
+          pluginId,
+          error: getUnknownErrorMessage(deactivateError) || String(deactivateError),
+        });
+      });
+      this.loader.unloadModule(loadedPlugin.path, pluginId);
+    }
+    this.lifecycle.deletePlugin(pluginId);
+
+    await this.duckdb.executeWithParams(`DELETE FROM js_plugins WHERE id = ?`, [pluginId]);
   }
 
   private async replaceInstalledCloudPlugin(

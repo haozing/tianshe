@@ -190,8 +190,8 @@ export class JSPluginManager {
     try {
       // 如果已经加载，先卸载
       if (this.lifecycle.hasPlugin(pluginId)) {
-        await this.deactivate(pluginId, { force: true });
         const plugin = this.lifecycle.getPlugin(pluginId);
+        await this.deactivate(pluginId, { force: true });
         if (plugin) {
           this.loader.unloadModule(plugin.path, pluginId);
         }
@@ -295,10 +295,10 @@ export class JSPluginManager {
         logger.info(`[UNINSTALL] Uninstalling plugin: ${pluginId}, deleteTables: ${deleteTables}`);
 
         // 1. 停用插件
+        const plugin = this.lifecycle.getPlugin(pluginId);
         await this.deactivate(pluginId, { force: true });
 
         // 2. 从内存卸载
-        const plugin = this.lifecycle.getPlugin(pluginId);
         if (plugin) {
           this.loader.unloadModule(plugin.path, pluginId);
           this.lifecycle.deletePlugin(pluginId);
@@ -498,6 +498,7 @@ export class JSPluginManager {
       });
 
       try {
+        this.executionCoordinator.assertNoRunningCommands(pluginId, 'reload');
         await this.lifecycle.reload(pluginId, {
           load: (id) => this.load(id),
           getPluginInfo: (id) => this.getPluginInfo(id),
@@ -651,6 +652,12 @@ export class JSPluginManager {
       force?: boolean;
     } = {}
   ): Promise<boolean> {
+    if (options.force === true) {
+      await this.executionCoordinator.waitForRunningCommands(pluginId);
+    } else {
+      this.executionCoordinator.assertNoRunningCommands(pluginId, 'deactivate');
+    }
+
     return await this.lifecycle.deactivate(
       pluginId,
       {
@@ -703,7 +710,11 @@ export class JSPluginManager {
   }
 
   async disableHotReload(pluginId: string): Promise<{ success: boolean; message: string }> {
-    return this.lifecycle.disableHotReload(pluginId);
+    return this.lifecycle.disableHotReload(
+      pluginId,
+      (id) => this.getPluginInfo(id),
+      (id) => this.reload(id)
+    );
   }
 
   isHotReloadEnabled(pluginId: string): boolean {

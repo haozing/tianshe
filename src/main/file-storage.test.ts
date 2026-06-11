@@ -113,4 +113,76 @@ describe('FileStorage path boundaries', () => {
       /Invalid dataset ID format/
     );
   });
+
+  it('records and sweeps deferred dataset attachment cleanup', async () => {
+    const storage = new FileStorage();
+    await storage.saveFile('dataset-123', Buffer.from('hello'), 'notes.txt');
+    const datasetDir = path.join(userDataRoot, 'attachments', 'dataset-123');
+    const backlogPath = path.join(userDataRoot, 'dataset-cleanup-backlog.json');
+
+    await storage.enqueueDeferredDatasetFilesCleanup('dataset-123', new Error('busy'));
+
+    const backlog = JSON.parse(await fs.readFile(backlogPath, 'utf8'));
+    expect(backlog).toEqual([
+      expect.objectContaining({
+        datasetId: 'dataset-123',
+        kind: 'attachment-dir',
+        attempts: 0,
+        lastError: 'busy',
+      }),
+    ]);
+
+    await expect(fs.pathExists(datasetDir)).resolves.toBe(true);
+    await expect(storage.sweepDeferredDatasetFilesCleanup()).resolves.toEqual({
+      removed: 1,
+      remaining: 0,
+    });
+    await expect(fs.pathExists(datasetDir)).resolves.toBe(false);
+    await expect(fs.pathExists(backlogPath)).resolves.toBe(false);
+  });
+
+  it('records and sweeps deferred dataset file cleanup inside userData', async () => {
+    const storage = new FileStorage();
+    const datasetFile = path.join(userDataRoot, 'duckdb', 'imports', 'plugin__demo__table.db');
+    const walFile = `${datasetFile}.wal`;
+    const backlogPath = path.join(userDataRoot, 'dataset-cleanup-backlog.json');
+    await fs.outputFile(datasetFile, 'db');
+    await fs.outputFile(walFile, 'wal');
+
+    await storage.enqueueDeferredDatasetFileCleanup(
+      'plugin__demo__table',
+      datasetFile,
+      new Error('locked')
+    );
+
+    const backlog = JSON.parse(await fs.readFile(backlogPath, 'utf8'));
+    expect(backlog).toEqual([
+      expect.objectContaining({
+        datasetId: 'plugin__demo__table',
+        kind: 'dataset-file',
+        targetPath: path.resolve(datasetFile),
+        attempts: 0,
+        lastError: 'locked',
+      }),
+    ]);
+
+    await expect(storage.sweepDeferredDatasetFilesCleanup()).resolves.toEqual({
+      removed: 1,
+      remaining: 0,
+    });
+    await expect(fs.pathExists(datasetFile)).resolves.toBe(false);
+    await expect(fs.pathExists(walFile)).resolves.toBe(false);
+    await expect(fs.pathExists(backlogPath)).resolves.toBe(false);
+  });
+
+  it('rejects deferred dataset file cleanup targets outside userData', async () => {
+    const storage = new FileStorage();
+
+    await expect(
+      storage.enqueueDeferredDatasetFileCleanup(
+        'plugin__demo__table',
+        path.join(os.tmpdir(), 'outside.db')
+      )
+    ).rejects.toThrow(/Unsafe dataset cleanup target path/);
+  });
 });

@@ -123,6 +123,33 @@ describe('runtime-config', () => {
     expect(runtimeConfig.resolveFirefoxExecutablePathOverride()).toBe('/tmp/firefox-bin');
   });
 
+  it('builds runtime config from explicit argv without reloading the module', async () => {
+    const runtimeConfig = await import('./runtime-config');
+
+    const first = runtimeConfig.createRuntimeConfig([
+      'node',
+      'runtime-config.test.ts',
+      '--airpa-enable-http=false',
+      '--airpa-http-port=49124',
+      '--airpa-firefox-path=/tmp/firefox-one',
+    ]);
+    const second = runtimeConfig.createRuntimeConfig([
+      'node',
+      'runtime-config.test.ts',
+      '--airpa-enable-http=true',
+      '--airpa-http-port=49125',
+      '--airpa-firefox-path=/tmp/firefox-two',
+    ]);
+
+    expect(first.http.enableHttpOverride).toBe(false);
+    expect(first.http.port).toBe(49124);
+    expect(runtimeConfig.resolveFirefoxExecutablePathOverride(first)).toBe('/tmp/firefox-one');
+    expect(second.http.enableHttpOverride).toBe(true);
+    expect(second.http.port).toBe(49125);
+    expect(runtimeConfig.resolveFirefoxExecutablePathOverride(second)).toBe('/tmp/firefox-two');
+    expect(runtimeConfig.AIRPA_RUNTIME_CONFIG.http.port).not.toBe(49125);
+  });
+
   it('detects packaged worker mode from resourcesPath app.asar', async () => {
     const resourcesPath = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-config-resources-'));
     fs.writeFileSync(path.join(resourcesPath, 'app.asar'), '');

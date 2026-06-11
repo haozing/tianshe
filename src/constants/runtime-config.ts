@@ -2,17 +2,50 @@
  * Runtime configuration SSOT for ai-dev architecture.
  *
  * Rule: runtime code must not read process.env directly.
+ * AIRPA_RUNTIME_CONFIG is evaluated once at module load; use createRuntimeConfig
+ * in tests or explicit startup probes that need alternate argv inputs.
  */
 
 export type RuntimeMode = 'development' | 'production' | 'test';
 export type OcrAdapterMode = 'worker' | 'inprocess';
 
-const getRuntimeProcess = (): NodeJS.Process | null => {
+type RuntimeConfigProcessLike = {
+  argv?: unknown;
+  versions?: Partial<NodeJS.ProcessVersions>;
+  type?: unknown;
+  resourcesPath?: unknown;
+};
+
+const getRuntimeProcess = (): RuntimeConfigProcessLike | null => {
   return typeof process !== 'undefined' ? process : null;
 };
 
-const readProcessArgValue = (flagName: string): string => {
-  const runtimeProcess = getRuntimeProcess();
+const getRuntimeArgv = (runtimeProcess: RuntimeConfigProcessLike | null): string[] => {
+  return Array.isArray(runtimeProcess?.argv) ? runtimeProcess.argv.filter(isString) : [];
+};
+
+const isString = (value: unknown): value is string => typeof value === 'string';
+
+const withRuntimeArgv = (
+  runtimeProcess: RuntimeConfigProcessLike | null,
+  argv?: readonly string[]
+): RuntimeConfigProcessLike | null => {
+  if (!argv) {
+    return runtimeProcess;
+  }
+
+  return {
+    argv: [...argv],
+    versions: runtimeProcess?.versions,
+    type: runtimeProcess?.type,
+    resourcesPath: runtimeProcess?.resourcesPath,
+  };
+};
+
+const readProcessArgValue = (
+  flagName: string,
+  runtimeProcess: RuntimeConfigProcessLike | null
+): string => {
   const args = Array.isArray(runtimeProcess?.argv) ? runtimeProcess.argv : [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -34,8 +67,11 @@ const readProcessArgValue = (flagName: string): string => {
   return '';
 };
 
-const readProcessArgInteger = (flagName: string): number | null => {
-  const raw = readProcessArgValue(flagName);
+const readProcessArgInteger = (
+  flagName: string,
+  runtimeProcess: RuntimeConfigProcessLike | null
+): number | null => {
+  const raw = readProcessArgValue(flagName, runtimeProcess);
   if (!raw) {
     return null;
   }
@@ -44,15 +80,13 @@ const readProcessArgInteger = (flagName: string): number | null => {
   return Number.isInteger(value) && value > 0 && value <= 65535 ? value : null;
 };
 
-const readProcessArgBoolean = (flagName: string): boolean | null => {
-  const runtimeProcess = getRuntimeProcess();
-  const args = Array.isArray(runtimeProcess?.argv) ? runtimeProcess.argv : [];
+const readProcessArgBoolean = (
+  flagName: string,
+  runtimeProcess: RuntimeConfigProcessLike | null
+): boolean | null => {
+  const args = getRuntimeArgv(runtimeProcess);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (typeof arg !== 'string') {
-      continue;
-    }
-
     if (arg === flagName) {
       return true;
     }
@@ -75,18 +109,23 @@ const readProcessArgBoolean = (flagName: string): boolean | null => {
   return null;
 };
 
-const getUserDataDirOverride = (): string => readProcessArgValue('--airpa-user-data-dir');
-const getAsarExtractBaseDirOverride = (): string =>
-  readProcessArgValue('--airpa-asar-extract-base-dir');
-const getFirefoxExecutablePathOverride = (): string =>
-  readProcessArgValue('--airpa-firefox-path');
-const getHttpPortOverride = (): number | null => readProcessArgInteger('--airpa-http-port');
-const getHttpEnabledOverride = (): boolean | null => readProcessArgBoolean('--airpa-enable-http');
-const getMcpEnabledOverride = (): boolean | null => readProcessArgBoolean('--airpa-enable-mcp');
-const getE2eCdpPortOverride = (): number | null => readProcessArgInteger('--airpa-e2e-cdp-port');
-const getAllowNoSandbox = (): boolean =>
-  readProcessArgBoolean('--tianshe-allow-no-sandbox') ??
-  readProcessArgBoolean('--airpa-allow-no-sandbox') ??
+const getUserDataDirOverride = (runtimeProcess: RuntimeConfigProcessLike | null): string =>
+  readProcessArgValue('--airpa-user-data-dir', runtimeProcess);
+const getAsarExtractBaseDirOverride = (runtimeProcess: RuntimeConfigProcessLike | null): string =>
+  readProcessArgValue('--airpa-asar-extract-base-dir', runtimeProcess);
+const getFirefoxExecutablePathOverride = (runtimeProcess: RuntimeConfigProcessLike | null): string =>
+  readProcessArgValue('--airpa-firefox-path', runtimeProcess);
+const getHttpPortOverride = (runtimeProcess: RuntimeConfigProcessLike | null): number | null =>
+  readProcessArgInteger('--airpa-http-port', runtimeProcess);
+const getHttpEnabledOverride = (runtimeProcess: RuntimeConfigProcessLike | null): boolean | null =>
+  readProcessArgBoolean('--airpa-enable-http', runtimeProcess);
+const getMcpEnabledOverride = (runtimeProcess: RuntimeConfigProcessLike | null): boolean | null =>
+  readProcessArgBoolean('--airpa-enable-mcp', runtimeProcess);
+const getE2eCdpPortOverride = (runtimeProcess: RuntimeConfigProcessLike | null): number | null =>
+  readProcessArgInteger('--airpa-e2e-cdp-port', runtimeProcess);
+const getAllowNoSandbox = (runtimeProcess: RuntimeConfigProcessLike | null): boolean =>
+  readProcessArgBoolean('--tianshe-allow-no-sandbox', runtimeProcess) ??
+  readProcessArgBoolean('--airpa-allow-no-sandbox', runtimeProcess) ??
   false;
 
 export interface AirpaRuntimeConfig {
@@ -151,8 +190,7 @@ export interface AirpaRuntimeConfig {
   };
 }
 
-const detectRuntimeMode = (): RuntimeMode => {
-  const runtimeProcess = getRuntimeProcess();
+const detectRuntimeMode = (runtimeProcess: RuntimeConfigProcessLike | null): RuntimeMode => {
   const hasNodeProcess = !!runtimeProcess?.versions?.node;
   if (!hasNodeProcess) {
     return 'production';
@@ -202,84 +240,101 @@ const detectRuntimeMode = (): RuntimeMode => {
   return 'development';
 };
 
-const runtimeMode = detectRuntimeMode();
+export const createRuntimeConfig = (
+  argv?: readonly string[],
+  _env?: NodeJS.ProcessEnv,
+  runtimeProcess: RuntimeConfigProcessLike | null = getRuntimeProcess()
+): AirpaRuntimeConfig => {
+  void _env;
+  const configProcess = withRuntimeArgv(runtimeProcess, argv);
+  const runtimeMode = detectRuntimeMode(configProcess);
 
-export const AIRPA_RUNTIME_CONFIG: AirpaRuntimeConfig = {
-  app: {
-    mode: runtimeMode,
-    devServerPort: 5273,
-    debugProdMenu: false,
-  },
-  e2e: {
-    cdpPort: getE2eCdpPortOverride(),
-  },
-  paths: {
-    userDataDirOverride: getUserDataDirOverride(),
-    asarExtractBaseDirOverride: getAsarExtractBaseDirOverride(),
-    firefoxExecutablePathOverride: getFirefoxExecutablePathOverride(),
-  },
-  http: {
-    port: getHttpPortOverride() ?? 39090,
-    enableHttpOverride: getHttpEnabledOverride(),
-    enableMcpOverride: getMcpEnabledOverride(),
-    mcpProtocolCompatibilityMode: 'sdk-compatible',
-    mcpMaxQueueSize: 64,
-    mcpInvokeTimeoutMs: 120000,
-    orchestrationMaxQueueSize: 128,
-    orchestrationInvokeTimeoutMs: 180000,
-    orchestrationIdempotencyTtlMs: 300000,
-    orchestrationAlertInvokeTimeoutWarnCount: 20,
-    orchestrationAlertInvokeTimeoutCriticalCount: 50,
-    orchestrationAlertQueueOverflowWarnCount: 10,
-    orchestrationAlertQueueOverflowCriticalCount: 30,
-    orchestrationAlertBrowserAcquireFailureWarnCount: 10,
-    orchestrationAlertBrowserAcquireFailureCriticalCount: 30,
-    orchestrationAlertBrowserAcquireTimeoutWarnCount: 10,
-    orchestrationAlertBrowserAcquireTimeoutCriticalCount: 30,
-    orchestrationAlertTotalPendingWarn: 100,
-    orchestrationAlertTotalPendingCritical: 300,
-    orchestrationAlertStaleSessionsWarn: 1,
-    orchestrationAlertStaleSessionsCritical: 5,
-  },
-  webview: {
-    debugStealthHeaders: false,
-    debugDevtools: false,
-  },
-  extension: {
-    fingerprintStrict: false,
-    extraLaunchArgs: [],
-    allowNoSandbox: getAllowNoSandbox(),
-    expectedChromeVersion: '',
-    expectedChromeVersionPrefix: '',
-    expectedChromeSha256: '',
-  },
-  ocr: {
-    adapter: 'worker',
-    dumpDir: '',
-  },
-  cv: {
-    workerDebug: false,
-    workerDebugVerbose: false,
-  },
-  logger: {
-    env: runtimeMode,
-  },
+  return {
+    app: {
+      mode: runtimeMode,
+      devServerPort: 5273,
+      debugProdMenu: false,
+    },
+    e2e: {
+      cdpPort: getE2eCdpPortOverride(configProcess),
+    },
+    paths: {
+      userDataDirOverride: getUserDataDirOverride(configProcess),
+      asarExtractBaseDirOverride: getAsarExtractBaseDirOverride(configProcess),
+      firefoxExecutablePathOverride: getFirefoxExecutablePathOverride(configProcess),
+    },
+    http: {
+      port: getHttpPortOverride(configProcess) ?? 39090,
+      enableHttpOverride: getHttpEnabledOverride(configProcess),
+      enableMcpOverride: getMcpEnabledOverride(configProcess),
+      mcpProtocolCompatibilityMode: 'sdk-compatible',
+      mcpMaxQueueSize: 64,
+      mcpInvokeTimeoutMs: 120000,
+      orchestrationMaxQueueSize: 128,
+      orchestrationInvokeTimeoutMs: 180000,
+      orchestrationIdempotencyTtlMs: 300000,
+      orchestrationAlertInvokeTimeoutWarnCount: 20,
+      orchestrationAlertInvokeTimeoutCriticalCount: 50,
+      orchestrationAlertQueueOverflowWarnCount: 10,
+      orchestrationAlertQueueOverflowCriticalCount: 30,
+      orchestrationAlertBrowserAcquireFailureWarnCount: 10,
+      orchestrationAlertBrowserAcquireFailureCriticalCount: 30,
+      orchestrationAlertBrowserAcquireTimeoutWarnCount: 10,
+      orchestrationAlertBrowserAcquireTimeoutCriticalCount: 30,
+      orchestrationAlertTotalPendingWarn: 100,
+      orchestrationAlertTotalPendingCritical: 300,
+      orchestrationAlertStaleSessionsWarn: 1,
+      orchestrationAlertStaleSessionsCritical: 5,
+    },
+    webview: {
+      debugStealthHeaders: false,
+      debugDevtools: false,
+    },
+    extension: {
+      fingerprintStrict: false,
+      extraLaunchArgs: [],
+      allowNoSandbox: getAllowNoSandbox(configProcess),
+      expectedChromeVersion: '',
+      expectedChromeVersionPrefix: '',
+      expectedChromeSha256: '',
+    },
+    ocr: {
+      adapter: 'worker',
+      dumpDir: '',
+    },
+    cv: {
+      workerDebug: false,
+      workerDebugVerbose: false,
+    },
+    logger: {
+      env: runtimeMode,
+    },
+  };
 };
+
+export const AIRPA_RUNTIME_CONFIG: AirpaRuntimeConfig = createRuntimeConfig();
 
 export const isDevelopmentMode = (): boolean => AIRPA_RUNTIME_CONFIG.app.mode === 'development';
 export const isProductionMode = (): boolean => AIRPA_RUNTIME_CONFIG.app.mode === 'production';
 
-export const resolveUserDataDir = (fallbackDir: string): string => {
-  const override = getUserDataDirOverride();
+export const resolveUserDataDir = (
+  fallbackDir: string,
+  runtimeConfig: AirpaRuntimeConfig = AIRPA_RUNTIME_CONFIG
+): string => {
+  const override = runtimeConfig.paths.userDataDirOverride;
   return override.length > 0 ? override : fallbackDir;
 };
 
-export const resolveAsarExtractBaseDir = (): string | null => {
-  const override = getAsarExtractBaseDirOverride();
+export const resolveAsarExtractBaseDir = (
+  runtimeConfig: AirpaRuntimeConfig = AIRPA_RUNTIME_CONFIG
+): string | null => {
+  const override = runtimeConfig.paths.asarExtractBaseDirOverride;
   return override.length > 0 ? override : null;
 };
 
-export const resolveFirefoxExecutablePathOverride = (): string | null => {
-  const override = getFirefoxExecutablePathOverride();
+export const resolveFirefoxExecutablePathOverride = (
+  runtimeConfig: AirpaRuntimeConfig = AIRPA_RUNTIME_CONFIG
+): string | null => {
+  const override = runtimeConfig.paths.firefoxExecutablePathOverride;
   return override.length > 0 ? override : null;
 };

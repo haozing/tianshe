@@ -13,6 +13,7 @@ import type { JSPluginManifest, JSPluginInfo, JSPluginImportResult } from '../..
 import { readManifest, loadPluginModule, extractPlugin } from './loader';
 import { createLogger } from '../logger';
 import { getUnknownErrorMessage } from '../../utils/error-message';
+import type { PluginTableCreationResult } from './plugin-installer';
 
 import {
   assertTrustedFirstPartyPluginImport,
@@ -28,7 +29,11 @@ export interface PluginImportCallbacks {
   /** 创建插件文件夹和数据表 */
   createFolderAndTables: (
     manifest: JSPluginManifest
-  ) => Promise<{ folderId: string; tableNameToDatasetId: Map<string, string> | null }>;
+  ) => Promise<{
+    folderId: string;
+    tableNameToDatasetId: Map<string, string> | null;
+    tableResults?: PluginTableCreationResult[];
+  }>;
   /** 保存 UI 扩展配置 */
   saveUIContributions: (
     manifest: JSPluginManifest,
@@ -38,6 +43,12 @@ export interface PluginImportCallbacks {
   unregisterUIContributions: (pluginId: string) => Promise<void>;
   /** 加载插件模块 */
   loadPlugin: (pluginId: string) => Promise<void>;
+  /** 失败补偿：删除插件 metadata */
+  cleanupMetadata?: (pluginId: string) => Promise<void>;
+  /** 失败补偿：删除插件文件夹 */
+  cleanupFolder?: (pluginId: string, folderId?: string | null) => Promise<void>;
+  /** 失败补偿：回滚已创建/恢复的数据表 */
+  rollbackTables?: (results: PluginTableCreationResult[]) => Promise<void>;
 }
 
 /**
@@ -174,6 +185,14 @@ export class PluginLoader {
     options?: PluginImportOptions,
     callbacks?: PluginImportCallbacks
   ): Promise<JSPluginImportResult> {
+    let manifest: JSPluginManifest | null = null;
+    let installPath: string | null = null;
+    let filesInstalled = false;
+    let metadataSaved = false;
+    let folderId: string | null = null;
+    let uiContributionsTouched = false;
+    const tableResults: PluginTableCreationResult[] = [];
+
     try {
       logger.info('Importing JS plugin', { sourcePath, exists: await fs.pathExists(sourcePath) });
 
@@ -212,7 +231,6 @@ export class PluginLoader {
 
       // 2. Read manifest
       logger.info('Reading manifest', { manifestSourceDir });
-      let manifest;
       try {
         manifest = await readManifest(manifestSourceDir);
         assertTrustedFirstPartyPluginImport(manifest, options);
@@ -223,6 +241,9 @@ export class PluginLoader {
         }
         logger.error('Failed to read manifest', manifestError);
         throw new Error(`无法读取插件配置文件：${getUnknownErrorMessage(manifestError)}`);
+      }
+      if (!manifest) {
+        throw new Error('无法读取插件配置文件');
       }
 
       logger.info('Plugin info parsed', {
@@ -246,7 +267,7 @@ export class PluginLoader {
       }
 
       // 4. 确定安装路径
-      const installPath = path.join(this.pluginsDir, manifest.id);
+      installPath = path.join(this.pluginsDir, manifest.id);
 
       // 5. 处理开发模式和符号链接
       let actualDevMode = options?.devMode ?? false;
@@ -262,11 +283,13 @@ export class PluginLoader {
           actualDevMode = false;
           warnings.push('压缩文件不支持开发模式（无法创建符号链接），已自动切换为生产模式。');
           await this.moveExtractedFiles(manifestSourceDir, installPath, tempExtractDir);
+          filesInstalled = true;
           tempExtractDir = null;
         } else {
           // 源是目录，可以创建符号链接
           const result = await this.setupDevMode(sourcePath, installPath);
           linkCreated = result.linkCreated;
+          filesInstalled = true;
           if (!result.linkCreated) {
             actualDevMode = false;
             if (result.warning) {
@@ -278,11 +301,13 @@ export class PluginLoader {
         // Production mode
         if (tempExtractDir) {
           await this.moveExtractedFiles(manifestSourceDir, installPath, tempExtractDir);
+          filesInstalled = true;
           tempExtractDir = null;
         } else {
           try {
             logger.info('Installing in production mode (file copy)');
             await extractPlugin(sourcePath, this.pluginsDir);
+            filesInstalled = true;
             logger.info('Production mode installation completed');
           } catch (extractError: unknown) {
             logger.error('Extract plugin failed', extractError);
@@ -306,6 +331,7 @@ export class PluginLoader {
           policyVersion: options?.policyVersion,
           lastPolicySyncAt: options?.lastPolicySyncAt,
         });
+        metadataSaved = true;
         logger.info('Plugin metadata saved successfully');
       } catch (saveError: unknown) {
         logger.error('Failed to save plugin metadata', saveError);
@@ -314,11 +340,18 @@ export class PluginLoader {
 
       // 7-9. Create folder, tables, and UI contributions (via callbacks)
       if (callbacks) {
-        const { tableNameToDatasetId } = await callbacks.createFolderAndTables(manifest);
+        const folderAndTables = await callbacks.createFolderAndTables(manifest);
+        folderId = folderAndTables.folderId;
+        if (folderAndTables.tableResults?.length) {
+          tableResults.push(...folderAndTables.tableResults);
+        }
+        const { tableNameToDatasetId } = folderAndTables;
 
         if (manifest.contributes) {
           await callbacks.unregisterUIContributions(manifest.id);
+          uiContributionsTouched = true;
           await callbacks.saveUIContributions(manifest, tableNameToDatasetId);
+          uiContributionsTouched = true;
         }
 
         // 10. Load plugin module
@@ -334,10 +367,78 @@ export class PluginLoader {
       };
     } catch (error: unknown) {
       logger.error('Plugin import failed', error);
+      await this.cleanupFailedImport({
+        callbacks,
+        manifest,
+        installPath,
+        filesInstalled,
+        metadataSaved,
+        folderId,
+        uiContributionsTouched,
+        tableResults,
+      });
       return {
         success: false,
         error: getUnknownErrorMessage(error),
       };
+    }
+  }
+
+  private async cleanupFailedImport(options: {
+    callbacks?: PluginImportCallbacks;
+    manifest: JSPluginManifest | null;
+    installPath: string | null;
+    filesInstalled: boolean;
+    metadataSaved: boolean;
+    folderId: string | null;
+    uiContributionsTouched: boolean;
+    tableResults: PluginTableCreationResult[];
+  }): Promise<void> {
+    const { callbacks, manifest, installPath } = options;
+    if (!manifest) {
+      return;
+    }
+
+    if (options.uiContributionsTouched) {
+      try {
+        await callbacks?.unregisterUIContributions(manifest.id);
+      } catch (cleanupError: unknown) {
+        logger.error('Failed to cleanup UI contributions after import failure', cleanupError);
+      }
+    }
+
+    if (options.tableResults.length > 0) {
+      try {
+        await callbacks?.rollbackTables?.(options.tableResults);
+      } catch (cleanupError: unknown) {
+        logger.error('Failed to rollback plugin tables after import failure', cleanupError);
+      }
+    }
+
+    if (options.folderId) {
+      try {
+        await callbacks?.cleanupFolder?.(manifest.id, options.folderId);
+      } catch (cleanupError: unknown) {
+        logger.error('Failed to cleanup plugin folder after import failure', cleanupError);
+      }
+    }
+
+    if (options.metadataSaved) {
+      try {
+        await callbacks?.cleanupMetadata?.(manifest.id);
+      } catch (cleanupError: unknown) {
+        logger.error('Failed to cleanup plugin metadata after import failure', cleanupError);
+      }
+    }
+
+    if (options.filesInstalled && installPath) {
+      try {
+        if (await fs.pathExists(installPath)) {
+          await fs.remove(installPath);
+        }
+      } catch (cleanupError: unknown) {
+        logger.error('Failed to cleanup plugin files after import failure', cleanupError);
+      }
     }
   }
 

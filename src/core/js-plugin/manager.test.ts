@@ -562,7 +562,11 @@ describe('JSPluginManager', () => {
       // 验证创建数据表
       expect(mockPluginInstaller.createTables).toHaveBeenCalledWith(
         mockManifestWithTables,
-        'folder-123'
+        'folder-123',
+        undefined,
+        expect.objectContaining({
+          onTableResult: expect.any(Function),
+        })
       );
     });
   });
@@ -768,6 +772,32 @@ describe('JSPluginManager', () => {
       // 验证删除数据表
       expect(mockPluginInstaller.deletePluginTables).toHaveBeenCalledWith('test-plugin');
       expect(mockPluginInstaller.orphanPluginTables).not.toHaveBeenCalled();
+    });
+
+    it('删除插件表失败时不应继续删除插件目录和 metadata', async () => {
+      mockPluginInstaller.deletePluginTables.mockRejectedValueOnce(new Error('table cleanup failed'));
+
+      await expect(manager.uninstall('test-plugin', true)).rejects.toThrow('table cleanup failed');
+
+      expect(mockPluginLoader.safeRemovePluginPath).not.toHaveBeenCalled();
+      expect(mockDuckDB.executeWithParams).not.toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM js_plugins'),
+        ['test-plugin']
+      );
+    });
+
+    it('孤立插件表失败时不应继续删除插件目录和 metadata', async () => {
+      mockPluginInstaller.orphanPluginTables.mockRejectedValueOnce(
+        new Error('table orphan failed')
+      );
+
+      await expect(manager.uninstall('test-plugin', false)).rejects.toThrow('table orphan failed');
+
+      expect(mockPluginLoader.safeRemovePluginPath).not.toHaveBeenCalled();
+      expect(mockDuckDB.executeWithParams).not.toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM js_plugins'),
+        ['test-plugin']
+      );
     });
 
     it('应该为卸载写入 plugin.lifecycle 观测事件', async () => {
@@ -1205,6 +1235,98 @@ describe('JSPluginManager', () => {
       ).toEqual(['plugin.invoke.started', 'plugin.invoke.succeeded']);
       expect(sink.events.every((event) => event.pluginId === 'test-plugin')).toBe(true);
     });
+
+    it('普通停用会拒绝正在执行命令的插件，避免提前释放 helpers/context', async () => {
+      let releaseCommand!: () => void;
+      const mockHandler = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            releaseCommand = () => resolve({ ok: true });
+          })
+      );
+      const mockContext = {
+        getCommand: vi.fn().mockReturnValue(mockHandler),
+      };
+
+      mockLifecycleManager.getContext.mockReturnValue(mockContext);
+      mockLifecycleManager.getHelpers.mockReturnValue({});
+      mockLifecycleManager.getLogger.mockReturnValue(null);
+
+      const runningCommand = manager.executeCommand('test-plugin', 'test-command', {});
+      await vi.waitFor(() => expect(mockHandler).toHaveBeenCalled());
+
+      await expect(manager.deactivate('test-plugin')).rejects.toThrow(
+        'Cannot deactivate plugin test-plugin: 1 command(s) still running'
+      );
+      expect(mockLifecycleManager.deactivate).not.toHaveBeenCalled();
+
+      releaseCommand();
+      await runningCommand;
+    });
+
+    it('force 停用会等待正在执行的命令完成后再释放生命周期资源', async () => {
+      let releaseCommand!: () => void;
+      const mockHandler = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            releaseCommand = () => resolve({ ok: true });
+          })
+      );
+      const mockContext = {
+        getCommand: vi.fn().mockReturnValue(mockHandler),
+      };
+
+      mockLifecycleManager.getContext.mockReturnValue(mockContext);
+      mockLifecycleManager.getHelpers.mockReturnValue({});
+      mockLifecycleManager.getLogger.mockReturnValue(null);
+
+      const runningCommand = manager.executeCommand('test-plugin', 'test-command', {});
+      await vi.waitFor(() => expect(mockHandler).toHaveBeenCalled());
+
+      const deactivation = manager.deactivate('test-plugin', { force: true });
+      await Promise.resolve();
+      expect(mockLifecycleManager.deactivate).not.toHaveBeenCalled();
+
+      releaseCommand();
+      await runningCommand;
+      await deactivation;
+
+      expect(mockLifecycleManager.deactivate).toHaveBeenCalledWith(
+        'test-plugin',
+        expect.objectContaining({
+          unregisterUIContributions: expect.any(Function),
+        }),
+        { force: true }
+      );
+    });
+
+    it('重载会拒绝仍有直接命令运行的插件', async () => {
+      let releaseCommand!: () => void;
+      const mockHandler = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            releaseCommand = () => resolve({ ok: true });
+          })
+      );
+      const mockContext = {
+        getCommand: vi.fn().mockReturnValue(mockHandler),
+      };
+
+      mockLifecycleManager.getContext.mockReturnValue(mockContext);
+      mockLifecycleManager.getHelpers.mockReturnValue({});
+      mockLifecycleManager.getLogger.mockReturnValue(null);
+
+      const runningCommand = manager.executeCommand('test-plugin', 'test-command', {});
+      await vi.waitFor(() => expect(mockHandler).toHaveBeenCalled());
+
+      await expect(manager.reload('test-plugin')).rejects.toThrow(
+        'Cannot reload plugin test-plugin: 1 command(s) still running'
+      );
+      expect(mockLifecycleManager.reload).not.toHaveBeenCalled();
+
+      releaseCommand();
+      await runningCommand;
+    });
   });
 
   // ==================== 启用/禁用测试 ====================
@@ -1280,7 +1402,11 @@ describe('JSPluginManager', () => {
       const result = await manager.disableHotReload('test-plugin');
 
       expect(result.success).toBe(true);
-      expect(mockLifecycleManager.disableHotReload).toHaveBeenCalledWith('test-plugin');
+      expect(mockLifecycleManager.disableHotReload).toHaveBeenCalledWith(
+        'test-plugin',
+        expect.any(Function),
+        expect.any(Function)
+      );
     });
 
     it('应该正确检查热重载状态', () => {

@@ -23,6 +23,18 @@ export interface IPipelineDatabase {
    * @param updates 要更新的字段
    */
   updateById(tableId: string, rowId: number | string, updates: Record<string, any>): Promise<void>;
+
+  /**
+   * Atomically claim a row before processing.
+   * Returns false when the row no longer has one of the expected statuses.
+   */
+  claimById?(
+    tableId: string,
+    rowId: number | string,
+    statusField: string,
+    fromStatuses: string[],
+    claimStatus: string
+  ): Promise<boolean>;
 }
 
 /**
@@ -79,6 +91,9 @@ export interface PipelineStage<TItem = any> {
 
   /** 失败后状态 */
   errorStatus: string;
+
+  /** 处理中状态，默认 `processing:{stage.name}` */
+  processingStatus?: string;
 
   /** 处理函数 */
   handler: (item: TItem, ctx: StageContext) => Promise<StageResult<TItem>>;

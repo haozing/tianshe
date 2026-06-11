@@ -36,6 +36,8 @@ const capabilityHandlers: Record<string, CapabilityHandler<OrchestrationDependen
 const capabilityDefinitionsByName: Record<string, OrchestrationCapabilityDefinition> =
   Object.fromEntries(Object.entries(capabilityCatalog).map(([name, item]) => [name, item.definition]));
 
+const ABORTED_INVOCATION_DRAIN_TIMEOUT_MS = 1_500;
+
 function isStructuredError(error: unknown): error is StructuredError {
   return (
     typeof error === 'object' &&
@@ -162,6 +164,50 @@ const awaitAbortableInvocation = async <T>(
 
   try {
     return await Promise.race([task, abortPromise]);
+  } catch (error) {
+    if (!signal.aborted) {
+      throw error;
+    }
+
+    let drained = false;
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        task
+          .then(() => {
+            drained = true;
+          })
+          .catch(() => {
+            drained = true;
+          }),
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, ABORTED_INVOCATION_DRAIN_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+
+    if (!drained) {
+      throw createStructuredError(
+        ErrorCode.OPERATION_FAILED,
+        `Capability invocation did not stop after abort: ${context.request.name}`,
+        {
+          details:
+            'The capability ignored AbortSignal beyond the cleanup budget; the caller must treat the session as unsafe for reuse.',
+          context: {
+            capability: context.request.name,
+            traceId: context.runtime.traceId,
+            reason: 'invocation_abandoned',
+            cleanupBudgetMs: ABORTED_INVOCATION_DRAIN_TIMEOUT_MS,
+          },
+        }
+      );
+    }
+
+    throw error;
   } finally {
     if (abortListener) {
       signal.removeEventListener('abort', abortListener);

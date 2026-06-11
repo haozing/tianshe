@@ -14,7 +14,10 @@ const mockAutoUpdater = vi.hoisted(() => {
     downloadUpdate: ReturnType<typeof vi.fn>;
     quitAndInstall: ReturnType<typeof vi.fn>;
     on: ReturnType<typeof vi.fn>;
+    off: ReturnType<typeof vi.fn>;
+    removeListener: ReturnType<typeof vi.fn>;
     removeAllListeners: ReturnType<typeof vi.fn>;
+    listenerCount: ReturnType<typeof vi.fn>;
     emit: ReturnType<typeof vi.fn>;
   };
 
@@ -31,10 +34,27 @@ const mockAutoUpdater = vi.hoisted(() => {
       listeners.set(eventName, eventListeners);
       return emitter;
     }),
+    off: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
+      const eventListeners = listeners.get(eventName) || [];
+      listeners.set(
+        eventName,
+        eventListeners.filter((item) => item !== listener)
+      );
+      return emitter;
+    }),
+    removeListener: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
+      const eventListeners = listeners.get(eventName) || [];
+      listeners.set(
+        eventName,
+        eventListeners.filter((item) => item !== listener)
+      );
+      return emitter;
+    }),
     removeAllListeners: vi.fn(() => {
       listeners.clear();
       return emitter;
     }),
+    listenerCount: vi.fn((eventName: string) => listeners.get(eventName)?.length ?? 0),
     emit: vi.fn((eventName: string, ...args: unknown[]) => {
       for (const listener of listeners.get(eventName) || []) {
         listener(...args);
@@ -106,10 +126,14 @@ beforeEach(() => {
   mockAutoUpdater.checkForUpdates.mockReset();
   mockAutoUpdater.downloadUpdate.mockReset();
   mockAutoUpdater.quitAndInstall.mockReset();
+  mockAutoUpdater.off.mockClear();
+  mockAutoUpdater.removeListener.mockClear();
+  mockAutoUpdater.listenerCount.mockClear();
 });
 
 afterEach(() => {
   restoreResourcesPath();
+  vi.useRealTimers();
   vi.resetModules();
 });
 
@@ -197,6 +221,57 @@ describe('UpdateManager', () => {
       expect(JSON.stringify((window.webContents.send as any).mock.calls)).not.toContain(
         'releases.atom'
       );
+    } finally {
+      fs.rmSync(resourcesPath, { recursive: true, force: true });
+    }
+  });
+
+  it('catches rejected periodic update checks', async () => {
+    vi.useFakeTimers();
+    const resourcesPath = fs.mkdtempSync(path.join(os.tmpdir(), 'updater-periodic-'));
+    setResourcesPath(resourcesPath);
+
+    try {
+      const { UpdateManager } = await import('./updater');
+      const logger = createLogger();
+      const manager = new UpdateManager(logger as any, createWindow() as any);
+      const checkSpy = vi
+        .spyOn(manager, 'checkForUpdates')
+        .mockRejectedValue(new Error('periodic failed'));
+
+      manager.startPeriodicCheck(1000);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(checkSpy).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'updater',
+        'Periodic update check failed',
+        expect.objectContaining({ message: 'periodic failed' })
+      );
+
+      manager.cleanup();
+    } finally {
+      fs.rmSync(resourcesPath, { recursive: true, force: true });
+    }
+  });
+
+  it('removes registered autoUpdater listeners during cleanup', async () => {
+    const resourcesPath = fs.mkdtempSync(path.join(os.tmpdir(), 'updater-cleanup-'));
+    setResourcesPath(resourcesPath);
+
+    try {
+      const { UpdateManager } = await import('./updater');
+      const window = createWindow();
+      const manager = new UpdateManager(createLogger() as any, window as any);
+
+      expect(mockAutoUpdater.listenerCount('checking-for-update')).toBe(1);
+
+      manager.cleanup();
+      mockAutoUpdater.emit('checking-for-update');
+
+      expect(mockAutoUpdater.off).toHaveBeenCalled();
+      expect(mockAutoUpdater.listenerCount('checking-for-update')).toBe(0);
+      expect(window.webContents.send).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(resourcesPath, { recursive: true, force: true });
     }

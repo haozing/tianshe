@@ -73,6 +73,7 @@ export interface InvokeTaskContext {
 export interface RuntimeMetricsSnapshot {
   queueOverflowCount: number;
   invokeTimeoutCount: number;
+  abandonedInvocationCount: number;
   browserAcquireFailureCount: number;
   browserAcquireTimeoutCount: number;
 }
@@ -128,6 +129,7 @@ interface LoggerLike {
 }
 
 const CLEANUP_WAIT_TIMEOUT_MS = 1_500;
+const INVOKE_DRAIN_TIMEOUT_MS = 1_500;
 
 export const SESSION_CLEANUP_POLICY: SessionCleanupPolicy = Object.freeze({
   defaultIdleTimeoutMs: HTTP_SERVER_DEFAULTS.SESSION_TIMEOUT,
@@ -286,6 +288,38 @@ const waitForAbortableTask = async <T>(
   }
 };
 
+const waitForTaskDrain = async <T>(params: {
+  task: Promise<T>;
+  timeoutMs: number;
+  onTimeout: () => void;
+}): Promise<void> => {
+  let timeout: NodeJS.Timeout | undefined;
+  let drained = false;
+
+  try {
+    await Promise.race([
+      params.task
+        .then(() => {
+          drained = true;
+        })
+        .catch(() => {
+          drained = true;
+        }),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, params.timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+
+  if (!drained) {
+    params.onTimeout();
+  }
+};
+
 const waitForCleanupBudget = async (
   promise: Promise<unknown>,
   timeoutMs: number,
@@ -332,7 +366,7 @@ export const enqueueInvokeTask = <T>(params: {
   sessionLabel: string;
   session: InvokeQueueState;
   task: (context: InvokeTaskContext) => Promise<T>;
-  options: { timeoutMs: number };
+  options: { timeoutMs: number; drainTimeoutMs?: number };
   runtimeMetrics: RuntimeMetricsSnapshot;
   logger: LoggerLike;
 }): Promise<T> => {
@@ -354,10 +388,19 @@ export const enqueueInvokeTask = <T>(params: {
   session.pendingInvocations += 1;
   session.lastActivity = Date.now();
 
-  const execute = async (): Promise<T> => {
+  let resolveResponse: (value: T) => void;
+  let rejectResponse: (reason: unknown) => void;
+  const responsePromise = new Promise<T>((resolve, reject) => {
+    resolveResponse = resolve;
+    rejectResponse = reject;
+  });
+
+  const execute = async (): Promise<void> => {
     let activeStarted = false;
     let invokeController: AbortController | undefined;
     let forwardSessionAbort: (() => void) | undefined;
+    let taskPromise: Promise<T> | undefined;
+    let timedOutOrAborted = false;
 
     try {
       const closeError = getSessionCloseError(sessionLabel, session);
@@ -391,20 +434,55 @@ export const enqueueInvokeTask = <T>(params: {
         closeController.signal.addEventListener('abort', forwardSessionAbort, { once: true });
       }
 
-      return await waitForAbortableTask(
-        Promise.resolve().then(() => task({ signal: invokeSignal })),
-        options.timeoutMs,
-        invokeSignal,
-        () => {
+      taskPromise = Promise.resolve().then(() => task({ signal: invokeSignal }));
+
+      try {
+        const result = await waitForAbortableTask(taskPromise, options.timeoutMs, invokeSignal, () => {
           runtimeMetrics.invokeTimeoutCount += 1;
           const timeoutError = createInvokeTimeoutError(sessionLabel, options.timeoutMs);
           if (!invokeController?.signal.aborted) {
             invokeController?.abort(timeoutError);
           }
           return timeoutError;
-        }
-      );
+        });
+        resolveResponse(result);
+      } catch (error) {
+        timedOutOrAborted = invokeSignal.aborted;
+        rejectResponse(error);
+        throw error;
+      }
+    } catch (error) {
+      if (!taskPromise) {
+        rejectResponse(error);
+      }
     } finally {
+      if (timedOutOrAborted && taskPromise) {
+        await waitForTaskDrain({
+          task: taskPromise,
+          timeoutMs: options.drainTimeoutMs ?? INVOKE_DRAIN_TIMEOUT_MS,
+          onTimeout: () => {
+            runtimeMetrics.abandonedInvocationCount += 1;
+            abortSession(
+              sessionLabel,
+              session,
+              createStructuredError(
+                ErrorCode.OPERATION_FAILED,
+                `Invocation did not stop after abort: ${sessionLabel}`,
+                {
+                  details:
+                    'The timed-out invocation did not finish during the cleanup budget; the session is closed to prevent overlapping side effects.',
+                  suggestion: 'Create a new session before retrying.',
+                  context: {
+                    session: sessionLabel,
+                    reason: 'invoke_abandoned',
+                    cleanupBudgetMs: options.drainTimeoutMs ?? INVOKE_DRAIN_TIMEOUT_MS,
+                  },
+                }
+              )
+            );
+          },
+        });
+      }
       if (forwardSessionAbort && session.closeController) {
         session.closeController.signal.removeEventListener('abort', forwardSessionAbort);
       }
@@ -425,7 +503,7 @@ export const enqueueInvokeTask = <T>(params: {
     .catch((error) => {
       logger.debug(`Invoke queue item failed (${sessionLabel}): ${String(error)}`);
     });
-  return run;
+  return responsePromise;
 };
 
 export const enqueueOrchestrationInvoke = <T>(params: {

@@ -217,6 +217,153 @@ describe('RuntimeObservationService', () => {
     ]);
   });
 
+  it('ignores corrupt JSON fields while returning the rest of the trace data', async () => {
+    mockConnection.prepare.mockImplementation((query: string) => {
+      if (query.includes('SELECT * FROM runtime_events')) {
+        return {
+          bind: vi.fn(),
+          runAndReadAll: vi.fn().mockResolvedValue({
+            columnNames: () => [
+              'id',
+              'trace_id',
+              'span_id',
+              'parent_span_id',
+              'timestamp',
+              'seq',
+              'level',
+              'event',
+              'outcome',
+              'component',
+              'message',
+              'duration_ms',
+              'source',
+              'capability',
+              'plugin_id',
+              'browser_runtime_id',
+              'session_id',
+              'profile_id',
+              'dataset_id',
+              'browser_id',
+              'attrs',
+              'error',
+              'artifact_refs',
+            ],
+            getRows: () => [
+              [
+                'event-corrupt',
+                'trace-corrupt',
+                null,
+                null,
+                1700000000100,
+                1700000000100000,
+                'error',
+                'capability.invoke.failed',
+                'failed',
+                'orchestration',
+                'failed but readable',
+                null,
+                'http',
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                '{bad attrs',
+                '{"message":"ok"}',
+                '[bad refs',
+              ],
+            ],
+          }),
+          run: vi.fn().mockResolvedValue(undefined),
+          destroySync: vi.fn(),
+        };
+      }
+
+      if (query.includes('SELECT * FROM runtime_artifacts')) {
+        return {
+          bind: vi.fn(),
+          runAndReadAll: vi.fn().mockResolvedValue({
+            columnNames: () => [
+              'id',
+              'trace_id',
+              'span_id',
+              'parent_span_id',
+              'timestamp',
+              'seq',
+              'type',
+              'component',
+              'label',
+              'mime_type',
+              'source',
+              'capability',
+              'plugin_id',
+              'browser_runtime_id',
+              'session_id',
+              'profile_id',
+              'dataset_id',
+              'browser_id',
+              'attrs',
+              'data',
+            ],
+            getRows: () => [
+              [
+                'artifact-corrupt',
+                'trace-corrupt',
+                null,
+                null,
+                1700000000101,
+                1700000000101000,
+                'snapshot',
+                'browser',
+                'corrupt snapshot',
+                null,
+                'http',
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                '{bad data',
+              ],
+            ],
+          }),
+          run: vi.fn().mockResolvedValue(undefined),
+          destroySync: vi.fn(),
+        };
+      }
+
+      return {
+        bind: vi.fn(),
+        run: vi.fn().mockResolvedValue(undefined),
+        runAndReadAll: vi.fn().mockResolvedValue({
+          columnNames: () => [],
+          getRows: () => [],
+        }),
+        destroySync: vi.fn(),
+      };
+    });
+
+    await expect(service.listEventsByTrace('trace-corrupt')).resolves.toEqual([
+      expect.objectContaining({
+        eventId: 'event-corrupt',
+        traceId: 'trace-corrupt',
+        error: { message: 'ok' },
+      }),
+    ]);
+    await expect(service.listArtifactsByTrace('trace-corrupt')).resolves.toEqual([
+      expect.objectContaining({
+        artifactId: 'artifact-corrupt',
+        traceId: 'trace-corrupt',
+        label: 'corrupt snapshot',
+      }),
+    ]);
+  });
+
   it('serializes runtime artifacts on write', async () => {
     const artifact: RuntimeArtifact = {
       artifactId: 'artifact-write-1',
@@ -236,5 +383,44 @@ describe('RuntimeObservationService', () => {
     expect(mockConnection.prepare).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO runtime_artifacts')
     );
+  });
+
+  it('cleans runtime observations older than retention cutoff', async () => {
+    const statements: any[] = [];
+    mockConnection.prepare.mockImplementation((query: string) => {
+      const statement = {
+        bind: vi.fn(),
+        run: vi.fn().mockResolvedValue(undefined),
+        runAndReadAll: vi.fn().mockResolvedValue({
+          columnNames: () => ['count'],
+          getRows: () => [[query.includes('runtime_artifacts') ? 3 : 2]],
+        }),
+        destroySync: vi.fn(),
+      };
+      statements.push({ query, statement });
+      return statement;
+    });
+
+    const result = await service.cleanupRetention({
+      daysToKeep: 2,
+      now: 1_700_000_000_000,
+    });
+
+    expect(result).toEqual({
+      cutoffTimestamp: 1_699_827_200_000,
+      artifactsDeleted: 3,
+      eventsDeleted: 2,
+    });
+    expect(statements.map((item) => item.query)).toEqual(
+      expect.arrayContaining([
+        'SELECT COUNT(*) AS count FROM runtime_artifacts WHERE timestamp < ?',
+        'SELECT COUNT(*) AS count FROM runtime_events WHERE timestamp < ?',
+        'DELETE FROM runtime_artifacts WHERE timestamp < ?',
+        'DELETE FROM runtime_events WHERE timestamp < ?',
+      ])
+    );
+    for (const { statement } of statements) {
+      expect(statement.bind).toHaveBeenCalledWith([1_699_827_200_000]);
+    }
   });
 });

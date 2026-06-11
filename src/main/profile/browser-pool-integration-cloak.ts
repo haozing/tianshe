@@ -439,6 +439,8 @@ type InterceptWaiter = {
   resolve: (request: BrowserInterceptedRequest) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  signal?: AbortSignal;
+  abortListener?: () => void;
 };
 
 type ResponseWaiter = {
@@ -1041,6 +1043,10 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
   async waitForInterceptedRequest(
     options?: BrowserInterceptWaitOptions
   ): Promise<BrowserInterceptedRequest> {
+    if (options?.signal?.aborted) {
+      throw new Error('Intercept wait aborted before start');
+    }
+
     const existing = this.getInterceptedRequests().find((request) =>
       this.matchesInterceptWaitOptions(request, options)
     );
@@ -1053,16 +1059,17 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
         resolve,
         reject,
         timer: setTimeout(() => {
-          this.interceptWaiters.delete(waiter);
+          this.cleanupInterceptWaiter(waiter);
           reject(new Error(`Timed out waiting for intercepted request after ${timeoutMs}ms`));
         }, timeoutMs),
+        signal: options?.signal,
       };
       const onAbort = () => {
-        clearTimeout(waiter.timer);
-        this.interceptWaiters.delete(waiter);
+        this.cleanupInterceptWaiter(waiter);
         reject(new Error('Intercept wait aborted'));
       };
       if (options?.signal) {
+        waiter.abortListener = onAbort;
         options.signal.addEventListener('abort', onAbort, { once: true });
       }
       this.interceptWaiters.add(waiter);
@@ -1152,7 +1159,12 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
         state: 'in_progress',
         source: 'native',
       });
-      void this.finalizeDownload(id, download);
+      void this.finalizeDownload(id, download).catch((error) => {
+        logger.warn('Unhandled Cloak download finalization failure', {
+          id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     });
     page.on('console', (message: any) => {
       if (!this.consoleCaptureEnabled) return;
@@ -1202,46 +1214,57 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
   private async finalizeDownload(id: string, download: PlaywrightDownload): Promise<void> {
     const entry = this.downloads.get(id);
     if (!entry) return;
-    if (this.downloadBehavior.policy === 'deny') {
-      await download.cancel().catch(() => undefined);
-      entry.state = 'canceled';
-      this.emitRuntimeEvent('download.canceled', {
+    try {
+      if (this.downloadBehavior.policy === 'deny') {
+        await download.cancel().catch(() => undefined);
+        entry.state = 'canceled';
+        this.emitRuntimeEvent('download.canceled', {
+          id,
+          url: entry.url,
+          suggestedFilename: entry.suggestedFilename,
+          state: 'canceled',
+          source: 'native',
+        });
+        return;
+      }
+
+      let downloadPath: string | null = null;
+      if (this.downloadBehavior.downloadPath && download.saveAs) {
+        const filename = sanitizeDownloadFilename(entry.suggestedFilename, `${id}.download`);
+        const targetPath = path.join(this.downloadBehavior.downloadPath, filename);
+        await fs.promises.mkdir(this.downloadBehavior.downloadPath, { recursive: true });
+        await download.saveAs(targetPath);
+        downloadPath = targetPath;
+      } else {
+        downloadPath = await download.path().catch(() => null);
+      }
+
+      const failure = await download.failure().catch(() => null);
+      if (failure) {
+        entry.state = 'interrupted';
+        logger.warn('Cloak download ended with failure', { id, failure });
+        return;
+      }
+
+      entry.state = 'completed';
+      entry.path = downloadPath ?? undefined;
+      this.emitRuntimeEvent('download.completed', {
         id,
         url: entry.url,
         suggestedFilename: entry.suggestedFilename,
-        state: 'canceled',
+        state: 'completed',
+        path: entry.path,
         source: 'native',
       });
-      return;
-    }
-
-    let downloadPath: string | null = null;
-    if (this.downloadBehavior.downloadPath && download.saveAs) {
-      const filename = sanitizeDownloadFilename(entry.suggestedFilename, `${id}.download`);
-      const targetPath = path.join(this.downloadBehavior.downloadPath, filename);
-      await fs.promises.mkdir(this.downloadBehavior.downloadPath, { recursive: true });
-      await download.saveAs(targetPath);
-      downloadPath = targetPath;
-    } else {
-      downloadPath = await download.path().catch(() => null);
-    }
-
-    const failure = await download.failure().catch(() => null);
-    if (failure) {
+    } catch (error) {
       entry.state = 'interrupted';
-      return;
+      logger.warn('Failed to finalize Cloak download', {
+        id,
+        url: entry.url,
+        suggestedFilename: entry.suggestedFilename,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
-
-    entry.state = 'completed';
-    entry.path = downloadPath ?? undefined;
-    this.emitRuntimeEvent('download.completed', {
-      id,
-      url: entry.url,
-      suggestedFilename: entry.suggestedFilename,
-      state: 'completed',
-      path: entry.path,
-      source: 'native',
-    });
   }
 
   private toInterceptedRequest(route: PlaywrightRoute, request: PlaywrightRequest): BrowserInterceptedRequest {
@@ -1285,17 +1308,24 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
   private resolveInterceptWaiters(request: BrowserInterceptedRequest): void {
     for (const waiter of [...this.interceptWaiters]) {
       if (!this.matchesInterceptWaitOptions(request, waiter.options)) continue;
-      clearTimeout(waiter.timer);
-      this.interceptWaiters.delete(waiter);
+      this.cleanupInterceptWaiter(waiter);
       waiter.resolve({ ...request, headers: { ...request.headers } });
     }
   }
 
   private rejectInterceptWaiters(error: Error): void {
     for (const waiter of [...this.interceptWaiters]) {
-      clearTimeout(waiter.timer);
-      this.interceptWaiters.delete(waiter);
+      this.cleanupInterceptWaiter(waiter);
       waiter.reject(error);
+    }
+  }
+
+  private cleanupInterceptWaiter(waiter: InterceptWaiter): void {
+    clearTimeout(waiter.timer);
+    this.interceptWaiters.delete(waiter);
+    if (waiter.signal && waiter.abortListener) {
+      waiter.signal.removeEventListener('abort', waiter.abortListener);
+      waiter.abortListener = undefined;
     }
   }
 

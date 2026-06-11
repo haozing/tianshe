@@ -128,8 +128,11 @@ export class PluginLifecycleManager {
       throw new Error(`Plugin not loaded: ${pluginId}`);
     }
 
-    // 如果插件没有 activate 钩子和 contributes，跳过
-    if (!plugin.module.activate && !plugin.manifest.contributes) {
+    const hasModuleCommands =
+      plugin.module.commands && Object.keys(plugin.module.commands).length > 0;
+
+    // 如果插件没有 activate 钩子、commands 和 contributes，跳过
+    if (!plugin.module.activate && !hasModuleCommands && !plugin.manifest.contributes) {
       this.runtimeRegistry?.setLifecyclePhase(pluginId, 'active', plugin.manifest.name);
       return;
     }
@@ -140,11 +143,14 @@ export class PluginLifecycleManager {
     pluginLogger.lifecycle('activating');
     this.runtimeRegistry?.setLifecyclePhase(pluginId, 'starting', plugin.manifest.name);
 
+    let helpers: PluginHelpers | undefined;
+    let context: PluginContext | undefined;
+
     try {
       // 1. 设置插件基础设施
-      const helpers = this.setupPluginHelpers(pluginId, plugin);
+      helpers = this.setupPluginHelpers(pluginId, plugin);
       const dataTables = await this.loadPluginDataTables(pluginId, pluginLogger);
-      const context = this.createPluginContext(pluginId, plugin, helpers, dataTables);
+      context = this.createPluginContext(pluginId, plugin, helpers, dataTables);
 
       // 1.5. 注册插件到 Registry
       const registry = getPluginRegistry();
@@ -181,10 +187,7 @@ export class PluginLifecycleManager {
       const registry = getPluginRegistry();
       registry.unregisterPlugin(pluginId);
 
-      // 清理上下文
-      this.contexts.delete(pluginId);
-      this.helpers.delete(pluginId);
-      this.loggers.delete(pluginId);
+      await this.cleanupFailedActivation(pluginId, context, helpers, callbacks);
 
       // 清理插件实例（防止状态残留）
       this.plugins.delete(pluginId);
@@ -271,7 +274,7 @@ export class PluginLifecycleManager {
       // 2. 清理 Context
       if (context) {
         try {
-          context.dispose();
+          await context.dispose();
           this.contexts.delete(pluginId);
           logger.debug('Context disposed', { pluginId });
         } catch (contextError: unknown) {
@@ -316,6 +319,11 @@ export class PluginLifecycleManager {
       } catch (uiError: unknown) {
         logger.error('Failed to unregister UI contributions', uiError);
       }
+
+      this.contexts.delete(pluginId);
+      this.helpers.delete(pluginId);
+      this.loggers.delete(pluginId);
+      this.plugins.delete(pluginId);
 
       logger.info('Plugin deactivated', { pluginId });
       this.runtimeRegistry?.setLifecyclePhase(pluginId, 'inactive');
@@ -482,6 +490,16 @@ export class PluginLifecycleManager {
 
       return { success: true, message: '热重载已启用' };
     } catch (error: unknown) {
+      if (this.fileWatcherManager.isWatching(pluginId)) {
+        try {
+          await this.fileWatcherManager.stopWatching(pluginId);
+        } catch (cleanupError: unknown) {
+          logger.error('Failed to rollback file watcher after hot reload enable error', {
+            pluginId,
+            error: getUnknownErrorMessage(cleanupError),
+          });
+        }
+      }
       return { success: false, message: `启用热重载失败: ${getUnknownErrorMessage(error)}` };
     }
   }
@@ -489,7 +507,11 @@ export class PluginLifecycleManager {
   /**
    * 禁用热重载
    */
-  async disableHotReload(pluginId: string): Promise<{ success: boolean; message: string }> {
+  async disableHotReload(
+    pluginId: string,
+    getPluginInfo?: (pluginId: string) => Promise<JSPluginInfo | null>,
+    reloadPlugin?: (pluginId: string) => Promise<void>
+  ): Promise<{ success: boolean; message: string }> {
     if (!this.fileWatcherManager.isWatching(pluginId)) {
       return { success: false, message: '热重载未启用' };
     }
@@ -504,6 +526,23 @@ export class PluginLifecycleManager {
 
       return { success: true, message: '热重载已禁用' };
     } catch (error: unknown) {
+      if (!this.fileWatcherManager.isWatching(pluginId) && getPluginInfo && reloadPlugin) {
+        try {
+          const info = await getPluginInfo(pluginId);
+          if (info?.devMode && info.sourcePath) {
+            const pluginLogger = this.loggers.get(pluginId);
+            await this.fileWatcherManager.startWatching(pluginId, info.sourcePath, async () => {
+              pluginLogger?.info('File change detected, triggering hot reload...');
+              await reloadPlugin(pluginId);
+            });
+          }
+        } catch (rollbackError: unknown) {
+          logger.error('Failed to rollback file watcher after hot reload disable error', {
+            pluginId,
+            error: getUnknownErrorMessage(rollbackError),
+          });
+        }
+      }
       return { success: false, message: `禁用热重载失败: ${getUnknownErrorMessage(error)}` };
     }
   }
@@ -687,6 +726,55 @@ export class PluginLifecycleManager {
         });
       }
     }
+  }
+
+  private async cleanupFailedActivation(
+    pluginId: string,
+    context: PluginContext | undefined,
+    helpers: PluginHelpers | undefined,
+    callbacks: {
+      unregisterUIContributions: (pluginId: string) => Promise<void>;
+    }
+  ): Promise<void> {
+    if (context) {
+      try {
+        await context.dispose();
+      } catch (contextError: unknown) {
+        logger.error('Context dispose failed after activation error', contextError);
+      }
+    }
+    this.contexts.delete(pluginId);
+
+    if (helpers) {
+      try {
+        await helpers.dispose();
+      } catch (helpersError: unknown) {
+        logger.error('Helpers dispose failed after activation error', helpersError);
+      }
+    }
+    this.helpers.delete(pluginId);
+
+    if (this.fileWatcherManager.isWatching(pluginId)) {
+      try {
+        await this.fileWatcherManager.stopWatching(pluginId);
+      } catch (watcherError: unknown) {
+        logger.error('Failed to stop file watcher after activation error', watcherError);
+      }
+    }
+
+    try {
+      await this.viewManager.cleanupPluginViews(pluginId);
+    } catch (viewError: unknown) {
+      logger.error('Failed to cleanup plugin views after activation error', viewError);
+    }
+
+    try {
+      await callbacks.unregisterUIContributions(pluginId);
+    } catch (uiError: unknown) {
+      logger.error('Failed to unregister UI contributions after activation error', uiError);
+    }
+
+    this.loggers.delete(pluginId);
   }
 
   /**

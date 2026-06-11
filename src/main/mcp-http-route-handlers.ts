@@ -111,6 +111,31 @@ const validateInitializeRequestId = (
   return false;
 };
 
+const validateInitializeIsNotBatched = (
+  body: unknown,
+  res: Response,
+  requestId?: JsonRpcRequestId | null
+): boolean => {
+  const initializeRequest = findInitializeRequest(body);
+  if (!initializeRequest || initializeRequest.index === null) {
+    return true;
+  }
+
+  writeJsonRpcError(
+    res,
+    400,
+    -32600,
+    'Initialize requests must be sent as a single JSON-RPC request',
+    {
+      reason: 'initialize_batch_not_supported',
+      initializeIndex: initializeRequest.index,
+      hint: 'Send initialize by itself, read the mcp-session-id response header, then send subsequent MCP requests with that session id.',
+    },
+    requestId
+  );
+  return false;
+};
+
 const createPendingTerminationOptions = (options: RegisterMcpRouteHandlersOptions) => ({
   transports: options.routeContext.transports,
   cleanupSession: options.sessionLifecycle.cleanupSession,
@@ -330,6 +355,9 @@ const createMcpPostHandler =
         return;
       }
       if (!validateInitializeRequestId(mcpBody, res, requestId)) {
+        return;
+      }
+      if (!validateInitializeIsNotBatched(mcpBody, res, requestId)) {
         return;
       }
 

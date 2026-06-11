@@ -206,11 +206,11 @@ export class ExtensionPackagesService {
         manifest_json, extract_dir, enabled, created_at, updated_at
       FROM extension_packages
       WHERE extension_id = ? AND enabled = TRUE
-      ORDER BY updated_at DESC, created_at DESC
-      LIMIT 1
     `, [extensionId]);
     const rows = parseRows(result);
-    return rows.length > 0 ? this.mapRowToPackage(rows[0]) : null;
+    const packages = rows.map((row) => this.mapRowToPackage(row));
+    packages.sort(comparePackagesForLatestResolution);
+    return packages[0] ?? null;
   }
 
   async upsertPackage(params: UpsertExtensionPackageParams): Promise<ExtensionPackage> {
@@ -519,4 +519,123 @@ export class ExtensionPackagesService {
       return value as T;
     }
   }
+}
+
+interface ParsedSemverLikeVersion {
+  valid: boolean;
+  numericParts: number[];
+  prereleaseParts: string[];
+  raw: string;
+}
+
+function comparePackagesForLatestResolution(
+  left: ExtensionPackage,
+  right: ExtensionPackage
+): number {
+  const versionCompare = compareSemverLikeVersions(right.version, left.version);
+  if (versionCompare !== 0) {
+    return versionCompare;
+  }
+
+  const updatedCompare = right.updatedAt.getTime() - left.updatedAt.getTime();
+  if (updatedCompare !== 0) {
+    return updatedCompare;
+  }
+
+  return right.createdAt.getTime() - left.createdAt.getTime();
+}
+
+function compareSemverLikeVersions(left: string, right: string): number {
+  const leftParsed = parseSemverLikeVersion(left);
+  const rightParsed = parseSemverLikeVersion(right);
+
+  if (leftParsed.valid !== rightParsed.valid) {
+    return leftParsed.valid ? 1 : -1;
+  }
+
+  if (!leftParsed.valid && !rightParsed.valid) {
+    return leftParsed.raw.localeCompare(rightParsed.raw, undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    });
+  }
+
+  const numericPartCount = Math.max(
+    leftParsed.numericParts.length,
+    rightParsed.numericParts.length,
+    3
+  );
+  for (let index = 0; index < numericPartCount; index += 1) {
+    const leftPart = leftParsed.numericParts[index] ?? 0;
+    const rightPart = rightParsed.numericParts[index] ?? 0;
+    if (leftPart !== rightPart) {
+      return leftPart > rightPart ? 1 : -1;
+    }
+  }
+
+  const leftHasPrerelease = leftParsed.prereleaseParts.length > 0;
+  const rightHasPrerelease = rightParsed.prereleaseParts.length > 0;
+  if (leftHasPrerelease !== rightHasPrerelease) {
+    return leftHasPrerelease ? -1 : 1;
+  }
+
+  const prereleasePartCount = Math.max(
+    leftParsed.prereleaseParts.length,
+    rightParsed.prereleaseParts.length
+  );
+  for (let index = 0; index < prereleasePartCount; index += 1) {
+    const leftPart = leftParsed.prereleaseParts[index];
+    const rightPart = rightParsed.prereleaseParts[index];
+    if (leftPart === undefined) return rightPart === undefined ? 0 : -1;
+    if (rightPart === undefined) return 1;
+    if (leftPart === rightPart) continue;
+
+    const leftNumeric = /^\d+$/.test(leftPart);
+    const rightNumeric = /^\d+$/.test(rightPart);
+    if (leftNumeric && rightNumeric) {
+      const leftNumber = Number(leftPart);
+      const rightNumber = Number(rightPart);
+      if (leftNumber !== rightNumber) {
+        return leftNumber > rightNumber ? 1 : -1;
+      }
+      continue;
+    }
+    if (leftNumeric !== rightNumeric) {
+      return leftNumeric ? -1 : 1;
+    }
+
+    return leftPart > rightPart ? 1 : -1;
+  }
+
+  return 0;
+}
+
+function parseSemverLikeVersion(version: string): ParsedSemverLikeVersion {
+  const raw = String(version || '').trim();
+  const withoutBuild = raw.replace(/^v/i, '').split('+', 1)[0] || '';
+  const [mainPart, prereleasePart = ''] = withoutBuild.split('-', 2);
+  const mainParts = mainPart.split('.');
+  const numericParts: number[] = [];
+
+  for (const part of mainParts) {
+    if (!/^\d+$/.test(part)) {
+      return { valid: false, numericParts: [], prereleaseParts: [], raw };
+    }
+    numericParts.push(Number(part));
+  }
+
+  if (numericParts.length === 0) {
+    return { valid: false, numericParts: [], prereleaseParts: [], raw };
+  }
+
+  const prereleaseParts = prereleasePart
+    ? prereleasePart.split('.').filter((part) => part.length > 0)
+    : [];
+
+  return {
+    valid: true,
+    numericParts,
+    prereleaseParts,
+    raw,
+  };
 }

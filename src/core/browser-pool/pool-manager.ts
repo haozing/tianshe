@@ -179,6 +179,15 @@ export class BrowserPoolManager {
     this.globalPool.setSessionBrowsersChangedCallback((sessionId) =>
       this.syncProfileIdleIfNoBrowsers(sessionId)
     );
+    this.globalPool.setLockTimeoutReleasedCallback(async ({ browserId, sessionId, pluginId }) => {
+      this.eventEmitter.emit('browser:released', {
+        browserId,
+        sessionId,
+        pluginId,
+        destroy: false,
+      });
+      await this.acquireCoordinator.processWaitQueue(sessionId);
+    });
 
     // 设置配置
     if (config) {
@@ -190,6 +199,15 @@ export class BrowserPoolManager {
 
     this.initialized = true;
     logger.info('Initialized');
+  }
+
+  private assertStartedAndInitialized(): void {
+    if (this.stopped) {
+      throw new PoolStoppedError();
+    }
+    if (!this.initialized) {
+      throw new PoolNotInitializedError();
+    }
   }
 
   /**
@@ -333,9 +351,7 @@ export class BrowserPoolManager {
     source: AcquireSource = 'internal',
     pluginId?: string
   ): Promise<BrowserHandle> {
-    if (this.stopped) {
-      throw new PoolStoppedError();
-    }
+    this.assertStartedAndInitialized();
 
     // 获取 Session（如果没有指定 profileId，使用默认浏览器）
     const { session, options: acquireOptions } = await this.sessionResolver.resolve(
@@ -376,6 +392,7 @@ export class BrowserPoolManager {
     source: AcquireSource = 'internal',
     pluginId?: string
   ): Promise<BrowserHandle | null> {
+    this.assertStartedAndInitialized();
     return this.pluginLeaseStrategy.adoptSamePluginLockedBrowser(
       profileId,
       options,
@@ -390,9 +407,7 @@ export class BrowserPoolManager {
     source: AcquireSource = 'mcp',
     pluginId?: string
   ): Promise<BrowserHandle | null> {
-    if (this.stopped) {
-      throw new PoolStoppedError();
-    }
+    this.assertStartedAndInitialized();
 
     return this.pluginLeaseStrategy.takeoverLockedBrowser(
       profileId,
@@ -416,6 +431,7 @@ export class BrowserPoolManager {
     options?: ReleaseOptions,
     expectedRequestId?: string
   ): Promise<ReleaseResult> {
+    this.assertStartedAndInitialized();
     const browser = this.globalPool.getBrowser(browserId);
     if (!browser) {
       logger.warn('Browser not found for release: ' + browserId);
@@ -538,6 +554,7 @@ export class BrowserPoolManager {
     extensionMs?: number,
     expectedRequestId?: string
   ): Promise<boolean> {
+    this.assertStartedAndInitialized();
     const browser = this.globalPool.getBrowser(browserId);
     if (
       expectedRequestId &&
@@ -573,6 +590,7 @@ export class BrowserPoolManager {
    * @param browserId 浏览器ID
    */
   async forceRelease(browserId: string): Promise<void> {
+    this.assertStartedAndInitialized();
     const browser = this.globalPool.getBrowser(browserId);
     const sessionId = browser?.sessionId;
 
@@ -592,11 +610,25 @@ export class BrowserPoolManager {
    * @param pluginId 插件ID
    */
   async releaseByPlugin(pluginId: string): Promise<{ browsers: number; requests: number }> {
+    this.assertStartedAndInitialized();
+    const sessionsToProcess = Array.from(
+      new Set(
+        this.globalPool
+          .listBrowsers()
+          .filter((browser) => browser.status === 'locked' && browser.lockedBy?.pluginId === pluginId)
+          .map((browser) => browser.sessionId)
+      )
+    );
+
     // 释放浏览器
     const browsers = await this.globalPool.releaseByPlugin(pluginId);
 
     // 取消等待请求
     const requests = this.waitQueue.cancelByPlugin(pluginId, 'Plugin stopped');
+
+    for (const sessionId of sessionsToProcess) {
+      await this.acquireCoordinator.processWaitQueue(sessionId);
+    }
 
     logger.info(
       'Released plugin resources: ' +

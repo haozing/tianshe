@@ -198,6 +198,11 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
       return false;
     }
 
+    if (record.info.status === 'pending') {
+      this.cancelPendingTask(taskId, record, 'Task cancelled');
+      return true;
+    }
+
     record.controller.abort(new Error('Task cancelled'));
     return true;
   }
@@ -388,6 +393,22 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
     const controllerRef = controller;
 
     const attempt = async (): Promise<T> => {
+      if (controller.signal.aborted) {
+        const currentRecord = this.taskRecords.get(taskId);
+        if (
+          currentRecord &&
+          currentRecord.controller === controllerRef &&
+          currentRecord.info.status === 'pending'
+        ) {
+          this.cancelPendingTask(taskId, currentRecord, 'Aborted before execution');
+        }
+
+        const abortReason = controller.signal.reason;
+        const reason =
+          abortReason instanceof Error ? abortReason.message : String(abortReason || 'cancelled');
+        throw new TaskCancelledError('Task cancelled', reason);
+      }
+
       taskInfo.status = 'running';
       taskInfo.startedAt = Date.now();
       this.emit('task:started', this.createEvent(taskInfo));
@@ -496,6 +517,22 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
     };
 
     return attempt();
+  }
+
+  private cancelPendingTask(taskId: string, record: TaskRecord, reason: string): void {
+    const { info: taskInfo, controller, deferred, cleanupExternalSignal } = record;
+    const cancellationError = new TaskCancelledError('Task cancelled', reason);
+
+    controller.abort(cancellationError);
+    taskInfo.status = 'cancelled';
+    taskInfo.finishedAt = Date.now();
+    taskInfo.duration = taskInfo.finishedAt - (taskInfo.startedAt || taskInfo.createdAt);
+    taskInfo.error = cancellationError;
+
+    this.emit('task:cancelled', this.createEvent(taskInfo));
+    cleanupExternalSignal?.();
+    deferred.reject(cancellationError);
+    this.taskRecords.delete(taskId);
   }
 
   /**

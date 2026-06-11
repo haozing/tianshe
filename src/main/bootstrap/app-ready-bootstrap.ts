@@ -47,27 +47,36 @@ export class AppReadyBootstrapStageTimeoutError extends Error {
   }
 }
 
+export interface AppReadyBootstrapStageContext {
+  signal: AbortSignal;
+}
+
 export interface AppReadyBootstrapOptions {
   logStartup: (message: string) => void;
   hideApplicationMenu: () => void;
-  initializeServices: () => Promise<void>;
-  initializePluginIPC: () => void;
-  initializeSchedulerIPC: () => void;
-  initializeObservationIPC: () => void;
-  initializeHttpApiIPC: () => void;
-  initializeOcrPoolIPC: () => void;
-  initializePlugins: () => Promise<void>;
-  createWindow: () => void;
-  setupWindowResizeListener: () => (() => void) | void | null;
-  initializeIPC: () => void;
-  shouldInitializeUpdater: () => boolean;
-  initializeUpdater: () => Promise<void>;
-  startResourceMonitoring: () => void;
-  initializeBrowserControlApi: () => Promise<void>;
+  initializeServices: (context?: AppReadyBootstrapStageContext) => Promise<void>;
+  initializePluginIPC: (context?: AppReadyBootstrapStageContext) => void;
+  initializeSchedulerIPC: (context?: AppReadyBootstrapStageContext) => void;
+  initializeObservationIPC: (context?: AppReadyBootstrapStageContext) => void;
+  initializeHttpApiIPC: (context?: AppReadyBootstrapStageContext) => void;
+  initializeOcrPoolIPC: (context?: AppReadyBootstrapStageContext) => void;
+  initializePlugins: (context?: AppReadyBootstrapStageContext) => Promise<void>;
+  createWindow: (context?: AppReadyBootstrapStageContext) => void;
+  setupWindowResizeListener: (
+    context?: AppReadyBootstrapStageContext
+  ) => (() => void) | void | null;
+  initializeIPC: (context?: AppReadyBootstrapStageContext) => void;
+  shouldInitializeUpdater: (context?: AppReadyBootstrapStageContext) => boolean;
+  initializeUpdater: (context?: AppReadyBootstrapStageContext) => Promise<void>;
+  startResourceMonitoring: (context?: AppReadyBootstrapStageContext) => void;
+  initializeBrowserControlApi: (context?: AppReadyBootstrapStageContext) => Promise<void>;
   handleInitializationFailure: (error: unknown) => Promise<void> | void;
   consoleRef?: Pick<Console, 'log' | 'error'>;
   stageTimeoutMs?: number | AppReadyBootstrapStageTimeouts;
+  lateStageDrainTimeoutMs?: number;
 }
+
+const DEFAULT_LATE_STAGE_DRAIN_TIMEOUT_MS = 1_500;
 
 function resolveStageTimeoutMs(
   stage: AppReadyBootstrapStage,
@@ -82,11 +91,15 @@ function resolveStageTimeoutMs(
 
 async function runBootstrapStage<T>(
   stage: AppReadyBootstrapStage,
-  action: () => T | Promise<T>,
-  timeoutMs: number
+  action: (context: AppReadyBootstrapStageContext) => T | Promise<T>,
+  timeoutMs: number,
+  lateStageDrainTimeoutMs: number,
+  logStartup: (message: string) => void
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const actionPromise = Promise.resolve().then(action);
+  let drainTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
+  const actionPromise = Promise.resolve().then(() => action({ signal: controller.signal }));
   const shouldUseTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0;
 
   try {
@@ -96,12 +109,34 @@ async function runBootstrapStage<T>(
 
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(() => {
+        controller.abort(new AppReadyBootstrapStageTimeoutError(stage, timeoutMs));
         reject(new AppReadyBootstrapStageTimeoutError(stage, timeoutMs));
       }, timeoutMs);
     });
 
     return await Promise.race([actionPromise, timeoutPromise]);
   } catch (error) {
+    if (error instanceof AppReadyBootstrapStageTimeoutError) {
+      let drained = false;
+      await Promise.race([
+        actionPromise
+          .then(() => {
+            drained = true;
+          })
+          .catch(() => {
+            drained = true;
+          }),
+        new Promise<void>((resolve) => {
+          drainTimeoutId = setTimeout(resolve, lateStageDrainTimeoutMs);
+        }),
+      ]);
+      if (!drained) {
+        logStartup(
+          `Bootstrap stage ${stage} still running after timeout drain budget (${lateStageDrainTimeoutMs}ms); continuing failure handling with startup marked failed`
+        );
+      }
+    }
+
     if (
       error instanceof AppReadyBootstrapStageError ||
       error instanceof AppReadyBootstrapStageTimeoutError
@@ -114,13 +149,27 @@ async function runBootstrapStage<T>(
     if (timeoutId) {
       clearTimeout(timeoutId);
     }
+    if (drainTimeoutId) {
+      clearTimeout(drainTimeoutId);
+    }
   }
 }
 
 export async function runAppReadyBootstrap(options: AppReadyBootstrapOptions): Promise<void> {
   const consoleRef = options.consoleRef ?? console;
-  const runStage = <T>(stage: AppReadyBootstrapStage, action: () => T | Promise<T>) =>
-    runBootstrapStage(stage, action, resolveStageTimeoutMs(stage, options.stageTimeoutMs));
+  const lateStageDrainTimeoutMs =
+    options.lateStageDrainTimeoutMs ?? DEFAULT_LATE_STAGE_DRAIN_TIMEOUT_MS;
+  const runStage = <T>(
+    stage: AppReadyBootstrapStage,
+    action: (context: AppReadyBootstrapStageContext) => T | Promise<T>
+  ) =>
+    runBootstrapStage(
+      stage,
+      action,
+      resolveStageTimeoutMs(stage, options.stageTimeoutMs),
+      lateStageDrainTimeoutMs,
+      options.logStartup
+    );
 
   try {
     await runStage('hideApplicationMenu', options.hideApplicationMenu);

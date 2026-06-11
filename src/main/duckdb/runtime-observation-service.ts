@@ -4,8 +4,13 @@ import type {
   RuntimeArtifact,
   RuntimeEvent,
 } from '../../core/observability/types';
+import { createLogger } from '../../core/logger';
 import { parseRows } from './utils';
 import { allPrepared, runPrepared } from './statement-executor';
+
+const logger = createLogger('RuntimeObservationService');
+const DEFAULT_RUNTIME_OBSERVATION_RETENTION_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface RuntimeEventRow {
   id: string;
@@ -56,11 +61,33 @@ interface RuntimeArtifactRow {
   data?: string | null;
 }
 
-function parseJson<T>(value: string | null | undefined): T | undefined {
+export interface RuntimeObservationRetentionCleanupOptions {
+  daysToKeep?: number;
+  now?: number;
+}
+
+export interface RuntimeObservationRetentionCleanupResult {
+  cutoffTimestamp: number;
+  eventsDeleted: number;
+  artifactsDeleted: number;
+}
+
+function parseJson<T>(
+  value: string | null | undefined,
+  context?: { rowId: string; table: 'runtime_events' | 'runtime_artifacts'; field: string }
+): T | undefined {
   if (!value) {
     return undefined;
   }
-  return JSON.parse(value) as T;
+  try {
+    return JSON.parse(value) as T;
+  } catch (error) {
+    logger.warn('Corrupted runtime observation JSON field ignored', {
+      ...context,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
 }
 
 export class RuntimeObservationService implements ObservationSink {
@@ -306,7 +333,67 @@ export class RuntimeObservationService implements ObservationSink {
     await this.conn.run('DELETE FROM runtime_artifacts');
   }
 
+  async cleanupRetention(
+    options: RuntimeObservationRetentionCleanupOptions = {}
+  ): Promise<RuntimeObservationRetentionCleanupResult> {
+    const daysToKeep =
+      typeof options.daysToKeep === 'number' && Number.isFinite(options.daysToKeep)
+        ? Math.max(1, Math.floor(options.daysToKeep))
+        : DEFAULT_RUNTIME_OBSERVATION_RETENTION_DAYS;
+    const now =
+      typeof options.now === 'number' && Number.isFinite(options.now) ? options.now : Date.now();
+    const cutoffTimestamp = now - daysToKeep * DAY_MS;
+
+    const artifactRows = parseRows<{ count: number }>(
+      await allPrepared(
+        this.conn,
+        'SELECT COUNT(*) AS count FROM runtime_artifacts WHERE timestamp < ?',
+        [cutoffTimestamp]
+      )
+    );
+    const eventRows = parseRows<{ count: number }>(
+      await allPrepared(this.conn, 'SELECT COUNT(*) AS count FROM runtime_events WHERE timestamp < ?', [
+        cutoffTimestamp,
+      ])
+    );
+
+    await runPrepared(this.conn, 'DELETE FROM runtime_artifacts WHERE timestamp < ?', [
+      cutoffTimestamp,
+    ]);
+    await runPrepared(this.conn, 'DELETE FROM runtime_events WHERE timestamp < ?', [
+      cutoffTimestamp,
+    ]);
+
+    return {
+      cutoffTimestamp,
+      artifactsDeleted: Number(artifactRows[0]?.count || 0),
+      eventsDeleted: Number(eventRows[0]?.count || 0),
+    };
+  }
+
   private toRuntimeEvent(row: RuntimeEventRow): RuntimeEvent {
+    const attrs = row.attrs
+      ? parseJson<Record<string, unknown>>(row.attrs, {
+          rowId: row.id,
+          table: 'runtime_events',
+          field: 'attrs',
+        })
+      : undefined;
+    const error = row.error
+      ? parseJson<RuntimeEvent['error']>(row.error, {
+          rowId: row.id,
+          table: 'runtime_events',
+          field: 'error',
+        })
+      : undefined;
+    const artifactRefs = row.artifact_refs
+      ? parseJson<string[]>(row.artifact_refs, {
+          rowId: row.id,
+          table: 'runtime_events',
+          field: 'artifact_refs',
+        })
+      : undefined;
+
     return {
       eventId: row.id,
       timestamp: Number(row.timestamp),
@@ -327,13 +414,28 @@ export class RuntimeObservationService implements ObservationSink {
       ...(row.profile_id ? { profileId: row.profile_id } : {}),
       ...(row.dataset_id ? { datasetId: row.dataset_id } : {}),
       ...(row.browser_id ? { browserId: row.browser_id } : {}),
-      ...(row.attrs ? { attrs: parseJson<Record<string, unknown>>(row.attrs) } : {}),
-      ...(row.error ? { error: parseJson(row.error) } : {}),
-      ...(row.artifact_refs ? { artifactRefs: parseJson<string[]>(row.artifact_refs) } : {}),
+      ...(attrs ? { attrs } : {}),
+      ...(error ? { error } : {}),
+      ...(artifactRefs ? { artifactRefs } : {}),
     };
   }
 
   private toRuntimeArtifact(row: RuntimeArtifactRow): RuntimeArtifact {
+    const attrs = row.attrs
+      ? parseJson<Record<string, unknown>>(row.attrs, {
+          rowId: row.id,
+          table: 'runtime_artifacts',
+          field: 'attrs',
+        })
+      : undefined;
+    const data = row.data
+      ? parseJson(row.data, {
+          rowId: row.id,
+          table: 'runtime_artifacts',
+          field: 'data',
+        })
+      : undefined;
+
     return {
       artifactId: row.id,
       timestamp: Number(row.timestamp),
@@ -352,8 +454,8 @@ export class RuntimeObservationService implements ObservationSink {
       ...(row.profile_id ? { profileId: row.profile_id } : {}),
       ...(row.dataset_id ? { datasetId: row.dataset_id } : {}),
       ...(row.browser_id ? { browserId: row.browser_id } : {}),
-      ...(row.attrs ? { attrs: parseJson<Record<string, unknown>>(row.attrs) } : {}),
-      ...(row.data ? { data: parseJson(row.data) } : {}),
+      ...(attrs ? { attrs } : {}),
+      ...(data !== undefined ? { data } : {}),
     };
   }
 }

@@ -147,6 +147,20 @@ function createResponse(url: string, body = 'ok') {
   };
 }
 
+async function createMockCloakBrowser(tempRoot: string) {
+  const executablePath = path.join(tempRoot, 'cloak.exe');
+  fs.writeFileSync(executablePath, '');
+  cloakState.binaryInfo.mockReturnValue({
+    binaryPath: executablePath,
+    installed: true,
+    version: '146.0.0',
+  });
+  const { page, context } = createMockPage();
+  cloakState.launchPersistentContext.mockResolvedValue(context);
+  const created = await createCloakBrowserFactory()(createSession());
+  return { created, page, context };
+}
+
 describe('Cloak browser integration contract', () => {
   let tempRoot: string;
 
@@ -289,6 +303,65 @@ describe('Cloak browser integration contract', () => {
     expect(created.browser.getInterceptedRequests()).toHaveLength(0);
   });
 
+  it('rejects pre-aborted intercepted request waits immediately', async () => {
+    const { created } = await createMockCloakBrowser(tempRoot);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      created.browser.waitForInterceptedRequest({
+        timeoutMs: 1000,
+        signal: controller.signal,
+      })
+    ).rejects.toThrow('Intercept wait aborted before start');
+  });
+
+  it('removes intercepted request abort listeners after resolving a wait', async () => {
+    const { created, page } = await createMockCloakBrowser(tempRoot);
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, 'removeEventListener');
+    const route = {
+      continue: vi.fn(async () => undefined),
+      fulfill: vi.fn(async () => undefined),
+      abort: vi.fn(async () => undefined),
+    };
+    const request = {
+      url: () => 'https://example.test/api/orders',
+      method: () => 'GET',
+      headers: () => ({}),
+      resourceType: () => 'xhr',
+      postData: () => null,
+    };
+
+    await created.browser.enableRequestInterception({
+      patterns: [{ urlPattern: '/api/orders' }],
+    });
+    const wait = created.browser.waitForInterceptedRequest({
+      timeoutMs: 1000,
+      urlPattern: '/api/orders',
+      signal: controller.signal,
+    });
+    page.emitRoute(route, request);
+
+    await expect(wait).resolves.toMatchObject({ url: 'https://example.test/api/orders' });
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+  });
+
+  it('cleans up intercepted request waiters when aborted during wait', async () => {
+    const { created } = await createMockCloakBrowser(tempRoot);
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, 'removeEventListener');
+
+    const wait = created.browser.waitForInterceptedRequest({
+      timeoutMs: 1000,
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(wait).rejects.toThrow('Intercept wait aborted');
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+  });
+
   it('saves downloads into the configured download path', async () => {
     const executablePath = path.join(tempRoot, 'cloak.exe');
     fs.writeFileSync(executablePath, '');
@@ -324,5 +397,30 @@ describe('Cloak browser integration contract', () => {
       path: path.join(downloadDir, 'report.csv'),
     });
   });
-});
 
+  it('marks downloads interrupted when saveAs fails', async () => {
+    const { created, page } = await createMockCloakBrowser(tempRoot);
+    const downloadDir = path.join(tempRoot, 'downloads');
+    const saveAs = vi.fn(async () => {
+      throw new Error('disk full');
+    });
+
+    await created.browser.setDownloadBehavior({ policy: 'allow', downloadPath: downloadDir });
+    page.emit('download', {
+      url: () => 'https://example.test/report.csv',
+      suggestedFilename: () => 'report.csv',
+      path: vi.fn(async () => path.join(tempRoot, 'tmp-download')),
+      saveAs,
+      failure: vi.fn(async () => null),
+      cancel: vi.fn(async () => undefined),
+    });
+
+    await expect(created.browser.waitForDownload({ timeoutMs: 1000 })).resolves.toMatchObject({
+      state: 'interrupted',
+      suggestedFilename: 'report.csv',
+    });
+    expect(await created.browser.listDownloads()).toEqual([
+      expect.objectContaining({ state: 'interrupted', suggestedFilename: 'report.csv' }),
+    ]);
+  });
+});

@@ -23,6 +23,11 @@ import { resourceCoordinator } from '../../core/resource-coordinator';
 const logger = createLogger('SchedulerService');
 const DEFAULT_RESOURCE_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
 
+type RunningTaskState = {
+  controller: AbortController;
+  promise: Promise<TaskExecution>;
+};
+
 /**
  * 任务处理器注册信息
 interface TaskHandler {
@@ -43,9 +48,12 @@ export interface SchedulerEvents {
 
 export class SchedulerService extends EventEmitter implements ISchedulerService {
   private timers: Map<string, NodeJS.Timeout> = new Map();
-  private runningTasks: Map<string, AbortController> = new Map();
+  private runningTasks: Map<string, RunningTaskState> = new Map();
+  private tasksPendingDelete: Set<string> = new Set();
+  private tasksSuppressSchedule: Set<string> = new Set();
   private handlers: Map<string, TaskHandler> = new Map();
   private initialized: boolean = false;
+  private disposing: boolean = false;
 
   // 自动清理配置
   private cleanupTimer: NodeJS.Timeout | null = null;
@@ -64,6 +72,14 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     }
 
     logger.info('[SchedulerService] Initializing...');
+    this.disposing = false;
+
+    const staleExecutions = await this.taskService.markStaleExecutionsCancelled();
+    if (staleExecutions > 0) {
+      logger.warn('Marked stale scheduler executions as cancelled during startup', {
+        count: staleExecutions,
+      });
+    }
 
     const tasks = await this.taskService.getActiveTasks();
     logger.info('Found active tasks to restore', { taskCount: tasks.length });
@@ -202,10 +218,15 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   async pauseTask(taskId: string): Promise<void> {
     this.cancelTimer(taskId);
 
-    const controller = this.runningTasks.get(taskId);
-    if (controller) {
-      controller.abort();
-      this.runningTasks.delete(taskId);
+    const runningTask = this.runningTasks.get(taskId);
+    if (runningTask) {
+      this.tasksSuppressSchedule.add(taskId);
+      runningTask.controller.abort();
+      try {
+        await this.waitForRunningTask(taskId);
+      } finally {
+        this.tasksSuppressSchedule.delete(taskId);
+      }
     }
 
     await this.taskService.updateTask(taskId, { status: 'paused' });
@@ -247,14 +268,21 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
 
     this.cancelTimer(taskId);
 
-    const controller = this.runningTasks.get(taskId);
-    if (controller) {
-      controller.abort();
-      this.runningTasks.delete(taskId);
+    const runningTask = this.runningTasks.get(taskId);
+    if (runningTask) {
+      this.tasksPendingDelete.add(taskId);
+      this.tasksSuppressSchedule.add(taskId);
+      runningTask.controller.abort();
+      await this.waitForRunningTask(taskId);
     }
 
     // 从数据库删除
-    await this.taskService.deleteTask(taskId);
+    try {
+      await this.taskService.deleteTask(taskId);
+    } finally {
+      this.tasksPendingDelete.delete(taskId);
+      this.tasksSuppressSchedule.delete(taskId);
+    }
 
     // 发射事件（使用删除前获取的任务信息）
     if (task) {
@@ -334,14 +362,24 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     const tasks = await this.taskService.getTasksByPlugin(pluginId);
     for (const task of tasks) {
       this.cancelTimer(task.id);
-      const controller = this.runningTasks.get(task.id);
-      if (controller) {
-        controller.abort();
-        this.runningTasks.delete(task.id);
+      const runningTask = this.runningTasks.get(task.id);
+      if (runningTask) {
+        this.tasksPendingDelete.add(task.id);
+        this.tasksSuppressSchedule.add(task.id);
+        runningTask.controller.abort();
       }
     }
 
-    return await this.taskService.deleteTasksByPlugin(pluginId);
+    await Promise.allSettled(tasks.map((task) => this.waitForRunningTask(task.id)));
+
+    try {
+      return await this.taskService.deleteTasksByPlugin(pluginId);
+    } finally {
+      for (const task of tasks) {
+        this.tasksPendingDelete.delete(task.id);
+        this.tasksSuppressSchedule.delete(task.id);
+      }
+    }
   }
 
   /**
@@ -362,6 +400,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
    */
   async dispose(): Promise<void> {
     logger.info('[SchedulerService] Disposing...');
+    this.disposing = true;
 
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
@@ -376,11 +415,18 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     }
     this.timers.clear();
 
-    for (const [taskId, controller] of this.runningTasks) {
-      controller.abort();
+    const runningTaskPromises: Promise<TaskExecution>[] = [];
+    for (const [taskId, runningTask] of this.runningTasks) {
+      this.tasksSuppressSchedule.add(taskId);
+      runningTask.controller.abort();
+      runningTaskPromises.push(runningTask.promise);
       logger.info('Scheduler running task aborted', { taskId });
     }
+
+    await Promise.allSettled(runningTaskPromises);
     this.runningTasks.clear();
+    this.tasksPendingDelete.clear();
+    this.tasksSuppressSchedule.clear();
 
     this.handlers.clear();
 
@@ -500,19 +546,51 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       return;
     }
 
-    // 执行任务
-    await this.executeTask(task, 'scheduled');
-
-    if (task.scheduleType !== 'once') {
-      const nextRun = this.calculateNextRun(task, Date.now());
-      if (nextRun) {
-        await this.taskService.updateTask(taskId, { nextRunAt: nextRun });
-        this.setTimer(taskId, nextRun);
+    try {
+      await this.executeTask(task, 'scheduled');
+    } catch (error) {
+      logger.error('Scheduled task execution failed during timer fire', { taskId, error });
+    } finally {
+      if (this.disposing || this.tasksSuppressSchedule.has(taskId)) {
+        logger.info('Scheduled task reschedule suppressed by lifecycle operation', { taskId });
+        return;
       }
-    } else {
-      // 一次性任务执行完成后禁用
-      await this.taskService.updateTask(taskId, { status: 'disabled' });
+
+      try {
+        const latestTask = await this.taskService.getTask(taskId);
+        if (!latestTask || latestTask.status !== 'active') {
+          logger.info('Scheduled task no longer active after execution, skipping reschedule', {
+            taskId,
+          });
+          return;
+        }
+
+        if (latestTask.scheduleType !== 'once') {
+          const nextRun = this.calculateNextRun(latestTask, Date.now());
+          if (nextRun) {
+            await this.taskService.updateTask(taskId, { nextRunAt: nextRun });
+            this.setTimer(taskId, nextRun);
+          }
+        } else {
+          // 一次性任务执行完成后禁用
+          await this.taskService.updateTask(taskId, { status: 'disabled' });
+        }
+      } catch (rescheduleError) {
+        logger.error('Failed to update scheduled task after timer fire', {
+          taskId,
+          error: rescheduleError,
+        });
+      }
     }
+  }
+
+  private async waitForRunningTask(taskId: string): Promise<void> {
+    const runningTask = this.runningTasks.get(taskId);
+    if (!runningTask) {
+      return;
+    }
+
+    await runningTask.promise.catch(() => undefined);
   }
 
   /**
@@ -527,6 +605,27 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       throw new Error(`Task ${task.id} is already running`);
     }
 
+    const controller = new AbortController();
+    const runningTask: RunningTaskState = {
+      controller,
+      promise: Promise.resolve(null as unknown as TaskExecution),
+    };
+
+    runningTask.promise = this.runTaskExecution(task, triggerType, controller).finally(() => {
+      if (this.runningTasks.get(task.id) === runningTask) {
+        this.runningTasks.delete(task.id);
+      }
+    });
+    this.runningTasks.set(task.id, runningTask);
+
+    return await runningTask.promise;
+  }
+
+  private async runTaskExecution(
+    task: ScheduledTask,
+    triggerType: 'scheduled' | 'manual' | 'recovery',
+    controller: AbortController
+  ): Promise<TaskExecution> {
     const executionId = uuidv4();
     const maxRetries = task.retryCount ?? 0;
     const retryDelayMs = task.retryDelayMs ?? 5000;
@@ -560,8 +659,6 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
         }
       | null = null;
 
-    const controller = new AbortController();
-    this.runningTasks.set(task.id, controller);
     let resourceLease = null;
 
     try {
@@ -647,6 +744,10 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
 
           // Execute handler with the current resource context
           const result = await invokeHandler();
+          if (controller.signal.aborted) {
+            const abortReason = controller.signal.reason;
+            throw abortReason instanceof Error ? abortReason : new Error(String(abortReason));
+          }
 
           const finishedAt = Date.now();
           await this.taskService.updateExecution(executionId, {
@@ -657,11 +758,13 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
           });
 
           // 更新任务统计
-          await this.taskService.updateTask(task.id, {
-            lastRunAt: startTime,
-            lastRunStatus: 'success',
-            runCount: task.runCount + 1,
-          });
+          if (!this.tasksPendingDelete.has(task.id)) {
+            await this.taskService.updateTask(task.id, {
+              lastRunAt: startTime,
+              lastRunStatus: 'success',
+              runCount: task.runCount + 1,
+            });
+          }
 
           const updatedExecution: TaskExecution = {
             ...runningExecution,
@@ -721,11 +824,9 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
         lastError = err instanceof Error ? err : new Error(String(err));
       }
     } finally {
-      // 确保执行结束后清�?runningTasks（无论成功、失败还是取消）
       if (resourceLease) {
         await resourceLease.release().catch(() => undefined);
       }
-      this.runningTasks.delete(task.id);
     }
 
     const finishedAt = Date.now();
@@ -741,12 +842,14 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
 
     // 更新任务统计
     // 修复：cancelled 不计�?failCount，lastRunStatus 区分 cancelled �?failed
-    await this.taskService.updateTask(task.id, {
-      lastRunAt: startTime,
-      lastRunStatus: isCancelled ? 'cancelled' : 'failed',
-      runCount: task.runCount + 1,
-      failCount: isCancelled ? task.failCount : task.failCount + 1,
-    });
+    if (!this.tasksPendingDelete.has(task.id)) {
+      await this.taskService.updateTask(task.id, {
+        lastRunAt: startTime,
+        lastRunStatus: isCancelled ? 'cancelled' : 'failed',
+        runCount: task.runCount + 1,
+        failCount: isCancelled ? task.failCount : task.failCount + 1,
+      });
+    }
 
     const updatedExecution: TaskExecution = {
       ...runningExecution,

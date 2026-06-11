@@ -13,6 +13,7 @@ import { createChildTraceContext, getCurrentTraceContext, withTraceContext } fro
 import { createLogger } from '../logger';
 
 const logger = createLogger('ObservationService');
+const OBSERVATION_SINK_WRITE_TIMEOUT_MS = 250;
 
 export interface ObservationSpanHandle {
   context: TraceContext;
@@ -131,6 +132,47 @@ export function getObservationSink(): ObservationSink | null {
   return observationSink;
 }
 
+class ObservationSinkWriteTimeoutError extends Error {
+  constructor(readonly kind: 'event' | 'artifact', readonly timeoutMs: number) {
+    super(`Timed out writing runtime ${kind} after ${timeoutMs}ms`);
+    this.name = 'ObservationSinkWriteTimeoutError';
+  }
+}
+
+async function writeObservationSinkWithTimeout(
+  kind: 'event' | 'artifact',
+  write: () => Promise<void> | void
+): Promise<void> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let timedOut = false;
+  const writePromise = Promise.resolve().then(write);
+
+  writePromise.catch((error) => {
+    if (timedOut) {
+      logger.warn('Runtime observation sink failed after timeout', {
+        kind,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  try {
+    await Promise.race([
+      writePromise,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          timedOut = true;
+          reject(new ObservationSinkWriteTimeoutError(kind, OBSERVATION_SINK_WRITE_TIMEOUT_MS));
+        }, OBSERVATION_SINK_WRITE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 class ObservationService {
   async event(input: ObservationEventInput): Promise<RuntimeEvent> {
     const context = eventContext(input.context);
@@ -159,16 +201,19 @@ class ObservationService {
       ...(input.artifactRefs?.length ? { artifactRefs: [...input.artifactRefs] } : {}),
     };
 
-    try {
-      await observationSink?.recordEvent(runtimeEvent);
-    } catch (error) {
-      logger.warn('Failed to record runtime event', {
-        eventId: runtimeEvent.eventId,
-        event: runtimeEvent.event,
-        component: runtimeEvent.component,
-        traceId: runtimeEvent.traceId,
-        errorMessage: error instanceof Error ? error.message : String(error),
-      });
+    const sink = observationSink;
+    if (sink) {
+      try {
+        await writeObservationSinkWithTimeout('event', () => sink.recordEvent(runtimeEvent));
+      } catch (error) {
+        logger.warn('Failed to record runtime event', {
+          eventId: runtimeEvent.eventId,
+          event: runtimeEvent.event,
+          component: runtimeEvent.component,
+          traceId: runtimeEvent.traceId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     return runtimeEvent;
@@ -198,16 +243,19 @@ class ObservationService {
       ...(input.data !== undefined ? { data: summarizeForObservation(input.data, 3) } : {}),
     };
 
-    try {
-      await observationSink?.recordArtifact(artifact);
-    } catch (error) {
-      logger.warn('Failed to record runtime artifact', {
-        artifactId: artifact.artifactId,
-        type: artifact.type,
-        component: artifact.component,
-        traceId: artifact.traceId,
-        errorMessage: error instanceof Error ? error.message : String(error),
-      });
+    const sink = observationSink;
+    if (sink) {
+      try {
+        await writeObservationSinkWithTimeout('artifact', () => sink.recordArtifact(artifact));
+      } catch (error) {
+        logger.warn('Failed to record runtime artifact', {
+          artifactId: artifact.artifactId,
+          type: artifact.type,
+          component: artifact.component,
+          traceId: artifact.traceId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     return artifact;

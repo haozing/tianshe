@@ -17,6 +17,7 @@ export const createHttpRuntimeState = (): HttpRuntimeState => ({
   runtimeMetrics: {
     queueOverflowCount: 0,
     invokeTimeoutCount: 0,
+    abandonedInvocationCount: 0,
     browserAcquireFailureCount: 0,
     browserAcquireTimeoutCount: 0,
   },

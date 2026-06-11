@@ -22,6 +22,7 @@ import {
   type ExportQuerySQLBuilder,
 } from './dataset-export-plan-builder';
 import { DatasetExportWriter } from './dataset-export-writer';
+import type { Dataset } from './types';
 
 const logger = createLogger('DatasetExportService');
 
@@ -158,6 +159,7 @@ export class DatasetExportService {
           });
 
           deletedRows = await this.handlePostExportAction({
+            dataset,
             datasetId: sanitizedId,
             rowIdSQL: exportPlan.rowIdSQL,
             action: normalizedPostExportAction,
@@ -218,12 +220,13 @@ export class DatasetExportService {
    * 仅支持物理删除
    */
   private async handlePostExportAction(params: {
+    dataset: Dataset;
     datasetId: string;
     rowIdSQL?: string;
     action: 'delete';
     batchSize?: number;
   }): Promise<number> {
-    const { datasetId, rowIdSQL, action, batchSize } = params;
+    const { dataset, datasetId, rowIdSQL, action, batchSize } = params;
     const tableName = quoteQualifiedName(`ds_${datasetId}`, 'data');
 
     logger.info('Handling dataset post-export action', {
@@ -255,11 +258,36 @@ export class DatasetExportService {
     }
 
     const result = await this.conn.run(deleteSQL);
+    const rowsChanged = Number(result.rowsChanged ?? 0);
+    if (rowsChanged > 0) {
+      try {
+        await this.metadataService.incrementRowCount(datasetId, -rowsChanged);
+      } catch (countError) {
+        try {
+          const actualRowCount = await this.metadataService.reconcileRowCountInCurrentQueue(
+            dataset
+          );
+          logger.warn('Reconciled dataset row_count after export-delete delta update failed', {
+            datasetId,
+            rowsChanged,
+            actualRowCount,
+            error: countError,
+          });
+        } catch (reconcileError) {
+          logger.error('Failed to reconcile dataset row_count after export-delete delta failed', {
+            datasetId,
+            rowsChanged,
+            originalError: countError,
+            reconcileError,
+          });
+        }
+      }
+    }
     logger.warn('Permanently deleted rows after dataset export', {
       datasetId,
       tableName,
-      rowsChanged: result.rowsChanged,
+      rowsChanged,
     });
-    return result.rowsChanged;
+    return rowsChanged;
   }
   }

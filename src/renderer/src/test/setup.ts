@@ -37,10 +37,37 @@ vi.mock('electron', () => ({
   dialog: {
     showOpenDialog: vi.fn().mockResolvedValue({ canceled: true, filePaths: [] }),
   },
+  clipboard: {
+    readText: vi.fn(() => ''),
+    writeText: vi.fn(),
+    readHTML: vi.fn(() => ''),
+    writeHTML: vi.fn(),
+    readRTF: vi.fn(() => ''),
+    writeRTF: vi.fn(),
+    readImage: vi.fn(() => ({
+      isEmpty: vi.fn(() => true),
+      toPNG: vi.fn(() => Buffer.alloc(0)),
+    })),
+    writeImage: vi.fn(),
+    readBookmark: vi.fn(() => ({ title: '', url: '' })),
+    writeBookmark: vi.fn(),
+    clear: vi.fn(),
+    availableFormats: vi.fn(() => []),
+    has: vi.fn(() => false),
+  },
+  desktopCapturer: {
+    getSources: vi.fn().mockResolvedValue([]),
+  },
   ipcMain: {
     handle: vi.fn(),
     removeHandler: vi.fn(),
     removeListener: vi.fn(),
+  },
+  nativeImage: {
+    createFromBuffer: vi.fn(() => ({
+      isEmpty: vi.fn(() => true),
+      toPNG: vi.fn(() => Buffer.alloc(0)),
+    })),
   },
   shell: {
     openExternal: vi.fn().mockResolvedValue(undefined),

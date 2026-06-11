@@ -10,6 +10,7 @@ import { DuckDBInstance, DuckDBConnection } from '@duckdb/node-api';
 import { DatasetService } from '../dataset-service';
 import { DatasetMetadataService } from '../dataset-metadata-service';
 import { DatasetStorageService } from '../dataset-storage-service';
+import { DatasetTabGroupService } from '../dataset-tab-group-service';
 import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
@@ -305,6 +306,28 @@ describe('DatasetService Integration Tests', () => {
       const count = Number(result.getRows()[0][0]);
 
       expect(count).toBe(150);
+    });
+
+    it('should reconcile row_count when insert delta update fails', async () => {
+      const incrementSpy = vi
+        .spyOn(DatasetMetadataService.prototype, 'incrementRowCount')
+        .mockRejectedValue(new Error('row_count update failed'));
+
+      try {
+        await service.batchInsertRecords(testDatasetId, [
+          { name: 'Reconcile User', age: 33, email: 'reconcile@example.com' },
+        ]);
+      } finally {
+        incrementSpy.mockRestore();
+      }
+
+      const result = await conn.runAndReadAll(
+        `SELECT COUNT(*) FROM ds_${testDatasetId}.data WHERE name = 'Reconcile User'`
+      );
+      const count = Number(result.getRows()[0][0]);
+      expect(count).toBe(1);
+      const datasetInfo = await service.getDatasetInfo(testDatasetId);
+      expect(datasetInfo?.rowCount).toBe(1);
     });
 
     it('should throw error for records with different columns', async () => {
@@ -698,6 +721,84 @@ describe('DatasetService Integration Tests', () => {
       expect(schemaColumns).not.toContain('age');
     });
 
+    it('should roll back physical column creation when metadata schema update fails', async () => {
+      const updateSpy = vi
+        .spyOn(DatasetMetadataService.prototype, 'updateDatasetSchema')
+        .mockRejectedValueOnce(new Error('metadata write failed'));
+
+      try {
+        await expect(
+          service.addColumn({
+            datasetId: testDatasetId,
+            columnName: 'rollback_col',
+            fieldType: 'text',
+            nullable: true,
+            storageMode: 'physical',
+          })
+        ).rejects.toThrow('metadata write failed');
+      } finally {
+        updateSpy.mockRestore();
+      }
+
+      const describeResult = await conn.runAndReadAll(`DESCRIBE ds_${testDatasetId}.data`);
+      const physicalColumns = describeResult.getRows().map((row) => String(row[0]));
+      expect(physicalColumns).not.toContain('rollback_col');
+
+      const info = await service.getDatasetInfo(testDatasetId);
+      const schemaColumns = info?.schema?.map((col: any) => col.name) || [];
+      expect(schemaColumns).not.toContain('rollback_col');
+    });
+
+    it('should roll back physical column rename when metadata schema update fails', async () => {
+      const updateSpy = vi
+        .spyOn(DatasetMetadataService.prototype, 'updateDatasetSchema')
+        .mockRejectedValueOnce(new Error('metadata rename failed'));
+
+      try {
+        await expect(
+          service.updateColumn({
+            datasetId: testDatasetId,
+            columnName: 'age',
+            newName: 'age_rollback',
+          })
+        ).rejects.toThrow('metadata rename failed');
+      } finally {
+        updateSpy.mockRestore();
+      }
+
+      const describeResult = await conn.runAndReadAll(`DESCRIBE ds_${testDatasetId}.data`);
+      const physicalColumns = describeResult.getRows().map((row) => String(row[0]));
+      expect(physicalColumns).toContain('age');
+      expect(physicalColumns).not.toContain('age_rollback');
+
+      const info = await service.getDatasetInfo(testDatasetId);
+      const schemaColumns = info?.schema?.map((col: any) => col.name) || [];
+      expect(schemaColumns).toContain('age');
+      expect(schemaColumns).not.toContain('age_rollback');
+    });
+
+    it('should roll back physical column deletion when metadata schema update fails', async () => {
+      const updateSpy = vi
+        .spyOn(DatasetMetadataService.prototype, 'updateDatasetSchema')
+        .mockRejectedValueOnce(new Error('metadata delete failed'));
+
+      try {
+        await expect(service.deleteColumn(testDatasetId, 'age', false)).rejects.toThrow(
+          'metadata delete failed'
+        );
+      } finally {
+        updateSpy.mockRestore();
+      }
+
+      const describeResult = await conn.runAndReadAll(`DESCRIBE ds_${testDatasetId}.data`);
+      const physicalColumns = describeResult.getRows().map((row) => String(row[0]));
+      expect(physicalColumns).toContain('age');
+
+      const info = await service.getDatasetInfo(testDatasetId);
+      const schemaColumns = info?.schema?.map((col: any) => col.name) || [];
+      expect(schemaColumns).toContain('age');
+    });
+
     it('should allow custom computed expression referencing updated_at', async () => {
       await service.addColumn({
         datasetId: testDatasetId,
@@ -848,6 +949,34 @@ describe('DatasetService Integration Tests', () => {
         'No row IDs provided for deletion'
       );
     });
+
+    it('should reconcile row_count when delete delta update fails', async () => {
+      await service.batchInsertRecords(testDatasetId, [
+        { name: 'Keep Me', age: 41, email: 'keep@example.com' },
+      ]);
+      const rowResult = await conn.runAndReadAll(
+        `SELECT _row_id FROM ds_${testDatasetId}.data WHERE name = 'Keep Me'`
+      );
+      const rowId = Number(rowResult.getRows()[0][0]);
+      const incrementSpy = vi
+        .spyOn(DatasetMetadataService.prototype, 'incrementRowCount')
+        .mockRejectedValue(new Error('row_count update failed'));
+
+      try {
+        const deletedCount = await service.hardDeleteRows(testDatasetId, [rowId]);
+        expect(deletedCount).toBe(1);
+      } finally {
+        incrementSpy.mockRestore();
+      }
+
+      const result = await conn.runAndReadAll(
+        `SELECT COUNT(*) FROM ds_${testDatasetId}.data WHERE _row_id = ${rowId}`
+      );
+      const count = Number(result.getRows()[0][0]);
+      expect(count).toBe(0);
+      const datasetInfo = await service.getDatasetInfo(testDatasetId);
+      expect(datasetInfo?.rowCount).toBe(0);
+    });
   });
 
   describe('createEmptyDataset', () => {
@@ -890,6 +1019,71 @@ describe('DatasetService Integration Tests', () => {
         newDatasetId,
       ]);
       expect(String(folderResult.getRows()[0][0])).toBe('folder-1');
+    });
+
+    it('should cleanup dataset file and rollback tab group when metadata save fails', async () => {
+      const listDatasetFiles = async () =>
+        (await fs.readdir(tempDir)).filter((name) => name.endsWith('.duckdb')).sort();
+
+      const beforeFiles = await listDatasetFiles();
+      const originalSaveMetadata = DatasetMetadataService.prototype.saveMetadata;
+      let failedDatasetId = '';
+      let failedTabGroupId = '';
+      const saveMetadataSpy = vi
+        .spyOn(DatasetMetadataService.prototype, 'saveMetadata')
+        .mockImplementation(async function (dataset) {
+          if (dataset.id.startsWith('dataset_')) {
+            failedDatasetId = dataset.id;
+            failedTabGroupId = dataset.tabGroupId || '';
+            throw new Error('empty dataset metadata save failed');
+          }
+          return originalSaveMetadata.call(this, dataset);
+        });
+
+      try {
+        await expect(service.createEmptyDataset('Broken Empty Dataset')).rejects.toThrow(
+          'empty dataset metadata save failed'
+        );
+      } finally {
+        saveMetadataSpy.mockRestore();
+      }
+
+      expect(failedDatasetId).toBeTruthy();
+      expect(await listDatasetFiles()).toEqual(beforeFiles);
+
+      const groupRows = await conn.runAndReadAll(
+        `SELECT id FROM dataset_tab_groups WHERE id = ? OR root_dataset_id = ?`,
+        [failedTabGroupId, failedDatasetId]
+      );
+      expect(groupRows.getRows()).toHaveLength(0);
+    });
+
+    it('should cleanup dataset file when tab group creation fails', async () => {
+      const listDatasetFiles = async () =>
+        (await fs.readdir(tempDir)).filter((name) => name.endsWith('.duckdb')).sort();
+
+      const beforeFiles = await listDatasetFiles();
+      let failedDatasetId = '';
+      const createGroupSpy = vi
+        .spyOn(DatasetTabGroupService.prototype, 'createGroupForDataset')
+        .mockImplementation(async (datasetId) => {
+          if (datasetId.startsWith('dataset_')) {
+            failedDatasetId = datasetId;
+            throw new Error('create group failed');
+          }
+          return 'unused';
+        });
+
+      try {
+        await expect(service.createEmptyDataset('Broken Empty Dataset')).rejects.toThrow(
+          'create group failed'
+        );
+      } finally {
+        createGroupSpy.mockRestore();
+      }
+
+      expect(failedDatasetId).toBeTruthy();
+      expect(await listDatasetFiles()).toEqual(beforeFiles);
     });
   });
 

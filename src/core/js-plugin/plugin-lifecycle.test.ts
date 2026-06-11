@@ -10,6 +10,8 @@
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { PluginLifecycleManager } from './plugin-lifecycle';
+import { PluginContext } from './context';
+import { PluginHelpers } from './helpers';
 import type { LoadedJSPlugin, JSPluginInfo } from '../../types/js-plugin';
 
 // Mock logger
@@ -68,12 +70,16 @@ vi.mock('./file-watcher', () => ({
 }));
 
 // Mock fs-extra
-vi.mock('fs-extra', () => ({
-  default: {
+vi.mock('fs-extra', () => {
+  const mockFsExtra = {
+    ensureDirSync: vi.fn(),
     realpathSync: vi.fn().mockImplementation((p: string) => p),
-  },
-  realpathSync: vi.fn().mockImplementation((p: string) => p),
-}));
+  };
+  return {
+    default: mockFsExtra,
+    ...mockFsExtra,
+  };
+});
 
 // Mock loader
 vi.mock('./loader', () => ({
@@ -93,6 +99,10 @@ const createMockDependencies = () => ({
     executeWithParams: vi.fn().mockResolvedValue(undefined),
     executeSQLWithParams: vi.fn().mockResolvedValue([]),
     query: vi.fn().mockResolvedValue([]),
+    getProfileService: vi.fn().mockReturnValue({}),
+    getProfileGroupService: vi.fn().mockReturnValue({}),
+    getAccountService: vi.fn().mockReturnValue({}),
+    getSavedSiteService: vi.fn().mockReturnValue({}),
   },
   viewManager: {
     cleanupPluginViews: vi.fn().mockResolvedValue(undefined),
@@ -226,6 +236,79 @@ describe('PluginLifecycleManager', () => {
     });
   });
 
+  // ========== 激活 ==========
+  describe('activate', () => {
+    const createActivateCallbacks = () => ({
+      getPluginInfo: vi.fn().mockResolvedValue(createMockPluginInfo()),
+      registerUIContributions: vi.fn().mockResolvedValue(undefined),
+      unregisterUIContributions: vi.fn().mockResolvedValue(undefined),
+      createPluginViews: vi.fn().mockResolvedValue(undefined),
+      reloadPlugin: vi.fn().mockResolvedValue(undefined),
+    });
+
+    it('仅导出 commands 对象的插件也应该创建上下文并注册命令', async () => {
+      const commandHandler = vi.fn().mockResolvedValue('ok');
+      const plugin = createMockPlugin({
+        module: {
+          commands: {
+            sync: commandHandler,
+          },
+        } as any,
+      });
+      lifecycle.setPlugin('test-plugin', plugin);
+
+      await lifecycle.activate('test-plugin', createActivateCallbacks());
+
+      const context = lifecycle.getContext('test-plugin');
+      expect(context).toBeDefined();
+      expect(context?.getCommand('sync')).toBe(commandHandler);
+
+      const { getPluginRegistry } = await import('./registry');
+      const registry = getPluginRegistry();
+      expect(registry.registerCommand).toHaveBeenCalledWith(
+        'test-plugin',
+        'sync',
+        expect.objectContaining({
+          handler: commandHandler,
+        })
+      );
+    });
+
+    it('激活失败时应该 dispose context/helpers 并清理 UI 与 Registry', async () => {
+      const contextDisposeSpy = vi
+        .spyOn(PluginContext.prototype, 'dispose')
+        .mockResolvedValue(undefined);
+      const helpersDisposeSpy = vi
+        .spyOn(PluginHelpers.prototype, 'dispose')
+        .mockResolvedValue(undefined);
+      const plugin = createMockPlugin({
+        module: {
+          activate: vi.fn().mockRejectedValue(new Error('boom')),
+        },
+      });
+      const callbacks = createActivateCallbacks();
+      lifecycle.setPlugin('test-plugin', plugin);
+
+      await expect(lifecycle.activate('test-plugin', callbacks)).rejects.toThrow(
+        'Plugin activation failed: boom'
+      );
+
+      expect(contextDisposeSpy).toHaveBeenCalledTimes(1);
+      expect(helpersDisposeSpy).toHaveBeenCalledTimes(1);
+      expect(mockDeps.viewManager.cleanupPluginViews).toHaveBeenCalledWith('test-plugin');
+      expect(callbacks.unregisterUIContributions).toHaveBeenCalledWith('test-plugin');
+      expect(lifecycle.getContext('test-plugin')).toBeUndefined();
+      expect(lifecycle.getHelpers('test-plugin')).toBeUndefined();
+      expect(lifecycle.hasPlugin('test-plugin')).toBe(false);
+
+      const { getPluginRegistry } = await import('./registry');
+      expect(getPluginRegistry().unregisterPlugin).toHaveBeenCalledWith('test-plugin');
+
+      contextDisposeSpy.mockRestore();
+      helpersDisposeSpy.mockRestore();
+    });
+  });
+
   // ========== 停用 ==========
   describe('deactivate', () => {
     const mockCallbacks = {
@@ -280,6 +363,41 @@ describe('PluginLifecycleManager', () => {
       const deactivateOrder = deactivate.mock.invocationCallOrder[0] || 0;
       expect(onStopOrder).toBeGreaterThan(0);
       expect(onStopOrder).toBeLessThan(deactivateOrder);
+    });
+
+    it('应该等待 context.dispose 完成后再清理 helpers', async () => {
+      let resolveDispose: (() => void) | undefined;
+      const context = {
+        dispose: vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveDispose = resolve;
+            })
+        ),
+      };
+      const helpers = {
+        dispose: vi.fn().mockResolvedValue(undefined),
+      };
+      const plugin = createMockPlugin({
+        module: {
+          activate: vi.fn(),
+          deactivate: vi.fn().mockResolvedValue(undefined),
+        },
+      });
+      lifecycle.setPlugin('test-plugin', plugin);
+      (lifecycle as any).contexts.set('test-plugin', context);
+      (lifecycle as any).helpers.set('test-plugin', helpers);
+
+      const deactivatePromise = lifecycle.deactivate('test-plugin', mockCallbacks);
+      await Promise.resolve();
+
+      expect(context.dispose).toHaveBeenCalledTimes(1);
+      expect(helpers.dispose).not.toHaveBeenCalled();
+
+      resolveDispose?.();
+      await deactivatePromise;
+
+      expect(helpers.dispose).toHaveBeenCalledTimes(1);
     });
 
     it('应该清理插件视图', async () => {
@@ -408,6 +526,33 @@ describe('PluginLifecycleManager', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('已启用');
       });
+
+      it('DB 更新失败时应该停止已启动的 watcher 作为补偿', async () => {
+        const watcher = (lifecycle as any).fileWatcherManager;
+        watcher.isWatching
+          .mockReturnValueOnce(false)
+          .mockReturnValueOnce(true);
+        mockDeps.duckdb.executeWithParams.mockRejectedValueOnce(new Error('db failed'));
+
+        const result = await lifecycle.enableHotReload(
+          'test-plugin',
+          vi.fn().mockResolvedValue(
+            createMockPluginInfo({
+              devMode: true,
+              sourcePath: '/source/path',
+            })
+          ),
+          vi.fn()
+        );
+
+        expect(result.success).toBe(false);
+        expect(watcher.startWatching).toHaveBeenCalledWith(
+          'test-plugin',
+          '/source/path',
+          expect.any(Function)
+        );
+        expect(watcher.stopWatching).toHaveBeenCalledWith('test-plugin');
+      });
     });
 
     describe('disableHotReload', () => {
@@ -416,6 +561,33 @@ describe('PluginLifecycleManager', () => {
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('未启用');
+      });
+
+      it('DB 更新失败时应该恢复已停止的 watcher', async () => {
+        const watcher = (lifecycle as any).fileWatcherManager;
+        watcher.isWatching
+          .mockReturnValueOnce(true)
+          .mockReturnValueOnce(false);
+        mockDeps.duckdb.executeWithParams.mockRejectedValueOnce(new Error('db failed'));
+
+        const result = await lifecycle.disableHotReload(
+          'test-plugin',
+          vi.fn().mockResolvedValue(
+            createMockPluginInfo({
+              devMode: true,
+              sourcePath: '/source/path',
+            })
+          ),
+          vi.fn()
+        );
+
+        expect(result.success).toBe(false);
+        expect(watcher.stopWatching).toHaveBeenCalledWith('test-plugin');
+        expect(watcher.startWatching).toHaveBeenCalledWith(
+          'test-plugin',
+          '/source/path',
+          expect.any(Function)
+        );
       });
     });
   });

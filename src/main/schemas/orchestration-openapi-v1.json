@@ -782,7 +782,7 @@
         "name": "x-airpa-idempotency-namespace",
         "in": "header",
         "required": false,
-        "description": "Optional idempotency namespace. Defaults to sessionId when omitted.",
+        "description": "Optional idempotency namespace. Defaults to sessionId when omitted. Custom namespaces are durable across orchestration session deletion when persistence is enabled; DELETE /sessions/{sessionId} only removes the default session-scoped namespace.",
         "schema": {
           "type": "string",
           "minLength": 1,

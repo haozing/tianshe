@@ -475,6 +475,39 @@ export class ScheduledTaskService {
     );
   }
 
+  async markStaleExecutionsCancelled(now: number = Date.now()): Promise<number> {
+    const normalizedNow = toDuckDbBigInt(now);
+    const countResult = await allPrepared(
+      this.conn,
+      `SELECT COUNT(*) as count FROM task_executions WHERE status IN ('pending', 'running')`,
+      []
+    );
+    const count = Number(parseRows(countResult)[0]?.count || 0);
+
+    if (count === 0) {
+      return 0;
+    }
+
+    await runPrepared(
+      this.conn,
+      `UPDATE task_executions
+       SET status = ?,
+           finished_at = ?,
+           duration_ms = CASE WHEN ? > started_at THEN ? - started_at ELSE 0 END,
+           error = ?
+       WHERE status IN ('pending', 'running')`,
+      [
+        'cancelled',
+        normalizedNow,
+        normalizedNow,
+        normalizedNow,
+        'Process restarted before execution completed',
+      ]
+    );
+
+    return count;
+  }
+
   /**
    * 获取任务的执行历史
    */

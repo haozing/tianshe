@@ -24,6 +24,34 @@ function isSystemColumnName(name: string): boolean {
   return SYSTEM_COLUMN_NAMES.has(name.toLowerCase());
 }
 
+export type PluginTableCreationAction = 'created' | 'reused' | 'restored_orphan';
+
+export interface PluginTableCreationResult {
+  datasetId: string;
+  tableName: string;
+  action: PluginTableCreationAction;
+  previousFolderId?: string | null;
+}
+
+export interface PluginTableCleanupFailure {
+  datasetId?: string;
+  tableName?: string;
+  stage: 'delete_table' | 'delete_folder' | 'orphan_tables' | 'orphan_folder';
+  error: string;
+}
+
+export class PluginTableCleanupError extends Error {
+  constructor(
+    message: string,
+    public readonly pluginId: string,
+    public readonly operation: 'delete' | 'orphan',
+    public readonly failures: PluginTableCleanupFailure[]
+  ) {
+    super(message);
+    this.name = 'PluginTableCleanupError';
+  }
+}
+
 /**
  * 插件安装器
  * 处理插件的卸载和数据表管理
@@ -40,9 +68,13 @@ export class PluginInstaller {
   async createTables(
     manifest: JSPluginManifest,
     pluginFolderId: string,
-    pluginLogger?: PluginLogger
+    pluginLogger?: PluginLogger,
+    options?: {
+      onTableResult?: (result: PluginTableCreationResult) => void;
+    }
   ): Promise<Map<string, string>> {
     const tableNameToDatasetId = new Map<string, string>();
+    const createdResults: PluginTableCreationResult[] = [];
 
     if (!manifest.dataTables || manifest.dataTables.length === 0) {
       return tableNameToDatasetId;
@@ -54,18 +86,21 @@ export class PluginInstaller {
 
     for (const tableDefinition of manifest.dataTables) {
       try {
-        const { datasetId } = await this.createSingleTable(
+        const result = await this.createSingleTable(
           manifest.id,
           tableDefinition,
           pluginFolderId,
           { skipCheckpoint: true, logger: pluginLogger }
         );
-        tableNameToDatasetId.set(tableDefinition.name, datasetId);
+        createdResults.push(result);
+        options?.onTableResult?.(result);
+        tableNameToDatasetId.set(tableDefinition.name, result.datasetId);
       } catch (error: unknown) {
         pluginLogger?.error(
           `[ERROR] Failed to create table "${tableDefinition.name}":`,
           getUnknownErrorMessage(error)
         );
+        await this.rollbackTableCreationResults(createdResults, pluginLogger);
         throw error;
       }
     }
@@ -96,7 +131,7 @@ export class PluginInstaller {
       logger?: PluginLogger;
       skipCheckpoint?: boolean;
     }
-  ): Promise<{ datasetId: string; tableName: string }> {
+  ): Promise<PluginTableCreationResult> {
     const pluginLogger = options?.logger;
 
     // 验证 code 字段
@@ -116,7 +151,7 @@ export class PluginInstaller {
 
     // 检查 ID 冲突
     const existingDataset = await this.duckdb.executeSQLWithParams(
-      `SELECT id, name, file_path, created_by_plugin, schema FROM datasets WHERE id = ?`,
+      `SELECT id, name, file_path, created_by_plugin, folder_id, schema FROM datasets WHERE id = ?`,
       [datasetId]
     );
 
@@ -139,7 +174,7 @@ export class PluginInstaller {
         const existingFilePath = existing.file_path || outputPath;
         if (await fs.pathExists(existingFilePath)) {
           pluginLogger?.info(`  [OK] Database file exists, reusing: ${existingFilePath}`);
-          return { datasetId, tableName: existing.name };
+          return { datasetId, tableName: existing.name, action: 'reused' };
         } else {
           throw new Error(
             `数据表记录存在但文件缺失: ${existingFilePath}\n` +
@@ -184,13 +219,19 @@ export class PluginInstaller {
           }
 
           // 恢复关联
+          const previousFolderId = existing.folder_id ?? null;
           await this.duckdb.executeWithParams(
             `UPDATE datasets SET created_by_plugin = ?, folder_id = ? WHERE id = ?`,
             [pluginId, pluginFolderId, datasetId]
           );
 
           pluginLogger?.info(`  [OK] Successfully restored orphaned table to plugin: ${pluginId}`);
-          return { datasetId, tableName: existing.name };
+          return {
+            datasetId,
+            tableName: existing.name,
+            action: 'restored_orphan',
+            previousFolderId,
+          };
         } else {
           // 清理无效记录
           await this.duckdb.executeWithParams(`DELETE FROM datasets WHERE id = ?`, [datasetId]);
@@ -341,32 +382,47 @@ export class PluginInstaller {
           columns: schema.length,
         });
       }
+    } catch (error: unknown) {
+      await this.cleanupPhysicalDatasetFiles(datasetId, outputPath, pluginLogger);
+      throw error;
     } finally {
-      await this.duckdb.executeWithParams(
-        `DETACH ${SQLUtils.escapeIdentifier(`ds_${datasetId}`)}`,
-        []
-      );
+      try {
+        await this.duckdb.executeWithParams(
+          `DETACH ${SQLUtils.escapeIdentifier(`ds_${datasetId}`)}`,
+          []
+        );
+      } catch (detachError: unknown) {
+        pluginLogger?.warn(
+          `  [WARN] Failed to detach plugin dataset after table creation:`,
+          getUnknownErrorMessage(detachError)
+        );
+      }
     }
 
     // 保存元数据
     const fileSize = await getFileSize(outputPath);
-    await this.duckdb.executeWithParams(
-      `INSERT INTO datasets (id, name, file_path, row_count, column_count, size_bytes, created_at, schema, folder_id, table_order, created_by_plugin)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        datasetId,
-        tableName,
-        outputPath,
-        0,
-        schema.length,
-        fileSize,
-        Date.now(),
-        JSON.stringify(schema),
-        pluginFolderId,
-        0,
-        pluginId,
-      ]
-    );
+    try {
+      await this.duckdb.executeWithParams(
+        `INSERT INTO datasets (id, name, file_path, row_count, column_count, size_bytes, created_at, schema, folder_id, table_order, created_by_plugin)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          datasetId,
+          tableName,
+          outputPath,
+          0,
+          schema.length,
+          fileSize,
+          Date.now(),
+          JSON.stringify(schema),
+          pluginFolderId,
+          0,
+          pluginId,
+        ]
+      );
+    } catch (metadataError: unknown) {
+      await this.cleanupPhysicalDatasetFiles(datasetId, outputPath, pluginLogger);
+      throw metadataError;
+    }
 
     if (!options?.skipCheckpoint) {
       try {
@@ -377,7 +433,72 @@ export class PluginInstaller {
       }
     }
 
-    return { datasetId, tableName };
+    return { datasetId, tableName, action: 'created' };
+  }
+
+  async rollbackTableCreationResults(
+    results: PluginTableCreationResult[],
+    pluginLogger?: PluginLogger
+  ): Promise<void> {
+    for (const result of [...results].reverse()) {
+      try {
+        if (result.action === 'created') {
+          await this.duckdb.deleteDataset(result.datasetId);
+          pluginLogger?.info(`  [ROLLBACK] Deleted plugin table: ${result.datasetId}`);
+          continue;
+        }
+
+        if (result.action === 'restored_orphan') {
+          await this.duckdb.executeWithParams(
+            `UPDATE datasets SET created_by_plugin = NULL, folder_id = ? WHERE id = ?`,
+            [result.previousFolderId ?? null, result.datasetId]
+          );
+          pluginLogger?.info(`  [ROLLBACK] Restored orphan table: ${result.datasetId}`);
+        }
+      } catch (rollbackError: unknown) {
+        pluginLogger?.error(
+          `  [ROLLBACK] Failed to rollback table ${result.datasetId}:`,
+          getUnknownErrorMessage(rollbackError)
+        );
+      }
+    }
+  }
+
+  private async cleanupPhysicalDatasetFiles(
+    datasetId: string,
+    outputPath: string,
+    pluginLogger?: PluginLogger
+  ): Promise<void> {
+    try {
+      try {
+        await this.duckdb.executeWithParams(
+          `DETACH ${SQLUtils.escapeIdentifier(`ds_${datasetId}`)}`,
+          []
+        );
+      } catch {
+        // The schema may already be detached by the caller.
+      }
+
+      if (process.platform === 'win32') {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+
+      if (await fs.pathExists(outputPath)) {
+        await fs.remove(outputPath);
+      }
+
+      const walPath = `${outputPath}.wal`;
+      if (await fs.pathExists(walPath)) {
+        await fs.remove(walPath);
+      }
+
+      pluginLogger?.info(`  [ROLLBACK] Removed physical dataset files: ${datasetId}`);
+    } catch (cleanupError: unknown) {
+      pluginLogger?.warn(
+        `  [WARN] Failed to cleanup physical dataset files for ${datasetId}:`,
+        getUnknownErrorMessage(cleanupError)
+      );
+    }
   }
 
   /**
@@ -385,6 +506,7 @@ export class PluginInstaller {
    */
   async deletePluginTables(pluginId: string): Promise<void> {
     logger.info(`[DELETE] Deleting tables created by plugin: ${pluginId}`);
+    const failures: PluginTableCleanupFailure[] = [];
 
     const tables = await this.duckdb.executeSQLWithParams(
       `SELECT id, name FROM datasets WHERE created_by_plugin = ?`,
@@ -402,8 +524,24 @@ export class PluginInstaller {
           await this.duckdb.deleteDataset(table.id);
           logger.info(`  [OK] Deleted table: ${table.name}`);
         } catch (error: unknown) {
-          logger.error(`  [ERROR] Failed to delete table ${table.id}:`, getUnknownErrorMessage(error));
+          const message = getUnknownErrorMessage(error);
+          failures.push({
+            datasetId: table.id,
+            tableName: table.name,
+            stage: 'delete_table',
+            error: message,
+          });
+          logger.error(`  [ERROR] Failed to delete table ${table.id}:`, message);
         }
+      }
+
+      if (failures.length > 0) {
+        throw new PluginTableCleanupError(
+          `Failed to delete ${failures.length} plugin table(s) for ${pluginId}`,
+          pluginId,
+          'delete',
+          failures
+        );
       }
 
       logger.info(`[OK] All plugin tables deleted for: ${pluginId}`);
@@ -417,7 +555,14 @@ export class PluginInstaller {
       ]);
       logger.info(`  [OK] Plugin folder deleted`);
     } catch (error: unknown) {
-      logger.error(`  [WARN] Failed to delete plugin folder:`, getUnknownErrorMessage(error));
+      const message = getUnknownErrorMessage(error);
+      logger.error(`  [ERROR] Failed to delete plugin folder:`, message);
+      throw new PluginTableCleanupError(
+        `Failed to delete plugin table folder for ${pluginId}`,
+        pluginId,
+        'delete',
+        [{ stage: 'delete_folder', error: message }]
+      );
     }
   }
 
@@ -427,43 +572,61 @@ export class PluginInstaller {
   async orphanPluginTables(pluginId: string): Promise<void> {
     logger.info(`🔓 Orphaning tables for plugin: ${pluginId}`);
 
+    const tables = await this.duckdb.executeSQLWithParams(
+      `SELECT id, name, folder_id FROM datasets WHERE created_by_plugin = ?`,
+      [pluginId]
+    );
+
+    if (tables.length === 0) {
+      logger.info(`  [INFO] No tables found for plugin: ${pluginId}`);
+      return;
+    }
+
+    logger.info(`  [INFO] Found ${tables.length} table(s) to orphan`);
+
+    // 解除表与插件的关联
     try {
-      const tables = await this.duckdb.executeSQLWithParams(
-        `SELECT id, name, folder_id FROM datasets WHERE created_by_plugin = ?`,
-        [pluginId]
-      );
-
-      if (tables.length === 0) {
-        logger.info(`  [INFO] No tables found for plugin: ${pluginId}`);
-        return;
-      }
-
-      logger.info(`  [INFO] Found ${tables.length} table(s) to orphan`);
-
-      // 解除表与插件的关联
       await this.duckdb.executeWithParams(
         `UPDATE datasets SET created_by_plugin = NULL WHERE created_by_plugin = ?`,
         [pluginId]
       );
+    } catch (error: unknown) {
+      const message = getUnknownErrorMessage(error);
+      logger.error(`[ERROR] Failed to orphan plugin tables:`, message);
+      throw new PluginTableCleanupError(
+        `Failed to orphan plugin tables for ${pluginId}`,
+        pluginId,
+        'orphan',
+        [{ stage: 'orphan_tables', error: message }]
+      );
+    }
 
-      logger.info(`  [OK] Unlinked ${tables.length} table(s) from plugin`);
+    logger.info(`  [OK] Unlinked ${tables.length} table(s) from plugin`);
 
-      // 将插件文件夹转为普通文件夹
+    // 将插件文件夹转为普通文件夹
+    try {
       await this.duckdb.executeWithParams(
         `UPDATE dataset_folders SET plugin_id = NULL WHERE plugin_id = ?`,
         [pluginId]
       );
-
-      logger.info(`  [OK] Converted plugin folder to regular folder`);
-
-      for (const table of tables) {
-        logger.info(`    - ${table.name} (${table.id})`);
-      }
-
-      logger.info(`[OK] Tables successfully orphaned`);
     } catch (error: unknown) {
-      logger.error(`[ERROR] Failed to orphan tables:`, getUnknownErrorMessage(error));
+      const message = getUnknownErrorMessage(error);
+      logger.error(`[ERROR] Failed to orphan plugin folder:`, message);
+      throw new PluginTableCleanupError(
+        `Failed to orphan plugin table folder for ${pluginId}`,
+        pluginId,
+        'orphan',
+        [{ stage: 'orphan_folder', error: message }]
+      );
     }
+
+    logger.info(`  [OK] Converted plugin folder to regular folder`);
+
+    for (const table of tables) {
+      logger.info(`    - ${table.name} (${table.id})`);
+    }
+
+    logger.info(`[OK] Tables successfully orphaned`);
   }
 
   /**

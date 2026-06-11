@@ -270,30 +270,22 @@ export class DatabaseNamespace {
    *
    * @param datasetId - 数据集ID
    * @param updates - 要更新的字段和值（已参数化，安全）
-   * @param where - WHERE 条件（SQL语句）
+   * @param where - 已禁用的 legacy WHERE 条件参数
    *
-   * ⚠️ **安全警告**：
-   * WHERE 参数会直接拼接到 SQL 语句中，请确保不包含用户输入，避免 SQL 注入风险。
-   * updates 参数会自动参数化，是安全的。
+   * Raw SQL WHERE strings are disabled for plugin helpers because they are unsafe.
+   * Query rows first, then update specific `_row_id` values with updateById().
    *
    * @example
-   * // ✅ 安全：WHERE 条件是硬编码的
-   * await helpers.database.update('dataset_123',
-   *   { '状态': '已发布', '更新时间': new Date().toISOString() },
-   *   "产品名称 = '测试产品'"
+   * const rows = await helpers.database.executeSQL(
+   *   'SELECT _row_id FROM data WHERE 产品名称 = ?',
+   *   { datasetId: 'dataset_123', params: ['测试产品'] }
    * );
-   *
-   * @example
-   * // ❌ 不安全：WHERE 包含用户输入
-   * const userId = req.query.userId; // 可能包含恶意 SQL
-   * await helpers.database.update('dataset_123',
-   *   { '状态': '已封禁' },
-   *   `用户ID = '${userId}'`  // 危险！
-   * );
-   *
-   * @example
-   * // ✅ 建议：使用 updateRow() 方法（已参数化）
-   * await helpers.database.updateRow('dataset_123', rowId, { '状态': '已发布' });
+   * for (const row of rows) {
+   *   await helpers.database.updateById('dataset_123', row._row_id, {
+   *     '状态': '已发布',
+   *     '更新时间': new Date().toISOString()
+   *   });
+   * }
    */
   async update(datasetId: string, updates: Record<string, any>, where: string): Promise<void> {
     // 参数验证 - 使用统一验证器
@@ -353,28 +345,77 @@ export class DatabaseNamespace {
     }
   }
 
+  async claimById(
+    datasetId: string,
+    rowId: number | string,
+    statusField: string,
+    fromStatuses: string[],
+    claimStatus: string
+  ): Promise<boolean> {
+    ParamValidator.validateDatasetId(datasetId);
+    ParamValidator.validateNotNullOrUndefined(rowId, 'rowId', 'number | string');
+    ParamValidator.validateString(statusField, 'statusField');
+    ParamValidator.validateArray(fromStatuses, 'fromStatuses', { allowEmpty: false });
+    ParamValidator.validateString(claimStatus, 'claimStatus');
+
+    if (!/^[\w\u4e00-\u9fa5]+$/.test(statusField)) {
+      throw new DatabaseError(`Invalid status field name: ${statusField}`, {
+        datasetId,
+        rowId,
+        operation: 'claimById',
+      });
+    }
+
+    const tableName = await this.getTableName(datasetId);
+    const statusColumn = SQLUtils.escapeIdentifier(statusField);
+    const placeholders = fromStatuses.map(() => '?').join(', ');
+    const normalizedRowId = this.normalizeRowId(rowId);
+
+    try {
+      const result = await this.duckdb.withDatasetAttached(datasetId, async () => {
+        return await this.duckdb.executeSQLWithParams(
+          `UPDATE ${tableName}
+           SET ${statusColumn} = ?
+           WHERE _row_id = ? AND ${statusColumn} IN (${placeholders})
+           RETURNING _row_id`,
+          [claimStatus, normalizedRowId, ...fromStatuses]
+        );
+      });
+
+      return Array.isArray(result) && result.length > 0;
+    } catch (error: unknown) {
+      throw new DatabaseError(
+        `Failed to claim row ${rowId} in dataset "${datasetId}"`,
+        {
+          datasetId,
+          rowId,
+          statusField,
+          fromStatuses,
+          claimStatus,
+          operation: 'claimById',
+        },
+        error
+      );
+    }
+  }
+
   /**
    * 删除记录
    *
    * @param datasetId - 数据集ID
-   * @param where - WHERE 条件（SQL语句）
+   * @param where - 已禁用的 legacy WHERE 条件参数
    *
-   * ⚠️ **安全警告**：
-   * WHERE 参数会直接拼接到 SQL 语句中，请确保不包含用户输入，避免 SQL 注入风险。
-   * 如果需要使用用户输入，请先进行严格的验证和转义。
-   *
-   * @example
-   * // ✅ 安全：硬编码的条件
-   * await helpers.database.delete('dataset_123', "状态 = '已删除'");
+   * Raw SQL WHERE strings are disabled for plugin helpers because they are unsafe.
+   * Query rows first, then delete specific `_row_id` values with deleteById().
    *
    * @example
-   * // ❌ 不安全：包含用户输入
-   * const userInput = req.query.status; // 可能包含恶意 SQL
-   * await helpers.database.delete('dataset_123', `状态 = '${userInput}'`); // 危险！
-   *
-   * @example
-   * // ✅ 建议：使用 deleteRow() 方法（已参数化）
-   * await helpers.database.deleteRow('dataset_123', rowId);
+   * const rows = await helpers.database.executeSQL(
+   *   'SELECT _row_id FROM data WHERE 状态 = ?',
+   *   { datasetId: 'dataset_123', params: ['已删除'] }
+   * );
+   * for (const row of rows) {
+   *   await helpers.database.deleteById('dataset_123', row._row_id);
+   * }
    */
   async delete(datasetId: string, where: string): Promise<void> {
     // 参数验证 - 使用统一验证器
@@ -528,43 +569,6 @@ export class DatabaseNamespace {
     }
   }
 
-  /**
-   * 执行自定义 SQL
-   *
-   * @param sql - SQL 语句（如果提供 datasetId，会自动替换表名 'data' 为实际表名）
-   * @param options - 选项
-   * @param options.params - SQL 参数（可选）
-   * @param options.datasetId - 数据集ID（可选，提供后会自动处理表名）
-   * @returns 查询结果
-   *
-   * @example
-   * // 执行复杂查询（推荐：使用 datasetId 自动处理表名）
-   * const result = await helpers.database.executeSQL(`
-   *   SELECT 类别, COUNT(*) as 数量, AVG(价格) as 平均价格
-   *   FROM data
-   *   GROUP BY 类别
-   * `, { datasetId: 'dataset_123' });
-   *
-   * @example
-   * // 插入数据（使用 datasetId）
-   * await helpers.database.executeSQL(`
-   *   INSERT INTO data (订单ID, 客户名称, 订单金额)
-   *   VALUES ('ORD-001', '测试客户', 999.99)
-   * `, { datasetId: 'dataset_123' });
-   *
-   * @example
-   * // 带参数的查询
-   * const result = await helpers.database.executeSQL(
-   *   'SELECT * FROM data WHERE 价格 > ? AND 状态 = ?',
-   *   { params: [100, '在售'], datasetId: 'dataset_123' }
-   * );
-   *
-   * @example
-   * // 不使用 datasetId（需要手动指定完整表名）
-   * const result = await helpers.database.executeSQL(
-   *   'SELECT * FROM ds_dataset_123.data'
-   * );
-   */
   /**
    * Import records from a local file into an existing dataset.
    */
@@ -779,6 +783,44 @@ export class DatabaseNamespace {
     }
   }
 
+  /**
+   * 执行自定义 SQL
+   *
+   * @param sql - SQL 语句；提供 datasetId 时仅允许只读 SQL，并会把表名 `data` 替换为实际数据集表名
+   * @param options - 选项
+   * @param options.params - SQL 参数（可选）
+   * @param options.datasetId - 数据集ID（可选，提供后会自动 attach 数据集并处理表名）
+   * @returns 查询结果
+   *
+   * @example
+   * // 执行只读复杂查询（推荐：使用 datasetId 自动处理表名）
+   * const result = await helpers.database.executeSQL(`
+   *   SELECT 类别, COUNT(*) as 数量, AVG(价格) as 平均价格
+   *   FROM data
+   *   GROUP BY 类别
+   * `, { datasetId: 'dataset_123' });
+   *
+   * @example
+   * // 写入数据请使用 insert / batchInsert / updateById / deleteById
+   * await helpers.database.insert('dataset_123', {
+   *   '订单ID': 'ORD-001',
+   *   '客户名称': '测试客户',
+   *   '订单金额': 999.99
+   * });
+   *
+   * @example
+   * // 带参数的只读查询
+   * const result = await helpers.database.executeSQL(
+   *   'SELECT * FROM data WHERE 价格 > ? AND 状态 = ?',
+   *   { params: [100, '在售'], datasetId: 'dataset_123' }
+   * );
+   *
+   * @example
+   * // 不使用 datasetId 时需要手动指定完整表名，并自行承担 SQL 权限边界
+   * const result = await helpers.database.executeSQL(
+   *   'SELECT * FROM ds_dataset_123.data'
+   * );
+   */
   async executeSQL(
     sql: string,
     options?: any[] | { params?: any[]; datasetId?: string }

@@ -14,6 +14,16 @@ const logger = createLogger('FileStorage');
 
 export const MAX_ATTACHMENT_BASE64_PREVIEW_BYTES = 10 * 1024 * 1024;
 export const MAX_ATTACHMENT_UPLOAD_BYTES = 500 * 1024 * 1024;
+const DATASET_CLEANUP_BACKLOG_FILE = 'dataset-cleanup-backlog.json';
+
+interface DatasetCleanupBacklogEntry {
+  datasetId: string;
+  kind: 'attachment-dir' | 'dataset-file';
+  targetPath?: string;
+  queuedAt: number;
+  attempts: number;
+  lastError?: string;
+}
 
 export class FileStorage {
   private basePath: string;
@@ -75,6 +85,27 @@ export class FileStorage {
    */
   private getDatasetDir(datasetId: string): string {
     return path.join(this.basePath, this.sanitizeDatasetId(datasetId));
+  }
+
+  private getCleanupBacklogPath(): string {
+    return path.join(path.dirname(this.basePath), DATASET_CLEANUP_BACKLOG_FILE);
+  }
+
+  private resolveSafeUserDataPath(targetPath: string): string {
+    const resolvedUserData = path.resolve(path.dirname(this.basePath));
+    const resolvedTarget = path.resolve(String(targetPath || '').trim());
+    const relativeToUserData = path.relative(resolvedUserData, resolvedTarget);
+
+    if (
+      !resolvedTarget ||
+      relativeToUserData === '' ||
+      relativeToUserData.startsWith('..') ||
+      path.isAbsolute(relativeToUserData)
+    ) {
+      throw new Error(`Unsafe dataset cleanup target path: ${targetPath}`);
+    }
+
+    return resolvedTarget;
   }
 
   /**
@@ -329,6 +360,166 @@ export class FileStorage {
     }
   }
 
+  async enqueueDeferredDatasetFilesCleanup(
+    datasetId: string,
+    error?: unknown
+  ): Promise<void> {
+    const safeDatasetId = this.sanitizeDatasetId(datasetId);
+    const entries = await this.readCleanupBacklog();
+    const existing = entries.find(
+      (entry) => entry.kind === 'attachment-dir' && entry.datasetId === safeDatasetId
+    );
+
+    if (existing) {
+      existing.lastError = error === undefined ? existing.lastError : getUnknownErrorMessage(error);
+      return await this.writeCleanupBacklog(entries);
+    }
+
+    entries.push({
+      datasetId: safeDatasetId,
+      kind: 'attachment-dir',
+      queuedAt: Date.now(),
+      attempts: 0,
+      ...(error === undefined ? {} : { lastError: getUnknownErrorMessage(error) }),
+    });
+    await this.writeCleanupBacklog(entries);
+  }
+
+  async enqueueDeferredDatasetFileCleanup(
+    datasetId: string,
+    targetPath: string,
+    error?: unknown
+  ): Promise<void> {
+    const safeDatasetId = this.sanitizeDatasetId(datasetId);
+    const safeTargetPath = this.resolveSafeUserDataPath(targetPath);
+    const entries = await this.readCleanupBacklog();
+    const existing = entries.find(
+      (entry) =>
+        entry.kind === 'dataset-file' &&
+        entry.datasetId === safeDatasetId &&
+        entry.targetPath === safeTargetPath
+    );
+
+    if (existing) {
+      existing.lastError = error === undefined ? existing.lastError : getUnknownErrorMessage(error);
+      return await this.writeCleanupBacklog(entries);
+    }
+
+    entries.push({
+      datasetId: safeDatasetId,
+      kind: 'dataset-file',
+      targetPath: safeTargetPath,
+      queuedAt: Date.now(),
+      attempts: 0,
+      ...(error === undefined ? {} : { lastError: getUnknownErrorMessage(error) }),
+    });
+    await this.writeCleanupBacklog(entries);
+  }
+
+  async sweepDeferredDatasetFilesCleanup(): Promise<{
+    removed: number;
+    remaining: number;
+  }> {
+    const entries = await this.readCleanupBacklog();
+    let removed = 0;
+    const remaining: DatasetCleanupBacklogEntry[] = [];
+
+    for (const entry of entries) {
+      try {
+        if (entry.kind === 'attachment-dir') {
+          const datasetDir = this.getDatasetDir(entry.datasetId);
+          if (await fs.pathExists(datasetDir)) {
+            await fs.remove(datasetDir);
+          }
+        } else if (entry.kind === 'dataset-file' && entry.targetPath) {
+          const targetPath = this.resolveSafeUserDataPath(entry.targetPath);
+          if (await fs.pathExists(targetPath)) {
+            await fs.remove(targetPath);
+          }
+          const walPath = `${targetPath}.wal`;
+          if (await fs.pathExists(walPath)) {
+            await fs.remove(walPath);
+          }
+        }
+        removed += 1;
+      } catch (error) {
+        remaining.push({
+          ...entry,
+          attempts: entry.attempts + 1,
+          lastError: getUnknownErrorMessage(error),
+        });
+      }
+    }
+
+    await this.writeCleanupBacklog(remaining);
+    return { removed, remaining: remaining.length };
+  }
+
+  private async readCleanupBacklog(): Promise<DatasetCleanupBacklogEntry[]> {
+    try {
+      const backlogPath = this.getCleanupBacklogPath();
+      if (!(await fs.pathExists(backlogPath))) {
+        return [];
+      }
+
+      const raw = await fs.readFile(backlogPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+
+      return parsed
+        .map((entry): DatasetCleanupBacklogEntry | null => {
+          if (!entry || typeof entry !== 'object') {
+            return null;
+          }
+          const datasetId = String((entry as any).datasetId || '').trim();
+          if (!datasetId || !/^[a-zA-Z0-9_-]+$/.test(datasetId)) {
+            return null;
+          }
+          return {
+            datasetId,
+            kind: (entry as any).kind === 'dataset-file' ? 'dataset-file' : 'attachment-dir',
+            targetPath:
+              typeof (entry as any).targetPath === 'string' ? (entry as any).targetPath : undefined,
+            queuedAt: Number((entry as any).queuedAt) || Date.now(),
+            attempts: Math.max(0, Math.trunc(Number((entry as any).attempts) || 0)),
+            lastError:
+              typeof (entry as any).lastError === 'string' ? (entry as any).lastError : undefined,
+          };
+        })
+        .filter((entry): entry is DatasetCleanupBacklogEntry => Boolean(entry));
+    } catch {
+      return [];
+    }
+  }
+
+  private async writeCleanupBacklog(entries: DatasetCleanupBacklogEntry[]): Promise<void> {
+    const backlogPath = this.getCleanupBacklogPath();
+    const deduped = new Map<string, DatasetCleanupBacklogEntry>();
+
+    for (const entry of entries) {
+      const safeDatasetId = this.sanitizeDatasetId(entry.datasetId);
+      const key =
+        entry.kind === 'dataset-file'
+          ? `${entry.kind}:${safeDatasetId}:${entry.targetPath || ''}`
+          : `${entry.kind}:${safeDatasetId}`;
+      deduped.set(key, {
+        ...entry,
+        datasetId: safeDatasetId,
+      });
+    }
+
+    const normalized = Array.from(deduped.values());
+    if (normalized.length === 0) {
+      await fs.remove(backlogPath);
+      return;
+    }
+
+    await fs.ensureDir(path.dirname(backlogPath));
+    await fs.writeFile(backlogPath, JSON.stringify(normalized, null, 2), 'utf8');
+  }
+
   /**
    * 获取数据集附件总大小
    * @param datasetId 数据集ID
@@ -396,6 +587,21 @@ export const fileStorage = {
   },
   deleteDatasetFiles(...args: Parameters<FileStorage['deleteDatasetFiles']>) {
     return ensureFileStorage().deleteDatasetFiles(...args);
+  },
+  enqueueDeferredDatasetFilesCleanup(
+    ...args: Parameters<FileStorage['enqueueDeferredDatasetFilesCleanup']>
+  ) {
+    return ensureFileStorage().enqueueDeferredDatasetFilesCleanup(...args);
+  },
+  enqueueDeferredDatasetFileCleanup(
+    ...args: Parameters<FileStorage['enqueueDeferredDatasetFileCleanup']>
+  ) {
+    return ensureFileStorage().enqueueDeferredDatasetFileCleanup(...args);
+  },
+  sweepDeferredDatasetFilesCleanup(
+    ...args: Parameters<FileStorage['sweepDeferredDatasetFilesCleanup']>
+  ) {
+    return ensureFileStorage().sweepDeferredDatasetFilesCleanup(...args);
   },
   getDatasetFilesSize(...args: Parameters<FileStorage['getDatasetFilesSize']>) {
     return ensureFileStorage().getDatasetFilesSize(...args);

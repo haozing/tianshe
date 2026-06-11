@@ -77,6 +77,29 @@ export class DatasetRecordMutationService {
     this.hookBus = options.hookBus;
   }
 
+  private async reconcileRowCountAfterDeltaFailure(
+    dataset: Dataset,
+    delta: number,
+    error: unknown
+  ): Promise<void> {
+    try {
+      const actualRowCount = await this.metadataService.reconcileRowCountInCurrentQueue(dataset);
+      logger.warn('Reconciled dataset row_count after delta update failed', {
+        datasetId: dataset.id,
+        delta,
+        actualRowCount,
+        error,
+      });
+    } catch (reconcileError) {
+      logger.error('Failed to reconcile dataset row_count after delta update failed', {
+        datasetId: dataset.id,
+        delta,
+        originalError: error,
+        reconcileError,
+      });
+    }
+  }
+
   async hardDeleteRows(datasetId: string, rowIds: number[]): Promise<number> {
     if (!rowIds || rowIds.length === 0) {
       throw new Error('No row IDs provided for deletion');
@@ -130,11 +153,7 @@ export class DatasetRecordMutationService {
         try {
           await this.metadataService.incrementRowCount(safeDatasetId, -deletedCount);
         } catch (countError) {
-          logger.warn('Failed to decrement dataset row_count after delete', {
-            datasetId: safeDatasetId,
-            deletedCount,
-            error: countError,
-          });
+          await this.reconcileRowCountAfterDeltaFailure(dataset, -deletedCount, countError);
         }
       }
 
@@ -264,10 +283,7 @@ export class DatasetRecordMutationService {
     try {
       await this.metadataService.incrementRowCount(safeDatasetId, 1);
     } catch (countError) {
-      logger.warn('Failed to increment dataset row_count after insert', {
-        datasetId: safeDatasetId,
-        error: countError,
-      });
+      await this.reconcileRowCountAfterDeltaFailure(dataset, 1, countError);
     }
 
     this.hookBus?.emit('webhook:record.created', {
@@ -332,11 +348,7 @@ export class DatasetRecordMutationService {
       try {
         await this.metadataService.incrementRowCount(safeDatasetId, cleanedRecords.length);
       } catch (countError) {
-        logger.warn('Failed to increment dataset row_count after batch insert', {
-          datasetId: safeDatasetId,
-          recordCount: cleanedRecords.length,
-          error: countError,
-        });
+        await this.reconcileRowCountAfterDeltaFailure(dataset, cleanedRecords.length, countError);
       }
 
       logger.info('Dataset records batch inserted', {

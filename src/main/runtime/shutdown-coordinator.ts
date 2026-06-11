@@ -39,9 +39,15 @@ export class ShutdownStepTimeoutError extends Error {
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+interface RunWithTimeoutOptions {
+  onLateCompletion?: () => void;
+  onLateFailure?: (error: unknown) => void;
+}
+
 const runWithTimeout = async (
   step: ShutdownStep,
-  timeoutMs: number | undefined
+  timeoutMs: number | undefined,
+  options: RunWithTimeoutOptions = {}
 ): Promise<void> => {
   if (!timeoutMs || timeoutMs <= 0) {
     await step.run();
@@ -49,11 +55,28 @@ const runWithTimeout = async (
   }
 
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let timedOut = false;
+  const stepPromise = Promise.resolve().then(step.run);
+
+  stepPromise.then(
+    () => {
+      if (timedOut) {
+        options.onLateCompletion?.();
+      }
+    },
+    (error) => {
+      if (timedOut) {
+        options.onLateFailure?.(error);
+      }
+    }
+  );
+
   try {
     await Promise.race([
-      Promise.resolve().then(step.run),
+      stepPromise,
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
+          timedOut = true;
           reject(new ShutdownStepTimeoutError(step.label, timeoutMs));
         }, timeoutMs);
       }),
@@ -85,7 +108,19 @@ export class ShutdownCoordinator {
     for (const step of this.steps) {
       const startedAt = this.now();
       try {
-        await runWithTimeout(step, step.timeoutMs ?? this.defaultStepTimeoutMs);
+        await runWithTimeout(step, step.timeoutMs ?? this.defaultStepTimeoutMs, {
+          onLateCompletion: () => {
+            this.consoleRef?.error(
+              `[WARN] ${step.label} completed after shutdown timeout (${this.now() - startedAt}ms)`
+            );
+          },
+          onLateFailure: (error) => {
+            this.consoleRef?.error(
+              `[WARN] ${step.label} failed after shutdown timeout (${this.now() - startedAt}ms):`,
+              error
+            );
+          },
+        });
         results.push({
           label: step.label,
           status: 'completed',
