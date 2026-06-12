@@ -6,7 +6,7 @@ describe('statement-executor', () => {
     const destroySync = vi.fn();
     const bind = vi.fn();
     const run = vi.fn(async () => undefined);
-    const runAndReadAll = vi.fn(async () => ({
+    const statementRunAndReadAll = vi.fn(async () => ({
       columnNames: () => ['id', 'name'],
       getRows: () => [
         [1, 'alice'],
@@ -17,11 +17,19 @@ describe('statement-executor', () => {
     const prepare = vi.fn(async () => ({
       bind,
       run,
-      runAndReadAll,
+      runAndReadAll: statementRunAndReadAll,
       destroySync,
     }));
 
-    return { prepare, bind, run, runAndReadAll, destroySync };
+    const runAndReadAll = vi.fn(async () => ({
+      columnNames: () => ['id', 'name'],
+      getRows: () => [
+        [1, 'alice'],
+        [2, 'bob'],
+      ],
+    }));
+
+    return { prepare, bind, run, statementRunAndReadAll, runAndReadAll, destroySync };
   };
 
   describe('withPrepared', () => {
@@ -96,7 +104,7 @@ describe('statement-executor', () => {
 
       expect(conn.prepare).toHaveBeenCalledWith('SELECT * FROM t WHERE id = ?');
       expect(conn.bind).toHaveBeenCalledWith([1]);
-      expect(conn.runAndReadAll).toHaveBeenCalled();
+      expect(conn.statementRunAndReadAll).toHaveBeenCalled();
       expect(conn.destroySync).toHaveBeenCalled();
 
       expect(result.getRows()).toEqual([
@@ -112,7 +120,7 @@ describe('statement-executor', () => {
       });
 
       await expect(
-        allPrepared(conn, 'SELECT * FROM t', [])
+        allPrepared(conn, 'SELECT * FROM t WHERE id = ?', [1])
       ).rejects.toThrow('bind error');
 
       expect(conn.destroySync).toHaveBeenCalled();
@@ -120,13 +128,26 @@ describe('statement-executor', () => {
 
     it('destroys statement even when runAndReadAll throws', async () => {
       const conn = createMockConn() as any;
-      conn.runAndReadAll.mockRejectedValue(new Error('read error'));
+      conn.statementRunAndReadAll.mockRejectedValue(new Error('read error'));
 
       await expect(
-        allPrepared(conn, 'SELECT * FROM t', [])
+        allPrepared(conn, 'SELECT * FROM t WHERE id = ?', [1])
       ).rejects.toThrow('read error');
 
       expect(conn.destroySync).toHaveBeenCalled();
+    });
+
+    it('runs empty-param queries directly without preparing a statement', async () => {
+      const conn = createMockConn() as any;
+      const result = await allPrepared(conn, 'SELECT * FROM t', []);
+
+      expect(conn.runAndReadAll).toHaveBeenCalledWith('SELECT * FROM t');
+      expect(conn.prepare).not.toHaveBeenCalled();
+      expect(conn.destroySync).not.toHaveBeenCalled();
+      expect(result.getRows()).toEqual([
+        [1, 'alice'],
+        [2, 'bob'],
+      ]);
     });
   });
 
@@ -141,7 +162,7 @@ describe('statement-executor', () => {
 
     it('returns null when no rows exist', async () => {
       const conn = createMockConn() as any;
-      conn.runAndReadAll.mockResolvedValue({
+      conn.statementRunAndReadAll.mockResolvedValue({
         columnNames: () => [],
         getRows: () => [],
       });
@@ -154,10 +175,10 @@ describe('statement-executor', () => {
 
     it('destroys statement even when runAndReadAll throws', async () => {
       const conn = createMockConn() as any;
-      conn.runAndReadAll.mockRejectedValue(new Error('read error'));
+      conn.statementRunAndReadAll.mockRejectedValue(new Error('read error'));
 
       await expect(
-        getPrepared(conn, 'SELECT * FROM t', [])
+        getPrepared(conn, 'SELECT * FROM t WHERE id = ?', [1])
       ).rejects.toThrow('read error');
 
       expect(conn.destroySync).toHaveBeenCalled();

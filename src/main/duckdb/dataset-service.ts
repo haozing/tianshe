@@ -367,6 +367,8 @@ export class DatasetService {
     this.metadataService.updateColumnDisplayConfig(id, name, config);
   updateDatasetSchema = (id: string, schema: any[]) =>
     this.metadataService.updateDatasetSchema(id, schema);
+  applyDatasetSchemaMetadata = (id: string, schema: any[]) =>
+    this.schemaService.applyDatasetSchemaMetadata(id, schema);
 
   // ==================== 存储 API（代理） ====================
 
@@ -465,6 +467,8 @@ export class DatasetService {
       await this.conn.run(`ATTACH '${escapedPath}' AS ${quoteIdentifier(attachKey)}`);
 
       let createError: unknown = null;
+      let detachErrorToThrow: unknown = null;
+      let createdDatasetId: string | null = null;
       try {
         const schema = await this.createBaseDatasetTable(attachKey);
 
@@ -507,10 +511,9 @@ export class DatasetService {
           name: datasetName,
         });
 
-        return datasetId;
+        createdDatasetId = datasetId;
       } catch (error) {
         createError = error;
-        throw error;
       } finally {
         // DETACH 数据库
         try {
@@ -522,7 +525,7 @@ export class DatasetService {
               error: detachError,
             });
           } else {
-            throw detachError;
+            detachErrorToThrow = detachError;
           }
         }
 
@@ -530,6 +533,17 @@ export class DatasetService {
           await this.cleanupFailedEmptyDatasetFiles(datasetId, outputPath);
         }
       }
+
+      if (createError) {
+        throw createError;
+      }
+      if (detachErrorToThrow) {
+        throw detachErrorToThrow;
+      }
+      if (!createdDatasetId) {
+        throw new Error(`Empty dataset creation did not produce an id: ${datasetId}`);
+      }
+      return createdDatasetId;
     });
   }
 

@@ -10,7 +10,12 @@ import type {
   TaskExecution,
   CreateScheduledTaskParams,
 } from '../duckdb/scheduled-task-service';
-import type { ISchedulerService, TaskExecutionContext, TaskHandler } from '../../types/scheduler';
+import type {
+  ISchedulerService,
+  ScheduleType,
+  TaskExecutionContext,
+  TaskHandler,
+} from '../../types/scheduler';
 import {
   getNextCronTime,
   parseInterval,
@@ -53,6 +58,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   private tasksSuppressSchedule: Set<string> = new Set();
   private handlers: Map<string, TaskHandler> = new Map();
   private initialized: boolean = false;
+  private activeTasksRestored: boolean = false;
   private disposing: boolean = false;
 
   // 自动清理配置
@@ -81,6 +87,22 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       });
     }
 
+    // 启动定期清理任务
+    this.startCleanupTimer();
+
+    this.initialized = true;
+    logger.info('[SchedulerService] Initialization complete');
+  }
+
+  async restoreActiveTasks(): Promise<void> {
+    if (!this.initialized) {
+      await this.init();
+    }
+    if (this.activeTasksRestored) {
+      logger.info('[SchedulerService] Active tasks already restored');
+      return;
+    }
+
     const tasks = await this.taskService.getActiveTasks();
     logger.info('Found active tasks to restore', { taskCount: tasks.length });
 
@@ -92,11 +114,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       }
     }
 
-    // 启动定期清理任务
-    this.startCleanupTimer();
-
-    this.initialized = true;
-    logger.info('[SchedulerService] Initialization complete');
+    this.activeTasksRestored = true;
   }
 
   /**
@@ -157,6 +175,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   }): Promise<ScheduledTask> {
     const taskId = uuidv4();
     const now = Date.now();
+    this.validateCreateTaskSchedule(params);
 
     // 计算下次执行时间
     let nextRunAt: number | undefined;
@@ -210,6 +229,40 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     });
 
     return task;
+  }
+
+  private validateCreateTaskSchedule(params: {
+    scheduleType: ScheduleType;
+    cron?: string;
+    interval?: string | number;
+    runAt?: Date | number;
+  }): void {
+    const hasCron = params.cron !== undefined && params.cron !== '';
+    const hasInterval = params.interval !== undefined && params.interval !== '';
+    const hasRunAt = params.runAt !== undefined;
+    const provided = [hasCron, hasInterval, hasRunAt].filter(Boolean).length;
+
+    if (provided !== 1) {
+      throw new Error('Exactly one of cron, interval, or runAt must be provided');
+    }
+    if (params.scheduleType === 'cron' && !hasCron) {
+      throw new Error('cron is required for cron scheduled tasks');
+    }
+    if (params.scheduleType === 'interval' && !hasInterval) {
+      throw new Error('interval is required for interval scheduled tasks');
+    }
+    if (params.scheduleType === 'once' && !hasRunAt) {
+      throw new Error('runAt is required for once scheduled tasks');
+    }
+    if (params.scheduleType !== 'cron' && hasCron) {
+      throw new Error('cron can only be used with cron scheduled tasks');
+    }
+    if (params.scheduleType !== 'interval' && hasInterval) {
+      throw new Error('interval can only be used with interval scheduled tasks');
+    }
+    if (params.scheduleType !== 'once' && hasRunAt) {
+      throw new Error('runAt can only be used with once scheduled tasks');
+    }
   }
 
   /**
@@ -551,29 +604,25 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     } catch (error) {
       logger.error('Scheduled task execution failed during timer fire', { taskId, error });
     } finally {
-      if (this.disposing || this.tasksSuppressSchedule.has(taskId)) {
-        logger.info('Scheduled task reschedule suppressed by lifecycle operation', { taskId });
-        return;
-      }
-
       try {
-        const latestTask = await this.taskService.getTask(taskId);
-        if (!latestTask || latestTask.status !== 'active') {
-          logger.info('Scheduled task no longer active after execution, skipping reschedule', {
-            taskId,
-          });
-          return;
-        }
-
-        if (latestTask.scheduleType !== 'once') {
-          const nextRun = this.calculateNextRun(latestTask, Date.now());
-          if (nextRun) {
-            await this.taskService.updateTask(taskId, { nextRunAt: nextRun });
-            this.setTimer(taskId, nextRun);
-          }
+        if (this.disposing || this.tasksSuppressSchedule.has(taskId)) {
+          logger.info('Scheduled task reschedule suppressed by lifecycle operation', { taskId });
         } else {
-          // 一次性任务执行完成后禁用
-          await this.taskService.updateTask(taskId, { status: 'disabled' });
+          const latestTask = await this.taskService.getTask(taskId);
+          if (!latestTask || latestTask.status !== 'active') {
+            logger.info('Scheduled task no longer active after execution, skipping reschedule', {
+              taskId,
+            });
+          } else if (latestTask.scheduleType !== 'once') {
+            const nextRun = this.calculateNextRun(latestTask, Date.now());
+            if (nextRun) {
+              await this.taskService.updateTask(taskId, { nextRunAt: nextRun });
+              this.setTimer(taskId, nextRun);
+            }
+          } else {
+            // 一次性任务执行完成后禁用
+            await this.taskService.updateTask(taskId, { status: 'disabled' });
+          }
         }
       } catch (rescheduleError) {
         logger.error('Failed to update scheduled task after timer fire', {

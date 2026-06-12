@@ -174,6 +174,11 @@ exports[`PluginHelpers contract snapshot > helpers public surface is stable 1`] 
         "returnType": "Promise<void>",
       },
       {
+        "name": "claimById",
+        "requiredParams": 5,
+        "returnType": "Promise<boolean>",
+      },
+      {
         "name": "delete",
         "requiredParams": 2,
         "returnType": "Promise<void>",
@@ -782,7 +787,7 @@ exports[`PluginHelpers contract snapshot > helpers public surface is stable 1`] 
         "returnType": "Promise<void>",
       },
       {
-        "name": "describeEngineRuntime",
+        "name": "describeRuntime",
         "requiredParams": 0,
         "returnType": "BrowserRuntimeDescriptor",
       },
@@ -842,14 +847,14 @@ exports[`PluginHelpers contract snapshot > helpers public surface is stable 1`] 
         "returnType": "Promise<BrowserProfile[]>",
       },
       {
-        "name": "listEngineRuntimes",
-        "requiredParams": 0,
-        "returnType": "Record<AutomationEngine, BrowserRuntimeDescriptor>",
-      },
-      {
         "name": "listGroups",
         "requiredParams": 0,
         "returnType": "Promise<any[]>",
+      },
+      {
+        "name": "listRuntimes",
+        "requiredParams": 0,
+        "returnType": "Record<BrowserRuntimeId, BrowserRuntimeDescriptor>",
       },
       {
         "name": "randomizeFingerprint",

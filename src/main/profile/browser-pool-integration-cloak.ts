@@ -41,6 +41,7 @@ import {
   summarizeNetworkEntries,
 } from '../../core/browser-automation/network-utils';
 import { createLogger } from '../../core/logger';
+import { resolveCloakBrowserExecutablePathOverride } from '../../constants/runtime-config';
 import { getUserDataBaseDir, resolveExtensionProxy } from './chrome-runtime-shared';
 
 type PlaywrightCookie = {
@@ -175,7 +176,7 @@ function getCloakCacheDir(): string {
 function sourcePath(source: BrowserRuntimeSource | null | undefined): string | undefined {
   if (source?.type === 'custom-path') return source.executablePath;
   if (source?.type === 'system-detected') return source.detectedPath;
-  return process.env.CLOAKBROWSER_BINARY_PATH;
+  return resolveCloakBrowserExecutablePathOverride() ?? undefined;
 }
 
 function readCloakBinaryInfo(value: unknown): Partial<CloakRuntimeInfo> {

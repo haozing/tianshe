@@ -24,7 +24,7 @@ import type {
   OSType,
   BrowserType,
 } from '../types/profile';
-import { DEFAULT_BROWSER_RUNTIME_ID } from '../types/profile';
+import { DEFAULT_BROWSER_RUNTIME_ID, normalizeBrowserRuntimeId } from '../types/profile';
 
 // =====================================================
 // 指纹预设选项（用于 UI 显示）
@@ -937,6 +937,12 @@ const DEFAULT_PRESET_ID_BY_RUNTIME: Record<BrowserRuntimeId, string> = {
   'chromium-cloak-playwright': 'windows-chrome-141',
 };
 
+type FingerprintRuntimeInput = BrowserRuntimeId | 'electron' | 'extension' | 'ruyi';
+
+function normalizeFingerprintRuntimeId(runtimeId: FingerprintRuntimeInput): BrowserRuntimeId {
+  return normalizeBrowserRuntimeId(runtimeId);
+}
+
 function resolveDefaultPresetOption(runtimeId: BrowserRuntimeId): FingerprintPresetOption {
   const option =
     FINGERPRINT_PRESET_OPTIONS.find(
@@ -1118,9 +1124,10 @@ export function mergeFingerprintCoreConfig(
 export function materializeFingerprintConfigFromCore(
   core: FingerprintCoreConfig,
   _source: Partial<FingerprintSourceConfig> | undefined,
-  runtimeId: BrowserRuntimeId
+  runtimeId: FingerprintRuntimeInput
 ): FingerprintConfig {
-  const preset = resolvePresetOptionForCore(core, runtimeId);
+  const normalizedRuntimeId = normalizeFingerprintRuntimeId(runtimeId);
+  const preset = resolvePresetOptionForCore(core, normalizedRuntimeId);
 
   return materializeFingerprintConfigForRuntime(
     mergeFingerprintConfig(cloneFingerprintConfig(preset.config), {
@@ -1150,16 +1157,17 @@ export function materializeFingerprintConfigFromCore(
         fileFormat: 'txt',
       },
     }),
-    runtimeId
+    normalizedRuntimeId
   );
 }
 
 export function materializeFingerprintConfigForRuntime(
   config: FingerprintConfig,
-  runtimeId: BrowserRuntimeId
+  runtimeId: FingerprintRuntimeInput
 ): FingerprintConfig {
+  const normalizedRuntimeId = normalizeFingerprintRuntimeId(runtimeId);
   const materialized = cloneFingerprintConfig(config);
-  const browserFamily = getBrowserFamilyForRuntime(runtimeId);
+  const browserFamily = getBrowserFamilyForRuntime(normalizedRuntimeId);
   const osFamily = materialized.identity.hardware.osFamily;
   const languages = uniqStrings(materialized.identity.region.languages);
   const primaryLanguage =
@@ -1182,7 +1190,7 @@ export function materializeFingerprintConfigForRuntime(
       : 24;
 
   if (
-    runtimeId === 'electron-webcontents' &&
+    normalizedRuntimeId === 'electron-webcontents' &&
     !(
       typeof materialized.identity.display.pixelRatio === 'number' &&
       Number.isFinite(materialized.identity.display.pixelRatio) &&
@@ -1205,21 +1213,25 @@ export function materializeFingerprintConfigForRuntime(
     webdriver: 0,
   };
 
-  return normalizeFingerprintConfigForRuntime(materialized, runtimeId);
+  return normalizeFingerprintConfigForRuntime(materialized, normalizedRuntimeId);
 }
 
 export function normalizeFingerprintConfigForRuntime(
   config: FingerprintConfig,
-  runtimeId: BrowserRuntimeId
+  runtimeId: FingerprintRuntimeInput
 ): FingerprintConfig {
+  const normalizedRuntimeId = normalizeFingerprintRuntimeId(runtimeId);
   const normalized = cloneFingerprintConfig(config);
-  const browserFamily = getBrowserFamilyForRuntime(runtimeId);
+  const browserFamily = getBrowserFamilyForRuntime(normalizedRuntimeId);
 
   normalized.identity.hardware.browserFamily = browserFamily;
 
   normalized.source.mode = 'generated';
 
-  if (runtimeId === 'chromium-extension-relay' || runtimeId === 'chromium-cloak-playwright') {
+  if (
+    normalizedRuntimeId === 'chromium-extension-relay' ||
+    normalizedRuntimeId === 'chromium-cloak-playwright'
+  ) {
     normalized.identity.hardware.platformVersion = undefined;
     normalized.identity.hardware.fontSystem = undefined;
     normalized.identity.display.pixelRatio = undefined;
@@ -1254,7 +1266,7 @@ export function normalizeFingerprintConfigForRuntime(
     };
   }
 
-  if (runtimeId === 'firefox-bidi') {
+  if (normalizedRuntimeId === 'firefox-bidi') {
     normalized.identity.display.pixelRatio = undefined;
     normalized.identity.input = undefined;
   }
@@ -1269,19 +1281,22 @@ export function normalizeFingerprintConfigForRuntime(
  * 每次调用返回新对象，避免意外修改
  */
 export function getDefaultFingerprint(
-  runtimeId: BrowserRuntimeId = 'chromium-extension-relay'
+  runtimeId: FingerprintRuntimeInput = 'chromium-extension-relay'
 ): FingerprintConfig {
+  const normalizedRuntimeId = normalizeFingerprintRuntimeId(runtimeId);
   return normalizeFingerprintConfigForRuntime(
     cloneFingerprintConfig(
-      DEFAULT_FINGERPRINT_CONFIG_BY_RUNTIME[runtimeId] ??
+      DEFAULT_FINGERPRINT_CONFIG_BY_RUNTIME[normalizedRuntimeId] ??
         DEFAULT_FINGERPRINT_CONFIG_BY_RUNTIME[DEFAULT_BROWSER_RUNTIME_ID] ??
         DEFAULT_FINGERPRINT_CONFIG
     ),
-    runtimeId
+    normalizedRuntimeId
   );
 }
 
-export function getDefaultFingerprintForRuntime(runtimeId: BrowserRuntimeId): FingerprintConfig {
+export function getDefaultFingerprintForRuntime(
+  runtimeId: FingerprintRuntimeInput
+): FingerprintConfig {
   return getDefaultFingerprint(runtimeId);
 }
 

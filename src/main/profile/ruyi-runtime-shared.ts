@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
 import {
+  createRuntimeConfig,
   resolveFirefoxExecutablePathOverride,
   resolveUserDataDir,
 } from '../../constants/runtime-config';
@@ -34,7 +35,10 @@ export interface PreparedRuyiFirefoxLaunch {
 export type FirefoxUserPrefValue = string | number | boolean;
 
 function getUserDataBaseDir(): string {
-  return resolveUserDataDir(app.getPath('userData'));
+  const runtimeConfig = createRuntimeConfig();
+  const configuredUserDataDir = resolveUserDataDir('', runtimeConfig);
+  if (configuredUserDataDir.trim()) return configuredUserDataDir;
+  return resolveUserDataDir(app.getPath('userData'), runtimeConfig);
 }
 
 export function getFirefoxBaseDir(): string {
@@ -89,7 +93,7 @@ function buildAcceptLanguageHeader(fingerprint: FingerprintConfig): string | und
 }
 
 export function resolveFirefoxExecutablePath(): string {
-  const override = resolveFirefoxExecutablePathOverride();
+  const override = resolveFirefoxExecutablePathOverride(createRuntimeConfig());
   if (override) {
     return override;
   }

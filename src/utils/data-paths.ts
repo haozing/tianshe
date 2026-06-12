@@ -7,18 +7,25 @@
 
 import path from 'path';
 import fs from 'fs-extra';
-import { resolveUserDataDir } from '../constants/runtime-config';
+import { createRuntimeConfig, resolveUserDataDir } from '../constants/runtime-config';
 
 function getUserDataDir(): string {
+  const runtimeConfig = createRuntimeConfig();
+  const configuredUserDataDir = resolveUserDataDir('', runtimeConfig);
+  if (configuredUserDataDir.trim()) return configuredUserDataDir;
+
   try {
     const electron = require('electron') as { app?: { getPath?: (name: string) => string } };
-    const userData = resolveUserDataDir(String(electron.app?.getPath?.('userData') || ''));
+    const userData = resolveUserDataDir(
+      String(electron.app?.getPath?.('userData') || ''),
+      runtimeConfig
+    );
     if (userData && String(userData).trim()) return userData;
   } catch {
     // ignore: worker_threads 环境下可能没有 electron 模块
   }
 
-  const fallback = resolveUserDataDir('');
+  const fallback = resolveUserDataDir('', runtimeConfig);
   if (fallback.trim()) return fallback;
 
   throw new Error('Unable to resolve userData directory from runtime config.');

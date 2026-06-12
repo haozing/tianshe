@@ -1,4 +1,4 @@
-import type { BrowserRuntimeId } from '../../types/browser-runtime';
+import { normalizeBrowserRuntimeId, type BrowserRuntimeId } from '../../types/browser-runtime';
 
 export type FingerprintFieldGroup = {
   label: string;
@@ -283,13 +283,15 @@ const FINGERPRINT_RUNTIME_CONTRACTS: Record<BrowserRuntimeId, FingerprintEngineC
 };
 
 export function getFingerprintRuntimeContract(
-  runtimeId: BrowserRuntimeId
+  runtimeId: BrowserRuntimeId | 'electron' | 'extension' | 'ruyi'
 ): FingerprintEngineContract {
-  return FINGERPRINT_RUNTIME_CONTRACTS[runtimeId];
+  return FINGERPRINT_RUNTIME_CONTRACTS[normalizeBrowserRuntimeId(runtimeId)];
 }
 
-export function getFingerprintRequiredPaths(runtimeId: BrowserRuntimeId): string[] {
-  return FINGERPRINT_RUNTIME_CONTRACTS[runtimeId].requiredPaths;
+export function getFingerprintRequiredPaths(
+  runtimeId: BrowserRuntimeId | 'electron' | 'extension' | 'ruyi'
+): string[] {
+  return FINGERPRINT_RUNTIME_CONTRACTS[normalizeBrowserRuntimeId(runtimeId)].requiredPaths;
 }
 
 export const getFingerprintEngineContract = getFingerprintRuntimeContract;

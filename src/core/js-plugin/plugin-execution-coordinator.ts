@@ -264,65 +264,70 @@ export class PluginExecutionCoordinator {
       },
     });
 
-    return await withTraceContext(traceContext, async () => {
-      const span = await observationService.startSpan({
-        context: traceContext,
-        component: 'plugin-manager',
-        event: 'plugin.invoke',
-        attrs: {
-          pluginId,
-          apiName,
-          invocationType: 'api',
-          source: 'api',
-          callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
-          args: summarizeForObservation(args, 2),
-        },
-      });
-
-      try {
-        const context = this.lifecycle.getContext(pluginId);
-        if (!context) {
-          throw new Error(`Plugin ${pluginId} is not activated`);
-        }
-
-        const result = await context.callExposedAPI(apiName, args);
-        await span.succeed({
-          attrs: {
-            pluginId,
-            apiName,
-            invocationType: 'api',
-            source: 'api',
-            callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
-            result: summarizeForObservation(result, 2),
-          },
-        });
-        return result;
-      } catch (error) {
-        const runtimeStatus = await this.getRuntimeStatus(pluginId).catch(() => null);
-        const artifact = await attachErrorContextArtifact({
-          span,
+    this.beginCommandExecution(pluginId);
+    try {
+      return await withTraceContext(traceContext, async () => {
+        const span = await observationService.startSpan({
+          context: traceContext,
           component: 'plugin-manager',
-          label: 'plugin api failure context',
-          data: {
-            pluginId,
-            apiName,
-            invocationType: 'api',
-            runtimeStatus: summarizeForObservation(runtimeStatus, 2),
-          },
-        });
-        await span.fail(error, {
-          artifactRefs: [artifact.artifactId],
+          event: 'plugin.invoke',
           attrs: {
             pluginId,
             apiName,
             invocationType: 'api',
             source: 'api',
             callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
+            args: summarizeForObservation(args, 2),
           },
         });
-        throw error;
-      }
-    });
+
+        try {
+          const context = this.lifecycle.getContext(pluginId);
+          if (!context) {
+            throw new Error(`Plugin ${pluginId} is not activated`);
+          }
+
+          const result = await context.callExposedAPI(apiName, args);
+          await span.succeed({
+            attrs: {
+              pluginId,
+              apiName,
+              invocationType: 'api',
+              source: 'api',
+              callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
+              result: summarizeForObservation(result, 2),
+            },
+          });
+          return result;
+        } catch (error) {
+          const runtimeStatus = await this.getRuntimeStatus(pluginId).catch(() => null);
+          const artifact = await attachErrorContextArtifact({
+            span,
+            component: 'plugin-manager',
+            label: 'plugin api failure context',
+            data: {
+              pluginId,
+              apiName,
+              invocationType: 'api',
+              runtimeStatus: summarizeForObservation(runtimeStatus, 2),
+            },
+          });
+          await span.fail(error, {
+            artifactRefs: [artifact.artifactId],
+            attrs: {
+              pluginId,
+              apiName,
+              invocationType: 'api',
+              source: 'api',
+              callerId: currentTraceContext?.pluginId ?? currentTraceContext?.source ?? 'internal',
+            },
+          });
+          throw error;
+        }
+      });
+    } finally {
+      this.endCommandExecution(pluginId);
+    }
   }
 
   /**
@@ -380,7 +385,8 @@ export class PluginExecutionCoordinator {
       message,
       contexts,
       helpers,
-      (pid, commandId, params) => this.executeCommand(pid, commandId, params)
+      (pid, commandId, params) => this.executeCommand(pid, commandId, params),
+      (pid, apiName, args) => this.callPluginAPI(pid, apiName, args)
     );
   }
 }

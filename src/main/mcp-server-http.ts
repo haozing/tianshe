@@ -19,6 +19,7 @@ import { createLogger } from '../core/logger'; // 使用统一的 pino logger
 import type { RestApiDependencies, RestApiConfig } from '../types/http-api';
 import { HTTP_SERVER_DEFAULTS } from '../constants/http-api';
 import type { BrowserPoolManager } from '../core/browser-pool';
+import type { BrowserPoolReadinessSnapshot } from './browser-pool-readiness';
 import {
   createAsyncHandler,
   mapErrorStatus,
@@ -68,6 +69,7 @@ export class AirpaHttpMcpServer {
   private dependencies?: RestApiDependencies;
   private restApiConfig?: RestApiConfig;
   private getBrowserPoolManager?: () => BrowserPoolManager;
+  private getBrowserPoolReadiness?: () => BrowserPoolReadinessSnapshot;
   private runtimeMetrics = this.runtimeState.runtimeMetrics;
   private sessionBridge = createHttpSessionBridge({
     transports: this.runtimeState.transports,
@@ -81,7 +83,8 @@ export class AirpaHttpMcpServer {
     config: HttpMcpServerConfig = {},
     dependencies?: RestApiDependencies,
     restApiConfig?: RestApiConfig,
-    getBrowserPoolManager?: () => BrowserPoolManager
+    getBrowserPoolManager?: () => BrowserPoolManager,
+    getBrowserPoolReadiness?: () => BrowserPoolReadinessSnapshot
   ) {
     this.config = {
       port: config.port ?? HTTP_SERVER_DEFAULTS.PORT,
@@ -91,6 +94,7 @@ export class AirpaHttpMcpServer {
     this.dependencies = dependencies;
     this.restApiConfig = restApiConfig;
     this.getBrowserPoolManager = getBrowserPoolManager;
+    this.getBrowserPoolReadiness = getBrowserPoolReadiness;
 
     this.app = createHttpServerComposition({
       serverName: this.config.name,
@@ -101,6 +105,7 @@ export class AirpaHttpMcpServer {
       runtimeMetrics: this.runtimeMetrics,
       sessionBridge: this.sessionBridge,
       getBrowserPoolManager: this.getBrowserPoolManager,
+      getBrowserPoolReadiness: this.getBrowserPoolReadiness,
       normalizeStructuredError: toStructuredError,
       mapErrorStatus: (code, fallback) => mapErrorStatus(code, fallback),
       mapStructuredErrorStatus: (error, fallback) => mapStructuredErrorStatus(error, fallback),
@@ -202,9 +207,16 @@ export async function createHttpMcpServer(
   config?: HttpMcpServerConfig,
   dependencies?: RestApiDependencies,
   restApiConfig?: RestApiConfig,
-  getBrowserPoolManager?: () => BrowserPoolManager
+  getBrowserPoolManager?: () => BrowserPoolManager,
+  getBrowserPoolReadiness?: () => BrowserPoolReadinessSnapshot
 ): Promise<AirpaHttpMcpServer> {
-  const server = new AirpaHttpMcpServer(config, dependencies, restApiConfig, getBrowserPoolManager);
+  const server = new AirpaHttpMcpServer(
+    config,
+    dependencies,
+    restApiConfig,
+    getBrowserPoolManager,
+    getBrowserPoolReadiness
+  );
   await server.start();
   return server;
 }

@@ -35,4 +35,35 @@ describe('attachBrowserFailureBundle', () => {
       quality: 60,
     });
   });
+
+  it('does not wait indefinitely for a hung snapshot capture', async () => {
+    vi.useFakeTimers();
+    try {
+      const browser = {
+        getCurrentUrl: vi.fn().mockResolvedValue('https://example.com'),
+        title: vi.fn().mockResolvedValue('Example'),
+        snapshot: vi.fn(() => new Promise(() => undefined)),
+        getConsoleMessages: vi.fn().mockReturnValue([{ level: 'error', text: 'boom' }]),
+        getNetworkSummary: vi.fn().mockReturnValue(undefined),
+        screenshotDetailed: vi.fn(() => new Promise(() => undefined)),
+      };
+
+      const bundlePromise = attachBrowserFailureBundle(browser as any, {
+        context: createChildTraceContext({ source: 'test' }),
+        component: 'browser-test',
+        labelPrefix: 'failure',
+        timeoutMs: 10,
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(10);
+      const artifacts = await bundlePromise;
+
+      expect(artifacts.map((artifact) => artifact.type)).toEqual(['console_tail']);
+      expect(browser.snapshot).toHaveBeenCalled();
+      expect(browser.screenshotDetailed).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

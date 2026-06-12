@@ -94,6 +94,7 @@ describe('DatasetIPCHandler', () => {
       hardDeleteRows: vi.fn(),
       analyzeDatasetTypes: vi.fn(),
       updateDatasetSchema: vi.fn(),
+      applyDatasetSchemaMetadata: vi.fn(),
       previewFilterCount: vi.fn(),
       previewAggregate: vi.fn(),
       previewSample: vi.fn(),
@@ -778,7 +779,7 @@ describe('DatasetIPCHandler', () => {
       const result = await h(mockEvent, { datasetId: 'ds1', schema });
 
       expect(result.success).toBe(true);
-      expect(mockDuckDB.updateDatasetSchema).toHaveBeenCalledWith('ds1', schema);
+      expect(mockDuckDB.applyDatasetSchemaMetadata).toHaveBeenCalledWith('ds1', schema);
       expect(mockEvent.sender.send).toHaveBeenCalledWith('dataset:schema-updated', 'ds1');
     });
   });

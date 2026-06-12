@@ -50,6 +50,12 @@ interface SyncLocalApplyOptions {
   scopeKey?: string;
 }
 
+type SyncLocalApplyDomainInput = SyncDomain | 'chromium-extension-relay';
+
+function canonicalizeLocalApplyDomain(domain: SyncLocalApplyDomainInput): SyncDomain {
+  return domain === 'chromium-extension-relay' ? 'extension' : domain;
+}
+
 export class SyncLocalApplyService {
   private activeScopeKey = DEFAULT_SCOPE_KEY;
   private readonly mappingResolver: SyncApplyMappingResolver;
@@ -69,51 +75,52 @@ export class SyncLocalApplyService {
   }
 
   async applyChange(
-    domain: SyncDomain,
+    domain: SyncLocalApplyDomainInput,
     change: SyncPullChange,
     options?: SyncLocalApplyOptions
   ): Promise<SyncLocalApplyResult> {
     return this.withScope(options?.scopeKey, async () => {
-      switch (domain) {
+      const normalizedDomain = canonicalizeLocalApplyDomain(domain);
+      switch (normalizedDomain) {
         case 'account':
           switch (change.entityType) {
             case 'account':
-              return this.applyAccount(domain, change);
+              return this.applyAccount(normalizedDomain, change);
             case 'savedSite':
-              return this.commonEntityApply.applySavedSite(domain, change);
+              return this.commonEntityApply.applySavedSite(normalizedDomain, change);
             case 'tag':
-              return this.commonEntityApply.applyTag(domain, change);
+              return this.commonEntityApply.applyTag(normalizedDomain, change);
             default:
               return {
                 applied: false,
                 skipped: true,
-                reason: `unsupported_entity_type:${domain}:${change.entityType}`,
+                reason: `unsupported_entity_type:${normalizedDomain}:${change.entityType}`,
               };
           }
         case 'profile':
           switch (change.entityType) {
             case 'profile':
-              return this.applyProfile(domain, change);
+              return this.applyProfile(normalizedDomain, change);
             case 'profileGroup':
-              return this.commonEntityApply.applyProfileGroup(domain, change);
+              return this.commonEntityApply.applyProfileGroup(normalizedDomain, change);
             default:
               return {
                 applied: false,
                 skipped: true,
-                reason: `unsupported_entity_type:${domain}:${change.entityType}`,
+                reason: `unsupported_entity_type:${normalizedDomain}:${change.entityType}`,
               };
           }
         case 'extension':
           switch (change.entityType) {
             case 'extensionPackage':
-              return this.applyExtensionPackage(domain, change);
+              return this.applyExtensionPackage(normalizedDomain, change);
             case 'profileExtensionBinding':
-              return this.applyProfileExtensionBinding(domain, change);
+              return this.applyProfileExtensionBinding(normalizedDomain, change);
             default:
               return {
                 applied: false,
                 skipped: true,
-                reason: `unsupported_entity_type:${domain}:${change.entityType}`,
+                reason: `unsupported_entity_type:${normalizedDomain}:${change.entityType}`,
               };
           }
         default:

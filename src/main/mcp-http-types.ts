@@ -178,7 +178,8 @@ export interface McpBrowserBindingPort {
   acquireBrowserFromPool: (
     profileId?: string,
     runtimeId?: BrowserRuntimeId,
-    source?: 'mcp' | 'http'
+    source?: 'mcp' | 'http',
+    signal?: AbortSignal
   ) => Promise<BrowserHandle>;
   getBrowserPoolManager?: () => BrowserPoolManager;
 }

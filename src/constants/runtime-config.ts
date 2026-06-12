@@ -115,6 +115,11 @@ const getAsarExtractBaseDirOverride = (runtimeProcess: RuntimeConfigProcessLike 
   readProcessArgValue('--airpa-asar-extract-base-dir', runtimeProcess);
 const getFirefoxExecutablePathOverride = (runtimeProcess: RuntimeConfigProcessLike | null): string =>
   readProcessArgValue('--airpa-firefox-path', runtimeProcess);
+const getCloakBrowserExecutablePathOverride = (
+  runtimeProcess: RuntimeConfigProcessLike | null
+): string =>
+  readProcessArgValue('--airpa-cloakbrowser-path', runtimeProcess) ||
+  readProcessArgValue('--airpa-cloak-browser-path', runtimeProcess);
 const getHttpPortOverride = (runtimeProcess: RuntimeConfigProcessLike | null): number | null =>
   readProcessArgInteger('--airpa-http-port', runtimeProcess);
 const getHttpEnabledOverride = (runtimeProcess: RuntimeConfigProcessLike | null): boolean | null =>
@@ -141,6 +146,7 @@ export interface AirpaRuntimeConfig {
     userDataDirOverride: string;
     asarExtractBaseDirOverride: string;
     firefoxExecutablePathOverride: string;
+    cloakBrowserExecutablePathOverride: string;
   };
   http: {
     port: number;
@@ -262,6 +268,7 @@ export const createRuntimeConfig = (
       userDataDirOverride: getUserDataDirOverride(configProcess),
       asarExtractBaseDirOverride: getAsarExtractBaseDirOverride(configProcess),
       firefoxExecutablePathOverride: getFirefoxExecutablePathOverride(configProcess),
+      cloakBrowserExecutablePathOverride: getCloakBrowserExecutablePathOverride(configProcess),
     },
     http: {
       port: getHttpPortOverride(configProcess) ?? 39090,
@@ -336,5 +343,12 @@ export const resolveFirefoxExecutablePathOverride = (
   runtimeConfig: AirpaRuntimeConfig = AIRPA_RUNTIME_CONFIG
 ): string | null => {
   const override = runtimeConfig.paths.firefoxExecutablePathOverride;
+  return override.length > 0 ? override : null;
+};
+
+export const resolveCloakBrowserExecutablePathOverride = (
+  runtimeConfig: AirpaRuntimeConfig = AIRPA_RUNTIME_CONFIG
+): string | null => {
+  const override = runtimeConfig.paths.cloakBrowserExecutablePathOverride;
   return override.length > 0 ? override : null;
 };

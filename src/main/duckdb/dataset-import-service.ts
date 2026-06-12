@@ -38,6 +38,7 @@ export class DatasetImportService {
   // Worker 管理
   private importWorkers = new Map<string, Worker>();
   private importProgressCallbacks = new Map<string, (progress: ImportProgress) => void>();
+  private importTempArtifacts = new Map<string, { datasetId: string; outputPath: string }>();
 
   constructor(
     private conn: DuckDBConnection,
@@ -48,6 +49,7 @@ export class DatasetImportService {
   private clearImportTracking(datasetId: string): void {
     this.importWorkers.delete(datasetId);
     this.importProgressCallbacks.delete(datasetId);
+    this.importTempArtifacts.delete(datasetId);
   }
 
   private async cleanupImportArtifacts(datasetId: string, outputPath: string): Promise<void> {
@@ -80,6 +82,22 @@ export class DatasetImportService {
     } catch (error) {
       logger.warn('Failed to cleanup import metadata', {
         datasetId,
+        errorMessage: getErrorMessage(error),
+      });
+    }
+  }
+
+  private async cleanupTempImportFiles(
+    trackingDatasetId: string,
+    tempDatasetId: string,
+    tempOutputPath: string
+  ): Promise<void> {
+    try {
+      await this.cleanupImportArtifacts(tempDatasetId, tempOutputPath);
+    } catch (error) {
+      logger.error('Failed to cleanup import-records temp files', {
+        targetDatasetId: trackingDatasetId,
+        tempOutputPath,
         errorMessage: getErrorMessage(error),
       });
     }
@@ -282,6 +300,7 @@ export class DatasetImportService {
    */
   async cancelImport(datasetId: string): Promise<void> {
     const worker = this.importWorkers.get(datasetId);
+    const tempArtifact = this.importTempArtifacts.get(datasetId);
     if (worker) {
       try {
         const terminatePromise = worker.terminate();
@@ -297,8 +316,12 @@ export class DatasetImportService {
       }
     }
 
-    const outputPath = getDatasetPath(datasetId);
-    await this.cleanupImportArtifacts(datasetId, outputPath);
+    if (tempArtifact) {
+      await this.cleanupTempImportFiles(datasetId, tempArtifact.datasetId, tempArtifact.outputPath);
+    } else {
+      const outputPath = getDatasetPath(datasetId);
+      await this.cleanupImportArtifacts(datasetId, outputPath);
+    }
   }
 
   /**
@@ -345,6 +368,10 @@ export class DatasetImportService {
     // Step 2: 生成临时数据库ID和路径
     const tempDatasetId = `temp_import_${Date.now()}`;
     const tempOutputPath = getDatasetPath(tempDatasetId);
+    this.importTempArtifacts.set(targetDatasetId, {
+      datasetId: tempDatasetId,
+      outputPath: tempOutputPath,
+    });
 
     // Step 3: 创建导入任务（使用 Worker 解析文件）
     const task: ImportTask = {
@@ -409,22 +436,8 @@ export class DatasetImportService {
       return { recordsInserted };
     } finally {
       // Step 5: 清理临时文件
-      try {
-        if (await fs.pathExists(tempOutputPath)) {
-          await fs.remove(tempOutputPath);
-        }
-        // 清理可能存在的 WAL 文件
-        const walPath = `${tempOutputPath}.wal`;
-        if (await fs.pathExists(walPath)) {
-          await fs.remove(walPath);
-        }
-      } catch (error) {
-        logger.error('Failed to cleanup import-records temp files', {
-          targetDatasetId,
-          tempOutputPath,
-          errorMessage: getErrorMessage(error),
-        });
-      }
+      await this.cleanupTempImportFiles(targetDatasetId, tempDatasetId, tempOutputPath);
+      this.clearImportTracking(targetDatasetId);
     }
   }
 
@@ -473,6 +486,25 @@ export class DatasetImportService {
         return;
       }
 
+      this.importWorkers.set(targetDatasetId, worker);
+      if (onProgress) this.importProgressCallbacks.set(targetDatasetId, onProgress);
+
+      let settled = false;
+      const settleResolve = () => {
+        if (settled) return;
+        settled = true;
+        this.importWorkers.delete(targetDatasetId);
+        this.importProgressCallbacks.delete(targetDatasetId);
+        resolve();
+      };
+      const settleReject = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        this.importWorkers.delete(targetDatasetId);
+        this.importProgressCallbacks.delete(targetDatasetId);
+        reject(error);
+      };
+
       worker.on('message', (message) => {
         if (message.type === 'progress') {
           // 调整进度范围：原始 0-100% → 映射到 0-60%
@@ -484,13 +516,13 @@ export class DatasetImportService {
             message: message.message || '正在处理文件...',
           });
         } else if (message.type === 'complete') {
-          resolve();
+          settleResolve();
         } else if (message.type === 'error') {
           logger.error('Import-records worker returned an error', {
             targetDatasetId,
             errorMessage: String(message.error),
           });
-          reject(new Error(message.error));
+          settleReject(new Error(message.error));
         }
       });
 
@@ -499,28 +531,20 @@ export class DatasetImportService {
           targetDatasetId,
           errorMessage: getErrorMessage(error),
         });
-        reject(error);
+        settleReject(error);
       });
 
       // ✅ 修复：正确处理 Worker 意外退出
-      let resolved = false;
       worker.on('exit', (code) => {
-        if (code !== 0 && !resolved) {
+        if (code !== 0 && !settled) {
           const errorMsg = `Worker stopped unexpectedly with exit code ${code}`;
           logger.error('Import-records worker exited unexpectedly', {
             targetDatasetId,
             exitCode: code,
           });
-          reject(new Error(errorMsg));
+          settleReject(new Error(errorMsg));
         }
       });
-
-      // 标记正常完成
-      const originalResolve = resolve;
-      resolve = ((value: void) => {
-        resolved = true;
-        originalResolve(value);
-      }) as typeof resolve;
     });
   }
 
@@ -652,6 +676,7 @@ export class DatasetImportService {
     }
     this.importWorkers.clear();
     this.importProgressCallbacks.clear();
+    this.importTempArtifacts.clear();
   }
 }
 

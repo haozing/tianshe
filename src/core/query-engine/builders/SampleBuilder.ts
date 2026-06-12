@@ -114,7 +114,7 @@ export class SampleBuilder extends SyncQueryBuilder<SampleConfig> {
     return `
       SELECT ${columns}
       FROM (
-        SELECT *,
+        SELECT ${columns},
           ROW_NUMBER() OVER (PARTITION BY ${partitionBy} ORDER BY ${orderBy}) AS _sample_rn
         FROM ${context.currentTable}
       ) AS _sampled

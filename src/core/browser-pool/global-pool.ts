@@ -161,6 +161,7 @@ export class GlobalPool {
    */
   setConfig(config: Partial<BrowserPoolConfig>): void {
     const oldMaxConcurrent = this.config.maxConcurrentCreation;
+    const oldHealthCheckIntervalMs = this.config.healthCheckIntervalMs;
     this.config = { ...this.config, ...config };
 
     // 只有当 maxConcurrentCreation 真正改变时才重新创建信号量
@@ -171,6 +172,16 @@ export class GlobalPool {
       // 保留旧信号量的引用，让正在等待的请求完成
       // 新请求将使用新的信号量
       this.creationSemaphore = new Semaphore(this.config.maxConcurrentCreation);
+    }
+
+    if (
+      config.healthCheckIntervalMs !== undefined &&
+      config.healthCheckIntervalMs !== oldHealthCheckIntervalMs &&
+      this.healthCheckTimer
+    ) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = undefined;
+      this.startHealthCheck();
     }
 
     logger.info('Config updated', {

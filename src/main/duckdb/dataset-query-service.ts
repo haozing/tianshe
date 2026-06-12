@@ -32,17 +32,40 @@ const MAX_QUERY_LIMIT = 10000;
 /**
  * 带超时的 Promise 包装器
  */
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> {
-  let timeoutId: NodeJS.Timeout;
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  errorMessage: string,
+  onTimeout?: () => void
+): Promise<T> {
+  let timeoutId: NodeJS.Timeout | undefined;
+  let didTimeout = false;
+  const timeoutError = new Error(errorMessage);
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
-      reject(new Error(errorMessage));
+      didTimeout = true;
+      onTimeout?.();
+      reject(timeoutError);
     }, timeoutMs);
   });
 
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    clearTimeout(timeoutId);
-  });
+  return Promise.race([promise, timeoutPromise])
+    .catch(async (error) => {
+      if (didTimeout) {
+        try {
+          await promise;
+        } catch {
+          // Expected after interrupting the underlying DuckDB query.
+        }
+        throw timeoutError;
+      }
+      throw error;
+    })
+    .finally(() => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    });
 }
 
 function normalizePaginationValue(
@@ -159,10 +182,18 @@ export class DatasetQueryService {
           sqlPreview: finalSql.substring(0, 200),
         });
         // ✅ 添加查询超时保护
+        const queryPromise = this.conn.runAndReadAll(finalSql);
         const result = await withTimeout(
-          this.conn.runAndReadAll(finalSql),
+          queryPromise,
           QUERY_TIMEOUT_MS,
-          `查询超时（${QUERY_TIMEOUT_MS / 1000}秒），请优化查询条件或减少数据量`
+          `查询超时（${QUERY_TIMEOUT_MS / 1000}秒），请优化查询条件或减少数据量`,
+          () => {
+            logger.warn('Dataset query timed out; interrupting DuckDB connection', {
+              datasetId: safeDatasetId,
+              timeoutMs: QUERY_TIMEOUT_MS,
+            });
+            this.conn.interrupt();
+          }
         );
         const rows = parseRows(result);
         const columns = result.columnNames();

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { BrowserRuntimeId } from '../../types/browser-runtime';
+import type { BrowserFamily, BrowserRuntimeId } from '../../types/browser-runtime';
 
 export type ObservationLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -26,6 +26,7 @@ export interface TraceContext {
   capability?: string;
   pluginId?: string;
   browserRuntimeId?: BrowserRuntimeId;
+  browserEngine?: BrowserFamily;
   sessionId?: string;
   profileId?: string;
   datasetId?: string;
@@ -57,6 +58,7 @@ export interface RuntimeEvent {
   capability?: string;
   pluginId?: string;
   browserRuntimeId?: BrowserRuntimeId;
+  browserEngine?: BrowserFamily;
   sessionId?: string;
   profileId?: string;
   datasetId?: string;
@@ -109,6 +111,7 @@ export interface TraceSummary {
     capability?: string;
     pluginId?: string;
     browserRuntimeId?: BrowserRuntimeId;
+    browserEngine?: BrowserFamily;
     sessionId?: string;
     profileId?: string;
     datasetId?: string;

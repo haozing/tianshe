@@ -15,6 +15,12 @@ export const PERSISTENT_BROWSER_RUNTIME_IDS = [
   'chromium-cloak-playwright',
 ] as const satisfies readonly BrowserRuntimeId[];
 
+export const LEGACY_BROWSER_RUNTIME_ALIASES = {
+  electron: 'electron-webcontents',
+  extension: 'chromium-extension-relay',
+  ruyi: 'firefox-bidi',
+} as const satisfies Record<string, BrowserRuntimeId>;
+
 export const PROFILE_BROWSER_INSTANCE_LIMIT = 1;
 
 export type BrowserFamily = 'electron' | 'chromium' | 'firefox';
@@ -67,7 +73,14 @@ export function normalizeBrowserRuntimeId(
   value: unknown,
   fallback: BrowserRuntimeId = DEFAULT_BROWSER_RUNTIME_ID
 ): BrowserRuntimeId {
-  return isBrowserRuntimeId(value) ? value : fallback;
+  if (isBrowserRuntimeId(value)) return value;
+  if (typeof value === 'string') {
+    const alias = (LEGACY_BROWSER_RUNTIME_ALIASES as Record<string, BrowserRuntimeId>)[
+      value.trim().toLowerCase()
+    ];
+    if (alias) return alias;
+  }
+  return fallback;
 }
 
 export function isPersistentBrowserRuntimeId(
@@ -116,4 +129,3 @@ export function getDefaultRuntimeSource(runtimeId: BrowserRuntimeId): BrowserRun
       return { type: 'managed-download', channel: 'cloakbrowser' };
   }
 }
-

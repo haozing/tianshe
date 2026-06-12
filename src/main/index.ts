@@ -389,7 +389,8 @@ async function startHttpServer(): Promise<void> {
         },
         dependencies,
         restApiConfig,
-        getBrowserPoolManager
+        getBrowserPoolManager,
+        () => appRuntime.browserPoolReadiness.getSnapshot()
       );
 
       if (startTimedOut) {
@@ -609,7 +610,10 @@ app.whenReady().then(async () => {
     initializeObservationIPC,
     initializeHttpApiIPC,
     initializeOcrPoolIPC,
-    initializePlugins: () => appRuntime.requireJSPluginManager().init(),
+    initializePlugins: async () => {
+      await appRuntime.requireJSPluginManager().init();
+      await appRuntime.requireSchedulerService().restoreActiveTasks();
+    },
     createWindow,
     setupWindowResizeListener: () => appRuntime.requireViewManager().setupWindowResizeListener(),
     initializeIPC,

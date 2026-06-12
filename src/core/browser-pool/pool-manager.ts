@@ -611,17 +611,28 @@ export class BrowserPoolManager {
    */
   async releaseByPlugin(pluginId: string): Promise<{ browsers: number; requests: number }> {
     this.assertStartedAndInitialized();
+    const browsersToRelease = this.globalPool
+      .listBrowsers()
+      .filter((browser) => browser.status === 'locked' && browser.lockedBy?.pluginId === pluginId)
+      .map((browser) => ({
+        browserId: browser.id,
+        sessionId: browser.sessionId,
+        pluginId: browser.lockedBy?.pluginId,
+      }));
     const sessionsToProcess = Array.from(
-      new Set(
-        this.globalPool
-          .listBrowsers()
-          .filter((browser) => browser.status === 'locked' && browser.lockedBy?.pluginId === pluginId)
-          .map((browser) => browser.sessionId)
-      )
+      new Set(browsersToRelease.map((browser) => browser.sessionId))
     );
 
     // 释放浏览器
     const browsers = await this.globalPool.releaseByPlugin(pluginId);
+    for (const browser of browsersToRelease) {
+      this.eventEmitter.emit('browser:released', {
+        browserId: browser.browserId,
+        sessionId: browser.sessionId,
+        pluginId: browser.pluginId,
+        destroy: false,
+      });
+    }
 
     // 取消等待请求
     const requests = this.waitQueue.cancelByPlugin(pluginId, 'Plugin stopped');

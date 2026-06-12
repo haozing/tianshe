@@ -1039,7 +1039,8 @@ export const ensureSessionBrowserHandle = async (
       browserHandle = await options.acquireBrowserFromPool(
         mcpSession.browser.partition,
         mcpSession.browser.runtimeId,
-        'mcp'
+        'mcp',
+        abortSignal
       );
     } catch (error) {
       const structured = createBrowserAcquireStructuredError(options, mcpSession, error);

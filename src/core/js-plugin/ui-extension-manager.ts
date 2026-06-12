@@ -30,6 +30,8 @@ export interface UIExtensionManagerConfig {
   viewManager: IWebContentsViewManager;
 }
 
+type PluginAPICaller = (pluginId: string, apiName: string, args: any[]) => Promise<any>;
+
 /**
  * appliesTo 配置
  */
@@ -45,10 +47,15 @@ export interface AppliesToConfig {
 export class UIExtensionManager {
   private duckdb: IDuckDBService;
   private viewManager: IWebContentsViewManager;
+  private pluginAPICaller?: PluginAPICaller;
 
   constructor(config: UIExtensionManagerConfig) {
     this.duckdb = config.duckdb;
     this.viewManager = config.viewManager;
+  }
+
+  setPluginAPICaller(caller: PluginAPICaller): void {
+    this.pluginAPICaller = caller;
   }
 
   // ========== UI 扩展注册和清理 ==========
@@ -452,7 +459,8 @@ export class UIExtensionManager {
     message: any,
     contexts: Map<string, PluginContext>,
     helpers: Map<string, PluginHelpers>,
-    executeCommand: (pluginId: string, commandId: string, params: any) => Promise<any>
+    executeCommand: (pluginId: string, commandId: string, params: any) => Promise<any>,
+    callPluginAPI?: PluginAPICaller
   ): Promise<any> {
     const { pluginId, pageId, command, params } = message;
 
@@ -488,17 +496,11 @@ export class UIExtensionManager {
       }
 
       const { apiName, args = [] } = params;
-      const context = contexts.get(pluginId);
-      if (!context) {
-        throw new Error('Plugin context not found');
+      const caller = callPluginAPI ?? this.pluginAPICaller;
+      if (!caller) {
+        throw new Error('Plugin API caller not configured');
       }
-
-      const apiFunc = (context as any).exposedAPIs.get(apiName);
-      if (!apiFunc) {
-        throw new Error(`API method not found: ${apiName}`);
-      }
-
-      return await apiFunc(...args);
+      return await caller(pluginId, apiName, args);
     }
 
     // 验证权限
@@ -604,13 +606,15 @@ export class UIExtensionManager {
 
           const pageLogger = {
             info: (...args) => {
-              if (window.console && typeof window.console.info === 'function') {
-                window.console.info(...args);
+              const browserConsole = window['console'];
+              if (browserConsole && typeof browserConsole.info === 'function') {
+                browserConsole.info(...args);
               }
             },
             error: (...args) => {
-              if (window.console && typeof window.console.error === 'function') {
-                window.console.error(...args);
+              const browserConsole = window['console'];
+              if (browserConsole && typeof browserConsole.error === 'function') {
+                browserConsole.error(...args);
               }
             }
           };

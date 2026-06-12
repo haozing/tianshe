@@ -53,10 +53,7 @@ class TestDuckDBService {
   }
 
   async executeSQLWithParams(sql: string, params: any[]): Promise<any[]> {
-    const stmt = await this.conn.prepare(sql);
-    stmt.bind(params);
-    const result = await stmt.runAndReadAll();
-    stmt.destroySync();
+    const result = await this.conn.runAndReadAll(sql, params);
     return parseRows(result);
   }
 

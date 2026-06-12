@@ -107,6 +107,9 @@ export class JSPluginManager {
       getPluginInfo: (pluginId) => this.getPluginInfo(pluginId),
       getRuntimeStatus: (pluginId) => this.getRuntimeStatus(pluginId),
     });
+    this.uiExtManager.setPluginAPICaller?.((pluginId, apiName, args) =>
+      this.executionCoordinator.callPluginAPI(pluginId, apiName, args)
+    );
   }
 
   /**
@@ -294,6 +297,12 @@ export class JSPluginManager {
       try {
         logger.info(`[UNINSTALL] Uninstalling plugin: ${pluginId}, deleteTables: ${deleteTables}`);
 
+        const info = await this.getPluginInfo(pluginId);
+        if (!info) {
+          throw new Error(`Plugin not found: ${pluginId}`);
+        }
+        this.runtimeRegistry.setLifecyclePhase(pluginId, 'stopping', info.name);
+
         // 1. 停用插件
         const plugin = this.lifecycle.getPlugin(pluginId);
         await this.deactivate(pluginId, { force: true });
@@ -304,13 +313,7 @@ export class JSPluginManager {
           this.lifecycle.deletePlugin(pluginId);
         }
 
-        // 3. 获取插件路径
-        const info = await this.getPluginInfo(pluginId);
-        if (!info) {
-          throw new Error(`Plugin not found: ${pluginId}`);
-        }
-
-        // 4. 处理数据表
+        // 3. 处理数据表
         if (deleteTables) {
           await this.installer.deletePluginTables(pluginId);
         } else {
@@ -338,6 +341,13 @@ export class JSPluginManager {
           },
         });
       } catch (error) {
+        const failedInfo = await this.getPluginInfo(pluginId).catch(() => null);
+        this.runtimeRegistry.recordError(
+          pluginId,
+          error,
+          failedInfo?.enabled === false ? 'disabled' : 'error',
+          failedInfo?.name
+        );
         const runtimeStatus = await this.getRuntimeStatus(pluginId).catch(() => null);
         const artifact = await attachErrorContextArtifact({
           span,

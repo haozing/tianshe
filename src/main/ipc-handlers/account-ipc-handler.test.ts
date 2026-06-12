@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { ipcMain } from 'electron-webcontents';
+import { ipcMain } from 'electron';
 import { registerAccountHandlers } from './account-ipc-handler';
 import { ipcRouteRegistry } from '../ipc-route-registry';
 import { UNBOUND_PROFILE_ID, type Account, type SavedSite } from '../../types/profile';
@@ -9,7 +9,7 @@ import {
   attachProfileLiveSessionLease,
 } from '../../core/browser-pool/profile-live-session-lease';
 
-vi.mock('electron-webcontents', () => ({
+vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn(),
     removeHandler: vi.fn(),

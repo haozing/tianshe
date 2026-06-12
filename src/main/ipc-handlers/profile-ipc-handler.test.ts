@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { ipcMain } from 'electron-webcontents';
+import { EventEmitter } from 'node:events';
+import { ipcMain } from 'electron';
 import { registerProfileHandlers } from './profile-ipc-handler';
 import { ipcRouteRegistry } from '../ipc-route-registry';
 import { getBrowserPoolManager } from '../../core/browser-pool';
@@ -8,7 +9,7 @@ import {
   attachProfileLiveSessionLease,
 } from '../../core/browser-pool/profile-live-session-lease';
 
-vi.mock('electron-webcontents', () => ({
+vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn(),
     removeHandler: vi.fn(),
@@ -51,6 +52,7 @@ vi.mock('../../core/logger', () => ({
 
 describe('registerProfileHandlers - pool IPC lease behavior', () => {
   const registeredHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+  const poolEvents = new EventEmitter();
 
   const profileService = {
     create: vi.fn(),
@@ -92,6 +94,7 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
     destroyBrowser: vi.fn(),
     updateConfig: vi.fn(),
     getConfig: vi.fn().mockReturnValue({}),
+    getEventEmitter: vi.fn(() => poolEvents),
   };
 
   const getHandler = (channel: string) => {
@@ -106,6 +109,7 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
     vi.clearAllMocks();
     ipcRouteRegistry.unregisterAll();
     registeredHandlers.clear();
+    poolEvents.removeAllListeners();
 
     (ipcMain.handle as Mock).mockImplementation(
       (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
@@ -113,6 +117,7 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
       }
     );
     (getBrowserPoolManager as Mock).mockReturnValue(poolManager);
+    poolManager.getEventEmitter.mockReturnValue(poolEvents);
     (attachProfileLiveSessionLease as Mock).mockImplementation((handle) => handle);
     (acquireProfileLiveSessionLease as Mock).mockResolvedValue({
       release: vi.fn().mockResolvedValue(undefined),

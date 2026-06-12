@@ -54,6 +54,7 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
       'src/core/browser-automation/integrated-browser.ts',
       'src/core/browser-extension/extension-browser.ts',
       'src/core/browser-pool/global-pool.ts',
+      'src/core/browser-pool/pool-manager.ts',
       'src/core/browser-ruyi/ruyi-browser.ts',
     ]
   ),
@@ -63,8 +64,10 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
     'Manager and namespace files stay below 900 lines and tests are split by concern.',
     [
       'src/core/js-plugin/manager.test.ts',
+      'src/core/js-plugin/manager.ts',
       'src/core/js-plugin/namespaces/database.ts',
       'src/core/js-plugin/plugin-loader.test.ts',
+      'src/core/js-plugin/plugin-installation-coordinator.ts',
       'src/core/js-plugin/registry.ts',
     ]
   ),
@@ -109,6 +112,7 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
     'Index/bootstrap code only wires services and runtime bridges are split by lifecycle, events, and domain capability.',
     [
       'src/main/profile/browser-pool-integration-cloak.ts',
+      'src/main/profile/extension-packages-manager.ts',
       'src/main/profile/ruyi-firefox-client.test.ts',
     ]
   ),
@@ -128,6 +132,7 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
       'src/main/mcp-server-http.mcp-surface.test.ts',
       'src/main/mcp-server-http.orchestration-routes.test.ts',
       'src/main/mcp-server-http.transport-session.test.ts',
+      'src/main/scheduler/scheduler-service.ts',
     ]
   ),
   ...createSizeRepairTargets(

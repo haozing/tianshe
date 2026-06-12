@@ -41,8 +41,9 @@ function registerMaterializeCleanToNewColumns(duckdb: DuckDBService): void {
 }
 
 function registerUpdateColumnMetadata(duckdb: DuckDBService): void {
-  registerDatasetRoute({
+  registerSchemaMutationRoute({
     channel: 'duckdb:update-column-metadata',
+    getDatasetId: (datasetId: string) => datasetId,
     handler: async (
       _event: IpcMainInvokeEvent,
       datasetId: string,
@@ -231,7 +232,7 @@ function registerApplySchema(duckdb: DuckDBService): void {
       }
     ) => {
       const { datasetId, schema } = params;
-      await duckdb.updateDatasetSchema(datasetId, schema);
+      await duckdb.applyDatasetSchemaMetadata(datasetId, schema);
 
       return { success: true };
     },

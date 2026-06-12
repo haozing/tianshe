@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import {
+  BrowserPoolErrorCode,
   ErrorCode,
   RegistryErrorCode,
   createStructuredError,
@@ -23,6 +24,8 @@ const ERROR_CODE_STATUS_MAP: Record<string, number> = {
   [ErrorCode.REQUEST_FAILED]: 429,
   [ErrorCode.TIMEOUT]: 408,
   [ErrorCode.WAIT_TIMEOUT]: 408,
+  [BrowserPoolErrorCode.POOL_NOT_INITIALIZED]: 503,
+  [BrowserPoolErrorCode.POOL_STOPPED]: 503,
 };
 
 export type AsyncHandler = (req: Request, res: Response) => Promise<void>;

@@ -91,6 +91,7 @@ export interface DuckDBServiceDatasetFacade {
     computeConfig?: any;
   }): Promise<void>;
   updateDatasetSchema(datasetId: string, schema: any[]): Promise<void>;
+  applyDatasetSchemaMetadata(datasetId: string, schema: any[]): Promise<void>;
   reorderColumns(datasetId: string, columnNames: string[]): Promise<void>;
   deleteColumn(datasetId: string, columnName: string, force?: boolean): Promise<void>;
   analyzeDatasetTypes(datasetId: string): Promise<{ schema: any[]; sampleData: any[] }>;
@@ -666,6 +667,12 @@ async updateColumn(params: {
 async updateDatasetSchema(datasetId: string, schema: any[]): Promise<void> {
   if (!this.datasetService) return;
   await this.datasetService.updateDatasetSchema(datasetId, schema);
+  this.queryEngine?.clearColumnCache(datasetId);
+},
+
+async applyDatasetSchemaMetadata(datasetId: string, schema: any[]): Promise<void> {
+  if (!this.datasetService) return;
+  await this.datasetService.applyDatasetSchemaMetadata(datasetId, schema);
   this.queryEngine?.clearColumnCache(datasetId);
 },
 

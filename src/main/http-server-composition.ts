@@ -31,6 +31,7 @@ import type { FingerprintManager } from '../core/stealth/fingerprint-manager';
 import type { PluginRegistry } from '../core/js-plugin/registry';
 import type { CloudRuntimePluginProvider } from '../edition/types';
 import type { BrowserRuntimeManager } from '../core/browser-runtime';
+import type { BrowserPoolReadinessSnapshot } from './browser-pool-readiness';
 
 interface LoggerLike {
   info(message: string, ...args: unknown[]): void;
@@ -47,6 +48,7 @@ interface CreateHttpServerCompositionOptions {
   runtimeMetrics: RuntimeMetricsSnapshot;
   sessionBridge: HttpSessionBridge;
   getBrowserPoolManager?: () => BrowserPoolManager;
+  getBrowserPoolReadiness?: () => BrowserPoolReadinessSnapshot;
   normalizeStructuredError: (error: unknown) => StructuredError;
   mapErrorStatus: (code: string, fallback?: number) => number;
   mapStructuredErrorStatus: (error: StructuredError, fallback?: number) => number;
@@ -140,15 +142,30 @@ export const createHttpServerComposition = (
     browser: {
       browserPoolAvailable: Boolean(options.getBrowserPoolManager),
       parseRequestedRuntimeId,
-      acquireBrowserFromPool: (profileId, runtimeId, source = 'mcp') =>
-        acquireBrowserFromPool({
+      acquireBrowserFromPool: (profileId, runtimeId, source = 'mcp', signal) => {
+        const readiness = options.getBrowserPoolReadiness?.();
+        if (readiness && readiness.status !== 'ready') {
+          throw createStructuredError(
+            ErrorCode.POOL_NOT_INITIALIZED,
+            `Browser pool is not ready: ${readiness.status}`,
+            {
+              context: {
+                readiness,
+              },
+              retryable: readiness.status === 'initializing' || readiness.status === 'not-started',
+            }
+          );
+        }
+        return acquireBrowserFromPool({
           getBrowserPoolManager: options.getBrowserPoolManager,
           runtimeMetrics: options.runtimeMetrics,
           logger: options.logger,
           profileId,
           runtimeId,
           source,
-        }),
+          signal,
+        });
+      },
       getBrowserPoolManager: options.getBrowserPoolManager,
     },
     invoke: {

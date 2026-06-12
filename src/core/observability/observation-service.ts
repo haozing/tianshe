@@ -11,6 +11,7 @@ import type {
 import { createRuntimeArtifactId, createRuntimeEventId } from './types';
 import { createChildTraceContext, getCurrentTraceContext, withTraceContext } from './observation-context';
 import { createLogger } from '../logger';
+import { getBrowserFamilyForRuntime } from '../../types/browser-runtime';
 
 const logger = createLogger('ObservationService');
 const OBSERVATION_SINK_WRITE_TIMEOUT_MS = 250;
@@ -132,6 +133,11 @@ export function getObservationSink(): ObservationSink | null {
   return observationSink;
 }
 
+function resolveBrowserEngine(context: TraceContext) {
+  if (context.browserEngine) return context.browserEngine;
+  return context.browserRuntimeId ? getBrowserFamilyForRuntime(context.browserRuntimeId) : undefined;
+}
+
 class ObservationSinkWriteTimeoutError extends Error {
   constructor(readonly kind: 'event' | 'artifact', readonly timeoutMs: number) {
     super(`Timed out writing runtime ${kind} after ${timeoutMs}ms`);
@@ -176,6 +182,7 @@ async function writeObservationSinkWithTimeout(
 class ObservationService {
   async event(input: ObservationEventInput): Promise<RuntimeEvent> {
     const context = eventContext(input.context);
+    const browserEngine = resolveBrowserEngine(context);
     const runtimeEvent: RuntimeEvent = {
       eventId: createRuntimeEventId(),
       timestamp: Date.now(),
@@ -192,6 +199,7 @@ class ObservationService {
       ...(context.capability ? { capability: context.capability } : {}),
       ...(context.pluginId ? { pluginId: context.pluginId } : {}),
       ...(context.browserRuntimeId ? { browserRuntimeId: context.browserRuntimeId } : {}),
+      ...(browserEngine ? { browserEngine } : {}),
       ...(context.sessionId ? { sessionId: context.sessionId } : {}),
       ...(context.profileId ? { profileId: context.profileId } : {}),
       ...(context.datasetId ? { datasetId: context.datasetId } : {}),

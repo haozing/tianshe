@@ -90,7 +90,18 @@ export function registerProfileHandlers(
   windowManager: WindowManager,
   options: RegisterProfileHandlersOptions = {}
 ) {
-  const launchedPoolHandles = new Map<string, BrowserHandle>();
+  const launchedPoolHandles = new Map<
+    string,
+    { handle: BrowserHandle; releasing: boolean; releaseLease: () => Promise<void> }
+  >();
+  const cleanupTrackedPoolHandle = async (browserId: string): Promise<void> => {
+    const tracked = launchedPoolHandles.get(browserId);
+    if (!tracked) return;
+    launchedPoolHandles.delete(browserId);
+    if (tracked.releasing) return;
+    tracked.releasing = true;
+    await tracked.releaseLease();
+  };
   const assertSender = (event: IpcMainInvokeEvent, channel: string): void => {
     options.senderGuard?.(event, channel);
   };
@@ -351,6 +362,9 @@ export function registerProfileHandlers(
         const profileLease = await acquireProfileLiveSessionLease(profileId, {
           timeoutMs: launchOptions?.timeout || 30000,
         });
+        const releaseLease = async (): Promise<void> => {
+          await profileLease?.release().catch(() => undefined);
+        };
         let handle: BrowserHandle;
         try {
           handle = attachProfileLiveSessionLease(
@@ -371,7 +385,13 @@ export function registerProfileHandlers(
           await profileLease?.release().catch(() => undefined);
           throw error;
         }
-        launchedPoolHandles.set(handle.browserId, handle);
+        launchedPoolHandles.set(handle.browserId, { handle, releasing: false, releaseLease });
+        const handleReleased = ({ browserId: releasedBrowserId }: { browserId: string }) => {
+          if (releasedBrowserId !== handle.browserId) return;
+          poolManager.getEventEmitter().off('browser:released', handleReleased);
+          void cleanupTrackedPoolHandle(handle.browserId);
+        };
+        poolManager.getEventEmitter().on('browser:released', handleReleased);
 
         logger.info('Browser acquired from profile pool', {
           browserId: handle.browserId,
@@ -421,7 +441,8 @@ export function registerProfileHandlers(
 
         if (trackedHandle) {
           launchedPoolHandles.delete(browserId);
-          await trackedHandle.release(releaseOptions);
+          trackedHandle.releasing = true;
+          await trackedHandle.handle.release(releaseOptions);
         } else {
           // 释放浏览器回池；Profile 状态由浏览器池统一维护
           await poolManager.release(browserId, releaseOptions);

@@ -35,16 +35,22 @@ const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Existing oversized extension browser facade; ongoing plan extracts role capabilities and shared browser operation helpers.',
   'src/core/browser-pool/global-pool.ts':
     'Existing oversized global browser pool; split lifecycle, acquire queue, and diagnostics during pool refactor.',
+  'src/core/browser-pool/pool-manager.ts':
+    'Existing oversized browser pool manager; split acquire, release, profile state sync, and event coordination during pool lifecycle refactor.',
   'src/core/browser-ruyi/ruyi-browser.ts':
     'Existing oversized Ruyi browser facade; ongoing plan extracts role capabilities and shared browser operation helpers.',
   'src/core/js-plugin/manager.test.ts':
     'Existing oversized plugin manager test; split lifecycle, install, and helper contracts when expanding coverage.',
+  'src/core/js-plugin/manager.ts':
+    'Existing oversized plugin manager; split lifecycle, install/uninstall orchestration, and execution coordination adapters.',
   'src/core/js-plugin/namespaces/database.ts':
     'Existing oversized plugin database namespace; split import/export helpers and SQL execution adapters during plugin API cleanup.',
   'src/core/js-plugin/namespaces/profile.ts':
     'Existing oversized plugin profile namespace; split launch, pool stats, profile CRUD, and lease operations.',
   'src/core/js-plugin/plugin-loader.test.ts':
     'Existing oversized plugin loader test; split manifest, runtime, and dependency loader contracts.',
+  'src/core/js-plugin/plugin-installation-coordinator.ts':
+    'Existing oversized plugin installation coordinator; split package validation, unpack, persistence, and rollback flows.',
   'src/core/js-plugin/registry.ts':
     'Existing oversized plugin registry; split discovery, persistence, and dependency index responsibilities.',
   'src/core/logger.test.ts':
@@ -89,6 +95,8 @@ const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Existing oversized view IPC test; split view lifecycle, bounds, cloud auth, and dock contracts.',
   'src/main/mcp-http-session-runtime.ts':
     'Existing oversized MCP session runtime; session state has been grouped and further route split remains planned.',
+  'src/main/scheduler/scheduler-service.ts':
+    'Existing oversized scheduler service; split restore, timer, execution, and lifecycle suppression responsibilities.',
   'src/main/mcp-server-http.auth-invoke.test.ts':
     'Focused split from former MCP giant test; kept under 1500 lines by split contract.',
   'src/main/mcp-server-http.browser-binding.test.ts':
@@ -101,6 +109,8 @@ const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Focused split from former MCP giant test; kept under 1500 lines by split contract.',
   'src/main/profile/browser-pool-integration-cloak.ts':
     'New Cloak Playwright adapter owns runtime launch plus advanced Playwright role bridges; split download, dialog, interception, and event helpers after real-browser smoke tests stabilize.',
+  'src/main/profile/extension-packages-manager.ts':
+    'Existing oversized extension packages manager; split package persistence, binding, import/export, and filesystem cleanup flows.',
   'src/main/profile/ruyi-firefox-client.test.ts':
     'Existing oversized Ruyi Firefox client test; split launch, connection, and protocol contracts.',
   'src/main/profile/ruyi-firefox-client.ts':

@@ -36,6 +36,7 @@ export type {
 } from './browser-runtime';
 export {
   BROWSER_RUNTIME_IDS,
+  LEGACY_BROWSER_RUNTIME_ALIASES,
   PERSISTENT_BROWSER_RUNTIME_IDS,
   DEFAULT_BROWSER_RUNTIME_ID,
   isBrowserRuntimeId,

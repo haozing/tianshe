@@ -1,6 +1,7 @@
 import type { App } from 'electron';
 import Store from 'electron-store';
 import { MAX_WEBCONTENTSVIEWS } from '../../constants';
+import type { BrowserPoolConfig } from '../../constants/browser-pool';
 import { DEFAULT_OCR_POOL_CONFIG, normalizeOcrPoolConfig, type OCRPoolConfig } from '../../constants/ocr-pool';
 import { initializeBrowserPool } from '../../core/browser-pool';
 import { HookBus } from '../../core/hookbus';
@@ -351,12 +352,17 @@ function initializeBrowserPoolRuntime(
       runtimeSourceOverride: sourceOverride,
     });
   };
+  const browserPoolConfigStore = new Store<{ browserPoolConfig?: Partial<BrowserPoolConfig> }>({
+    name: 'browser-pool-config',
+  });
+  const savedBrowserPoolConfig = browserPoolConfigStore.get('browserPoolConfig') || {};
 
   appRuntime.browserPoolReadiness.markInitializing();
   initializeBrowserPool(
     () => duckdbService.getProfileService(),
     browserFactory,
-    createBrowserDestroyer(viewManager)
+    createBrowserDestroyer(viewManager),
+    savedBrowserPoolConfig
   )
     .then(() => {
       appRuntime.browserPoolReadiness.markReady();

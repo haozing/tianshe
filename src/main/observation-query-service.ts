@@ -7,6 +7,7 @@ import type {
   TraceTimeline,
   TraceSummary,
 } from '../core/observability/types';
+import { getBrowserFamilyForRuntime } from '../types/browser-runtime';
 import { RuntimeObservationService } from './duckdb/runtime-observation-service';
 
 function isFailureEvent(event: RuntimeEvent): boolean {
@@ -56,6 +57,12 @@ function pickFirstDefined<T>(...values: Array<T | undefined>): T | undefined {
   return undefined;
 }
 
+function resolveBrowserEngineFromEvent(event: RuntimeEvent | undefined) {
+  if (!event) return undefined;
+  if (event.browserEngine) return event.browserEngine;
+  return event.browserRuntimeId ? getBrowserFamilyForRuntime(event.browserRuntimeId) : undefined;
+}
+
 function selectLatestArtifact(
   artifacts: RuntimeArtifact[],
   type: RuntimeArtifact['type']
@@ -99,6 +106,11 @@ export class ObservationQueryService {
           rootEvent?.browserRuntimeId,
           firstFailure?.browserRuntimeId,
           lastEvent?.browserRuntimeId
+        ),
+        browserEngine: pickFirstDefined(
+          resolveBrowserEngineFromEvent(rootEvent),
+          resolveBrowserEngineFromEvent(firstFailure),
+          resolveBrowserEngineFromEvent(lastEvent)
         ),
         sessionId: pickFirstDefined(rootEvent?.sessionId, firstFailure?.sessionId, lastEvent?.sessionId),
         profileId: pickFirstDefined(rootEvent?.profileId, firstFailure?.profileId, lastEvent?.profileId),

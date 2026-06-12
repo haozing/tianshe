@@ -42,6 +42,10 @@ export async function allPrepared(
   sql: string,
   params: any[]
 ): Promise<DuckDBResultReader> {
+  if (params.length === 0) {
+    return await conn.runAndReadAll(sql);
+  }
+
   return withPrepared(conn, sql, params, (stmt) => stmt.runAndReadAll());
 }
 

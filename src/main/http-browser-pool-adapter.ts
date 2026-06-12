@@ -21,6 +21,7 @@ interface AcquireBrowserFromPoolOptions {
   runtimeId?: BrowserRuntimeId;
   source?: 'mcp' | 'http';
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 type TakeoverCapablePoolManager = BrowserPoolManager & {
@@ -302,6 +303,7 @@ export const acquireBrowserFromPool = async ({
   runtimeId,
   source = 'mcp',
   timeoutMs,
+  signal,
 }: AcquireBrowserFromPoolOptions): Promise<BrowserHandle> => {
   if (!getBrowserPoolManager) {
     throw new Error('BrowserPoolManager not available. MCP requires browser pool.');
@@ -328,6 +330,7 @@ export const acquireBrowserFromPool = async ({
   try {
     profileLease = await acquireProfileLiveSessionLease(resolvedProfileId, {
       timeoutMs: effectiveTimeoutMs,
+      signal,
     });
   } catch (error) {
     const takenOverAfterLeaseContention = await tryTakeoverLockedBrowser({
@@ -377,7 +380,7 @@ export const acquireBrowserFromPool = async ({
     const handle = attachProfileLiveSessionLease(
       await poolManager.acquire(
         profileId || undefined,
-        { strategy: 'any', timeout: effectiveTimeoutMs, priority: 'normal', runtimeId },
+        { strategy: 'any', timeout: effectiveTimeoutMs, priority: 'normal', runtimeId, signal },
         source
       ),
       profileLease

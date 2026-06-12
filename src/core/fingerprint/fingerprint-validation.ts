@@ -1,4 +1,4 @@
-import type { BrowserRuntimeId } from '../../types/browser-runtime';
+import { normalizeBrowserRuntimeId, type BrowserRuntimeId } from '../../types/browser-runtime';
 import type { FingerprintConfig } from '../../types/profile';
 import { getFingerprintRequiredPaths } from './fingerprint-engine-contracts';
 
@@ -38,11 +38,11 @@ function hasRequiredFingerprintValue(fingerprint: FingerprintConfig, path: strin
 }
 
 function normalizeBrowserEngine(
-  runtimeId: BrowserRuntimeId | undefined,
+  runtimeId: BrowserRuntimeId | 'electron' | 'extension' | 'ruyi' | undefined,
   fingerprint: FingerprintConfig
 ): BrowserRuntimeId {
   if (runtimeId) {
-    return runtimeId;
+    return normalizeBrowserRuntimeId(runtimeId);
   }
   if (fingerprint.identity.hardware.browserFamily === 'firefox') {
     return 'firefox-bidi';
@@ -83,7 +83,7 @@ function validateSpeechBundle(fingerprint: FingerprintConfig, warnings: string[]
 
 export function getFingerprintPreflightIssues(
   fingerprint: FingerprintConfig | undefined,
-  runtimeId?: BrowserRuntimeId
+  runtimeId?: BrowserRuntimeId | 'electron' | 'extension' | 'ruyi'
 ): string[] {
   if (!fingerprint) {
     return [
@@ -108,7 +108,7 @@ export function getFingerprintPreflightIssues(
 
 export function validateFingerprintConfig(
   fingerprint: FingerprintConfig,
-  runtimeId?: BrowserRuntimeId
+  runtimeId?: BrowserRuntimeId | 'electron' | 'extension' | 'ruyi'
 ): FingerprintValidationResult {
   const warnings = [...getFingerprintPreflightIssues(fingerprint, runtimeId)];
   const identity = fingerprint.identity;

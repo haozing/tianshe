@@ -13,6 +13,27 @@ export interface BrowserFailureBundleOptions {
   component: string;
   labelPrefix: string;
   maxArtifacts?: number;
+  timeoutMs?: number;
+}
+
+const DEFAULT_CAPTURE_TIMEOUT_MS = 2_000;
+
+async function settleWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timeoutId: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timeoutId = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+  } catch {
+    return null;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 export async function attachBrowserFailureBundle(
@@ -21,23 +42,23 @@ export async function attachBrowserFailureBundle(
 ): Promise<RuntimeArtifact[]> {
   const artifacts: RuntimeArtifact[] = [];
   const maxArtifacts = Math.max(1, options.maxArtifacts ?? 4);
+  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS);
 
-  const snapshotResult = await Promise.allSettled([
-    browser.getCurrentUrl().catch(() => ''),
-    typeof browser.title === 'function' ? browser.title().catch(() => '') : Promise.resolve(''),
-    browser
-      .snapshot({
+  const [currentUrl, currentTitle, snapshot] = await Promise.all([
+    settleWithTimeout(browser.getCurrentUrl(), timeoutMs),
+    typeof browser.title === 'function'
+      ? settleWithTimeout(browser.title(), timeoutMs)
+      : Promise.resolve(''),
+    settleWithTimeout(
+      browser.snapshot({
         includeSummary: true,
         includeNetwork: 'smart',
         includeConsole: true,
         elementsFilter: 'interactive',
-      })
-      .catch(() => null),
+      }),
+      timeoutMs
+    ),
   ]);
-
-  const currentUrl = snapshotResult[0].status === 'fulfilled' ? snapshotResult[0].value : '';
-  const currentTitle = snapshotResult[1].status === 'fulfilled' ? snapshotResult[1].value : '';
-  const snapshot = snapshotResult[2].status === 'fulfilled' ? snapshotResult[2].value : null;
 
   if (snapshot && artifacts.length < maxArtifacts) {
     artifacts.push(
@@ -47,8 +68,8 @@ export async function attachBrowserFailureBundle(
         type: 'snapshot',
         label: `${options.labelPrefix} snapshot`,
         data: {
-          currentUrl,
-          currentTitle,
+          currentUrl: currentUrl ?? '',
+          currentTitle: currentTitle ?? '',
           snapshot,
         },
       })
@@ -67,7 +88,7 @@ export async function attachBrowserFailureBundle(
         type: 'console_tail',
         label: `${options.labelPrefix} console tail`,
         data: {
-          currentUrl,
+          currentUrl: currentUrl ?? '',
           messages: consoleTail,
         },
       })
@@ -84,7 +105,7 @@ export async function attachBrowserFailureBundle(
         type: 'network_summary',
         label: `${options.labelPrefix} network summary`,
         data: {
-          currentUrl,
+          currentUrl: currentUrl ?? '',
           summary: networkSummary,
         },
       })
@@ -96,11 +117,17 @@ export async function attachBrowserFailureBundle(
     typeof browser.screenshotDetailed === 'function'
   ) {
     try {
-      const screenshot = await browser.screenshotDetailed({
-        captureMode: 'viewport',
-        format: 'jpeg',
-        quality: 60,
-      });
+      const screenshot = await settleWithTimeout(
+        browser.screenshotDetailed({
+          captureMode: 'viewport',
+          format: 'jpeg',
+          quality: 60,
+        }),
+        timeoutMs
+      );
+      if (!screenshot) {
+        return artifacts;
+      }
       artifacts.push(
         await observationService.attachArtifact({
           context: options.context,
@@ -108,7 +135,7 @@ export async function attachBrowserFailureBundle(
           type: 'screenshot',
           label: `${options.labelPrefix} screenshot`,
           data: {
-            currentUrl,
+            currentUrl: currentUrl ?? '',
             screenshot: {
               mimeType: screenshot.mimeType,
               format: screenshot.format,

@@ -41,12 +41,15 @@ describe('http-server-composition', () => {
     }
   });
 
-  const startServer = async (restApiConfig: {
-    enableAuth?: boolean;
-    token?: string;
-    mcpRequireAuth?: boolean;
-    enableMcp?: boolean;
-  }) => {
+  const startServer = async (
+    restApiConfig: {
+      enableAuth?: boolean;
+      token?: string;
+      mcpRequireAuth?: boolean;
+      enableMcp?: boolean;
+    },
+    compositionOptions?: Partial<Parameters<typeof createHttpServerComposition>[0]>
+  ) => {
     const logger = createLogger();
     const runtimeState = createHttpRuntimeState();
     const sessionBridge = createHttpSessionBridge({
@@ -64,6 +67,7 @@ describe('http-server-composition', () => {
       runtimeState,
       runtimeMetrics: runtimeState.runtimeMetrics,
       sessionBridge,
+      ...compositionOptions,
       normalizeStructuredError: toStructuredError,
       mapErrorStatus,
       mapStructuredErrorStatus,
@@ -203,5 +207,40 @@ describe('http-server-composition', () => {
       body: JSON.stringify({}),
     });
     expect(response.status).toBe(403);
+  });
+
+  it('returns 503 for browser requests while browser pool is still initializing', async () => {
+    const getBrowserPoolManager = vi.fn(() => {
+      throw new Error('pool should not be acquired before ready');
+    });
+    const { baseUrl } = await startServer(
+      {
+        enableAuth: false,
+        enableMcp: false,
+      },
+      {
+        getBrowserPoolManager: getBrowserPoolManager as never,
+        getBrowserPoolReadiness: () => ({
+          status: 'initializing',
+          startedAt: Date.now(),
+          readyAt: null,
+          failedAt: null,
+          error: null,
+        }),
+      }
+    );
+
+    const response = await fetch(`${baseUrl}/api/v1/orchestration/sessions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ visible: false }),
+    });
+    const payload = (await response.json()) as { code?: string; context?: unknown };
+
+    expect(response.status).toBe(503);
+    expect(payload.code).toBe('BROWSER_POOL_NOT_INITIALIZED');
+    expect(getBrowserPoolManager).not.toHaveBeenCalled();
   });
 });

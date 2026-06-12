@@ -1589,6 +1589,7 @@ describe('JSPluginManager', () => {
         mockMessage,
         expect.any(Map),
         expect.any(Map),
+        expect.any(Function),
         expect.any(Function)
       );
     });

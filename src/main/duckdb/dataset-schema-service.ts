@@ -56,6 +56,34 @@ export class DatasetSchemaService {
     await this.storageService.smartAttach(datasetId, escapedPath);
   }
 
+  private assertApplySchemaPreservesPhysicalShape(currentSchema: any[], nextSchema: any[]): void {
+    if (!Array.isArray(nextSchema)) {
+      throw new Error('schema must be an array');
+    }
+
+    const currentByName = new Map(currentSchema.map((column) => [column.name, column]));
+    const nextByName = new Map(nextSchema.map((column) => [column.name, column]));
+    if (currentByName.size !== nextByName.size) {
+      throw new Error('apply-schema cannot add or remove columns; use column mutation APIs instead');
+    }
+
+    for (const [name, currentColumn] of currentByName) {
+      const nextColumn = nextByName.get(name);
+      if (!nextColumn) {
+        throw new Error(`apply-schema cannot rename or remove column: ${name}`);
+      }
+
+      const shapeFields = ['duckdbType', 'fieldType', 'nullable', 'storageMode', 'computeConfig'];
+      for (const field of shapeFields) {
+        if (JSON.stringify(currentColumn[field] ?? null) !== JSON.stringify(nextColumn[field] ?? null)) {
+          throw new Error(
+            `apply-schema cannot change physical or computed column shape for ${name}; use column mutation APIs instead`
+          );
+        }
+      }
+    }
+  }
+
   private async tryDropPhysicalColumn(
     datasetId: string,
     filePath: string,
@@ -125,6 +153,64 @@ export class DatasetSchemaService {
    * 6. 处理默认值
    * 7. 复制数据（如指定）
    */
+  private async trySetPhysicalColumnType(
+    datasetId: string,
+    filePath: string,
+    columnName: string,
+    duckdbType: string,
+    reason: string
+  ): Promise<void> {
+    try {
+      await this.ensureDatasetAttached(datasetId, filePath);
+      await this.conn.run(
+        `ALTER TABLE ${this.getDatasetTableRef(datasetId)} ALTER COLUMN ${quoteIdentifier(columnName)} SET DATA TYPE ${duckdbType}`
+      );
+      logger.info('Restored dataset physical column type during compensation', {
+        datasetId,
+        columnName,
+        duckdbType,
+        reason,
+      });
+    } catch (error: unknown) {
+      logger.error('Failed to compensate dataset physical column type', {
+        datasetId,
+        columnName,
+        duckdbType,
+        reason,
+        errorMessage: getUnknownErrorMessage(error),
+      });
+    }
+  }
+
+  private async trySetPhysicalColumnNullability(
+    datasetId: string,
+    filePath: string,
+    columnName: string,
+    nullable: boolean,
+    reason: string
+  ): Promise<void> {
+    try {
+      await this.ensureDatasetAttached(datasetId, filePath);
+      await this.conn.run(
+        `ALTER TABLE ${this.getDatasetTableRef(datasetId)} ALTER COLUMN ${quoteIdentifier(columnName)} ${nullable ? 'DROP NOT NULL' : 'SET NOT NULL'}`
+      );
+      logger.info('Restored dataset physical column nullability during compensation', {
+        datasetId,
+        columnName,
+        nullable,
+        reason,
+      });
+    } catch (error: unknown) {
+      logger.error('Failed to compensate dataset physical column nullability', {
+        datasetId,
+        columnName,
+        nullable,
+        reason,
+        errorMessage: getUnknownErrorMessage(error),
+      });
+    }
+  }
+
   async addColumn(params: {
     datasetId: string;
     columnName: string;
@@ -455,6 +541,8 @@ export class DatasetSchemaService {
       }
 
       let physicalColumnRenamed = false;
+      let physicalColumnTypeChanged = false;
+      let physicalColumnNullabilityChanged = false;
       try {
         if (isPhysicalColumn) {
           await this.ensureDatasetAttached(safeDatasetId, dataset.filePath);
@@ -473,6 +561,7 @@ export class DatasetSchemaService {
             await this.conn.run(
               `ALTER TABLE ${tableRef} ALTER COLUMN ${quoteIdentifier(targetName)} SET DATA TYPE ${updatedColumn.duckdbType}`
             );
+            physicalColumnTypeChanged = true;
           }
 
           if (nullable !== undefined && nullable !== column.nullable) {
@@ -485,6 +574,7 @@ export class DatasetSchemaService {
                 `ALTER TABLE ${tableRef} ALTER COLUMN ${quoteIdentifier(targetName)} SET NOT NULL`
               );
             }
+            physicalColumnNullabilityChanged = true;
           }
 
           if (fieldType !== undefined && fieldType !== column.fieldType) {
@@ -540,6 +630,24 @@ export class DatasetSchemaService {
         this.dependencyManager.rebuildFromSchema(updatedSchema);
       } catch (error) {
         this.dependencyManager.rebuildFromSchema(dataset.schema);
+        if (physicalColumnNullabilityChanged) {
+          await this.trySetPhysicalColumnNullability(
+            safeDatasetId,
+            dataset.filePath,
+            targetName,
+            column.nullable !== false,
+            'updateColumn failed after physical column nullability change'
+          );
+        }
+        if (physicalColumnTypeChanged) {
+          await this.trySetPhysicalColumnType(
+            safeDatasetId,
+            dataset.filePath,
+            targetName,
+            column.duckdbType,
+            'updateColumn failed after physical column type change'
+          );
+        }
         if (physicalColumnRenamed) {
           await this.tryRenamePhysicalColumn(
             safeDatasetId,
@@ -558,6 +666,19 @@ export class DatasetSchemaService {
         targetName,
         renamed: isRenaming,
       });
+    });
+  }
+
+  async applyDatasetSchemaMetadata(datasetId: string, schema: any[]): Promise<void> {
+    const safeDatasetId = sanitizeDatasetId(datasetId);
+
+    return this.storageService.executeInQueue(safeDatasetId, async () => {
+      const dataset = await this.metadataService.getDatasetInfo(safeDatasetId);
+      if (!dataset) throw new Error(`Dataset not found: ${safeDatasetId}`);
+
+      this.assertApplySchemaPreservesPhysicalShape(dataset.schema ?? [], schema);
+      await this.metadataService.updateDatasetSchema(safeDatasetId, schema);
+      this.dependencyManager.rebuildFromSchema(schema);
     });
   }
 

@@ -132,9 +132,21 @@ describe('SchedulerService', () => {
     it('init 应该先取消遗留 pending/running executions 再恢复 active tasks', async () => {
       await scheduler.init();
 
+      expect(mockTaskService.markStaleExecutionsCancelled).toHaveBeenCalledTimes(1);
+      expect(mockTaskService.getActiveTasks).not.toHaveBeenCalled();
+    });
+
+    it('restoreActiveTasks should explicitly restore active tasks after init', async () => {
+      const task = createTestTask({ nextRunAt: Date.now() + 60000 });
+      mockTaskService.getActiveTasks.mockResolvedValue([task]);
+
+      await scheduler.restoreActiveTasks();
+
       const staleOrder = mockTaskService.markStaleExecutionsCancelled.mock.invocationCallOrder[0];
       const activeOrder = mockTaskService.getActiveTasks.mock.invocationCallOrder[0];
       expect(staleOrder).toBeLessThan(activeOrder);
+      expect(mockTaskService.getActiveTasks).toHaveBeenCalledTimes(1);
+      expect(mockTaskService.updateTask).not.toHaveBeenCalledWith(task.id, { status: 'disabled' });
     });
 
     it('dispose 应该清理定时器', async () => {
@@ -163,6 +175,35 @@ describe('SchedulerService', () => {
       // 再快进 24 小时
       vi.advanceTimersByTime(24 * 60 * 60 * 1000);
       expect(mockTaskService.cleanupOldExecutions).toHaveBeenCalledTimes(3);
+    });
+
+    it('createTask should reject multiple schedule fields', async () => {
+      await expect(
+        scheduler.createTask({
+          pluginId: 'test-plugin',
+          name: 'Invalid Task',
+          scheduleType: 'interval',
+          interval: '1m',
+          cron: '* * * * *',
+          handlerId: 'test-handler',
+        })
+      ).rejects.toThrow(/Exactly one/);
+
+      expect(mockTaskService.createTask).not.toHaveBeenCalled();
+    });
+
+    it('createTask should reject scheduleType and schedule field mismatch', async () => {
+      await expect(
+        scheduler.createTask({
+          pluginId: 'test-plugin',
+          name: 'Invalid Task',
+          scheduleType: 'once',
+          interval: '1m',
+          handlerId: 'test-handler',
+        })
+      ).rejects.toThrow(/runAt is required/);
+
+      expect(mockTaskService.createTask).not.toHaveBeenCalled();
     });
   });
 

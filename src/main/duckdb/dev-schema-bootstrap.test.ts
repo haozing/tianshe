@@ -129,7 +129,8 @@ describe('DuckDB dev schema bootstrap', () => {
     ).map((row) => String(row.name));
     expect(browserProfileColumns).toEqual(
       expect.arrayContaining([
-        'engine',
+        'runtime_id',
+        'runtime_source_override',
         'quota',
         'idle_timeout_ms',
         'lock_timeout_ms',
