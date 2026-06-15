@@ -19,12 +19,14 @@ import type {
   StructDefinition,
   LoadLibraryOptions,
   LibraryInfo,
+  FFIIsolatedCallRunner,
 } from './types';
 import { getUnknownErrorMessage, toError } from '../../utils/error-message';
 import { createLogger } from '../logger';
 
 const SYSTEM_LIBS_ALLOWLIST = new Set(SYSTEM_LIBS_WHITELIST.map((lib) => lib.toLowerCase()));
 const logger = createLogger('FFIService');
+const DEFAULT_FFI_CALL_TIMEOUT_MS = 5000;
 
 /**
  * FFI 服务
@@ -63,11 +65,23 @@ export class FFIService {
   /** 额外允许的路径 */
   private readonly allowedPaths: string[];
 
+  /** 是否默认隔离异步调用 */
+  private readonly isolateCalls: boolean;
+
+  /** 默认调用超时 */
+  private readonly defaultCallTimeoutMs: number;
+
+  /** 隔离调用执行器 */
+  private readonly isolatedCallRunner?: FFIIsolatedCallRunner;
+
   constructor(config: FFIServiceConfig) {
     this.callerId = config.callerId;
     this.maxLibraries = config.maxLibraries ?? 10;
     this.maxCallbacks = config.maxCallbacks ?? 50;
     this.allowedPaths = config.allowedPaths ?? [];
+    this.isolateCalls = config.isolateCalls ?? true;
+    this.defaultCallTimeoutMs = normalizeCallTimeoutMs(config.defaultCallTimeoutMs);
+    this.isolatedCallRunner = config.isolatedCallRunner;
 
     logger.info('FFI service initialized', { callerId: this.callerId });
   }
@@ -115,7 +129,11 @@ export class FFIService {
       const koffiLib = koffi.load(safePath);
 
       // 创建 Library 实例
-      const library = new Library(safePath, koffiLib, this.callerId);
+      const library = new Library(safePath, koffiLib, this.callerId, {
+        isolateCalls: this.isolateCalls,
+        defaultCallTimeoutMs: this.defaultCallTimeoutMs,
+        ...(this.isolatedCallRunner ? { isolatedCallRunner: this.isolatedCallRunner } : {}),
+      });
 
       // 缓存
       this.libraries.set(safePath, library);
@@ -413,4 +431,11 @@ export class FFIService {
   private mapFFIType(type: string): string {
     return FFI_TYPE_MAP[type] || type;
   }
+}
+
+function normalizeCallTimeoutMs(value: number | undefined): number {
+  if (!Number.isFinite(value) || Number(value) <= 0) {
+    return DEFAULT_FFI_CALL_TIMEOUT_MS;
+  }
+  return Math.max(1, Math.trunc(Number(value)));
 }

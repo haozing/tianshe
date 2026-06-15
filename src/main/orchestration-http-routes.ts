@@ -7,6 +7,7 @@ import { showBrowserView, hideBrowserView } from '../core/browser-pool';
 import type { BrowserHandle } from '../core/browser-pool';
 import {
   createOrchestrationExecutor,
+  hashOrchestrationInvokePayload,
   listOrchestrationCapabilities,
   type OrchestrationExecutor,
   type OrchestrationIdempotencyEntry,
@@ -41,6 +42,22 @@ const formatZodIssues = (error: z.ZodError): string =>
     .join('; ');
 
 const asTrimmedText = (value: unknown): string => String(value == null ? '' : value).trim();
+
+const createIdempotencyRunningError = (
+  capability: string,
+  idempotencyKey: string
+): StructuredError =>
+  createStructuredError(
+    ErrorCode.REQUEST_FAILED,
+    'Idempotency-Key is already reserved by an in-flight request',
+    {
+      context: {
+        capability,
+        idempotencyKey,
+        reason: 'idempotency_request_running',
+      },
+    }
+  );
 
 const resolveProfileIdHint = async (
   dependencies: RegisterOrchestrationRoutesOptions['dependencies'],
@@ -435,9 +452,38 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
       ? resolveIdempotencyNamespace(req, sessionId)
       : undefined;
     if (idempotencyKey && idempotencyNamespace && idempotencyPersistence) {
-      const persisted = await idempotencyPersistence.get(idempotencyNamespace, idempotencyKey);
+      const reservationEntry: OrchestrationIdempotencyEntry = {
+        state: 'running',
+        requestHash: hashOrchestrationInvokePayload(name, args),
+        capability: name,
+        createdAt: Date.now(),
+        meta: {
+          idempotencyKey,
+          traceId:
+            typeof res.locals.traceId === 'string' && res.locals.traceId.trim().length > 0
+              ? (res.locals.traceId as string)
+              : undefined,
+        },
+      };
+      const reservation = idempotencyPersistence.reserve
+        ? await idempotencyPersistence.reserve(idempotencyNamespace, idempotencyKey, reservationEntry)
+        : {
+            status: 'exists' as const,
+            entry: await idempotencyPersistence.get(idempotencyNamespace, idempotencyKey),
+          };
+      const persisted = reservation.entry;
       if (persisted) {
-        session.idempotencyCache.set(idempotencyKey, persisted);
+        if (reservation.status === 'exists' && persisted.state === 'running') {
+          const structured = createIdempotencyRunningError(name, idempotencyKey);
+          return sendStructuredError(res, structured, options.mapStructuredErrorStatus(structured), {
+            sessionId,
+            capability: name,
+            idempotencyKey,
+          });
+        }
+        if (reservation.status === 'exists') {
+          session.idempotencyCache.set(idempotencyKey, persisted);
+        }
       }
     }
     const requestTraceId =

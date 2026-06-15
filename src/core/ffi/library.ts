@@ -5,13 +5,16 @@
  */
 
 import * as koffi from 'koffi';
+import { ChildProcessFFIIsolatedCallRunner } from './isolated-runner';
 import { FFIError } from './errors';
 import { FFI_TYPE_MAP } from './types';
-import type { FunctionSignature } from './types';
+import type { FFICallOptions, FFIIsolatedCallRunner, FunctionSignature } from './types';
 import { getUnknownErrorMessage, toError } from '../../utils/error-message';
 import { createLogger } from '../logger';
 
 const logger = createLogger('FFILibrary');
+const DEFAULT_FFI_CALL_TIMEOUT_MS = 5000;
+const defaultIsolatedCallRunner = new ChildProcessFFIIsolatedCallRunner();
 
 /**
  * 动态链接库实例
@@ -38,13 +41,29 @@ export class Library {
   /** koffi 库实例 */
   private koffiLib: any;
 
+  private readonly options: {
+    isolateCalls: boolean;
+    defaultCallTimeoutMs: number;
+    isolatedCallRunner: FFIIsolatedCallRunner;
+  };
+
   constructor(
     /** 库文件路径 */
     public readonly libPath: string,
     koffiLib: any,
-    private callerId: string
+    private callerId: string,
+    options: Partial<{
+      isolateCalls: boolean;
+      defaultCallTimeoutMs: number;
+      isolatedCallRunner: FFIIsolatedCallRunner;
+    }> = {}
   ) {
     this.koffiLib = koffiLib;
+    this.options = {
+      isolateCalls: options.isolateCalls ?? true,
+      defaultCallTimeoutMs: options.defaultCallTimeoutMs ?? DEFAULT_FFI_CALL_TIMEOUT_MS,
+      isolatedCallRunner: options.isolatedCallRunner ?? defaultIsolatedCallRunner,
+    };
   }
 
   /**
@@ -113,7 +132,7 @@ export class Library {
    * @example
    * const result = await lib.call('MessageBoxA', [null, 'Hello', 'Title', 0]);
    */
-  async call(name: string, args: any[]): Promise<any> {
+  async call(name: string, args: any[], options: FFICallOptions = {}): Promise<any> {
     const startTime = Date.now();
 
     try {
@@ -134,10 +153,12 @@ export class Library {
         callerId: this.callerId,
         libraryPath: this.libPath,
         functionName: name,
+        isolated: this.shouldUseIsolatedCall(signature, options),
       });
 
-      // 调用函数
-      const result = func(...args);
+      const result = this.shouldUseIsolatedCall(signature, options)
+        ? await this.callIsolated(name, signature, args, options)
+        : await this.callInProcess(func, args, this.resolveTimeoutMs(signature, options));
 
       const duration = Date.now() - startTime;
       logger.info('FFI function completed', {
@@ -192,6 +213,17 @@ export class Library {
   }
 
   /**
+   * 显式非隔离异步调用。仅用于回调、指针或结构体参数等无法跨子进程序列化的 FFI 场景。
+   */
+  async callUnsafeInProcess(
+    name: string,
+    args: any[],
+    options: Omit<FFICallOptions, 'isolated'> = {}
+  ): Promise<any> {
+    return this.call(name, args, { ...options, isolated: false });
+  }
+
+  /**
    * 获取函数指针
    *
    * @param name - 函数名
@@ -232,6 +264,123 @@ export class Library {
     });
     this.functions.clear();
     // koffi 会自动处理库的卸载
+  }
+
+  private shouldUseIsolatedCall(
+    signature: FunctionSignature,
+    options: FFICallOptions
+  ): boolean {
+    return options.isolated ?? signature.isolated ?? this.options.isolateCalls;
+  }
+
+  private async callIsolated(
+    functionName: string,
+    signature: FunctionSignature,
+    args: any[],
+    options: FFICallOptions
+  ): Promise<any> {
+    this.assertIsolatedCallSupported(signature, args);
+    const timeoutMs = this.resolveTimeoutMs(signature, options);
+    return await this.options.isolatedCallRunner.run(
+      {
+        libPath: this.libPath,
+        functionName,
+        signature,
+        args,
+        callerId: this.callerId,
+      },
+      { timeoutMs }
+    );
+  }
+
+  private async callInProcess(func: any, args: any[], timeoutMs: number): Promise<any> {
+    let timeout: NodeJS.Timeout | null = null;
+    try {
+      const callPromise = Promise.resolve().then(() => func(...args));
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new FFIError(`FFI call timed out after ${timeoutMs}ms`, 'CALL_TIMEOUT'));
+        }, timeoutMs);
+      });
+      return await Promise.race([callPromise, timeoutPromise]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  private resolveTimeoutMs(signature: FunctionSignature, options: FFICallOptions): number {
+    const value = options.timeoutMs ?? signature.timeoutMs ?? this.options.defaultCallTimeoutMs;
+    if (!Number.isFinite(value) || value <= 0) {
+      return DEFAULT_FFI_CALL_TIMEOUT_MS;
+    }
+    return Math.max(1, Math.trunc(value));
+  }
+
+  private assertIsolatedCallSupported(signature: FunctionSignature, args: any[]): void {
+    const unsupportedTypeIndex = signature.args.findIndex((type) =>
+      this.isNonSerializableFFIType(type)
+    );
+    if (unsupportedTypeIndex >= 0) {
+      throw new FFIError(
+        `FFI isolated call does not support argument type '${signature.args[unsupportedTypeIndex]}' at index ${unsupportedTypeIndex}; use callUnsafeInProcess() only for trusted callbacks/pointers`,
+        'ISOLATED_CALL_UNSUPPORTED'
+      );
+    }
+
+    if (!this.isSerializableValue(args)) {
+      throw new FFIError(
+        'FFI isolated call arguments must be structured-clone serializable; use callUnsafeInProcess() only for trusted callbacks/pointers',
+        'ISOLATED_CALL_UNSUPPORTED'
+      );
+    }
+  }
+
+  private isNonSerializableFFIType(type: string): boolean {
+    const normalized = String(type).trim().toLowerCase();
+    return (
+      normalized === 'pointer' ||
+      normalized === 'void*' ||
+      normalized.endsWith('*') ||
+      normalized.includes('callback') ||
+      normalized === 'function'
+    );
+  }
+
+  private isSerializableValue(value: unknown, seen = new Set<object>()): boolean {
+    if (
+      value === null ||
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean' ||
+      typeof value === 'bigint'
+    ) {
+      return true;
+    }
+
+    if (typeof value === 'undefined' || typeof value === 'function' || typeof value === 'symbol') {
+      return false;
+    }
+
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+      return true;
+    }
+
+    if (value instanceof Date) {
+      return true;
+    }
+
+    if (Array.isArray(value)) {
+      return value.every((item) => this.isSerializableValue(item, seen));
+    }
+
+    if (typeof value === 'object') {
+      const objectValue = value as Record<string, unknown>;
+      if (seen.has(objectValue)) return false;
+      seen.add(objectValue);
+      return Object.values(objectValue).every((item) => this.isSerializableValue(item, seen));
+    }
+
+    return false;
   }
 
   /**

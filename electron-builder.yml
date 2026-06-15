@@ -18,6 +18,8 @@ asarUnpack:
   - dist/utils/data-paths.js
   - dist/utils/error-message.js
   - dist/utils/redaction.js
+  - dist/core/ffi/isolated-worker.js
+  - dist/core/ffi/types.js
   - dist/core/system-automation/cv/opencvjs-worker.js
 
   # Worker 依赖（让 worker 在 app.asar.unpacked 内部即可解析到 node_modules）

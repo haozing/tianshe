@@ -14,6 +14,14 @@ import type { BrowserRuntimeManager } from '../core/browser-runtime';
 
 export interface OrchestrationIdempotencyPersistenceStore {
   get(namespace: string, key: string): Promise<OrchestrationIdempotencyEntry | null>;
+  reserve?(
+    namespace: string,
+    key: string,
+    entry: OrchestrationIdempotencyEntry
+  ): Promise<
+    | { status: 'reserved'; entry: OrchestrationIdempotencyEntry }
+    | { status: 'exists'; entry: OrchestrationIdempotencyEntry }
+  >;
   set(namespace: string, key: string, entry: OrchestrationIdempotencyEntry): Promise<void>;
   deleteNamespace(namespace: string): Promise<void>;
   pruneExpired(ttlMs: number, nowMs?: number): Promise<number>;

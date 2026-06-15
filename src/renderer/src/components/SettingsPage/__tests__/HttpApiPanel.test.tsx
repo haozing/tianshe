@@ -123,4 +123,41 @@ describe('HttpApiPanel', () => {
 
     expect(mockGetRuntimeStatus).toHaveBeenCalledTimes(1);
   });
+
+  it('shows the explicit enabled no-auth contract', async () => {
+    mockGetConfig.mockResolvedValueOnce({
+      success: true,
+      storedConfig: {
+        ...DEFAULT_HTTP_API_CONFIG,
+        enabled: true,
+        enableAuth: false,
+        enableMcp: true,
+        mcpRequireAuth: true,
+      },
+      effectiveConfig: {
+        ...DEFAULT_HTTP_API_CONFIG,
+        enabled: true,
+        enableAuth: false,
+        enableMcp: true,
+        mcpRequireAuth: true,
+      },
+      runtimeOverrides: {
+        enabled: false,
+        enableMcp: false,
+      },
+    });
+
+    render(<HttpApiPanel />);
+
+    expect(await screen.findByText('访问控制合约')).toBeInTheDocument();
+    expect(screen.getByText('HTTP 已开启，无 Token 鉴权')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '开启 HTTP 但关闭 Token 认证时，/api/v1/orchestration/* 与 /mcp 均不要求 Bearer Token；仅在本机可信环境使用。'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText('HTTP Bearer：不需要')).toBeInTheDocument();
+    expect(screen.getByText('MCP Bearer：不需要')).toBeInTheDocument();
+    expect(screen.getByText('Orchestration Bearer：不需要')).toBeInTheDocument();
+  });
 });

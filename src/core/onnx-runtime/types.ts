@@ -87,6 +87,12 @@ export interface ONNXModelConfig {
   intraOpNumThreads?: number;
   /** 是否启用内存模式（默认 true） */
   enableMemoryPattern?: boolean;
+  /** 单个模型允许并发推理数（默认 1，最大 8） */
+  maxConcurrency?: number;
+  /** 默认推理超时，单位毫秒（默认 30000） */
+  inferenceTimeoutMs?: number;
+  /** 单次推理输入元素总数上限（默认 10000000） */
+  maxInputElements?: number;
 }
 
 /**
@@ -95,6 +101,10 @@ export interface ONNXModelConfig {
 export interface InferenceOptions {
   /** 指定输出张量名称（可选，默认返回所有输出） */
   outputNames?: string[];
+  /** 覆盖本次推理超时，单位毫秒 */
+  timeoutMs?: number;
+  /** 覆盖本次输入元素总数上限 */
+  maxInputElements?: number;
 }
 
 /**

@@ -7,6 +7,10 @@ export type OCRPoolQueueMode = 'wait' | 'reject';
 
 export interface GutenOCRPoolOptions {
   size?: number;
+  /**
+   * Maximum number of queued OCR requests once all adapters are busy.
+   * Use Infinity only when the caller has an external backpressure guard.
+   */
   maxQueue?: number;
   queueMode?: OCRPoolQueueMode;
 }
@@ -22,7 +26,6 @@ type OcrAdapter = GutenOCRAdapter | GutenOCRWorkerAdapter;
 export class GutenOCRPool implements OCRAPI {
   private size: number;
   private maxQueue: number;
-  private queueMode: OCRPoolQueueMode;
   private adapters: OcrAdapter[] = [];
   private free: OcrAdapter[] = [];
   private waiters: Waiter[] = [];
@@ -32,11 +35,7 @@ export class GutenOCRPool implements OCRAPI {
   constructor(options?: GutenOCRPoolOptions) {
     const size = Number(options?.size ?? 1);
     this.size = Number.isFinite(size) && size > 0 ? Math.floor(size) : 1;
-    this.maxQueue =
-      typeof options?.maxQueue === 'number' && options.maxQueue >= 0
-        ? Math.floor(options.maxQueue)
-        : this.size * 2;
-    this.queueMode = options?.queueMode ?? 'wait';
+    this.maxQueue = this.normalizeMaxQueue(options?.maxQueue);
   }
 
   async warmup(): Promise<void> {
@@ -122,7 +121,7 @@ export class GutenOCRPool implements OCRAPI {
     const created = this.createAdapter();
     if (created) return created;
 
-    if (this.queueMode === 'reject' && this.waiters.length >= this.maxQueue) {
+    if (this.isQueueFull()) {
       throw new Error('OCR pool queue is full');
     }
 
@@ -168,5 +167,19 @@ export class GutenOCRPool implements OCRAPI {
     }
 
     this.free.push(adapter);
+  }
+
+  private normalizeMaxQueue(value: unknown): number {
+    if (value === Infinity) {
+      return Infinity;
+    }
+
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? Math.floor(value)
+      : this.size * 2;
+  }
+
+  private isQueueFull(): boolean {
+    return this.maxQueue !== Infinity && this.waiters.length >= this.maxQueue;
   }
 }

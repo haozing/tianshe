@@ -13,12 +13,18 @@ const createTableSql = `
     idempotency_key VARCHAR NOT NULL,
     request_hash VARCHAR NOT NULL,
     capability VARCHAR NOT NULL,
+    state VARCHAR NOT NULL DEFAULT 'completed',
     created_at BIGINT NOT NULL,
-    result_json TEXT NOT NULL,
+    result_json TEXT,
     error_json TEXT,
     meta_json TEXT,
     PRIMARY KEY (namespace, idempotency_key)
   )
+`;
+
+const addStateColumnSql = `
+  ALTER TABLE ${TABLE_NAME}
+  ADD COLUMN IF NOT EXISTS state VARCHAR DEFAULT 'completed'
 `;
 
 const createIndexSql = `
@@ -49,6 +55,7 @@ class DuckDbOrchestrationIdempotencyPersistence implements OrchestrationIdempote
       return;
     }
     await this.duckdb.executeWithParams(createTableSql, []);
+    await this.duckdb.executeWithParams(addStateColumnSql, []);
     await this.duckdb.executeWithParams(createIndexSql, []);
     this.initialized = true;
   }
@@ -60,6 +67,7 @@ class DuckDbOrchestrationIdempotencyPersistence implements OrchestrationIdempote
         SELECT
           request_hash,
           capability,
+          state,
           created_at,
           result_json,
           error_json,
@@ -78,24 +86,75 @@ class DuckDbOrchestrationIdempotencyPersistence implements OrchestrationIdempote
     const row = rows[0];
     const requestHash = typeof row.request_hash === 'string' ? row.request_hash : '';
     const capability = typeof row.capability === 'string' ? row.capability : '';
+    const state = row.state === 'running' ? 'running' : 'completed';
     const createdAt = Number(row.created_at);
     const result = parseJson<OrchestrationIdempotencyEntry['result']>(row.result_json);
     const error = parseJson<OrchestrationIdempotencyEntry['error']>(row.error_json);
     const meta = parseJson<OrchestrationIdempotencyEntry['meta']>(row.meta_json);
 
-    if (!requestHash || !capability || !Number.isFinite(createdAt) || !result) {
+    if (!requestHash || !capability || !Number.isFinite(createdAt)) {
       logger.warn(`Corrupted idempotency entry detected, namespace=${namespace}, key=${key}`);
       return null;
     }
 
+    if (state === 'completed' && !result) {
+      logger.warn(`Completed idempotency entry has no result, namespace=${namespace}, key=${key}`);
+      return null;
+    }
+
     return {
+      state,
       requestHash,
       capability,
       createdAt,
-      result,
+      ...(result ? { result } : {}),
       ...(error ? { error } : {}),
       ...(meta ? { meta } : {}),
     };
+  }
+
+  async reserve(
+    namespace: string,
+    key: string,
+    entry: OrchestrationIdempotencyEntry
+  ): Promise<
+    | { status: 'reserved'; entry: OrchestrationIdempotencyEntry }
+    | { status: 'exists'; entry: OrchestrationIdempotencyEntry }
+  > {
+    await this.ensureInitialized();
+    const existing = await this.get(namespace, key);
+    if (existing) {
+      return { status: 'exists', entry: existing };
+    }
+
+    await this.duckdb.executeWithParams(
+      `
+        INSERT INTO ${TABLE_NAME} (
+          namespace,
+          idempotency_key,
+          request_hash,
+          capability,
+          state,
+          created_at,
+          result_json,
+          error_json,
+          meta_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        namespace,
+        key,
+        entry.requestHash,
+        entry.capability,
+        entry.state ?? 'running',
+        entry.createdAt,
+        entry.result ? serialize(entry.result) : null,
+        entry.error ? serialize(entry.error) : null,
+        entry.meta ? serialize(entry.meta) : null,
+      ]
+    );
+
+    return { status: 'reserved', entry };
   }
 
   async set(namespace: string, key: string, entry: OrchestrationIdempotencyEntry): Promise<void> {
@@ -114,19 +173,21 @@ class DuckDbOrchestrationIdempotencyPersistence implements OrchestrationIdempote
           idempotency_key,
           request_hash,
           capability,
+          state,
           created_at,
           result_json,
           error_json,
           meta_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         namespace,
         key,
         entry.requestHash,
         entry.capability,
+        entry.state ?? 'completed',
         entry.createdAt,
-        serialize(entry.result),
+        entry.result ? serialize(entry.result) : null,
         entry.error ? serialize(entry.error) : null,
         entry.meta ? serialize(entry.meta) : null,
       ]

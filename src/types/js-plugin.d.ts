@@ -71,6 +71,7 @@ export interface JSPluginManifest {
   permissions?: PluginPermissions;
   /** 插件信任模型；open 版本只允许运行 first_party 插件 */
   trustModel?: 'first_party';
+  runtime?: PluginRuntimePolicy;
   /** 🆕 跨插件调用配置（用于插件互调和 MCP/HTTP 调用） */
   crossPlugin?: CrossPluginConfig;
   /** 云端插件编码（配置后主进程可在执行命令前执行 cloud authorize） */
@@ -499,6 +500,14 @@ export interface PluginPermissions {
   ai?: boolean;
   /** 系统命令执行权限 */
   exec?: boolean;
+}
+
+export interface PluginRuntimePolicy {
+  lifecycleHookTimeoutMs?: number;
+  commandTimeoutMs?: number;
+  apiTimeoutMs?: number;
+  isolation?: 'main-process' | 'worker-process';
+  highRiskScopes?: Array<'filesystem' | 'network' | 'database' | 'browser' | 'ai' | 'ffi' | 'exec'>;
 }
 
 // ========== 🆕 跨插件调用类型定义 ==========

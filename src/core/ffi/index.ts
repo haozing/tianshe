@@ -15,11 +15,14 @@ export { FFICallback } from './callback';
 // 类型定义
 export type {
   FunctionSignature,
+  FFICallOptions,
   CallbackSignature,
   StructDefinition,
   LoadLibraryOptions,
   LibraryInfo,
   FFIServiceConfig,
+  FFIIsolatedCallRequest,
+  FFIIsolatedCallRunner,
 } from './types';
 
 // 错误类型

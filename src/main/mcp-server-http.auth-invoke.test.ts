@@ -11,277 +11,31 @@ import { HTTP_SERVER_DEFAULTS } from '../constants/http-api';
 import {
   MCP_PROTOCOL_ALLOWED_VERSIONS,
   MCP_PROTOCOL_COMPATIBILITY_MODE,
-  MCP_PROTOCOL_UNIFIED_VERSION,
 } from '../constants/mcp-protocol';
 import { MCP_PUBLIC_TOOL_NAMES } from './mcp-catalog-metadata';
 import { ErrorCode } from '../types/error-codes';
 import type { RestApiConfig, RestApiDependencies } from '../types/http-api';
 import type { BrowserInterface } from '../types/browser-interface';
 import { AirpaHttpMcpServer } from './mcp-server-http';
-
-const FETCH_FORBIDDEN_PORTS = new Set([
-  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,
-  103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465,
-  512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993,
-  995, 1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669,
-  6697, 10080,
-]);
-
-function isFetchSafePort(port: number): boolean {
-  return Number.isInteger(port) && port > 0 && port < 65536 && !FETCH_FORBIDDEN_PORTS.has(port);
-}
-
-function createSnapshotResult(url = 'https://example.com', title = 'Example') {
-  return {
-    url,
-    title,
-    elements: [],
-  };
-}
-
-function createMockBrowser(overrides: Partial<BrowserInterface> = {}): BrowserInterface {
-  return {
-    goto: vi.fn(),
-    snapshot: vi.fn().mockResolvedValue(createSnapshotResult()),
-    click: vi.fn(),
-    type: vi.fn(),
-    evaluate: vi.fn().mockResolvedValue({ width: 1280, height: 720 }),
-    getCurrentUrl: vi.fn().mockResolvedValue('https://example.com'),
-    ...overrides,
-  } as BrowserInterface;
-}
-
-function createMockHandle(browser: BrowserInterface): {
-  handle: BrowserHandle;
-  release: ReturnType<typeof vi.fn>;
-} {
-  const release = vi.fn().mockResolvedValue({
-    browserId: 'browser-1',
-    sessionId: 'pool-session-1',
-    remainingBrowserCount: 0,
-    state: 'idle',
-  });
-  const handle = {
-    browser,
-    browserId: 'browser-1',
-    sessionId: 'pool-session-1',
-    runtimeId: 'chromium-extension-relay',
-    release,
-    renew: vi.fn().mockResolvedValue(true),
-  } as unknown as BrowserHandle;
-  return { handle, release };
-}
-
-async function waitForAssertion(assertion: () => void, timeoutMs = 1500): Promise<void> {
-  const start = Date.now();
-  let lastError: unknown;
-  while (Date.now() - start <= timeoutMs) {
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-  }
-  throw lastError ?? new Error('waitForAssertion timeout');
-}
-
-async function postJson(
-  baseUrl: string,
-  path: string,
-  body?: unknown,
-  headers?: Record<string, string>
-): Promise<{ status: number; json: any }> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(headers || {}),
-    },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
-  const json = await response.json();
-  return { status: response.status, json };
-}
-
-async function getJson(
-  baseUrl: string,
-  path: string,
-  headers?: Record<string, string>
-): Promise<{ status: number; json: any }> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    headers: headers || {},
-  });
-  const json = await response.json();
-  return { status: response.status, json };
-}
-
-async function deleteJson(
-  baseUrl: string,
-  path: string,
-  headers?: Record<string, string>
-): Promise<{ status: number; json: any }> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: 'DELETE',
-    headers: headers || {},
-  });
-  const json = await response.json();
-  return { status: response.status, json };
-}
-
-async function initializeMcpSession(
-  baseUrl: string,
-  headers?: Record<string, string>
-): Promise<{ status: number; json: any; sessionId: string }> {
-  const response = await fetch(`${baseUrl}/mcp`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json',
-      'mcp-protocol-version': MCP_PROTOCOL_UNIFIED_VERSION,
-      ...(headers || {}),
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: {
-        protocolVersion: MCP_PROTOCOL_UNIFIED_VERSION,
-        capabilities: {},
-        clientInfo: { name: 'test-mcp-init', version: '1.0.0' },
-      },
-    }),
-  });
-
-  const json = await response.json();
-  return {
-    status: response.status,
-    json,
-    sessionId: String(response.headers.get('mcp-session-id') || ''),
-  };
-}
-
-async function callMcpToolRaw(
-  baseUrl: string,
-  sessionId: string,
-  name: string,
-  args: Record<string, unknown>,
-  headers?: Record<string, string>
-): Promise<{ status: number; json: any }> {
-  return postJson(
-    baseUrl,
-    '/mcp',
-    {
-      jsonrpc: '2.0',
-      id: 2,
-      method: 'tools/call',
-      params: {
-        name,
-        arguments: args,
-      },
-    },
-    {
-      accept: 'application/json',
-      'mcp-protocol-version': MCP_PROTOCOL_UNIFIED_VERSION,
-      'mcp-session-id': sessionId,
-      ...(headers || {}),
-    }
-  );
-}
-
-function pickRuntimeFingerprint(value: any) {
-  return {
-    processStartTime: value?.processStartTime ?? null,
-    mainDistUpdatedAt: value?.mainDistUpdatedAt ?? null,
-    rendererDistUpdatedAt: value?.rendererDistUpdatedAt ?? null,
-    mainBuildStamp: value?.mainBuildStamp ?? null,
-    mcpRuntimeFreshness: value?.mcpRuntimeFreshness ?? null,
-    buildFreshness: value?.buildFreshness ?? null,
-    gitCommit: value?.gitCommit ?? null,
-    mcpSdk: value?.mcpSdk ?? null,
-  };
-}
-
-function expectRuntimeFingerprintLike(value: any): void {
-  expect(typeof value?.processStartTime).toBe('string');
-  expect(value?.mcpRuntimeFreshness).toMatchObject({
-    overall: expect.any(String),
-    main: expect.objectContaining({
-      ok: expect.any(Boolean),
-      reason: expect.any(String),
-    }),
-  });
-  expect(value?.buildFreshness).toMatchObject({
-    overall: expect.any(String),
-    main: expect.objectContaining({
-      ok: expect.any(Boolean),
-      reason: expect.any(String),
-    }),
-    renderer: expect.objectContaining({
-      ok: expect.any(Boolean),
-      reason: expect.any(String),
-    }),
-  });
-  expect(value?.mainDistUpdatedAt === null || typeof value?.mainDistUpdatedAt === 'string').toBe(
-    true
-  );
-  expect(
-    value?.rendererDistUpdatedAt === null || typeof value?.rendererDistUpdatedAt === 'string'
-  ).toBe(true);
-  expect(
-    value?.mainBuildStamp === null ||
-      (value?.mainBuildStamp?.schema === 'airpa.main.build-stamp.v1' &&
-        value?.mainBuildStamp?.success === true &&
-        typeof value?.mainBuildStamp?.builtAt === 'string' &&
-        typeof value?.mainBuildStamp?.entryPoint === 'string' &&
-        typeof value?.mainBuildStamp?.entryPointUpdatedAt === 'string')
-  ).toBe(true);
-  expect(value?.gitCommit === null || typeof value?.gitCommit === 'string').toBe(true);
-  expect(value?.mcpSdk).toMatchObject({
-    version: expect.any(String),
-    initializeShimMode: expect.any(String),
-    degraded: expect.any(Boolean),
-    fingerprintInjected: expect.any(Boolean),
-  });
-  expect(
-    value?.mcpSdk?.initializeShimReason === null ||
-      typeof value?.mcpSdk?.initializeShimReason === 'string'
-  ).toBe(true);
-}
-
-function expectInitializeInstructionsLike(value: any): void {
-  expect(typeof value?.instructions).toBe('string');
-  expect(String(value.instructions)).toContain('system_bootstrap');
-  expect(String(value.instructions)).toContain('session_prepare');
-  expect(String(value.instructions)).toContain('browser_observe');
-  expect(String(value.instructions)).toContain('browser_act');
-  expect(String(value.instructions)).toContain('session_end_current');
-  expect(String(value.instructions)).not.toContain('toolProfile=full');
-  expect(String(value.instructions)).not.toContain('browser_act waitFor');
-}
-
-function pickSessionSnapshot(value: any) {
-  return {
-    sessionId: value?.sessionId ?? null,
-    profileId: value?.profileId ?? null,
-    runtimeId: value?.runtimeId ?? null,
-    visible: value?.visible ?? false,
-    browserAcquired: value?.browserAcquired ?? false,
-    browserAcquireInProgress: value?.browserAcquireInProgress ?? false,
-    effectiveScopes: Array.isArray(value?.effectiveScopes) ? value.effectiveScopes : [],
-    closing: value?.closing ?? false,
-    terminateAfterResponse: value?.terminateAfterResponse ?? false,
-    hostWindowId: value?.hostWindowId ?? null,
-    viewportHealth: value?.viewportHealth ?? 'unknown',
-    viewportHealthReason: value?.viewportHealthReason ?? null,
-    interactionReady: value?.interactionReady ?? false,
-    offscreenDetected: value?.offscreenDetected ?? false,
-    runtimeDescriptor: value?.runtimeDescriptor ?? null,
-    browserRuntimeDescriptor: value?.browserRuntimeDescriptor ?? null,
-    resolvedRuntimeDescriptor: value?.resolvedRuntimeDescriptor ?? null,
-  };
-}
+import { TRACE_HEADER } from './http-response-mapper';
+import { setObservationSink } from '../core/observability/observation-service';
+import {
+  MemoryObservationSink,
+  callMcpToolRaw,
+  createMockBrowser,
+  createMockHandle,
+  createSnapshotResult,
+  deleteJson,
+  expectInitializeInstructionsLike,
+  expectRuntimeFingerprintLike,
+  getJson,
+  initializeMcpSession,
+  isFetchSafePort,
+  pickRuntimeFingerprint,
+  pickSessionSnapshot,
+  postJson,
+  waitForAssertion,
+} from './__tests__/mcp-server-http-test-utils';
 
 describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
   const originalBindAddress = HTTP_SERVER_DEFAULTS.BIND_ADDRESS;
@@ -350,6 +104,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
   }
 
   afterEach(async () => {
+    setObservationSink(null);
     if (mcpClient) {
       await mcpClient.close();
     }
@@ -502,6 +257,86 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(invokeAfterDelete.status).toBe(404);
     expect(invokeAfterDelete.json.success).toBe(false);
     expect(invokeAfterDelete.json.code).toBe(ErrorCode.NOT_FOUND);
+  });
+
+  it('propagates HTTP trace ids through invoke response meta and observation events', async () => {
+    const sink = new MemoryObservationSink();
+    setObservationSink(sink);
+    const browser = createMockBrowser({
+      snapshot: vi.fn().mockResolvedValue(createSnapshotResult('https://trace.example', 'Trace')),
+    });
+    await startServer(browser);
+
+    const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
+    const sessionId = createResponse.json.data.sessionId as string;
+    const traceId = 'trace-http-contract-success';
+
+    const invokeResponse = await postJson(
+      baseUrl,
+      '/api/v1/orchestration/invoke',
+      {
+        sessionId,
+        name: 'browser_snapshot',
+        arguments: {},
+      },
+      {
+        [TRACE_HEADER]: traceId,
+      }
+    );
+
+    expect(invokeResponse.status).toBe(200);
+    expect(invokeResponse.headers.get(TRACE_HEADER)).toBe(traceId);
+    expect(invokeResponse.json._meta.traceId).toBe(traceId);
+    expect(invokeResponse.json.data.invokeMeta.traceId).toBe(traceId);
+    expect(
+      sink.events.filter((event) => event.event.startsWith('capability.invoke')).map((event) => event.event)
+    ).toEqual(['capability.invoke.started', 'capability.invoke.succeeded']);
+    expect(
+      sink.events
+        .filter((event) => event.event.startsWith('capability.invoke'))
+        .every((event) => event.traceId === traceId && event.capability === 'browser_snapshot')
+    ).toBe(true);
+  });
+
+  it('keeps HTTP trace ids on failed invoke responses and failed observation events', async () => {
+    const sink = new MemoryObservationSink();
+    setObservationSink(sink);
+    const browser = createMockBrowser({
+      snapshot: vi.fn().mockRejectedValue(new Error('trace snapshot failed')),
+    });
+    await startServer(browser);
+
+    const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
+    const sessionId = createResponse.json.data.sessionId as string;
+    const traceId = 'trace-http-contract-failure';
+
+    const response = await postJson(
+      baseUrl,
+      '/api/v1/orchestration/invoke',
+      {
+        sessionId,
+        name: 'browser_snapshot',
+        arguments: {},
+      },
+      {
+        [TRACE_HEADER]: traceId,
+      }
+    );
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get(TRACE_HEADER)).toBe(traceId);
+    expect(response.json.success).toBe(false);
+    expect(response.json.code).toBe(ErrorCode.OPERATION_FAILED);
+    expect(response.json._meta.traceId).toBe(traceId);
+    expect(
+      sink.events.filter((event) => event.event.startsWith('capability.invoke')).map((event) => event.event)
+    ).toEqual(['capability.invoke.started', 'capability.invoke.failed']);
+    const failedEvent = sink.events.find((event) => event.event === 'capability.invoke.failed');
+    expect(failedEvent).toMatchObject({
+      traceId,
+      capability: 'browser_snapshot',
+      outcome: 'failed',
+    });
   });
 
   it('create session returns an error when visible browser show fails', async () => {
@@ -821,6 +656,68 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(deleteResponse.status).toBe(200);
     expect(deleteNamespace).toHaveBeenCalledWith(sessionId);
     expect(deleteNamespace).not.toHaveBeenCalledWith('order-1001');
+  });
+
+  it('returns 409 for persisted running idempotency reservations before executing side effects', async () => {
+    const snapshot = vi
+      .fn()
+      .mockResolvedValue(createSnapshotResult('https://example.com/running', 'Running'));
+    const runningEntry = {
+      state: 'running' as const,
+      requestHash: 'reserved-request-hash',
+      capability: 'browser_snapshot',
+      createdAt: Date.now(),
+      meta: {
+        idempotencyKey: 'persisted-running-key',
+      },
+    };
+    const reserve = vi.fn().mockResolvedValue({
+      status: 'exists',
+      entry: runningEntry,
+    });
+    const getPersisted = vi.fn().mockResolvedValue(runningEntry);
+    const setPersisted = vi.fn().mockResolvedValue(undefined);
+    const deleteNamespace = vi.fn().mockResolvedValue(undefined);
+    const pruneExpired = vi.fn().mockResolvedValue(0);
+
+    await startServer(createMockBrowser({ snapshot }), {
+      restApiConfig: {
+        orchestrationIdempotencyStore: 'duckdb',
+      },
+      dependencies: {
+        idempotencyPersistence: {
+          get: getPersisted,
+          reserve,
+          set: setPersisted,
+          deleteNamespace,
+          pruneExpired,
+        },
+      },
+    });
+
+    const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
+    const sessionId = createResponse.json.data.sessionId as string;
+    const response = await postJson(
+      baseUrl,
+      '/api/v1/orchestration/invoke',
+      {
+        sessionId,
+        name: 'browser_snapshot',
+        arguments: {},
+      },
+      {
+        'Idempotency-Key': 'persisted-running-key',
+        'x-airpa-idempotency-namespace': 'order-running',
+      }
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.json.success).toBe(false);
+    expect(response.json.code).toBe(ErrorCode.REQUEST_FAILED);
+    expect(response.json.context.reason).toBe('idempotency_request_running');
+    expect(reserve).toHaveBeenCalledTimes(1);
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(setPersisted).not.toHaveBeenCalled();
   });
 
   it('keeps persisted custom idempotency namespaces across session deletion', async () => {

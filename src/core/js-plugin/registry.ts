@@ -118,6 +118,7 @@ export interface PluginRegistration {
   manifest: JSPluginManifest;
   /** 插件 helpers 引用（用于执行命令） */
   helpers?: PluginHelpers;
+  runtimePolicy?: JSPluginManifest['runtime'];
 }
 
 /**
@@ -251,6 +252,7 @@ export class PluginRegistry extends TypedEventEmitter<PluginRegistryEvents> {
       crossPluginConfig: this.extractCrossPluginConfig(manifest),
       manifest,
       helpers,
+      runtimePolicy: manifest.runtime,
     };
 
     this.registry.set(pluginId, registration);
@@ -900,6 +902,12 @@ export class PluginRegistry extends TypedEventEmitter<PluginRegistryEvents> {
       if (perms.browser) permissions.push('browser');
       if (perms.ai) permissions.push('ai');
       if (perms.exec) permissions.push('exec');
+    }
+
+    for (const scope of manifest.runtime?.highRiskScopes || []) {
+      if (!permissions.includes(scope)) {
+        permissions.push(scope);
+      }
     }
 
     return permissions;

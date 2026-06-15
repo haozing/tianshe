@@ -33,6 +33,17 @@ type RunningTaskState = {
   promise: Promise<TaskExecution>;
 };
 
+class SchedulerTaskCancelledError extends Error {
+  constructor(
+    message: string,
+    readonly cancelledBy: 'timeout' | 'abort'
+  ) {
+    super(message);
+    this.name = 'SchedulerTaskCancelledError';
+    Object.setPrototypeOf(this, SchedulerTaskCancelledError.prototype);
+  }
+}
+
 /**
  * 任务处理器注册信息
 interface TaskHandler {
@@ -776,11 +787,8 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
           break;
         }
 
-        // 设置超时
-        const timeoutId = setTimeout(() => {
-          controller.abort(new Error(`Task timed out after ${task.timeoutMs}ms`));
-        }, task.timeoutMs);
-
+        // Run the handler through a hard-settling cancellation race so scheduler state is released
+        // even when the handler ignores AbortSignal.
         try {
           if (attempt > 0) {
             logger.info('Retrying scheduled task', {
@@ -792,7 +800,11 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
           }
 
           // Execute handler with the current resource context
-          const result = await invokeHandler();
+          const result = await this.invokeHandlerWithHardCancellation(
+            task,
+            controller,
+            invokeHandler
+          );
           if (controller.signal.aborted) {
             const abortReason = controller.signal.reason;
             throw abortReason instanceof Error ? abortReason : new Error(String(abortReason));
@@ -862,8 +874,6 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
             });
             await this.sleep(retryDelayMs);
           }
-        } finally {
-          clearTimeout(timeoutId);
         }
       }
     } catch (err: unknown) {
@@ -921,6 +931,78 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
 
   /**
    * 辅助方法：延迟执�?   */
+  private async invokeHandlerWithHardCancellation(
+    task: ScheduledTask,
+    controller: AbortController,
+    invokeHandler: () => Promise<unknown>
+  ): Promise<unknown> {
+    if (controller.signal.aborted) {
+      const abortReason = controller.signal.reason;
+      throw abortReason instanceof Error
+        ? abortReason
+        : new SchedulerTaskCancelledError(String(abortReason || 'Task cancelled'), 'abort');
+    }
+
+    const handlerPromise = Promise.resolve().then(() => invokeHandler());
+    handlerPromise.catch(() => undefined);
+
+    return await new Promise<unknown>((resolve, reject) => {
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+      const cleanup = () => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        controller.signal.removeEventListener('abort', onAbort);
+      };
+
+      const finish = (callback: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        callback();
+      };
+
+      const toAbortError = () => {
+        const abortReason = controller.signal.reason;
+        return abortReason instanceof Error
+          ? abortReason
+          : new SchedulerTaskCancelledError(String(abortReason || 'Task cancelled'), 'abort');
+      };
+
+      const onAbort = () => {
+        finish(() => reject(toAbortError()));
+      };
+
+      handlerPromise.then(
+        (result) => finish(() => resolve(result)),
+        (error) => finish(() => reject(error))
+      );
+
+      controller.signal.addEventListener('abort', onAbort, { once: true });
+
+      if (task.timeoutMs > 0 && Number.isFinite(task.timeoutMs)) {
+        timeoutId = setTimeout(() => {
+          const error = new SchedulerTaskCancelledError(
+            `Task timed out after ${task.timeoutMs}ms`,
+            'timeout'
+          );
+          if (!controller.signal.aborted) {
+            controller.abort(error);
+          }
+          finish(() => reject(error));
+        }, task.timeoutMs);
+      }
+
+      if (controller.signal.aborted) {
+        onAbort();
+      }
+    });
+  }
+
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }

@@ -746,6 +746,34 @@ describe('TaskQueue', () => {
 
       await timeoutQueue.stop();
     });
+
+    it('不响应 AbortSignal 的任务超时后也应该硬结束队列状态', async () => {
+      const timeoutQueue = createTaskQueue({ timeout: 50 });
+      const cancelledEvents: TaskEvent[] = [];
+      timeoutQueue.on('task:cancelled', (event) => {
+        cancelledEvents.push(event);
+      });
+
+      const taskPromise = timeoutQueue.add(
+        async () => {
+          await new Promise(() => undefined);
+          return 'never';
+        },
+        { taskId: 'non-cooperative-timeout' }
+      );
+
+      await expect(taskPromise).rejects.toMatchObject({
+        name: 'TaskCancelledError',
+        reason: 'Task timeout after 50ms',
+      });
+
+      expect(timeoutQueue.getStats().running).toBe(0);
+      expect(timeoutQueue.getTask('non-cooperative-timeout')).toMatchObject({
+        status: 'cancelled',
+      });
+      expect(cancelledEvents).toHaveLength(1);
+      await timeoutQueue.stop();
+    });
   });
 
   // ========== 并发控制 ==========
@@ -897,13 +925,15 @@ describe('TaskQueue', () => {
     });
 
     it('clear 应该取消正在运行的任务', async () => {
-      let taskCancelled = false;
+      const cancelledEvents: TaskEvent[] = [];
+      queue.on('task:cancelled', (event) => {
+        cancelledEvents.push(event);
+      });
 
       const taskPromise = queue.add(async (ctx) => {
         while (!ctx.signal.aborted) {
           await new Promise((r) => setTimeout(r, 50));
         }
-        taskCancelled = true;
         throw new TaskCancelledError('Cleared');
       });
 
@@ -911,13 +941,13 @@ describe('TaskQueue', () => {
 
       queue.clear();
 
-      try {
-        await taskPromise;
-      } catch {
-        // Expected
-      }
+      await expect(taskPromise).rejects.toMatchObject({
+        name: 'TaskCancelledError',
+        reason: 'Task cancelled by clear()',
+      });
 
-      expect(taskCancelled).toBe(true);
+      expect(queue.getStats().running).toBe(0);
+      expect(cancelledEvents).toHaveLength(1);
     });
 
     it('应该能停止队列', async () => {

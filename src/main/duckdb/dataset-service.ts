@@ -267,10 +267,16 @@ export class DatasetService {
 
   // ==================== 元数据 API（代理） ====================
 
-  initTable = () => this.metadataService.initTable();
+  async initTable(): Promise<void> {
+    await this.metadataService.initTable();
+    await this.reconcileAllDatasetRowCounts();
+  }
+
   listDatasets = () => this.metadataService.listDatasets();
   getDatasetInfo = (id: string) => this.metadataService.getDatasetInfo(id);
   reconcileDatasetRowCount = (id: string) => this.metadataService.reconcileRowCount(id);
+  reconcileAllDatasetRowCounts = () =>
+    this.metadataService.reconcileAllRowCounts({ continueOnError: true });
   renameDataset = (id: string, name: string) => this.metadataService.renameDataset(id, name);
   analyzeDatasetTypes = (id: string) => this.metadataService.analyzeDatasetTypes(id);
 

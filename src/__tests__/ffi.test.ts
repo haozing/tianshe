@@ -163,7 +163,7 @@ describe('FFI Namespace', () => {
         args: [],
       });
 
-      const result = await lib.call('GetCurrentProcessId', []);
+      const result = await lib.callUnsafeInProcess('GetCurrentProcessId', []);
 
       expect(result).toBe(42);
     });
@@ -327,7 +327,9 @@ describe('FFI Namespace', () => {
       const lib = await ffiNamespace.loadLibrary(`${SYS_BASE}\\test.dll`);
       lib.defineFunction('CrashFunction', { returns: 'void', args: [] });
 
-      await expect(lib.call('CrashFunction', [])).rejects.toThrow('Access violation');
+      await expect(lib.callUnsafeInProcess('CrashFunction', [])).rejects.toThrow(
+        'Access violation'
+      );
     });
 
     it('应该处理回调中的异常', () => {

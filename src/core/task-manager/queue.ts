@@ -57,6 +57,7 @@ interface TaskRecord {
   };
   /** 清理外部 signal listener 的函数 */
   cleanupExternalSignal?: () => void;
+  settled?: boolean;
 }
 
 /**
@@ -375,7 +376,7 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
    * 执行单个任务（内部方法）
    *
    * 修复：
-   * 1. 超时不破坏并发上限 - 超时只触发 abort signal，等待任务真正结束
+   * 1. 超时/取消会硬 settle 队列记录，避免不响应 AbortSignal 的任务永久占用状态
    * 2. taskId 复用竞态 - 延迟清理时检查 controller 引用
    */
   private async executeTask<T, TMeta>(
@@ -413,13 +414,40 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
       taskInfo.startedAt = Date.now();
       this.emit('task:started', this.createEvent(taskInfo));
 
-      // 设置超时定时器（只触发 abort，不直接 reject）
+      const record = this.taskRecords.get(taskId);
+      const getCancellationReason = (fallback = 'cancelled'): string => {
+        const abortReason = controller.signal.reason;
+        if (abortReason instanceof TaskCancelledError && abortReason.reason) {
+          return abortReason.reason;
+        }
+        if (abortReason instanceof Error) {
+          return abortReason.message;
+        }
+        return String(abortReason || fallback);
+      };
+      const settleCancelled = (reason: string): TaskCancelledError => {
+        const cancellationError = new TaskCancelledError('Task cancelled', reason);
+        if (record?.settled) {
+          if (taskInfo.error instanceof TaskCancelledError) {
+            return taskInfo.error;
+          }
+          return cancellationError;
+        }
+        if (record) {
+          record.settled = true;
+        }
+        if (!controller.signal.aborted) {
+          controller.abort(cancellationError);
+        }
+        taskInfo.status = 'cancelled';
+        taskInfo.finishedAt = Date.now();
+        taskInfo.duration = taskInfo.finishedAt - (taskInfo.startedAt || taskInfo.createdAt);
+        taskInfo.error = cancellationError;
+        this.emit('task:cancelled', this.createEvent(taskInfo));
+        return cancellationError;
+      };
+
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
-      if (taskTimeout > 0 && Number.isFinite(taskTimeout)) {
-        timeoutId = setTimeout(() => {
-          controller.abort(new Error(`Task timeout after ${taskTimeout}ms`));
-        }, taskTimeout);
-      }
 
       try {
         const ctx: TaskContext<TMeta> = {
@@ -432,14 +460,59 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
           },
         };
 
-        // 直接等待任务完成（不用 Promise.race，确保并发槽位只在任务真正结束时释放）
-        const result = await task(ctx);
+        const taskPromise = Promise.resolve().then(() => task(ctx));
+        taskPromise.catch(() => undefined);
+
+        const result = await new Promise<T>((resolve, reject) => {
+          let raceSettled = false;
+          let removeAbortListener: (() => void) | undefined;
+          const finish = (callback: () => void) => {
+            if (raceSettled) {
+              return;
+            }
+            raceSettled = true;
+            removeAbortListener?.();
+            callback();
+          };
+
+          taskPromise.then(
+            (value) => finish(() => resolve(value)),
+            (error) => finish(() => reject(error))
+          );
+
+          if (taskTimeout > 0 && Number.isFinite(taskTimeout)) {
+            timeoutId = setTimeout(() => {
+              finish(() => {
+                const cancellationError = settleCancelled(`Task timeout after ${taskTimeout}ms`);
+                reject(cancellationError);
+              });
+            }, taskTimeout);
+          }
+
+          const onAbort = () => {
+            finish(() => {
+              const cancellationError = settleCancelled(getCancellationReason());
+              reject(cancellationError);
+            });
+          };
+
+          controller.signal.addEventListener('abort', onAbort, { once: true });
+          removeAbortListener = () => controller.signal.removeEventListener('abort', onAbort);
+
+          if (controller.signal.aborted) {
+            onAbort();
+          }
+        });
 
         // 检查是否在任务执行期间被取消/超时
         if (controller.signal.aborted) {
           throw new TaskCancelledError('Task cancelled', 'Aborted during execution');
         }
 
+        const currentRecord = this.taskRecords.get(taskId);
+        if (currentRecord) {
+          currentRecord.settled = true;
+        }
         taskInfo.status = 'completed';
         taskInfo.finishedAt = Date.now();
         taskInfo.duration = taskInfo.finishedAt - (taskInfo.startedAt || taskInfo.createdAt);
@@ -449,17 +522,7 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
         return result;
       } catch (error: unknown) {
         if (controller.signal.aborted) {
-          const abortReason = controller.signal.reason;
-          const reason =
-            abortReason instanceof Error ? abortReason.message : String(abortReason || 'cancelled');
-          const cancellationError = new TaskCancelledError('Task cancelled', reason);
-
-          taskInfo.status = 'cancelled';
-          taskInfo.finishedAt = Date.now();
-          taskInfo.duration = taskInfo.finishedAt - (taskInfo.startedAt || taskInfo.createdAt);
-          taskInfo.error = cancellationError;
-
-          this.emit('task:cancelled', this.createEvent(taskInfo));
+          const cancellationError = settleCancelled(getCancellationReason());
 
           throw cancellationError;
         }
@@ -489,6 +552,10 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
           return attempt();
         }
 
+        const currentRecord = this.taskRecords.get(taskId);
+        if (currentRecord) {
+          currentRecord.settled = true;
+        }
         taskInfo.status = 'failed';
         taskInfo.finishedAt = Date.now();
         taskInfo.duration = taskInfo.finishedAt - (taskInfo.startedAt || taskInfo.createdAt);

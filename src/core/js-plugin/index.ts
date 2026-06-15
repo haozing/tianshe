@@ -24,6 +24,11 @@ export { JSPluginManager } from './manager';
 // ============================================
 export { PluginLoader } from './plugin-loader';
 export { PluginLifecycleManager } from './plugin-lifecycle';
+export {
+  DEFAULT_PLUGIN_API_TIMEOUT_MS,
+  DEFAULT_PLUGIN_COMMAND_TIMEOUT_MS,
+  DEFAULT_PLUGIN_LIFECYCLE_HOOK_TIMEOUT_MS,
+} from './runtime-budget';
 export { PluginInstaller } from './plugin-installer';
 export { PluginRuntimeRegistry } from './runtime-registry';
 

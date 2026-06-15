@@ -1,10 +1,34 @@
 # 天蛇客户端全量审计计划
 
+## 最近一次报告
+
+- 报告文件：`docs/full-audit-report.zh-CN.md`
+- 报告日期：2026-06-15
+- 最近同步：2026-06-15
+- 本轮已完成：AUD-P1-01、AUD-P1-02、AUD-P1-03、AUD-P1-04、AUD-P1-05、AUD-P1-06、AUD-P2-01、AUD-P2-02、AUD-P2-03、AUD-P2-04、AUD-P2-05、AUD-P2-06、AUD-P3-01、AUD-P3-02、AUD-P3-03、AUD-P3-04。
+- 待处理：无。
+
+### 差异记录
+
+| 日期 | 来源 | 差异 | 处理 |
+| --- | --- | --- | --- |
+| 2026-06-15 | `docs/full-audit-report.zh-CN.md` | 报告新增 P1/P2/P3 修复 backlog，并记录本轮已完成的高优先级稳定性修复。 | 计划新增“最近一次报告”和“差异记录”固定锚点；每轮审计结束时同步完成项、待处理项和新增差异。 |
+
 ## 1. 目标
 
 本计划用于对天蛇客户端进行一次面向稳定性、健壮性和功能完整度的全量代码审计。审计方法采用“按功能模块纵向深挖，再用少量横向主题统一复盘”的方式，避免一次性铺开导致问题只停留在表面。
 
-本计划暂不覆盖“权限与信任边界”主题。该主题应作为独立安全审计执行，尤其是插件能力、本地 HTTP/MCP 端点、账号数据、文件系统访问和外部工具调用等入口。
+本计划暂不覆盖“权限与信任边界”这一**独立安全审计主题**。深层授权设计、插件信任模型、凭证处理、威胁建模应作为独立安全审计执行。
+
+但要注意：信任边界代码并不是孤立的几个文件，而是穿插在多个子系统内部的“稳定性即安全”双面控制。以下几类守卫**在本计划范围内**，因为它们同时是数据防腐和合约稳定性的核心，把它们划给推迟的安全审计会导致模块一/四/五在“被告知不许读”的代码上下结论：
+
+- `src/main/duckdb/sql-validator.ts` 的 `checkSecurity` / `sanitizeIdentifier`：拦截 DROP/DELETE/TRUNCATE，是阻止畸形计算列表达式破坏 dataset 表的防线（模块一核心）。
+- `src/main/network-target-policy.ts` 的 `assertPublicHttpTarget`：既是 SSRF 防护，又决定 webhook 投递可靠性与错误分类（模块五/六）。
+- `src/constants/http-api.ts` 的 `enableAuth` 默认值与 `src/main/http-auth-middleware.ts` 的接线方式：默认是否鉴权是模块四必须给出的合约事实。
+- `src/main/mcp-http-route-handlers.ts` 的 `validateMcpOrigin`：401 / invalid-origin 已经是 `http-server-composition.test.ts`、`mcp-server-http-transport.test.ts` 里编码的契约行为。
+- 各 handler 里穿插的 `senderGuard`：重点是“漏传即静默放行”这种健壮性 bug，而非授权策略设计本身。
+
+仅 capability scoping 设计、插件信任模型、凭证存储这些纯授权/威胁建模议题留给独立安全审计。
 
 ## 2. 审计原则
 
@@ -13,10 +37,11 @@
 3. 审计结论必须能落成 issue、测试、重构任务或文档修订。
 4. 优先审查会造成数据损坏、任务卡死、状态污染、升级失败、资源泄漏和不可诊断故障的问题。
 5. 对高风险流程要求证据：代码位置、复现步骤、现有测试、缺失测试、建议修复方案。
+6. **先盘点后补缺**：本仓库已有 338 个测试文件（296 个 `.test.ts` + 42 个 `.test.tsx`），分层清晰（`.contract.test`、`.integration.test`、`.smoke.test`、`cross-runtime-contract`、`real-contract`、`canary`）。每个模块审计的第一步是列出该子系统现有的 `*.test.ts(x)` 与对应 npm script、标注覆盖层级（unit / contract / integration / smoke），再 diff 出真正的空白。严禁在已有大型测试套件的区域“从零编写测试”——“必要测试建议”一律先判定为“评估现有套件充分性”，确认缺失后才提议新增。
 
 ## 3. 范围
 
-### 3.1 七个纵向审计对象
+### 3.1 八个纵向审计对象
 
 1. 本地数据工作台。
 2. 浏览器自动化工作流。
@@ -25,6 +50,9 @@
 5. 桌面调试与运行健康系统。
 6. 任务系统和后台流程。
 7. 配置、存储、启动和升级系统。
+8. 本地能力原语（AI / CV / 向量检索 / OCR / 原生 FFI）。
+
+> 注：第 8 项是对原始七模块切分的修正。`ai-service`、`onnx-runtime`、`image-search`、`image-similarity`、`system-automation`、`ffi` 六个子系统是真实运行、高风险的本地计算层，原计划只把它们当作插件 namespace 的薄 facade 而漏在范围之外。它们的实现本体（ONNX 推理、HNSW 向量索引、模型下载、OCR/CV worker pool、koffi 调原生 DLL）必须独立审计。
 
 ### 3.2 九个横向审计主题
 
@@ -49,29 +77,33 @@
 - 阅读 `README.md`、`README.zh-CN.md`、`ROADMAP.md`、`SECURITY.md`、`docs/` 下现有设计文档。
 - 梳理 `src/core`、`src/main`、`src/renderer`、`src/preload`、`src/shared` 的职责边界。
 - 梳理 Electron 主进程、预加载脚本、渲染进程、本地服务、插件 helper、浏览器运行时之间的调用关系。
-- 梳理现有测试命令，包括 `test:open`、`test:open:full`、`test:architecture`、`test:browser-pool`、`test:dataset-ipc`、`typecheck`、`lint`、`verify:ci`。
+- 梳理现有测试命令，**完整清单**包括 `test:open`、`test:open:full`、`test:architecture`、`test:main-bootstrap`、`test:browser-pool`、`test:dataset-ipc`、`typecheck`、`lint`、`verify:supply-chain`、`verify:open-source-boundary`、`sbom`、`verify:ci`。注意原计划遗漏的两项：
+  - `test:main-bootstrap` 覆盖 `app-runtime` + `bootstrap/{app-ready,runtime-error,shutdown,stdio}` + `browser-pool-readiness`，直接回答模块七（配置、存储、启动和升级系统）关于启动阶段测试的开放问题。
+  - `test:architecture` 是一整层结构性治理测试（`architecture-maintenance-guard.test.ts` 做 AST 扫描、`HARD_SIZE_LIMIT=900` 文件大小基线、`architecture-boundary` 与 edition 边界），应登记为现有覆盖强项，而非缺口。
+- 跑一遍 `vitest --coverage` 或至少枚举全部 `*.test.ts(x)`，按子系统建立**覆盖 baseline**，作为后续每个模块“先盘点后补缺”的依据。
 
 产出：
 
 - 一张模块依赖图。
 - 一张核心数据流图。
 - 一张启动流程图。
-- 一张测试覆盖现状表。
+- 一张**现有测试覆盖 baseline 表**（按子系统列出 test 文件 + 覆盖层级 + 对应 npm script）。
 - 审计 issue 模板和严重级别定义。
 
-### 阶段二：七个模块纵向深挖
+### 阶段二：八个模块纵向深挖
 
-每次只审一个模块。每个模块都按“入口、核心流程、状态模型、失败路径、并发行为、测试、日志、升级影响”八个维度展开。
+每次只审一个模块。每个模块都按“入口、核心流程、状态模型、失败路径、并发行为、测试、日志、升级影响”八个维度展开。每个模块的第一步统一是“盘点现有测试覆盖，diff 出真空白”（见审计原则 6）。
 
 建议顺序：
 
 1. 本地数据工作台。
 2. 浏览器自动化工作流。
 3. 任务系统和后台流程。
-4. 插件系统。
-5. 本地 HTTP/MCP 自动化端点。
-6. 桌面调试与运行健康系统。
-7. 配置、存储、启动和升级系统。
+4. 本地能力原语（AI / CV / ONNX / 向量检索 / OCR / FFI）。
+5. 插件系统。
+6. 本地 HTTP/MCP 自动化端点。
+7. 桌面调试与运行健康系统。
+8. 配置、存储、启动和升级系统。
 
 ### 阶段三：九个横向主题复盘
 
@@ -350,17 +382,25 @@
 
 ### 8.1 审计目标
 
-确认本地 HTTP/MCP 端点作为 Agent、CLI 工具和编排客户端的入口时，具备清晰、稳定、可测试、可诊断的调用合约。
+确认本地端点作为 Agent、CLI 工具和编排客户端的入口时，具备清晰、稳定、可测试、可诊断的调用合约。
+
+注意：这里**不是**“HTTP 或 MCP 二选一”的两套服务，而是**单一的 MCP-over-HTTP 统一服务器**——MCP 协议跑在 HTTP 传输之上。审计时按这一事实组织，不要去找两个独立 server。同时必须把“默认是否鉴权”作为合约事实给出结论：`src/constants/http-api.ts` 的 `DEFAULT_HTTP_API_CONFIG` 默认 `enableAuth: false`，`src/main/http-server-composition.ts:108-116` 只有在拿到 token 时才挂 auth 中间件，因此默认状态下 `/api/v1/orchestration/*` 无需 Bearer 即可驱动 browser + profile + plugin + dataset 网关。合约审计不能跳过这一点（参见 section 1 的双面守卫说明）。
 
 ### 8.2 重点代码区域
 
-- MCP server 或 HTTP server 初始化代码。
-- `src/main/bootstrap`
-- `src/main/runtime`
-- `src/main/ipc-handlers`
-- `src/core/http-client`
-- `src/shared` 和 `src/types` 中端点 schema。
-- 与 Agent、CLI、插件 helper 相关的桥接代码。
+不要再用一行概括或指向 `bootstrap`/`runtime`/`ipc-handlers` 等边缘目录；实现本体集中在 `src/main` 下约 30 个 `http-*.ts` / `mcp-*.ts` 文件，按九个子域点名走读：
+
+- **会话生命周期**：`mcp-http-session-runtime.ts`、`mcp-http-session-lifecycle.ts`、`mcp-http-session-snapshot.ts`、`http-session-manager.ts`、`http-session-bridge.ts`。
+- **传输**：`mcp-http-transport-utils.ts`、`mcp-server-http-transport`（见 `mcp-server-http-transport.test.ts`）。
+- **catalog**：`mcp-http-catalog.ts`、`mcp-catalog-metadata.ts`、`mcp-guidance-content.ts`、`mcp-initialize-instructions.ts`。
+- **orchestration**：`orchestration-http-routes.ts`。
+- **幂等**：`orchestration-idempotency-duckdb-store.ts`（活的 orchestration 幂等存储，不要当成 cloud-sync 跳过）。
+- **auth**：`http-auth-middleware.ts`、`http-api-config-guard.ts`、`src/constants/http-api.ts` 的 `enableAuth` 默认值。
+- **运行时可用性与诊断**：`mcp-http-runtime-availability.ts`、`http-runtime-diagnostics.ts`、`http-runtime-state.ts`。
+- **路由注册与 composition**：`http-server-composition.ts`、`http-server-lifecycle.ts`、`http-route-registry.ts`、`http-system-routes.ts`、`mcp-http-route-handlers.ts`、`http-response-mapper.ts`、`http-error-utils.ts`、`http-request-utils.ts`、`http-trace-middleware.ts`。
+- **SDK init shim**：`mcp-sdk-initialize-shim.ts`、`mcp-server-http.ts`。
+- 端点入参/出参 schema（`src/shared`、`src/types`）与 Agent / CLI / 插件 helper 桥接代码。
+- 注意 `src/core/http-client` 是**出站** HTTP 客户端（get/post/put/delete），不注册路由、不管会话，**不属于本模块**；它应在调用方（数据/浏览器/webhook）上下文里审，别列进入站端点合约。
 
 ### 8.3 核心流程
 
@@ -390,8 +430,9 @@ API/MCP 合约质量：
 - 参数校验是否集中、可复用、可测试。
 - 错误码是否稳定，是否可被 Agent/CLI 自动处理。
 - 长任务是否返回 task id、进度、最终结果和失败原因。
-- 操作是否具备幂等性，或者明确标注不可幂等。
+- 操作是否具备幂等性，或者明确标注不可幂等（对照 `orchestration-idempotency-duckdb-store.ts` 的实际行为）。
 - 是否区分同步请求、异步任务、流式输出和事件通知。
+- **默认鉴权状态**：`enableAuth: false` 下端点的默认合约是否被文档明确说明？401 / invalid-origin（已在 `http-server-composition.test.ts`、`mcp-server-http-transport.test.ts` 中编码）是否是稳定且可被客户端处理的合约行为？
 
 错误处理与可观测性：
 
@@ -407,11 +448,14 @@ API/MCP 合约质量：
 
 ### 8.5 必要测试建议
 
-- HTTP/MCP 端点 schema 测试。
-- 错误响应快照测试。
-- 端点到 task manager 的集成测试。
-- 并发请求测试。
-- 长任务取消测试。
+先盘点：`mcp-server-http.*.test.ts`（auth-invoke、browser-binding、mcp-surface、orchestration-routes、split-contract、start-stop、transport-session 等多个 30–55KB 大文件）、`mcp-server-http-transport.test.ts`、`orchestration-openapi-contract.test.ts`、`http-server-composition.test.ts`、`http-session-manager.test.ts`、`http-session-bridge.test.ts`、`mcp-http-session-runtime.test.ts`、`mcp-http-runtime-availability.test.ts`、`mcp-http-types.test.ts`、`http-api-handler.test.ts` 已经存在。本模块的测试任务**主要是评估上述套件的充分性**，而非从零编写。
+
+确认缺失后才提议新增，候选缺口：
+
+- 默认 `enableAuth: false` 与显式开启 token 两种模式下的端点行为对比测试（若现有 auth-invoke 测试未覆盖默认放行路径）。
+- schema 快照或类型一致性测试（若 openapi-contract 未覆盖全部端点）。
+- 下游模块失败（dataset / browser / plugin 网关报错）向上映射为稳定错误码的测试。
+- 并发请求与长任务取消测试（若 transport-session 测试未覆盖）。
 
 ### 8.6 产出
 
@@ -654,13 +698,88 @@ API/MCP 合约质量：
 - 升级和回滚风险列表。
 - 供应链风险报告。
 
-## 12. 九个横向主题复盘
+## 12. 模块八：本地能力原语
 
-### 12.1 架构边界
+### 12.1 审计目标
+
+确认本地 AI 推理、计算机视觉、向量检索、OCR 和原生 FFI 这一层在模型加载、推理失败、worker 崩溃、原生内存边界和并发背压场景下不会拖垮主应用。这一层是被插件 namespace 当作薄 facade 暴露的，但实现本体真实运行、且风险等级最高（原生内存安全、模型下载、worker 崩溃恢复）。
+
+### 12.2 重点代码区域
+
+- `src/core/ai-service`（OpenAI 兼容客户端、错误模型）。
+- `src/core/onnx-runtime`（`onnx-service.ts`、`tensor-utils.ts`，CPU/CUDA/DirectML execution provider 回退）。
+- `src/core/image-search`（`hnsw-index.ts` 向量索引、`mobilenet-extractor.ts` 特征提取、`model-download-safety.ts` 模型下载校验）。
+- `src/core/image-similarity`（感知哈希、SSIM 比对）。
+- `src/core/system-automation`（`ocr/` 与 `cv/` worker pool）。
+- `src/core/ffi`（`ffi-service.ts`、`library.ts`、`callback.ts`，koffi 调原生 DLL）。
+- `src/main/ipc-handlers/ocr-pool-handler.ts` 等把这些能力桥接到主进程/插件的入口。
+
+### 12.3 核心流程
+
+需要逐条走读：
+
+- ONNX 模型加载、execution provider 选择与回退、推理调用、张量编解码。
+- 模型下载、来源校验、完整性校验、缓存目录管理。
+- HNSW 向量索引的构建、持久化、增量更新、并发查询。
+- 特征提取与相似度比对管线。
+- OCR / CV worker pool 的创建、任务分发、背压、超时、崩溃重启。
+- FFI 库加载、原生函数调用、回调生命周期、句柄/内存释放。
+- 上述能力通过插件 helper namespace 暴露时的参数校验与错误传递。
+
+### 12.4 深挖问题清单
+
+架构边界：
+
+- AI/CV/向量/OCR/FFI 这五类原语是否各自边界清楚，还是互相直接调用底层实现。
+- 插件 namespace 是否只是薄 facade，业务逻辑是否漏进了 facade 层。
+
+数据安全与一致性：
+
+- 模型下载是否校验来源与完整性，是否可能加载被篡改或不完整的模型。
+- HNSW 索引文件损坏或版本不匹配时是否能检测并恢复。
+- FFI 调用是否存在内存泄漏、double free、句柄泄漏、缓冲区越界。
+
+稳定性与资源管理：
+
+- worker pool 崩溃后能否感知并重启，崩溃任务是否标记失败而非永久挂起。
+- 并发推理/OCR 任务是否有背压和队列上限，避免内存爆掉。
+- execution provider 回退（CUDA→DirectML→CPU）是否在缺驱动/缺硬件时优雅降级而不是直接崩进程。
+- 原生 DLL 缺失或版本不符时是否有清晰失败状态。
+
+错误处理与可观测性：
+
+- 推理失败、模型加载失败、FFI 调用失败、worker 崩溃是否各有可区分的错误类型与上下文。
+- 原生层崩溃是否能在不丢失诊断信息的前提下被主进程捕获。
+
+测试覆盖：
+
+- `hnsw-index.test.ts`、`mobilenet-extractor.test.ts`、`model-download-safety.test.ts`、`image-similarity-service.test.ts`、`system-automation/types.test.ts` 已覆盖哪些路径，缺口在哪。
+- 是否覆盖 worker 崩溃恢复、execution provider 回退、FFI 内存/崩溃边界、模型下载被篡改场景。
+
+### 12.5 必要测试建议
+
+先评估上述现有测试的充分性，再针对以下确认缺失的高风险路径补测：
+
+- worker pool 崩溃重启与背压测试。
+- execution provider 回退路径测试。
+- FFI 原生内存/崩溃边界测试（含 double free、句柄泄漏）。
+- 模型下载完整性/来源校验失败路径测试。
+- HNSW 索引损坏检测与恢复测试。
+
+### 12.6 产出
+
+- 本地能力原语能力矩阵。
+- 原生/ML 资源生命周期与崩溃恢复说明。
+- 原生内存安全与模型下载安全风险列表。
+- 缺失测试列表。
+
+## 13. 九个横向主题复盘
+
+### 13.1 架构边界
 
 复盘问题：
 
-- 七个模块是否都有清楚的 owner、入口、出口和依赖。
+- 八个模块是否都有清楚的 owner、入口、出口和依赖。
 - 主进程、渲染进程、预加载脚本、core、shared、types 的边界是否稳定。
 - IPC、HTTP/MCP、插件 helper 是否各自只是适配层，还是混入了核心业务逻辑。
 - 是否存在跨模块直接访问内部状态、重复实现状态机、重复实现错误处理。
@@ -671,7 +790,7 @@ API/MCP 合约质量：
 - 推荐依赖方向图。
 - 需要拆分或收敛的模块列表。
 
-### 12.2 数据安全与一致性
+### 13.2 数据安全与一致性
 
 复盘问题：
 
@@ -687,7 +806,7 @@ API/MCP 合约质量：
 - 事务和锁策略表。
 - 数据恢复策略。
 
-### 12.3 插件系统稳定性
+### 13.3 插件系统稳定性
 
 复盘问题：
 
@@ -701,7 +820,7 @@ API/MCP 合约质量：
 - 插件故障隔离策略。
 - 插件升级测试清单。
 
-### 12.4 浏览器自动化可靠性
+### 13.4 浏览器自动化可靠性
 
 复盘问题：
 
@@ -715,7 +834,7 @@ API/MCP 合约质量：
 - runtime 健康矩阵。
 - 资源泄漏排查表。
 
-### 12.5 API/MCP 合约质量
+### 13.5 API/MCP 合约质量
 
 复盘问题：
 
@@ -729,7 +848,7 @@ API/MCP 合约质量：
 - 合约测试覆盖表。
 - 错误码和响应格式规范。
 
-### 12.6 错误处理与可观测性
+### 13.6 错误处理与可观测性
 
 复盘问题：
 
@@ -745,7 +864,7 @@ API/MCP 合约质量：
 - 日志字段规范。
 - 失败包规范。
 
-### 12.7 测试覆盖
+### 13.7 测试覆盖
 
 复盘问题：
 
@@ -759,7 +878,7 @@ API/MCP 合约质量：
 - 高风险缺失测试清单。
 - CI 分层建议。
 
-### 12.8 依赖与供应链
+### 13.8 依赖与供应链
 
 复盘问题：
 
@@ -774,7 +893,7 @@ API/MCP 合约质量：
 - 原生依赖构建和打包验证表。
 - SBOM 和发布产物一致性报告。
 
-### 12.9 发布与升级
+### 13.9 发布与升级
 
 复盘问题：
 
@@ -789,7 +908,7 @@ API/MCP 合约质量：
 - 回滚策略。
 - 发布前检查清单。
 
-## 13. 审计执行模板
+## 14. 审计执行模板
 
 每个模块建议使用同一份模板记录结果。
 
@@ -828,39 +947,50 @@ API/MCP 合约质量：
 ### 后续任务
 ```
 
-## 14. 建议排期
+## 15. 建议排期
 
-如果由一名审计者执行，建议按 4 周安排：
+**关于工期的现实判断**：原 4 周估算建立在"7 个模块、从零写测试"的假设上，不成立。修正范围后有两点必须考虑：
+
+- 模块四真实面约 30 个 `http-*` / `mcp-*` / `orchestration-*` 实现文件，外加约 20 个测试文件（多个 30–55KB），单这一块的"评估现有套件 + 补缺"就不止一周。
+- 模块八（本地能力原语）含原生 FFI 与 ML 推理，需要单独排期，不能挤进既有模块的边角。
+
+因此 4 周更接近"只够模块二 + 模块四两块深挖"。建议按以下分配，由一名审计者执行约需 6 周；若按 4 周硬约束，则需多人并行或缩小本轮范围（见下）。
+
+单人 6 周参考排期：
 
 | 周期 | 内容 | 主要产出 |
 | --- | --- | --- |
-| 第 1 周 | 审计准备、本地数据工作台、浏览器自动化工作流 | 模块图、数据风险、浏览器状态机 |
-| 第 2 周 | 任务系统、插件系统、本地 HTTP/MCP 端点 | 任务状态机、插件生命周期、端点合约表 |
-| 第 3 周 | 调试健康系统、配置存储启动升级、供应链 | 错误规范、启动阶段图、供应链报告 |
-| 第 4 周 | 横向复盘、问题分级、修复路线、回归测试计划 | 全量审计报告、修复 backlog、测试矩阵 |
+| 第 1 周 | 审计准备（含测试 baseline 盘点）、本地数据工作台 | 模块图、测试覆盖现状表、数据风险 |
+| 第 2 周 | 浏览器自动化工作流 | 浏览器状态机、资源泄漏报告、集成测试 CI 编排缺口 |
+| 第 3 周 | 任务系统、插件系统 | 任务状态机、插件生命周期、现有套件充分性评估 |
+| 第 4 周 | 本地 HTTP/MCP 端点（含默认鉴权合约事实）、桌面调试与健康系统 | 端点合约表、错误码矩阵、错误/trace 规范 |
+| 第 5 周 | 模块八本地能力原语、配置存储启动升级、供应链 | 原生/ML 风险列表、启动阶段图、供应链报告、打包 smoke 缺口 |
+| 第 6 周 | 横向复盘、问题分级、修复路线、回归测试计划 | 全量审计报告、修复 backlog、测试矩阵 |
 
-如果由多人并行执行，建议每个纵向模块指定 owner，同时保留一名横向 owner 负责错误模型、测试策略和发布升级一致性。
+如果由多人并行执行，建议每个纵向模块指定 owner，同时保留一名横向 owner 负责错误模型、测试策略和发布升级一致性。模块四与模块八体量最大，建议各自单独 owner。
 
-## 15. 最终交付物
+## 16. 最终交付物
 
 审计完成后应交付：
 
 - 全量审计报告。
-- 七个模块的独立审计记录。
+- 八个模块的独立审计记录。
 - 九个横向主题复盘记录。
+- 测试覆盖 baseline 与缺口 diff（区分"已有套件"与"确认缺失"）。
 - P0/P1/P2/P3 问题列表。
 - 修复优先级路线图。
 - 回归测试矩阵。
 - 发布前检查清单。
 - 架构图、数据流图、任务状态机、浏览器状态机、插件生命周期图。
 
-## 16. 推荐优先级
+## 17. 推荐优先级
 
 第一优先级：
 
 - 本地数据工作台。
 - 浏览器自动化工作流。
 - 任务系统和后台流程。
+- 本地能力原语（ffi / onnx / system-automation 原生与 ML 层风险最高，须尽早纳入）。
 
 第二优先级：
 
@@ -872,4 +1002,8 @@ API/MCP 合约质量：
 - 桌面调试与运行健康系统。
 - 配置、存储、启动和升级系统。
 
-最后用九个横向主题统一复盘。这样可以先覆盖最容易造成数据损坏、状态污染和任务卡死的核心风险，再处理长期维护和发布升级稳定性。
+独立的快赢项（可随时插入）：
+
+- 打包产物 smoke test（electron-builder 产物 + asar 内容 + `package.json` 的 `files` 白名单断言）。这是已确认的真缺口，不要把精力花在已有大型测试套件的子系统上。
+
+最后用九个横向主题统一复盘。这样可以先覆盖最容易造成数据损坏、状态污染、任务卡死和原生层崩溃的核心风险，再处理长期维护和发布升级稳定性。

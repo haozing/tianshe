@@ -7,6 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { createLogger } from '../logger';
 import { dynamicImport } from '../utils/dynamic-import';
 import { l2Normalize } from '../onnx-runtime';
@@ -20,6 +21,7 @@ import type {
 } from './types';
 
 const logger = createLogger('HNSWIndex');
+const HNSW_METADATA_VERSION = 1;
 
 // hnswlib-node 类型（动态导入）
 type HierarchicalNSW = any;
@@ -35,6 +37,20 @@ interface IndexEntry {
   internalId: number;
   /** 模板信息 */
   template: TemplateInfo;
+}
+
+interface PersistedIndexMetadata {
+  version?: number;
+  config: HNSWIndexConfig;
+  dim?: number;
+  spaceType?: SpaceType;
+  nextInternalId: number;
+  indexChecksumSha256?: string;
+  entries: Array<{
+    templateId: string;
+    internalId: number;
+    template: TemplateInfo;
+  }>;
 }
 
 /**
@@ -319,21 +335,41 @@ export class HNSWIndex {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    // 保存 HNSW 索引
-    this.index!.writeIndexSync(indexPath);
-
-    // 保存模板映射
     const metaPath = indexPath + '.meta.json';
-    const metadata = {
-      config: this.config,
-      nextInternalId: this.nextInternalId,
-      entries: Array.from(this.entries.entries()).map(([id, entry]) => ({
-        templateId: id,
-        internalId: entry.internalId,
-        template: entry.template,
-      })),
-    };
-    fs.writeFileSync(metaPath, JSON.stringify(metadata, null, 2));
+    const tempIndexPath = this.createTempPath(indexPath, 'index');
+    const tempMetaPath = this.createTempPath(metaPath, 'meta');
+
+    try {
+      // Write both files to temporary paths first so a failed save does not corrupt
+      // the last known-good index pair.
+      this.index!.writeIndexSync(tempIndexPath);
+      this.fsyncFileBestEffort(tempIndexPath);
+
+      const metadata: PersistedIndexMetadata = {
+        version: HNSW_METADATA_VERSION,
+        config: this.config,
+        dim: this.config.dim,
+        spaceType: this.config.spaceType,
+        nextInternalId: this.nextInternalId,
+        indexChecksumSha256: this.hashFileSha256(tempIndexPath),
+        entries: Array.from(this.entries.entries()).map(([id, entry]) => ({
+          templateId: id,
+          internalId: entry.internalId,
+          template: entry.template,
+        })),
+      };
+
+      fs.writeFileSync(tempMetaPath, JSON.stringify(metadata, null, 2));
+      this.fsyncFileBestEffort(tempMetaPath);
+
+      fs.renameSync(tempIndexPath, indexPath);
+      fs.renameSync(tempMetaPath, metaPath);
+      this.fsyncDirectoryBestEffort(dir);
+    } catch (error) {
+      this.removeFileBestEffort(tempIndexPath);
+      this.removeFileBestEffort(tempMetaPath);
+      throw error;
+    }
 
     logger.info(`Index saved to ${indexPath} (${this.entries.size} templates)`);
   }
@@ -343,20 +379,17 @@ export class HNSWIndex {
    */
   async loadIndex(indexPath: string): Promise<void> {
     if (!fs.existsSync(indexPath)) {
+      this.quarantineIndexFiles(indexPath, 'missing-index-file');
       throw new Error(`Index file not found: ${indexPath}`);
     }
 
     const metaPath = indexPath + '.meta.json';
     if (!fs.existsSync(metaPath)) {
+      this.quarantineIndexFiles(indexPath, 'missing-metadata-file');
       throw new Error(`Index metadata not found: ${metaPath}`);
     }
 
-    // 加载元数据
-    const metadata = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-
-    // 更新配置
-    this.config = metadata.config;
-    this.nextInternalId = metadata.nextInternalId;
+    const metadata = this.readMetadata(indexPath, metaPath);
 
     // 确保 hnswlib 已加载
     if (!this.hnswlib) {
@@ -370,21 +403,35 @@ export class HNSWIndex {
       ip: 'ip',
     };
 
-    this.index = new this.hnswlib.HierarchicalNSW(spaceMap[this.config.spaceType], this.config.dim);
-    this.index.readIndexSync(indexPath);
+    const loadedIndex = new this.hnswlib.HierarchicalNSW(
+      spaceMap[metadata.config.spaceType],
+      metadata.config.dim
+    );
 
-    // 恢复模板映射
-    this.entries.clear();
-    this.idToTemplate.clear();
+    try {
+      loadedIndex.readIndexSync(indexPath);
+    } catch (error) {
+      this.quarantineIndexFiles(indexPath, 'index-read-failed');
+      throw new Error(
+        `Index file is unreadable and was quarantined: ${(error as Error).message}`
+      );
+    }
 
+    const loadedEntries: Map<string, IndexEntry> = new Map();
+    const loadedIdToTemplate: Map<number, string> = new Map();
     for (const entry of metadata.entries) {
-      this.entries.set(entry.templateId, {
+      loadedEntries.set(entry.templateId, {
         internalId: entry.internalId,
         template: entry.template,
       });
-      this.idToTemplate.set(entry.internalId, entry.templateId);
+      loadedIdToTemplate.set(entry.internalId, entry.templateId);
     }
 
+    this.config = metadata.config;
+    this.nextInternalId = metadata.nextInternalId;
+    this.index = loadedIndex;
+    this.entries = loadedEntries;
+    this.idToTemplate = loadedIdToTemplate;
     this.initialized = true;
     logger.info(`Index loaded from ${indexPath} (${this.entries.size} templates)`);
   }
@@ -524,6 +571,160 @@ export class HNSWIndex {
         return Math.exp(-distance);
       default:
         return 1 - distance;
+    }
+  }
+
+  private readMetadata(indexPath: string, metaPath: string): PersistedIndexMetadata {
+    try {
+      const metadata = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as PersistedIndexMetadata;
+      this.validateMetadata(metadata);
+
+      if (metadata.indexChecksumSha256) {
+        const actualChecksum = this.hashFileSha256(indexPath);
+        if (actualChecksum !== metadata.indexChecksumSha256) {
+          throw new Error(
+            `Index checksum mismatch: expected ${metadata.indexChecksumSha256}, got ${actualChecksum}`
+          );
+        }
+      }
+
+      return metadata;
+    } catch (error) {
+      this.quarantineIndexFiles(indexPath, 'metadata-validation-failed');
+      throw new Error(
+        `Index metadata is invalid and was quarantined: ${(error as Error).message}`
+      );
+    }
+  }
+
+  private validateMetadata(metadata: PersistedIndexMetadata): void {
+    if (!metadata || typeof metadata !== 'object') {
+      throw new Error('metadata must be an object');
+    }
+
+    if (!metadata.config || typeof metadata.config !== 'object') {
+      throw new Error('metadata config is missing');
+    }
+
+    const config = metadata.config;
+    if (
+      !['cosine', 'l2', 'ip'].includes(config.spaceType) ||
+      !Number.isInteger(config.dim) ||
+      config.dim <= 0 ||
+      !Number.isInteger(config.maxElements) ||
+      config.maxElements <= 0
+    ) {
+      throw new Error('metadata config is invalid');
+    }
+
+    if (metadata.version !== undefined && metadata.version !== HNSW_METADATA_VERSION) {
+      throw new Error(`unsupported metadata version: ${metadata.version}`);
+    }
+
+    if (metadata.dim !== undefined && metadata.dim !== config.dim) {
+      throw new Error(`metadata dim mismatch: ${metadata.dim} !== ${config.dim}`);
+    }
+
+    if (metadata.spaceType !== undefined && metadata.spaceType !== config.spaceType) {
+      throw new Error(`metadata spaceType mismatch: ${metadata.spaceType} !== ${config.spaceType}`);
+    }
+
+    if (!Number.isInteger(metadata.nextInternalId) || metadata.nextInternalId < 0) {
+      throw new Error('metadata nextInternalId is invalid');
+    }
+
+    if (!Array.isArray(metadata.entries)) {
+      throw new Error('metadata entries must be an array');
+    }
+
+    for (const entry of metadata.entries) {
+      if (
+        !entry ||
+        typeof entry.templateId !== 'string' ||
+        !Number.isInteger(entry.internalId) ||
+        entry.internalId < 0 ||
+        !entry.template ||
+        typeof entry.template !== 'object'
+      ) {
+        throw new Error('metadata entry is invalid');
+      }
+    }
+
+    if (
+      metadata.indexChecksumSha256 !== undefined &&
+      !/^[a-f0-9]{64}$/.test(metadata.indexChecksumSha256)
+    ) {
+      throw new Error('metadata index checksum is invalid');
+    }
+  }
+
+  private hashFileSha256(filePath: string): string {
+    return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+  }
+
+  private createTempPath(filePath: string, label: string): string {
+    return `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.${label}.tmp`;
+  }
+
+  private fsyncFileBestEffort(filePath: string): void {
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(filePath, 'r');
+      fs.fsyncSync(fd);
+    } catch {
+      // Best-effort: some filesystems or mocks do not support fsync.
+    } finally {
+      if (fd !== null) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  private fsyncDirectoryBestEffort(dir: string): void {
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(dir, 'r');
+      fs.fsyncSync(fd);
+    } catch {
+      // Directory fsync is not available on every supported platform.
+    } finally {
+      if (fd !== null) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  private quarantineIndexFiles(indexPath: string, reason: string): void {
+    const suffix = `.corrupt-${Date.now()}-${reason}`;
+    this.renameIfExistsBestEffort(indexPath, `${indexPath}${suffix}`);
+    this.renameIfExistsBestEffort(`${indexPath}.meta.json`, `${indexPath}.meta.json${suffix}`);
+  }
+
+  private renameIfExistsBestEffort(from: string, to: string): void {
+    try {
+      if (fs.existsSync(from)) {
+        fs.renameSync(from, to);
+      }
+    } catch (error) {
+      logger.warn(`Failed to quarantine ${from}:`, error);
+    }
+  }
+
+  private removeFileBestEffort(filePath: string): void {
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch {
+      // ignore cleanup failures
     }
   }
 }

@@ -35,7 +35,11 @@ export const mapErrorStatus = (code: string, fallback = 500): number => {
 };
 
 export const mapStructuredErrorStatus = (error: StructuredError, fallback = 500): number => {
-  if (error.code === ErrorCode.REQUEST_FAILED && error.context?.reason === 'idempotency_conflict') {
+  if (
+    error.code === ErrorCode.REQUEST_FAILED &&
+    (error.context?.reason === 'idempotency_conflict' ||
+      error.context?.reason === 'idempotency_request_running')
+  ) {
     return 409;
   }
   if (error.context?.reason === 'session_closing' || error.context?.reason === 'invocation_aborted') {

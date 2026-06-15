@@ -36,6 +36,16 @@ export interface HttpApiConfig {
   enableDevMode?: boolean;
 }
 
+export interface HttpApiAuthContract {
+  mode: 'disabled' | 'no-auth' | 'token-auth';
+  httpRequiresBearer: boolean;
+  mcpRequiresBearer: boolean;
+  orchestrationRequiresBearer: boolean;
+  warning: 'http-disabled' | 'http-no-auth' | 'mcp-no-auth' | 'token-required';
+  label: string;
+  detail: string;
+}
+
 /**
  * 默认 HTTP API 配置
  */
@@ -122,6 +132,48 @@ export const applyRuntimeHttpApiOverrides = (config: HttpApiConfig): HttpApiConf
 export const resolveEffectiveHttpApiConfig = (
   input: Partial<HttpApiConfig> | null | undefined
 ): HttpApiConfig => applyRuntimeHttpApiOverrides(normalizeHttpApiConfig(input));
+
+export const describeHttpApiAuthContract = (
+  input: Partial<HttpApiConfig> | null | undefined
+): HttpApiAuthContract => {
+  const config = normalizeHttpApiConfig(input);
+  if (!config.enabled) {
+    return {
+      mode: 'disabled',
+      httpRequiresBearer: false,
+      mcpRequiresBearer: false,
+      orchestrationRequiresBearer: false,
+      warning: 'http-disabled',
+      label: 'HTTP 服务未开启',
+      detail: '本地 HTTP/MCP 端点未监听，不接受外部请求。',
+    };
+  }
+
+  if (!config.enableAuth) {
+    return {
+      mode: 'no-auth',
+      httpRequiresBearer: false,
+      mcpRequiresBearer: false,
+      orchestrationRequiresBearer: false,
+      warning: 'http-no-auth',
+      label: 'HTTP 已开启，无 Token 鉴权',
+      detail:
+        '开启 HTTP 但关闭 Token 认证时，/api/v1/orchestration/* 与 /mcp 均不要求 Bearer Token；仅在本机可信环境使用。',
+    };
+  }
+
+  return {
+    mode: 'token-auth',
+    httpRequiresBearer: true,
+    mcpRequiresBearer: config.mcpRequireAuth,
+    orchestrationRequiresBearer: true,
+    warning: config.mcpRequireAuth ? 'token-required' : 'mcp-no-auth',
+    label: config.mcpRequireAuth ? 'HTTP 与 MCP 均要求 Token' : 'HTTP 要求 Token，MCP 免 Token',
+    detail: config.mcpRequireAuth
+      ? 'Bearer Token 会保护 /api/v1/orchestration/* 与 /mcp。'
+      : 'Bearer Token 会保护 /api/v1/orchestration/*；/mcp 因 mcpRequireAuth=false 免 Token。',
+  };
+};
 
 export const getHttpApiRuntimeOverrideFlags = (): {
   enabled: boolean;

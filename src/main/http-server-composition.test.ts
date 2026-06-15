@@ -108,6 +108,21 @@ describe('http-server-composition', () => {
     expect(response.status).toBe(401);
   });
 
+  it('enableAuth=false 时 orchestration 路由不要求 token（显式 no-auth 合约）', async () => {
+    const { baseUrl } = await startServer({
+      enableAuth: false,
+      mcpRequireAuth: true,
+      enableMcp: true,
+    });
+
+    const response = await fetch(`${baseUrl}/api/v1/orchestration/capabilities`);
+    const payload = (await response.json()) as { success?: boolean; data?: unknown };
+
+    expect(response.status).toBe(200);
+    expect(payload.success).toBe(true);
+    expect(Array.isArray(payload.data)).toBe(true);
+  });
+
   it('rejects enableAuth=true when token is blank', () => {
     const logger = createLogger();
     const runtimeState = createHttpRuntimeState();

@@ -222,6 +222,31 @@ export class PluginRuntimeRegistry extends TypedEventEmitter<RuntimeRegistryEven
     return this.setStatus(pluginId, next);
   }
 
+  setCurrentOperation(
+    pluginId: string,
+    operation:
+      | {
+          summary: string;
+          currentOperation?: string;
+          workState?: JSPluginWorkState;
+          pluginName?: string;
+        }
+      | null
+  ): JSPluginRuntimeStatus {
+    const current = this.getOrCreateStatus(pluginId);
+    const next = {
+      ...current,
+      pluginName: operation?.pluginName || current.pluginName,
+      currentSummary: operation?.summary,
+      currentOperation: operation?.currentOperation,
+      progressPercent: operation ? current.progressPercent : undefined,
+      workState: operation?.workState ?? this.deriveWorkState(current.lifecyclePhase, current),
+      lastActivityAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    return this.setStatus(pluginId, next);
+  }
+
   registerQueue(pluginId: string, queueId: string, queue: ITaskQueue, pluginName?: string): void {
     const queueMap = this.queues.get(pluginId) ?? new Map<string, QueueBinding>();
     const existing = queueMap.get(queueId);

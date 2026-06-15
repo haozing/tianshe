@@ -83,7 +83,12 @@ describe('FFI 集成测试', () => {
         args: ['void*', 'string', 'string', 'uint'],
       });
 
-      const result = await user32.call('MessageBoxW', [null, 'Hello from FFI!', 'Test', 0]);
+      const result = await user32.callUnsafeInProcess('MessageBoxW', [
+        null,
+        'Hello from FFI!',
+        'Test',
+        0,
+      ]);
       expect(result).toBe(1);
       expect(mockLib.func).toHaveBeenCalled();
     });
@@ -96,7 +101,7 @@ describe('FFI 集成测试', () => {
       const kernel32 = await ffi.loadLibrary('kernel32.dll');
       kernel32.defineFunction('GetCurrentProcessId', { returns: 'int', args: [] });
 
-      const pid = await kernel32.call('GetCurrentProcessId', []);
+      const pid = await kernel32.callUnsafeInProcess('GetCurrentProcessId', []);
       expect(pid).toBe(12345);
     });
 
@@ -122,7 +127,10 @@ describe('FFI 集成测试', () => {
       );
 
       user32.defineFunction('EnumWindows', { returns: 'bool', args: ['void*', 'long'] });
-      const result = await user32.call('EnumWindows', [enumCallback.getPointer(), 0]);
+      const result = await user32.callUnsafeInProcess('EnumWindows', [
+        enumCallback.getPointer(),
+        0,
+      ]);
 
       expect(result).toBeTruthy();
       expect(windowHandles).toEqual([1001, 1002, 1003]);
@@ -175,12 +183,18 @@ describe('FFI 集成测试', () => {
       );
 
       ocrLib.defineFunction('WeChatOCR_Init', { returns: 'int', args: ['void*', 'void*'] });
-      const initResult = await ocrLib.call('WeChatOCR_Init', [ocrCallback.getPointer(), null]);
+      const initResult = await ocrLib.callUnsafeInProcess('WeChatOCR_Init', [
+        ocrCallback.getPointer(),
+        null,
+      ]);
       expect(initResult).toBe(0);
 
       ocrLib.defineFunction('WeChatOCR_DoOCR', { returns: 'int', args: ['int', 'string'] });
       const taskId = 1001;
-      const doOCRResult = await ocrLib.call('WeChatOCR_DoOCR', [taskId, 'C:\\test\\image.jpg']);
+      const doOCRResult = await ocrLib.callUnsafeInProcess('WeChatOCR_DoOCR', [
+        taskId,
+        'C:\\test\\image.jpg',
+      ]);
       expect(doOCRResult).toBe(0);
 
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -236,7 +250,7 @@ describe('FFI 集成测试', () => {
       myLib.defineFunction('ProcessRect', { returns: 'bool', args: [Rect] });
 
       const rect = { left: 0, top: 0, right: 100, bottom: 100 };
-      const result = await myLib.call('ProcessRect', [rect]);
+      const result = await myLib.callUnsafeInProcess('ProcessRect', [rect]);
 
       expect(result).toBe(true);
     });
@@ -304,8 +318,10 @@ describe('FFI 集成测试', () => {
 
       lib.defineFunction('FlakeyFunction', { returns: 'int', args: [] });
 
-      await expect(lib.call('FlakeyFunction', [])).rejects.toThrow('First call failed');
-      const result = await lib.call('FlakeyFunction', []);
+      await expect(lib.callUnsafeInProcess('FlakeyFunction', [])).rejects.toThrow(
+        'First call failed'
+      );
+      const result = await lib.callUnsafeInProcess('FlakeyFunction', []);
       expect(result).toBe(42);
 
       await ffi.dispose();

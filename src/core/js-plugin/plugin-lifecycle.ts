@@ -25,6 +25,7 @@ import { getPluginRegistry } from './registry';
 import type { PluginRuntimeRegistry } from './runtime-registry';
 import { createLogger } from '../logger';
 import { getUnknownErrorMessage } from '../../utils/error-message';
+import { getPluginRuntimeBudgetMs, withPluginRuntimeBudget } from './runtime-budget';
 
 
 /** 模块级 logger */
@@ -151,16 +152,19 @@ export class PluginLifecycleManager {
       helpers = this.setupPluginHelpers(pluginId, plugin);
       const dataTables = await this.loadPluginDataTables(pluginId, pluginLogger);
       context = this.createPluginContext(pluginId, plugin, helpers, dataTables);
+      const activeContext = context;
 
       // 1.5. 注册插件到 Registry
       const registry = getPluginRegistry();
       registry.registerPlugin(pluginId, plugin.manifest, helpers);
 
       // 2. 调用插件的 activate 钩子
-      await this.invokePluginActivateHook(plugin, context);
+      await this.runLifecycleHook(plugin, 'activate', () =>
+        this.invokePluginActivateHook(plugin, activeContext)
+      );
 
       // 2.5. 同步 API 和命令到 Registry
-      this.syncToRegistry(pluginId, context, helpers);
+      this.syncToRegistry(pluginId, activeContext, helpers);
 
       // 3. 设置插件 UI
       await this.setupPluginUI(pluginId, plugin, pluginLogger, callbacks);
@@ -220,11 +224,13 @@ export class PluginLifecycleManager {
     if (!force && plugin?.module && typeof plugin.module.canDeactivate === 'function') {
       try {
         const guard = normalizeCanDeactivateResult(
-          await plugin.module.canDeactivate({
-            force,
-            pluginId,
-            helpers,
-          })
+          await this.runLifecycleHook(plugin, 'canDeactivate', () =>
+            plugin.module.canDeactivate?.({
+              force,
+              pluginId,
+              helpers,
+            })
+          )
         );
         if (!guard.allow) {
           logger.info('Plugin deactivation skipped by guard', {
@@ -255,7 +261,7 @@ export class PluginLifecycleManager {
       // 1. 调用插件的 deactivate 钩子
       if (plugin?.module.onStop && helpers) {
         try {
-          await plugin.module.onStop(helpers);
+          await this.runLifecycleHook(plugin, 'onStop', () => plugin.module.onStop?.(helpers));
           logger.debug('Plugin onStop hook completed', { pluginId });
         } catch (hookError: unknown) {
           logger.error('Plugin onStop hook failed', hookError);
@@ -264,7 +270,7 @@ export class PluginLifecycleManager {
 
       if (plugin?.module.deactivate) {
         try {
-          await plugin.module.deactivate();
+          await this.runLifecycleHook(plugin, 'deactivate', () => plugin.module.deactivate?.());
           logger.debug('Plugin deactivate hook completed', { pluginId });
         } catch (hookError: unknown) {
           logger.error('Plugin deactivate hook failed', hookError);
@@ -672,6 +678,34 @@ export class PluginLifecycleManager {
     // 2. 再调用 activate 钩子（可覆盖或添加命令）
     if (plugin.module.activate) {
       await plugin.module.activate(context);
+    }
+  }
+
+  private async runLifecycleHook<T>(
+    plugin: LoadedJSPlugin,
+    hookName: 'activate' | 'canDeactivate' | 'onStop' | 'deactivate',
+    run: () => Promise<T> | T
+  ): Promise<T> {
+    const pluginId = plugin.manifest.id;
+    const timeoutMs = getPluginRuntimeBudgetMs(plugin.manifest, 'lifecycleHookTimeoutMs');
+    this.runtimeRegistry?.setCurrentOperation(pluginId, {
+      summary: `${hookName} hook`,
+      currentOperation: hookName,
+      workState: 'busy',
+      pluginName: plugin.manifest.name,
+    });
+
+    try {
+      return await withPluginRuntimeBudget(
+        `plugin ${pluginId} ${hookName} hook`,
+        timeoutMs,
+        run
+      );
+    } catch (error: unknown) {
+      this.runtimeRegistry?.recordError(pluginId, error, 'error', plugin.manifest.name);
+      throw error;
+    } finally {
+      this.runtimeRegistry?.setCurrentOperation(pluginId, null);
     }
   }
 

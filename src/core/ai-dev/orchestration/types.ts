@@ -158,6 +158,7 @@ export interface OrchestrationInvokeRequest {
 }
 
 export type OrchestrationIdempotencyStatus = 'stored' | 'replayed';
+export type OrchestrationIdempotencyEntryState = 'running' | 'completed';
 
 export interface OrchestrationInvokeAttempt {
   /** 绗嚑娆″皾璇曪紙浠?1 寮€濮嬶級 */
@@ -227,10 +228,11 @@ export interface OrchestrationInvokeMeta {
  * 骞傜瓑缂撳瓨鏉＄洰
  */
 export interface OrchestrationIdempotencyEntry {
+  state?: OrchestrationIdempotencyEntryState;
   requestHash: string;
   capability: string;
   createdAt: number;
-  result: CapabilityCallResult;
+  result?: CapabilityCallResult;
   error?: StructuredError;
   meta?: OrchestrationInvokeMeta;
 }

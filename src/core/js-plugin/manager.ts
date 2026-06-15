@@ -106,6 +106,10 @@ export class JSPluginManager {
       uiExtManager: this.uiExtManager,
       getPluginInfo: (pluginId) => this.getPluginInfo(pluginId),
       getRuntimeStatus: (pluginId) => this.getRuntimeStatus(pluginId),
+      setCurrentOperation: (pluginId, operation) =>
+        this.runtimeRegistry.setCurrentOperation(pluginId, operation),
+      recordRuntimeError: (pluginId, error, pluginName) =>
+        this.runtimeRegistry.recordError(pluginId, error, 'error', pluginName),
     });
     this.uiExtManager.setPluginAPICaller?.((pluginId, apiName, args) =>
       this.executionCoordinator.callPluginAPI(pluginId, apiName, args)

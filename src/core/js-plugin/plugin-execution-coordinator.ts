@@ -14,6 +14,7 @@ import {
 } from '../observability/observation-context';
 import { observationService, summarizeForObservation } from '../observability/observation-service';
 import { attachErrorContextArtifact } from '../observability/error-context-artifact';
+import { getPluginRuntimeBudgetMs, withPluginRuntimeBudget } from './runtime-budget';
 
 export interface CommandExecutionGuardContext {
   pluginId: string;
@@ -30,6 +31,18 @@ export interface PluginExecutionCoordinatorDeps {
   uiExtManager: UIExtensionManager;
   getPluginInfo: (pluginId: string) => Promise<JSPluginInfo | null>;
   getRuntimeStatus: (pluginId: string) => Promise<unknown>;
+  setCurrentOperation?: (
+    pluginId: string,
+    operation:
+      | {
+          summary: string;
+          currentOperation?: string;
+          workState?: 'idle' | 'busy' | 'error';
+          pluginName?: string;
+        }
+      | null
+  ) => void;
+  recordRuntimeError?: (pluginId: string, error: unknown, pluginName?: string) => void;
 }
 
 export class PluginExecutionCoordinator {
@@ -185,7 +198,13 @@ export class PluginExecutionCoordinator {
             throw new Error(`Helpers not found for plugin ${pluginId}`);
           }
 
-          const result = await handler(params, helpers);
+          const result = await this.runWithExecutionBudget(
+            pluginId,
+            commandId,
+            'command',
+            () => handler(params, helpers),
+            info
+          );
 
           endTimer?.();
           pluginLogger?.command(commandId, 'success', { result });
@@ -287,7 +306,14 @@ export class PluginExecutionCoordinator {
             throw new Error(`Plugin ${pluginId} is not activated`);
           }
 
-          const result = await context.callExposedAPI(apiName, args);
+          const info = await this.getPluginInfo(pluginId);
+          const result = await this.runWithExecutionBudget(
+            pluginId,
+            apiName,
+            'api',
+            () => context.callExposedAPI(apiName, args),
+            info
+          );
           await span.succeed({
             attrs: {
               pluginId,
@@ -327,6 +353,36 @@ export class PluginExecutionCoordinator {
       });
     } finally {
       this.endCommandExecution(pluginId);
+    }
+  }
+
+  private async runWithExecutionBudget<T>(
+    pluginId: string,
+    operationId: string,
+    kind: 'command' | 'api',
+    run: () => Promise<T> | T,
+    info?: JSPluginInfo | null
+  ): Promise<T> {
+    const plugin = this.lifecycle.getPlugin(pluginId);
+    const timeoutMs = getPluginRuntimeBudgetMs(
+      plugin?.manifest,
+      kind === 'api' ? 'apiTimeoutMs' : 'commandTimeoutMs'
+    );
+    const operation = `${kind}:${operationId}`;
+    this.deps.setCurrentOperation?.(pluginId, {
+      summary: operation,
+      currentOperation: operation,
+      workState: 'busy',
+      pluginName: info?.name ?? plugin?.manifest.name,
+    });
+
+    try {
+      return await withPluginRuntimeBudget(`plugin ${pluginId} ${operation}`, timeoutMs, run);
+    } catch (error: unknown) {
+      this.deps.recordRuntimeError?.(pluginId, error, info?.name ?? plugin?.manifest.name);
+      throw error;
+    } finally {
+      this.deps.setCurrentOperation?.(pluginId, null);
     }
   }
 

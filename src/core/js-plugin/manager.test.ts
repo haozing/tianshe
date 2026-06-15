@@ -190,6 +190,11 @@ describe('JSPluginManager', () => {
 
     // 重置所有 mock
     vi.clearAllMocks();
+    mockLifecycleManager.hasPlugin.mockReturnValue(false);
+    mockLifecycleManager.getPlugin.mockReturnValue(null);
+    mockLifecycleManager.getContext.mockReturnValue(null);
+    mockLifecycleManager.getHelpers.mockReturnValue(null);
+    mockLifecycleManager.getLogger.mockReturnValue(null);
     mockPluginLoader.discoverExternalPluginSources.mockResolvedValue([]);
   });
 
@@ -1213,6 +1218,39 @@ describe('JSPluginManager', () => {
       expect(mockLogger.command).toHaveBeenCalledWith('test-command', 'error', error);
     });
 
+    it('times out command execution using the plugin runtime budget', async () => {
+      vi.useFakeTimers();
+      const mockHandler = vi.fn(() => new Promise(() => {}));
+      const mockContext = {
+        getCommand: vi.fn().mockReturnValue(mockHandler),
+      };
+      const mockPlugin = {
+        manifest: {
+          id: 'test-plugin',
+          name: 'Test Plugin',
+          version: '1.0.0',
+          author: 'Test Author',
+          main: 'index.js',
+          runtime: { commandTimeoutMs: 50 },
+        },
+      };
+
+      mockLifecycleManager.getPlugin.mockReturnValue(mockPlugin);
+      mockLifecycleManager.getContext.mockReturnValue(mockContext);
+      mockLifecycleManager.getHelpers.mockReturnValue({});
+      mockLifecycleManager.getLogger.mockReturnValue(null);
+
+      const running = manager.executeCommand('test-plugin', 'test-command', {});
+      const assertion = expect(running).rejects.toThrow(
+        'Operation "plugin test-plugin command:test-command" timed out after 50ms'
+      );
+      await vi.advanceTimersByTimeAsync(51);
+
+      await assertion;
+      expect((manager as any).executionCoordinator.getRunningCommandCount('test-plugin')).toBe(0);
+      vi.useRealTimers();
+    });
+
     it('应该写入 plugin.invoke 观测事件', async () => {
       const sink = new MemoryObservationSink();
       setObservationSink(sink);
@@ -1664,6 +1702,36 @@ describe('JSPluginManager', () => {
 
       expect(result).toEqual({ result: 'success' });
       expect(mockContext.callExposedAPI).toHaveBeenCalledWith('testAPI', ['arg1', 'arg2']);
+    });
+
+    it('times out exposed API calls using the plugin runtime budget', async () => {
+      vi.useFakeTimers();
+      const mockContext = {
+        callExposedAPI: vi.fn(() => new Promise(() => {})),
+      };
+      const mockPlugin = {
+        manifest: {
+          id: 'test-plugin',
+          name: 'Test Plugin',
+          version: '1.0.0',
+          author: 'Test Author',
+          main: 'index.js',
+          runtime: { apiTimeoutMs: 50 },
+        },
+      };
+
+      mockLifecycleManager.getPlugin.mockReturnValue(mockPlugin);
+      mockLifecycleManager.getContext.mockReturnValue(mockContext);
+
+      const running = manager.callPluginAPI('test-plugin', 'testAPI', ['arg1']);
+      const assertion = expect(running).rejects.toThrow(
+        'Operation "plugin test-plugin api:testAPI" timed out after 50ms'
+      );
+      await vi.advanceTimersByTimeAsync(51);
+
+      await assertion;
+      expect((manager as any).executionCoordinator.getRunningCommandCount('test-plugin')).toBe(0);
+      vi.useRealTimers();
     });
 
     it('应该为 API 调用写入 plugin.invoke 观测事件', async () => {

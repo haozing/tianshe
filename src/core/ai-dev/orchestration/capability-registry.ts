@@ -458,7 +458,10 @@ const normalizeForHash = (value: unknown): unknown => {
   return value;
 };
 
-const hashInvokePayload = (name: string, args: Record<string, unknown>): string => {
+export const hashOrchestrationInvokePayload = (
+  name: string,
+  args: Record<string, unknown>
+): string => {
   return createHash('sha256')
     .update(JSON.stringify(normalizeForHash({ name, args })))
     .digest('hex');
@@ -618,7 +621,10 @@ const idempotencyMiddleware: InvokeMiddleware = async (context, next) => {
     };
   }
 
-  const requestHash = hashInvokePayload(context.request.name, context.request.arguments || {});
+  const requestHash = hashOrchestrationInvokePayload(
+    context.request.name,
+    context.request.arguments || {}
+  );
   const cached = store.get(idempotencyKey);
 
   if (cached) {
@@ -637,6 +643,33 @@ const idempotencyMiddleware: InvokeMiddleware = async (context, next) => {
             idempotencyKey,
             capability: context.request.name,
             reason: 'idempotency_conflict',
+          },
+        }
+      );
+      return {
+        result: formatStructuredErrorResult(error),
+        error,
+        meta: {
+          idempotencyKey,
+        },
+      };
+    }
+
+    if (cached.state === 'running' || !cached.result) {
+      context.runtime.idempotencyDecision = {
+        enabled: true,
+        key: idempotencyKey,
+        status: 'rejected',
+        reason: 'idempotency_request_running',
+      };
+      const error = createStructuredError(
+        ErrorCode.REQUEST_FAILED,
+        'Idempotency-Key is already reserved by an in-flight request',
+        {
+          context: {
+            idempotencyKey,
+            capability: context.request.name,
+            reason: 'idempotency_request_running',
           },
         }
       );
@@ -677,6 +710,7 @@ const idempotencyMiddleware: InvokeMiddleware = async (context, next) => {
   const derivedError = inferErrorFromResult(outcome);
 
   store.set(idempotencyKey, {
+    state: 'completed',
     requestHash,
     capability: context.request.name,
     createdAt: now(),

@@ -80,6 +80,15 @@ export interface SimpleTensorOutput {
   dims: number[];
 }
 
+export interface RunModelOptions {
+  /** 指定输出张量名称 */
+  outputNames?: string[];
+  /** 单次推理超时，单位毫秒 */
+  timeoutMs?: number;
+  /** 单次输入元素总数上限 */
+  maxInputElements?: number;
+}
+
 /**
  * 模型加载选项
  */
@@ -194,7 +203,8 @@ export class ONNXNamespace {
    */
   async run(
     modelId: string,
-    inputs: Record<string, SimpleTensorInput>
+    inputs: Record<string, SimpleTensorInput>,
+    options?: RunModelOptions
   ): Promise<Record<string, SimpleTensorOutput>> {
     // 转换输入格式
     const tensorInputs: Record<string, TensorData> = {};
@@ -206,7 +216,7 @@ export class ONNXNamespace {
       };
     }
 
-    const result = await this.service.run(modelId, tensorInputs);
+    const result = await this.service.run(modelId, tensorInputs, options);
 
     // 转换输出格式
     const outputs: Record<string, SimpleTensorOutput> = {};

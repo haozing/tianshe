@@ -39,6 +39,31 @@ describe('PluginRuntimeRegistry', () => {
     expect(listener).toHaveBeenCalled();
   });
 
+  it('tracks current lifecycle or command operation summaries', () => {
+    const registry = new PluginRuntimeRegistry();
+    registry.setLifecyclePhase('plugin-a', 'active', 'Plugin A');
+
+    registry.setCurrentOperation('plugin-a', {
+      summary: 'command:sync',
+      currentOperation: 'command:sync',
+      workState: 'busy',
+    });
+
+    expect(registry.getStatus('plugin-a')).toMatchObject({
+      workState: 'busy',
+      currentSummary: 'command:sync',
+      currentOperation: 'command:sync',
+    });
+
+    registry.setCurrentOperation('plugin-a', null);
+
+    expect(registry.getStatus('plugin-a')).toMatchObject({
+      workState: 'idle',
+      currentSummary: undefined,
+      currentOperation: undefined,
+    });
+  });
+
   it('aggregates queue execution state and progress', async () => {
     const registry = new PluginRuntimeRegistry();
     const queue = createTaskQueue({ concurrency: 1, retry: 0 });

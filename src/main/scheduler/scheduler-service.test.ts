@@ -480,6 +480,48 @@ describe('SchedulerService', () => {
       // 恢复 fake timers
       vi.useFakeTimers();
     }, 5000);
+
+    it('不响应 AbortSignal 的 handler 超时后应硬结束运行状态', async () => {
+      vi.useRealTimers();
+
+      const task = createTestTask({ retryCount: 0, timeoutMs: 50 });
+
+      mockTaskService.getTask.mockResolvedValue(task);
+      let execCount = 0;
+      mockTaskService.createExecution.mockImplementation(async () => ({
+        id: `exec-hard-timeout-${++execCount}`,
+        taskId: task.id,
+        status: 'running',
+        startedAt: Date.now(),
+        triggerType: 'manual',
+      }));
+
+      const handler = vi
+        .fn()
+        .mockImplementationOnce(() => new Promise(() => undefined))
+        .mockResolvedValueOnce({ ok: true });
+      scheduler.registerHandler(task.pluginId, task.handlerId, handler);
+
+      const timedOut = await scheduler.triggerTask(task.id);
+
+      expect(timedOut.status).toBe('cancelled');
+      expect(timedOut.error).toBe('Task timed out after 50ms');
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(mockTaskService.updateExecution).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          status: 'cancelled',
+          error: 'Task timed out after 50ms',
+        })
+      );
+
+      const secondRun = await scheduler.triggerTask(task.id);
+
+      expect(secondRun.status).toBe('completed');
+      expect(handler).toHaveBeenCalledTimes(2);
+
+      vi.useFakeTimers();
+    }, 5000);
   });
 
   describe('处理器注册测试', () => {
@@ -701,7 +743,7 @@ describe('SchedulerService', () => {
       expect(mockTaskService.updateTask).toHaveBeenCalledWith(task.id, { status: 'disabled' });
     });
 
-    it('cancel running task 应等待旧 handler 收尾并在此期间拒绝同任务重入', async () => {
+    it('cancel running task 应硬结束不响应 AbortSignal 的 handler 状态', async () => {
       vi.useRealTimers();
 
       const task = createTestTask({
@@ -718,15 +760,11 @@ describe('SchedulerService', () => {
         triggerType: 'manual',
       } as TaskExecution);
 
-      let resolveHandler!: () => void;
       let receivedSignal: AbortSignal | null = null;
       const handler = vi.fn(
         async (ctx) => {
           receivedSignal = ctx.signal;
-          await new Promise<void>((resolve) => {
-            resolveHandler = resolve;
-          });
-          return { ok: true };
+          await new Promise(() => undefined);
         }
       );
       scheduler.registerHandler(task.pluginId, task.handlerId, handler);
@@ -738,14 +776,8 @@ describe('SchedulerService', () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
 
       expect(receivedSignal?.aborted).toBe(true);
-      expect(mockTaskService.deleteTask).not.toHaveBeenCalled();
-      await expect(scheduler.triggerTask(task.id)).rejects.toThrow(
-        `Task ${task.id} is already running`
-      );
-
-      resolveHandler();
-      await cancelPromise;
       const result = await running;
+      await cancelPromise;
 
       expect(result.status).toBe('cancelled');
       expect(mockTaskService.deleteTask).toHaveBeenCalledWith(task.id);

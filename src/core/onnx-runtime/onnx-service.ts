@@ -21,6 +21,10 @@ import { ModelNotFoundError, ModelLoadError, InferenceError } from './types';
 import { toTypedArray, toArray } from './tensor-utils';
 
 const logger = createLogger('ONNXService');
+const DEFAULT_MODEL_CONCURRENCY = 1;
+const MAX_MODEL_CONCURRENCY = 8;
+const DEFAULT_INFERENCE_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_INPUT_ELEMENTS = 10_000_000;
 
 // ONNX Runtime 类型（动态导入，避免编译时依赖）
 
@@ -38,6 +42,8 @@ interface LoadedModel {
   meta: ModelMeta;
   loadedAt: number;
   lastUsed: number;
+  activeRuns: number;
+  waiters: Array<() => void>;
 }
 
 /**
@@ -64,6 +70,10 @@ export class ONNXRuntimeService {
       ONNXRuntimeService.instance = new ONNXRuntimeService();
     }
     return ONNXRuntimeService.instance;
+  }
+
+  static resetInstanceForTesting(): void {
+    ONNXRuntimeService.instance = new ONNXRuntimeService();
   }
 
   /**
@@ -128,6 +138,116 @@ export class ONNXRuntimeService {
         return ['coreml', 'cpu'];
       default:
         return ['cpu'];
+    }
+  }
+
+  private normalizeConcurrency(value: unknown): number {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MODEL_CONCURRENCY;
+    return Math.max(1, Math.min(MAX_MODEL_CONCURRENCY, Math.trunc(parsed)));
+  }
+
+  private normalizeTimeoutMs(value: unknown): number {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_INFERENCE_TIMEOUT_MS;
+    return Math.max(1, Math.trunc(parsed));
+  }
+
+  private normalizeMaxInputElements(value: unknown): number {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_INPUT_ELEMENTS;
+    return Math.max(1, Math.trunc(parsed));
+  }
+
+  private getTensorElementCount(tensorData: TensorData): number {
+    if (tensorData.dims.length === 0) {
+      return 1;
+    }
+
+    const dimProduct = tensorData.dims.reduce((total, dim) => {
+      if (!Number.isFinite(dim) || dim <= 0) {
+        throw new Error(`Invalid tensor dimension: ${dim}`);
+      }
+      return total * Math.trunc(dim);
+    }, 1);
+    const dataLength =
+      typeof tensorData.data === 'object' && 'length' in tensorData.data
+        ? Number(tensorData.data.length)
+        : dimProduct;
+    if (Number.isFinite(dataLength) && dataLength !== dimProduct) {
+      throw new Error(
+        `Tensor data length mismatch: dims imply ${dimProduct} elements, got ${dataLength}`
+      );
+    }
+    return dimProduct;
+  }
+
+  private assertInputBudget(
+    inputs: Record<string, TensorData>,
+    maxInputElements: number
+  ): number {
+    let totalElements = 0;
+    for (const [name, tensorData] of Object.entries(inputs)) {
+      const elementCount = this.getTensorElementCount(tensorData);
+      totalElements += elementCount;
+      if (totalElements > maxInputElements) {
+        throw new Error(
+          `ONNX input element budget exceeded for "${name}": ${totalElements} > ${maxInputElements}`
+        );
+      }
+    }
+    return totalElements;
+  }
+
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    modelId: string
+  ): Promise<T> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            reject(new Error(`ONNX inference timed out after ${timeoutMs}ms for model "${modelId}"`));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  private async acquireModelSlot(model: LoadedModel): Promise<() => void> {
+    const maxConcurrency = this.normalizeConcurrency(model.config.maxConcurrency);
+    if (model.activeRuns < maxConcurrency) {
+      model.activeRuns += 1;
+      return () => this.releaseModelSlot(model);
+    }
+
+    await new Promise<void>((resolve) => {
+      model.waiters.push(resolve);
+    });
+
+    model.activeRuns += 1;
+    return () => this.releaseModelSlot(model);
+  }
+
+  private releaseModelSlot(model: LoadedModel): void {
+    model.activeRuns = Math.max(0, model.activeRuns - 1);
+    const next = model.waiters.shift();
+    if (next) {
+      next();
+    }
+  }
+
+  private async runWithModelQueue<T>(model: LoadedModel, operation: () => Promise<T>): Promise<T> {
+    const release = await this.acquireModelSlot(model);
+    try {
+      return await operation();
+    } finally {
+      release();
     }
   }
 
@@ -196,6 +316,8 @@ export class ONNXRuntimeService {
         meta,
         loadedAt: Date.now(),
         lastUsed: Date.now(),
+        activeRuns: 0,
+        waiters: [],
       };
 
       this.models.set(modelId, loadedModel);
@@ -254,32 +376,54 @@ export class ONNXRuntimeService {
     }
 
     try {
-      const startTime = performance.now();
+      const timeoutMs = this.normalizeTimeoutMs(
+        options?.timeoutMs ?? model.config.inferenceTimeoutMs
+      );
+      const maxInputElements = this.normalizeMaxInputElements(
+        options?.maxInputElements ?? model.config.maxInputElements
+      );
+      const inputElements = this.assertInputBudget(inputs, maxInputElements);
 
-      // 构建输入 feeds
-      const feeds: Record<string, Tensor> = {};
-      for (const [name, tensorData] of Object.entries(inputs)) {
-        const data = toTypedArray(tensorData.data as number[], tensorData.type || 'float32');
-        feeds[name] = new this.ort.Tensor(tensorData.type || 'float32', data, tensorData.dims);
-      }
+      return await this.runWithModelQueue(model, async () => {
+        const startTime = performance.now();
 
-      // 执行推理
-      const results = await model.session.run(feeds, options?.outputNames);
+        // 构建输入 feeds
+        const feeds: Record<string, Tensor> = {};
+        for (const [name, tensorData] of Object.entries(inputs)) {
+          const data = toTypedArray(tensorData.data as number[], tensorData.type || 'float32');
+          feeds[name] = new this.ort!.Tensor(tensorData.type || 'float32', data, tensorData.dims);
+        }
 
-      // 转换输出
-      const outputs: Record<string, TensorData> = {};
-      for (const [name, tensor] of Object.entries(results) as [string, Tensor][]) {
-        outputs[name] = {
-          data: toArray(tensor.data as Float32Array),
-          dims: tensor.dims as number[],
-          type: tensor.type as TensorData['type'],
-        };
-      }
+        logger.debug(`Running ONNX inference for model "${modelId}"`, {
+          timeoutMs,
+          maxInputElements,
+          inputElements,
+          maxConcurrency: this.normalizeConcurrency(model.config.maxConcurrency),
+        });
 
-      const duration = performance.now() - startTime;
-      model.lastUsed = Date.now();
+        const results = await this.withTimeout<Record<string, Tensor>>(
+          Promise.resolve(model.session.run(feeds, options?.outputNames)) as Promise<
+            Record<string, Tensor>
+          >,
+          timeoutMs,
+          modelId
+        );
 
-      return { outputs, duration };
+        // 转换输出
+        const outputs: Record<string, TensorData> = {};
+        for (const [name, tensor] of Object.entries(results) as [string, Tensor][]) {
+          outputs[name] = {
+            data: toArray(tensor.data as Float32Array),
+            dims: tensor.dims as number[],
+            type: tensor.type as TensorData['type'],
+          };
+        }
+
+        const duration = performance.now() - startTime;
+        model.lastUsed = Date.now();
+
+        return { outputs, duration };
+      });
     } catch (error) {
       logger.error(`Inference failed for model "${modelId}":`, error);
       throw new InferenceError(modelId, error as Error);

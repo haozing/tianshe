@@ -307,6 +307,32 @@ describe('PluginLifecycleManager', () => {
       contextDisposeSpy.mockRestore();
       helpersDisposeSpy.mockRestore();
     });
+
+    it('times out a hanging activate hook and cleans up partial activation', async () => {
+      vi.useFakeTimers();
+      const plugin = createMockPlugin({
+        manifest: {
+          ...createMockPlugin().manifest,
+          runtime: { lifecycleHookTimeoutMs: 50 },
+        },
+        module: {
+          activate: vi.fn(() => new Promise(() => {})),
+        },
+      });
+      const callbacks = createActivateCallbacks();
+      lifecycle.setPlugin('test-plugin', plugin);
+
+      const activation = lifecycle.activate('test-plugin', callbacks);
+      const assertion = expect(activation).rejects.toThrow(
+        'Plugin activation failed: Operation "plugin test-plugin activate hook" timed out after 50ms'
+      );
+      await vi.advanceTimersByTimeAsync(51);
+
+      await assertion;
+      expect(lifecycle.hasPlugin('test-plugin')).toBe(false);
+      expect(callbacks.unregisterUIContributions).toHaveBeenCalledWith('test-plugin');
+      vi.useRealTimers();
+    });
   });
 
   // ========== 停用 ==========
@@ -389,9 +415,8 @@ describe('PluginLifecycleManager', () => {
       (lifecycle as any).helpers.set('test-plugin', helpers);
 
       const deactivatePromise = lifecycle.deactivate('test-plugin', mockCallbacks);
-      await Promise.resolve();
 
-      expect(context.dispose).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(context.dispose).toHaveBeenCalledTimes(1));
       expect(helpers.dispose).not.toHaveBeenCalled();
 
       resolveDispose?.();
@@ -442,6 +467,31 @@ describe('PluginLifecycleManager', () => {
       expect(plugin.module.deactivate).not.toHaveBeenCalled();
       expect(mockCallbacks.unregisterUIContributions).not.toHaveBeenCalled();
       expect(mockDeps.viewManager.cleanupPluginViews).not.toHaveBeenCalled();
+    });
+
+    it('times out a hanging canDeactivate guard and still finishes cleanup', async () => {
+      vi.useFakeTimers();
+      const plugin = createMockPlugin({
+        manifest: {
+          ...createMockPlugin().manifest,
+          runtime: { lifecycleHookTimeoutMs: 50 },
+        },
+        module: {
+          activate: vi.fn(),
+          canDeactivate: vi.fn(() => new Promise(() => {})),
+          deactivate: vi.fn().mockResolvedValue(undefined),
+        } as any,
+      });
+      lifecycle.setPlugin('test-plugin', plugin);
+
+      const deactivation = lifecycle.deactivate('test-plugin', mockCallbacks);
+      await vi.advanceTimersByTimeAsync(51);
+      const result = await deactivation;
+
+      expect(result).toBe(true);
+      expect(plugin.module.deactivate).toHaveBeenCalled();
+      expect(mockCallbacks.unregisterUIContributions).toHaveBeenCalledWith('test-plugin');
+      vi.useRealTimers();
     });
 
     it('force 停用会忽略 canDeactivate 守卫', async () => {

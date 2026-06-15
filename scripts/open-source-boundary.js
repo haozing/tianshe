@@ -421,6 +421,17 @@ function applyOpenSourceOverlay(outputDir) {
     test: 'npm run test:open',
     'test:open': 'node scripts/test-edition.js open',
     'test:open:full': 'node scripts/test-edition.js open --full',
+    'test:architecture':
+      'vitest run src/core/ai-dev/architecture-maintenance-guard.test.ts src/core/ai-dev/architecture-boundary.test.ts src/core/ai-dev/runtime-profile-contract-baseline.test.ts',
+    'test:inventory': 'node scripts/test-inventory.js',
+    'test:main-bootstrap':
+      'vitest run src/main/app-runtime.test.ts src/main/bootstrap/app-ready-bootstrap.test.ts src/main/bootstrap/runtime-error-bootstrap.test.ts src/main/bootstrap/shutdown-bootstrap.test.ts src/main/bootstrap/stdio-bootstrap.test.ts src/main/browser-pool-readiness.test.ts',
+    'test:browser-pool':
+      'vitest run src/core/browser-pool/__tests__/pool-manager.test.ts src/core/browser-pool/__tests__/pool-manager.closed-persistent.test.ts src/core/browser-pool/__tests__/wait-queue.test.ts src/core/browser-pool/__tests__/global-pool.test.ts src/core/browser-pool/__tests__/profile-live-session-lease.test.ts',
+    'test:browser-canary': 'node scripts/browser-canary.js',
+    'test:dataset-ipc':
+      'vitest run src/main/ipc-handlers/dataset-handler.test.ts src/renderer/src/stores/__tests__/datasetStore.test.ts',
+    'test:package-smoke': 'npm run package:open:dir && node scripts/package-smoke.js',
     typecheck: 'tsc --noEmit',
     lint: 'eslint .',
     'format:check': 'prettier --check "src/**/*.{ts,tsx,json}"',
@@ -428,7 +439,7 @@ function applyOpenSourceOverlay(outputDir) {
     sbom: 'node scripts/generate-sbom.js',
     'verify:open-source-boundary': 'node scripts/open-source-boundary.js',
     'verify:ci':
-      'npm run typecheck && npm run lint && npm run test:open:full && npm run verify:supply-chain && npm run verify:open-source-boundary && npm run sbom && npm run build:open',
+      'npm run test:architecture && npm run test:inventory && npm run typecheck && npm run lint && npm run test:open:full && npm run verify:supply-chain && npm run verify:open-source-boundary && npm run sbom && npm run build:open && npm run test:package-smoke',
   };
   writeJson(outputDir, 'package.json', packageJson);
 
@@ -478,8 +489,11 @@ require(mainEntry);
     'dev:open',
     'build:open',
     'package:open:portable',
+    'test:browser-canary',
     'test:open',
     'test:open:full',
+    'test:inventory',
+    'test:package-smoke',
     'verify:supply-chain',
     'sbom',
     'verify:open-source-boundary',

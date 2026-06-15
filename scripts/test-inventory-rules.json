@@ -1,0 +1,446 @@
+{
+  "schemaVersion": 1,
+  "tagPrefix": "@tianshe-test",
+  "requiredFields": ["area", "layer", "runtime"],
+  "allowed": {
+    "areas": [
+      "architecture",
+      "bootstrap",
+      "browser",
+      "config",
+      "dataset",
+      "edition",
+      "http-mcp",
+      "native",
+      "observability",
+      "plugin",
+      "renderer",
+      "shared",
+      "sync",
+      "task",
+      "tooling"
+    ],
+    "layers": [
+      "architecture",
+      "canary",
+      "contract",
+      "integration",
+      "real",
+      "smoke",
+      "unit"
+    ],
+    "runtimes": ["browser", "electron", "jsdom", "node", "packaged", "real-browser"]
+  },
+  "rules": [
+    {
+      "pattern": "**/*.test.ts",
+      "layer": "unit",
+      "runtime": "node"
+    },
+    {
+      "pattern": "**/*.spec.ts",
+      "layer": "unit",
+      "runtime": "node"
+    },
+    {
+      "pattern": "**/*.test.tsx",
+      "layer": "unit",
+      "runtime": "jsdom"
+    },
+    {
+      "pattern": "**/*.spec.tsx",
+      "layer": "unit",
+      "runtime": "jsdom"
+    },
+    {
+      "pattern": "**/*.test.js",
+      "layer": "unit",
+      "runtime": "node"
+    },
+    {
+      "pattern": "**/*.spec.js",
+      "layer": "unit",
+      "runtime": "node"
+    },
+    {
+      "pattern": "**/*.contract.test.ts",
+      "layer": "contract"
+    },
+    {
+      "pattern": "**/*-contract.test.ts",
+      "layer": "contract"
+    },
+    {
+      "pattern": "**/*.integration.test.ts",
+      "layer": "integration"
+    },
+    {
+      "pattern": "**/*.smoke.test.ts",
+      "layer": "smoke",
+      "runtime": "real-browser"
+    },
+    {
+      "pattern": "**/*.canary.test.ts",
+      "layer": "canary",
+      "runtime": "real-browser"
+    },
+    {
+      "pattern": "**/*.real-contract.test.ts",
+      "layer": "real",
+      "runtime": "real-browser"
+    },
+    {
+      "pattern": "**/*.fingerprint-real.test.ts",
+      "layer": "real",
+      "runtime": "real-browser"
+    },
+    {
+      "pattern": "scripts/**/*.test.js",
+      "area": "tooling",
+      "runtime": "node"
+    },
+    {
+      "pattern": "src/constants/**/*.test.ts",
+      "area": "config"
+    },
+    {
+      "pattern": "src/core/ai-dev/**/*.test.ts",
+      "area": "http-mcp"
+    },
+    {
+      "pattern": "src/core/ai-dev/architecture-*.test.ts",
+      "area": "architecture",
+      "layer": "architecture"
+    },
+    {
+      "pattern": "src/core/ai-dev/runtime-profile-contract-baseline.test.ts",
+      "area": "architecture",
+      "layer": "architecture"
+    },
+    {
+      "pattern": "src/core/browser-*/**/*.test.ts",
+      "area": "browser"
+    },
+    {
+      "pattern": "src/core/browser-*/**/*.test.tsx",
+      "area": "browser"
+    },
+    {
+      "pattern": "src/main/profile/browser-*.test.ts",
+      "area": "browser"
+    },
+    {
+      "pattern": "src/main/http-browser-*.test.ts",
+      "area": "browser"
+    },
+    {
+      "pattern": "src/main/browser-*.test.ts",
+      "area": "browser"
+    },
+    {
+      "pattern": "src/core/fingerprint/**/*.test.ts",
+      "area": "browser"
+    },
+    {
+      "pattern": "src/core/stealth/**/*.test.ts",
+      "area": "browser"
+    },
+    {
+      "pattern": "src/core/js-plugin/**/*.test.ts",
+      "area": "plugin"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/js-plugin*.test.ts",
+      "area": "plugin"
+    },
+    {
+      "pattern": "src/renderer/src/components/Plugin*/**/*.test.tsx",
+      "area": "plugin"
+    },
+    {
+      "pattern": "src/main/mcp*.test.ts",
+      "area": "http-mcp"
+    },
+    {
+      "pattern": "src/main/http*.test.ts",
+      "area": "http-mcp"
+    },
+    {
+      "pattern": "src/main/orchestration*.test.ts",
+      "area": "http-mcp"
+    },
+    {
+      "pattern": "src/main/schemas/orchestration*.test.ts",
+      "area": "http-mcp",
+      "layer": "contract"
+    },
+    {
+      "pattern": "src/core/task-manager/**/*.test.ts",
+      "area": "task"
+    },
+    {
+      "pattern": "src/main/scheduler/**/*.test.ts",
+      "area": "task"
+    },
+    {
+      "pattern": "src/main/task*.test.ts",
+      "area": "task"
+    },
+    {
+      "pattern": "src/core/ffi/**/*.test.ts",
+      "area": "native"
+    },
+    {
+      "pattern": "src/__tests__/ffi*.test.ts",
+      "area": "native"
+    },
+    {
+      "pattern": "src/core/onnx-runtime/**/*.test.ts",
+      "area": "native"
+    },
+    {
+      "pattern": "src/core/image-search/**/*.test.ts",
+      "area": "native"
+    },
+    {
+      "pattern": "src/core/image-similarity/**/*.test.ts",
+      "area": "native"
+    },
+    {
+      "pattern": "src/core/system-automation/**/*.test.ts",
+      "area": "native"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/ocr*.test.ts",
+      "area": "native"
+    },
+    {
+      "pattern": "src/main/duckdb/**/*.test.ts",
+      "area": "dataset"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/dataset*.test.ts",
+      "area": "dataset"
+    },
+    {
+      "pattern": "src/renderer/src/stores/**/dataset*.test.ts",
+      "area": "dataset"
+    },
+    {
+      "pattern": "src/renderer/src/components/DatasetsPage/**/*.test.tsx",
+      "area": "dataset"
+    },
+    {
+      "pattern": "src/main/sync/**/*.test.ts",
+      "area": "sync"
+    },
+    {
+      "pattern": "src/utils/**/*sync*.test.ts",
+      "area": "sync"
+    },
+    {
+      "pattern": "src/main/bootstrap/**/*.test.ts",
+      "area": "bootstrap"
+    },
+    {
+      "pattern": "src/main/app-runtime.test.ts",
+      "area": "bootstrap"
+    },
+    {
+      "pattern": "src/main/main-service-composition.test.ts",
+      "area": "bootstrap"
+    },
+    {
+      "pattern": "src/main/*bootstrap*.test.ts",
+      "area": "bootstrap"
+    },
+    {
+      "pattern": "src/core/logger.test.ts",
+      "area": "observability"
+    },
+    {
+      "pattern": "src/main/*diagnostic*.test.ts",
+      "area": "observability"
+    },
+    {
+      "pattern": "src/main/runtime/**/*.test.ts",
+      "area": "observability"
+    },
+    {
+      "pattern": "src/edition/**/*.test.ts",
+      "area": "edition"
+    },
+    {
+      "pattern": "src/preload/**/*.test.ts",
+      "area": "edition"
+    },
+    {
+      "pattern": "src/renderer/**/*.test.tsx",
+      "area": "renderer",
+      "runtime": "jsdom"
+    },
+    {
+      "pattern": "src/renderer/**/*.test.ts",
+      "area": "renderer",
+      "runtime": "jsdom"
+    },
+    {
+      "pattern": "src/__tests__/*.test.tsx",
+      "area": "renderer",
+      "runtime": "jsdom"
+    },
+    {
+      "pattern": "src/__tests__/duckdb*.test.ts",
+      "area": "dataset",
+      "layer": "integration"
+    },
+    {
+      "pattern": "src/core/errors/**/*.test.ts",
+      "area": "observability"
+    },
+    {
+      "pattern": "src/core/observability/**/*.test.ts",
+      "area": "observability"
+    },
+    {
+      "pattern": "src/core/extension-packages/**/*.test.ts",
+      "area": "browser"
+    },
+    {
+      "pattern": "src/main/__tests__/plugin*.test.ts",
+      "area": "plugin"
+    },
+    {
+      "pattern": "src/main/__tests__/window*.test.ts",
+      "area": "bootstrap"
+    },
+    {
+      "pattern": "src/main/file-storage.test.ts",
+      "area": "shared"
+    },
+    {
+      "pattern": "src/main/ipc*.test.ts",
+      "area": "shared"
+    },
+    {
+      "pattern": "src/main/main-build-freshness.test.ts",
+      "area": "bootstrap"
+    },
+    {
+      "pattern": "src/main/renderer-build-freshness.test.ts",
+      "area": "bootstrap"
+    },
+    {
+      "pattern": "src/main/network-target-policy.test.ts",
+      "area": "shared"
+    },
+    {
+      "pattern": "src/main/observation-query-service.test.ts",
+      "area": "observability"
+    },
+    {
+      "pattern": "src/main/updater.test.ts",
+      "area": "bootstrap"
+    },
+    {
+      "pattern": "src/main/webcontents*.test.ts",
+      "area": "bootstrap"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/account*.test.ts",
+      "area": "dataset"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/profile*.test.ts",
+      "area": "browser"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/browser*.test.ts",
+      "area": "browser"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/extension*.test.ts",
+      "area": "browser"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/http*.test.ts",
+      "area": "http-mcp"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/observation*.test.ts",
+      "area": "observability"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/query-template*.test.ts",
+      "area": "dataset"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/scheduler*.test.ts",
+      "area": "task"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/system*.test.ts",
+      "area": "native"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/tag*.test.ts",
+      "area": "dataset"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/updater*.test.ts",
+      "area": "bootstrap"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/view*.test.ts",
+      "area": "bootstrap"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/file*.test.ts",
+      "area": "shared"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/errors.test.ts",
+      "area": "observability"
+    },
+    {
+      "pattern": "src/main/ipc-handlers/utils.test.ts",
+      "area": "shared"
+    },
+    {
+      "pattern": "src/main/profile/**/*.test.ts",
+      "area": "browser"
+    },
+    {
+      "pattern": "src/utils/**/*.test.ts",
+      "area": "shared"
+    },
+    {
+      "pattern": "src/shared/**/*.test.ts",
+      "area": "shared"
+    },
+    {
+      "pattern": "src/types/**/*.test.ts",
+      "area": "shared"
+    },
+    {
+      "pattern": "src/core/hookbus.test.ts",
+      "area": "shared"
+    },
+    {
+      "pattern": "src/core/resource-coordinator.test.ts",
+      "area": "shared"
+    },
+    {
+      "pattern": "src/core/typed-event-emitter.test.ts",
+      "area": "shared"
+    },
+    {
+      "pattern": "src/core/query-engine/**/*.test.ts",
+      "area": "dataset"
+    },
+    {
+      "pattern": "src/core/cloud-api-common/**/*.test.ts",
+      "area": "sync"
+    }
+  ]
+}

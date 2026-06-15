@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'fs';
 import { HNSWIndex } from './hnsw-index';
 
 // Mock hnswlib-node
@@ -44,6 +45,11 @@ vi.mock('fs', async () => {
     existsSync: vi.fn().mockReturnValue(true),
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
+    renameSync: vi.fn(),
+    unlinkSync: vi.fn(),
+    openSync: vi.fn().mockReturnValue(1),
+    fsyncSync: vi.fn(),
+    closeSync: vi.fn(),
     readFileSync: vi.fn().mockReturnValue(
       JSON.stringify({
         config: { spaceType: 'cosine', dim: 128, maxElements: 1000, M: 16, efConstruction: 200 },
@@ -56,6 +62,18 @@ vi.mock('fs', async () => {
     ),
   };
 });
+
+function defaultMetadata(overrides: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    config: { spaceType: 'cosine', dim: 128, maxElements: 1000, M: 16, efConstruction: 200 },
+    nextInternalId: 2,
+    entries: [
+      { templateId: 'template1', internalId: 0, template: { id: 'template1', addedAt: 1000 } },
+      { templateId: 'template2', internalId: 1, template: { id: 'template2', addedAt: 2000 } },
+    ],
+    ...overrides,
+  });
+}
 
 // Mock l2Normalize
 vi.mock('../onnx-runtime', () => ({
@@ -70,6 +88,9 @@ describe('HNSWIndex', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.openSync).mockReturnValue(1);
+    vi.mocked(fs.readFileSync).mockReturnValue(defaultMetadata());
     index = new HNSWIndex({
       spaceType: 'cosine',
       dim: 128,
@@ -346,6 +367,110 @@ describe('HNSWIndex', () => {
       expect(ids).toContain('template1');
       expect(ids).toContain('template2');
       expect(ids).toHaveLength(2);
+    });
+  });
+
+  describe('persistence', () => {
+    beforeEach(async () => {
+      await index.initialize();
+      await index.add('template1', new Array(128).fill(0.1));
+    });
+
+    it('saves index and metadata through temporary files before renaming into place', async () => {
+      const fileBytes = new Map<string, Buffer>();
+      mockWriteIndexSync.mockImplementation((filePath: string) => {
+        fileBytes.set(filePath, Buffer.from(`index:${filePath}`));
+      });
+      vi.mocked(fs.writeFileSync).mockImplementation((filePath, data) => {
+        fileBytes.set(String(filePath), Buffer.from(String(data)));
+      });
+      vi.mocked(fs.readFileSync).mockImplementation((filePath) => {
+        const bytes = fileBytes.get(String(filePath));
+        if (!bytes) {
+          return Buffer.from('');
+        }
+        return bytes;
+      });
+
+      await index.saveIndex('C:\\tmp\\image-search.index');
+
+      const writePath = mockWriteIndexSync.mock.calls[0][0] as string;
+      expect(writePath).toMatch(/\.index\..+\.index\.tmp$/);
+      expect(fs.writeFileSync).toHaveBeenCalledWith(
+        expect.stringMatching(/\.meta\.json\..+\.meta\.tmp$/),
+        expect.any(String)
+      );
+      expect(fs.renameSync).toHaveBeenCalledWith(writePath, 'C:\\tmp\\image-search.index');
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        expect.stringMatching(/\.meta\.json\..+\.meta\.tmp$/),
+        'C:\\tmp\\image-search.index.meta.json'
+      );
+
+      const metadataWrite = vi.mocked(fs.writeFileSync).mock.calls.find((call) =>
+        String(call[0]).includes('.meta.json')
+      );
+      const metadata = JSON.parse(String(metadataWrite?.[1]));
+      expect(metadata.version).toBe(1);
+      expect(metadata.dim).toBe(128);
+      expect(metadata.spaceType).toBe('cosine');
+      expect(metadata.indexChecksumSha256).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it('validates index checksum when loading', async () => {
+      const checksum =
+        'f2e9028c4d64eaf3c0c08f2fdc94e66d91779e1b312b142a7935103c52f15f7c';
+      vi.mocked(fs.readFileSync).mockImplementation((filePath) => {
+        const normalized = String(filePath);
+        if (normalized.endsWith('.meta.json')) {
+          return defaultMetadata({
+            version: 1,
+            dim: 128,
+            spaceType: 'cosine',
+            indexChecksumSha256: checksum,
+          });
+        }
+        return Buffer.from('not-the-expected-index-bytes');
+      });
+
+      await expect(index.loadIndex('C:\\tmp\\image-search.index')).rejects.toThrow(
+        /checksum mismatch/i
+      );
+
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        'C:\\tmp\\image-search.index',
+        expect.stringContaining('.corrupt-')
+      );
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        'C:\\tmp\\image-search.index.meta.json',
+        expect.stringContaining('.corrupt-')
+      );
+      expect(mockReadIndexSync).not.toHaveBeenCalled();
+    });
+
+    it('quarantines unreadable index files without replacing the current in-memory index', async () => {
+      vi.mocked(fs.readFileSync).mockImplementation((filePath) => {
+        if (String(filePath).endsWith('.meta.json')) {
+          return defaultMetadata();
+        }
+        return Buffer.from('legacy-index-without-checksum');
+      });
+      mockReadIndexSync.mockImplementationOnce(() => {
+        throw new Error('broken index');
+      });
+
+      await expect(index.loadIndex('C:\\tmp\\image-search.index')).rejects.toThrow(
+        /unreadable/
+      );
+
+      expect(index.hasTemplate('template1')).toBe(true);
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        'C:\\tmp\\image-search.index',
+        expect.stringContaining('.corrupt-')
+      );
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        'C:\\tmp\\image-search.index.meta.json',
+        expect.stringContaining('.corrupt-')
+      );
     });
   });
 

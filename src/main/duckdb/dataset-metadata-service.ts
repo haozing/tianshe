@@ -23,6 +23,17 @@ import { DATASET_METADATA_SCHEMA_MIGRATIONS } from './schema-migrations';
 
 const logger = createLogger('DatasetMetadataService');
 
+export interface DatasetRowCountReconcileOptions {
+  continueOnError?: boolean;
+}
+
+export interface DatasetRowCountReconcileSummary {
+  checked: number;
+  updated: number;
+  failed: number;
+  errors: Array<{ datasetId: string; message: string }>;
+}
+
 export class DatasetMetadataService {
   constructor(
     private conn: DuckDBConnection,
@@ -273,6 +284,7 @@ export class DatasetMetadataService {
 
   async reconcileRowCountInCurrentQueue(dataset: Dataset): Promise<number> {
     const safeDatasetId = sanitizeDatasetId(dataset.id);
+    const previousRowCount = Number(dataset.rowCount ?? 0);
     const escapedPath = dataset.filePath.replace(/\\/g, '\\\\').replace(/'/g, "''");
     await this.storageService.smartAttach(safeDatasetId, escapedPath);
 
@@ -289,6 +301,7 @@ export class DatasetMetadataService {
     await this.setRowCount(safeDatasetId, actualRowCount);
     logger.info('Reconciled dataset row_count from physical table count', {
       datasetId: safeDatasetId,
+      previousRowCount,
       rowCount: actualRowCount,
     });
     return actualRowCount;
@@ -303,6 +316,56 @@ export class DatasetMetadataService {
       }
       return await this.reconcileRowCountInCurrentQueue(dataset);
     });
+  }
+
+  async reconcileAllRowCounts(
+    options: DatasetRowCountReconcileOptions = {}
+  ): Promise<DatasetRowCountReconcileSummary> {
+    const continueOnError = options.continueOnError ?? true;
+    const datasets = await this.listDatasets();
+    const summary: DatasetRowCountReconcileSummary = {
+      checked: 0,
+      updated: 0,
+      failed: 0,
+      errors: [],
+    };
+
+    logger.info('Starting dataset row_count reconciliation sweep', {
+      datasetCount: datasets.length,
+    });
+
+    for (const dataset of datasets) {
+      summary.checked += 1;
+
+      try {
+        const safeDatasetId = sanitizeDatasetId(dataset.id);
+        const actualRowCount = await this.storageService.executeInQueue(safeDatasetId, async () =>
+          this.reconcileRowCountInCurrentQueue({ ...dataset, id: safeDatasetId })
+        );
+        const metadataRowCount = Math.max(0, Math.trunc(Number(dataset.rowCount) || 0));
+        if (actualRowCount !== metadataRowCount) {
+          summary.updated += 1;
+        }
+      } catch (error: unknown) {
+        const message = getUnknownErrorMessage(error);
+        summary.failed += 1;
+        summary.errors.push({ datasetId: String(dataset.id), message });
+        logger.warn('Failed to reconcile dataset row_count during sweep', {
+          datasetId: dataset.id,
+          errorMessage: message,
+        });
+        if (!continueOnError) {
+          throw error;
+        }
+      }
+    }
+
+    logger.info('Dataset row_count reconciliation sweep completed', {
+      checked: summary.checked,
+      updated: summary.updated,
+      failed: summary.failed,
+    });
+    return summary;
   }
 
   /**

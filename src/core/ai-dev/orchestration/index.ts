@@ -38,6 +38,7 @@ export type {
 
 export {
   createOrchestrationExecutor,
+  hashOrchestrationInvokePayload,
   listOrchestrationCapabilities,
 } from './capability-registry';
 export {

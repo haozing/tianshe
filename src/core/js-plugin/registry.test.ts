@@ -97,6 +97,28 @@ describe('PluginRegistry', () => {
       expect(registry.hasPlugin('plugin-1')).toBe(true);
     });
 
+    it('records runtime policy and high-risk scopes from manifest', () => {
+      const manifest = createTestManifest('plugin-1', {
+        permissions: {
+          database: true,
+        },
+        runtime: {
+          commandTimeoutMs: 5000,
+          isolation: 'main-process',
+          highRiskScopes: ['ffi', 'browser'],
+        },
+      });
+
+      registry.registerPlugin('plugin-1', manifest);
+
+      const info = registry.getPluginInfo('plugin-1');
+      expect(info?.runtimePolicy).toMatchObject({
+        commandTimeoutMs: 5000,
+        isolation: 'main-process',
+      });
+      expect(info?.permissions).toEqual(['database', 'ffi', 'browser']);
+    });
+
     it('应该触发 plugin:registered 事件', () => {
       const handler = vi.fn();
       registry.on('plugin:registered', handler);

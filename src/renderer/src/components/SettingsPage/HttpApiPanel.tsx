@@ -16,6 +16,7 @@ import { getUnknownErrorMessage } from '../../../../utils/error-message';
 import {
   DEFAULT_HTTP_API_CONFIG,
   HTTP_SERVER_DEFAULTS,
+  describeHttpApiAuthContract,
   normalizeHttpApiConfig,
   type HttpApiConfig,
 } from '../../../../constants/http-api';
@@ -326,6 +327,7 @@ export function HttpApiPanel() {
   const mcpBaseUrl = `http://${HTTP_SERVER_DEFAULTS.BIND_ADDRESS}:${configuredPort}/mcp`;
   const runtimeBadge = getRuntimeBadge(runtime);
   const diagnosisTone = getDiagnosisTone(runtime?.diagnosis);
+  const authContract = describeHttpApiAuthContract(effectiveConfig);
   const enabledOverrideText = getOverrideText({
     label: 'HTTP 服务开关',
     flagEnabled: runtimeOverrides.enabled,
@@ -378,6 +380,39 @@ export function HttpApiPanel() {
                 <div>HTTP 服务：{effectiveConfig.enabled ? '开启' : '关闭'}</div>
                 <div>MCP 服务：{effectiveConfig.enableMcp ? '开启' : '关闭'}</div>
                 <div>鉴权：{effectiveConfig.enableAuth ? '开启' : '关闭'}</div>
+              </div>
+            </div>
+          </div>
+
+          <div
+            className={`settings-section p-3 ${
+              authContract.warning === 'http-no-auth' || authContract.warning === 'mcp-no-auth'
+                ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-100'
+                : 'settings-section--muted'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold">访问控制合约</div>
+              <Badge
+                variant={
+                  authContract.warning === 'http-no-auth' ||
+                  authContract.warning === 'mcp-no-auth'
+                    ? 'secondary'
+                    : authContract.mode === 'token-auth'
+                      ? 'default'
+                      : 'secondary'
+                }
+              >
+                {authContract.label}
+              </Badge>
+            </div>
+            <div className="mt-1.5 text-xs">{authContract.detail}</div>
+            <div className="mt-1.5 grid gap-1 text-xs md:grid-cols-3">
+              <div>HTTP Bearer：{authContract.httpRequiresBearer ? '需要' : '不需要'}</div>
+              <div>MCP Bearer：{authContract.mcpRequiresBearer ? '需要' : '不需要'}</div>
+              <div>
+                Orchestration Bearer：
+                {authContract.orchestrationRequiresBearer ? '需要' : '不需要'}
               </div>
             </div>
           </div>

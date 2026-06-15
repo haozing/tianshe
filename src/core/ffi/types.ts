@@ -14,8 +14,19 @@ export interface FunctionSignature {
   returns: string;
   /** 是否异步调用 */
   async?: boolean;
+  /** 是否强制使用隔离子进程调用。指针/回调参数不支持隔离时会拒绝调用。 */
+  isolated?: boolean;
+  /** 单次调用超时，单位毫秒。隔离调用超时会终止子进程。 */
+  timeoutMs?: number;
   /** 调用约定 */
   abi?: 'default' | 'stdcall' | 'cdecl' | 'fastcall';
+}
+
+export interface FFICallOptions {
+  /** 覆盖函数签名中的隔离策略。 */
+  isolated?: boolean;
+  /** 覆盖函数签名/服务默认超时。 */
+  timeoutMs?: number;
 }
 
 /**
@@ -71,6 +82,24 @@ export interface FFIServiceConfig {
   maxLibraries?: number;
   /** 最大回调数量限制（默认：50） */
   maxCallbacks?: number;
+  /** 默认异步调用超时，单位毫秒（默认：5000） */
+  defaultCallTimeoutMs?: number;
+  /** 是否默认将可序列化的异步调用放入隔离子进程（默认：true） */
+  isolateCalls?: boolean;
+  /** 测试或替代运行时可注入的隔离调用执行器 */
+  isolatedCallRunner?: FFIIsolatedCallRunner;
+}
+
+export interface FFIIsolatedCallRequest {
+  libPath: string;
+  functionName: string;
+  signature: FunctionSignature;
+  args: unknown[];
+  callerId: string;
+}
+
+export interface FFIIsolatedCallRunner {
+  run(request: FFIIsolatedCallRequest, options: { timeoutMs: number }): Promise<unknown>;
 }
 
 /**
