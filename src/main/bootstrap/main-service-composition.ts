@@ -2,6 +2,8 @@ import type { App } from 'electron';
 import Store from 'electron-store';
 import { MAX_WEBCONTENTSVIEWS } from '../../constants';
 import type { BrowserPoolConfig } from '../../constants/browser-pool';
+import { HTTP_SERVER_DEFAULTS } from '../../constants/http-api';
+import { MCP_PROTOCOL_UNIFIED_VERSION } from '../../constants/mcp-protocol';
 import { DEFAULT_OCR_POOL_CONFIG, normalizeOcrPoolConfig, type OCRPoolConfig } from '../../constants/ocr-pool';
 import { initializeBrowserPool } from '../../core/browser-pool';
 import { HookBus } from '../../core/hookbus';
@@ -22,6 +24,8 @@ import { registerProfileHandlers } from '../ipc-handlers/profile-ipc-handler';
 import { registerTagHandlers } from '../ipc-handlers/tag-ipc-handler';
 import { maybeOpenInternalBrowserDevTools } from '../internal-browser-devtools';
 import { LogStorageService } from '../log-storage-service';
+import { getRuntimeFingerprint } from '../runtime-fingerprint';
+import { parseRows } from '../duckdb/utils';
 import { createBrowserFactory, createBrowserDestroyer } from '../profile/browser-pool-integration';
 import { createExtensionBrowserFactory } from '../profile/browser-pool-integration-extension';
 import { createRuyiBrowserFactory } from '../profile/browser-pool-integration-ruyi';
@@ -41,6 +45,36 @@ import { WindowManager } from '../window-manager';
 import type { AppRuntime } from '../app-runtime';
 
 const logger = createLogger('MainServiceComposition');
+
+async function logVersionMatrix(app: App, duckdbService: DuckDBService): Promise<void> {
+  const runtimeFingerprint = getRuntimeFingerprint();
+  let schemaMigrationHead: Record<string, unknown> | null = null;
+
+  try {
+    const rows = parseRows(
+      await duckdbService.getConnection().runAndReadAll(`
+        SELECT id, applied_at
+        FROM schema_migrations
+        ORDER BY applied_at DESC
+        LIMIT 1
+      `)
+    );
+    schemaMigrationHead = rows[0] || null;
+  } catch (error: unknown) {
+    logger.warn('Failed to read schema migration head for version matrix', { error });
+  }
+
+  logger.info('Runtime version matrix', {
+    appVersion: app.getVersion(),
+    httpApiVersion: HTTP_SERVER_DEFAULTS.API_VERSION,
+    mcpProtocolVersion: MCP_PROTOCOL_UNIFIED_VERSION,
+    gitCommit: runtimeFingerprint.gitCommit,
+    processStartTime: runtimeFingerprint.processStartTime,
+    buildFreshness: runtimeFingerprint.buildFreshness,
+    mcpSdk: runtimeFingerprint.mcpSdk,
+    schemaMigrationHead,
+  });
+}
 
 export interface MainServiceCompositionOptions {
   app: App;
@@ -84,6 +118,7 @@ async function createCoreServices(options: MainServiceCompositionOptions) {
   const duckdbService = appRuntime.duckdbService;
   await duckdbService.init();
   logger.info('DuckDB service initialized');
+  await logVersionMatrix(options.app, duckdbService);
   logStartup('DuckDB service initialized');
 
   logStartup('Initializing LogStorageService...');

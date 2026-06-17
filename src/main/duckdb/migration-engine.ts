@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 import type { DuckDBConnection } from '@duckdb/node-api';
-import { escapeSqlStringLiteral, parseRows, quoteIdentifier } from './utils';
+import {
+  escapeSqlStringLiteral,
+  parseRows,
+  quoteIdentifier,
+  runInDuckDbTransaction,
+} from './utils';
 
 export type SchemaMigrationStep =
   | string
@@ -82,27 +87,29 @@ export class SchemaMigrationEngine {
         continue;
       }
 
-      const context = new SchemaMigrationContext(this.conn);
-      for (const step of migration.up) {
-        if (typeof step === 'string') {
-          await context.run(step);
-        } else {
-          await step.run(context);
-        }
-      }
-
       const appliedAt = Date.now();
       const rollbackSql = getRollbackSql(migration);
-      await this.conn.run(`
-        INSERT INTO schema_migrations (id, description, checksum, applied_at, rollback_sql)
-        VALUES (
-          ${toSqlStringLiteral(migration.id)},
-          ${toSqlStringLiteral(migration.description)},
-          ${toSqlStringLiteral(checksum)},
-          ${appliedAt},
-          ${toSqlStringLiteral(rollbackSql)}
-        )
-      `);
+      await runInDuckDbTransaction(this.conn, async () => {
+        const context = new SchemaMigrationContext(this.conn);
+        for (const step of migration.up) {
+          if (typeof step === 'string') {
+            await context.run(step);
+          } else {
+            await step.run(context);
+          }
+        }
+
+        await this.conn.run(`
+          INSERT INTO schema_migrations (id, description, checksum, applied_at, rollback_sql)
+          VALUES (
+            ${toSqlStringLiteral(migration.id)},
+            ${toSqlStringLiteral(migration.description)},
+            ${toSqlStringLiteral(checksum)},
+            ${appliedAt},
+            ${toSqlStringLiteral(rollbackSql)}
+          )
+        `);
+      });
 
       const applied: AppliedSchemaMigration = {
         id: migration.id,

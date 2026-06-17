@@ -58,8 +58,15 @@ describe('CoreError', () => {
       const error = new CoreError('TEST_ERROR', '测试错误', undefined, undefined, cause);
 
       expect(error.cause).toBe(cause);
-      expect(error.cause?.message).toBe('原始错误');
-      expect(error.cause?.stack).toBeDefined();
+      expect((error.cause as Error).message).toBe('原始错误');
+      expect((error.cause as Error).stack).toBeDefined();
+    });
+
+    it('应该保存非 Error cause 的原始引用', () => {
+      const cause = { reason: 'plain object thrown', code: 12 };
+      const error = new CoreError('TEST_ERROR', '测试错误', undefined, undefined, cause);
+
+      expect(error.cause).toBe(cause);
     });
   });
 
@@ -110,6 +117,26 @@ describe('CoreError', () => {
       expect(json.cause?.code).toBe('UNKNOWN_ERROR');
       expect(json.cause?.message).toBe('普通错误');
       expect(json.cause?.name).toBe('Error');
+    });
+
+    it('应该正确序列化非 Error cause', () => {
+      const cause = { reason: 'plain object thrown', retry: false };
+      const error = new CoreError('TEST_ERROR', '测试错误', undefined, undefined, cause);
+      const json = error.toJSON();
+
+      expect(json.cause).toBeDefined();
+      expect(json.cause?.name).toBe('NonErrorCause');
+      expect(json.cause?.code).toBe('UNKNOWN_ERROR');
+      expect(json.cause?.message).toBe('{"reason":"plain object thrown","retry":false}');
+      expect(json.cause?.details?.value).toEqual(cause);
+    });
+
+    it('应该序列化 falsy 的非 Error cause', () => {
+      const error = new CoreError('TEST_ERROR', '测试错误', undefined, undefined, '');
+      const json = error.toJSON();
+
+      expect(json.cause?.name).toBe('NonErrorCause');
+      expect(json.cause?.message).toBe('');
     });
 
     it('序列化结果应该不包含未定义的字段', () => {
@@ -198,6 +225,15 @@ describe('CoreError', () => {
         const result = CoreError.fromError(originalError);
 
         expect(result).toBe(originalError);
+      });
+
+      it('应该将非 Error 抛出物转换为 CoreError 并保留 cause', () => {
+        const originalError = { message: 'not an Error', detail: 1 };
+        const coreError = CoreError.fromError(originalError, 'PLAIN_THROWN');
+
+        expect(coreError.code).toBe('PLAIN_THROWN');
+        expect(coreError.message).toBe('{"message":"not an Error","detail":1}');
+        expect(coreError.cause).toBe(originalError);
       });
     });
 
@@ -288,7 +324,7 @@ describe('辅助函数', () => {
       expect(getErrorMessage(123)).toBe('123');
       expect(getErrorMessage(null)).toBe('null');
       expect(getErrorMessage(undefined)).toBe('undefined');
-      expect(getErrorMessage({ foo: 'bar' })).toBe('[object Object]');
+      expect(getErrorMessage({ foo: 'bar' })).toBe('{"foo":"bar"}');
     });
   });
 

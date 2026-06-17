@@ -79,11 +79,25 @@ interface BrowserClosedStateProbe {
   isClosed(): boolean;
 }
 
+interface BrowserLifecycleEventTarget {
+  once(event: string, listener: (...args: unknown[]) => void): unknown;
+  removeListener?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  off?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+}
+
 function hasBrowserClosedStateProbe(browser: unknown): browser is BrowserClosedStateProbe {
   return (
     typeof browser === 'object' &&
     browser !== null &&
     typeof (browser as { isClosed?: unknown }).isClosed === 'function'
+  );
+}
+
+function hasLifecycleEventTarget(value: unknown): value is BrowserLifecycleEventTarget {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { once?: unknown }).once === 'function'
   );
 }
 
@@ -124,6 +138,9 @@ export class GlobalPool {
 
   /** 锁超时释放回调 */
   private lockTimeoutReleasedCallback?: LockTimeoutReleasedCallback;
+
+  /** 浏览器外部关闭/崩溃事件订阅清理器 */
+  private browserCloseSubscriptions: Map<string, () => void> = new Map();
 
   /** 是否已停止 */
   private stopped = false;
@@ -448,6 +465,7 @@ export class GlobalPool {
       if (!readyBrowser) {
         throw new Error('Invariant violation: readyBrowser is null after successful creation');
       }
+      this.attachBrowserCloseWatcher(browserId, readyBrowser.browser);
       return readyBrowser;
     } catch (error: unknown) {
       if (timeoutId) {
@@ -494,6 +512,29 @@ export class GlobalPool {
     } catch (error: unknown) {
       logger.error(`Failed to cleanup created browser (${reason})`, error);
     }
+  }
+
+  private attachBrowserCloseWatcher(
+    browserId: string,
+    browser: PooledBrowserController
+  ): void {
+    this.detachBrowserCloseWatcher(browserId);
+    const cleanup = subscribeToBrowserLifecycleClose(browser, (eventName) => {
+      logger.warn(`Browser lifecycle close detected: ${browserId}`, { eventName });
+      void this.destroyBrowser(browserId);
+    });
+    if (cleanup) {
+      this.browserCloseSubscriptions.set(browserId, cleanup);
+    }
+  }
+
+  private detachBrowserCloseWatcher(browserId: string): void {
+    const cleanup = this.browserCloseSubscriptions.get(browserId);
+    if (!cleanup) {
+      return;
+    }
+    cleanup();
+    this.browserCloseSubscriptions.delete(browserId);
   }
 
   /**
@@ -746,6 +787,7 @@ export class GlobalPool {
         return;
       }
 
+      this.detachBrowserCloseWatcher(browserId);
       destroyingSessionId = pooledBrowser.sessionId;
       this.markSessionDestroying(destroyingSessionId);
 
@@ -1146,4 +1188,64 @@ export class GlobalPool {
   listBrowsers(): PooledBrowser[] {
     return Array.from(this.browsers.values());
   }
+}
+
+function subscribeToBrowserLifecycleClose(
+  browser: PooledBrowserController,
+  callback: (eventName: string) => void
+): (() => void) | null {
+  const subscriptions: Array<{
+    target: BrowserLifecycleEventTarget;
+    eventName: string;
+    listener: (...args: unknown[]) => void;
+  }> = [];
+  let closed = false;
+
+  const subscribe = (target: BrowserLifecycleEventTarget, eventName: string) => {
+    const listener = () => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      cleanup();
+      callback(eventName);
+    };
+    target.once(eventName, listener);
+    subscriptions.push({ target, eventName, listener });
+  };
+
+  if (hasLifecycleEventTarget(browser)) {
+    for (const eventName of ['closed', 'close', 'disconnected', 'disconnect', 'exit']) {
+      subscribe(browser, eventName);
+    }
+  }
+
+  const browserWithWebContents = browser as PooledBrowserController & {
+    getWebContents?: () => unknown;
+  };
+  if (typeof browserWithWebContents.getWebContents === 'function') {
+    try {
+      const webContents = browserWithWebContents.getWebContents();
+      if (hasLifecycleEventTarget(webContents)) {
+        subscribe(webContents, 'destroyed');
+        subscribe(webContents, 'render-process-gone');
+      }
+    } catch (error) {
+      logger.warn('Failed to subscribe browser WebContents lifecycle events', {
+        errorMessage: getUnknownErrorMessage(error),
+      });
+    }
+  }
+
+  function cleanup(): void {
+    for (const { target, eventName, listener } of subscriptions.splice(0)) {
+      if (typeof target.removeListener === 'function') {
+        target.removeListener(eventName, listener);
+      } else if (typeof target.off === 'function') {
+        target.off(eventName, listener);
+      }
+    }
+  }
+
+  return subscriptions.length > 0 ? cleanup : null;
 }

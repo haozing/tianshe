@@ -269,6 +269,16 @@ export class DatasetService {
 
   async initTable(): Promise<void> {
     await this.metadataService.initTable();
+    const importArtifactReconciliation = await this.importService.reconcileImportArtifacts();
+    if (
+      importArtifactReconciliation.orphanFilesDeleted > 0 ||
+      importArtifactReconciliation.orphanMetadataDeleted > 0 ||
+      importArtifactReconciliation.failed > 0
+    ) {
+      logger.info('Dataset import artifact reconciliation completed during initialization', {
+        ...importArtifactReconciliation,
+      });
+    }
     await this.reconcileAllDatasetRowCounts();
   }
 

@@ -609,6 +609,28 @@ describe('BrowserPoolManager', () => {
       expect(profiles.get('health-session')?.status).toBe('idle');
     });
 
+    it('浏览器生命周期关闭事件应立即清理 Profile 并唤醒等待队列', async () => {
+      profiles.set('lifecycle-close-session', createMockProfile({ id: 'lifecycle-close-session' }));
+
+      const handle1 = await manager.acquire('lifecycle-close-session');
+      const pendingAcquire = manager.acquire('lifecycle-close-session', { timeout: 5000 });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(manager.getWaitQueueStats().totalWaiting).toBe(1);
+
+      (handle1.browser as any)._emitLifecycle('closed');
+
+      const handle2 = await pendingAcquire;
+
+      expect(handle2.browserId).not.toBe(handle1.browserId);
+      expect(manager.getWaitQueueStats().totalWaiting).toBe(0);
+      expect(
+        manager.listBrowsers().some((item: any) => item.id === handle1.browserId)
+      ).toBe(false);
+
+      await handle2.release();
+    });
+
     it('空闲超时驱逐后应该把 Profile 状态回写为 idle', async () => {
       profiles.set(
         'idle-timeout-session',

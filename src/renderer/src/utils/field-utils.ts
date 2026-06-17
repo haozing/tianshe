@@ -310,12 +310,12 @@ export function validateRecords(
 export function formatUserFriendlyError(error: string): string {
   if (error.startsWith('Columns are not writable:')) {
     const columns = error.replace('Columns are not writable:', '').trim();
-    return `浠ヤ笅瀛楁涓嶆敮鎸佺洿鎺ュ啓鍏ワ細${columns}`;
+    return `以下字段不支持直接写入：${columns}`;
   }
 
   if (error.startsWith('Unknown columns:')) {
     const columns = error.replace('Unknown columns:', '').trim();
-    return `瀛楁涓嶅瓨鍦ㄦ垨宸蹭笉鍙敤锛細${columns}`;
+    return `字段不存在或已不可用：${columns}`;
   }
   // NOT NULL 约束错误
   if (error.includes('NOT NULL constraint failed')) {

@@ -84,14 +84,14 @@ export class CoreError extends Error {
   /**
    * 原始错误
    */
-  public readonly cause?: Error;
+  public readonly cause?: unknown;
 
   constructor(
     code: string | ErrorCode,
     message: string,
     details?: Record<string, unknown>,
     context?: ErrorContext,
-    cause?: Error
+    cause?: unknown
   ) {
     super(message);
     this.name = 'CoreError';
@@ -102,7 +102,7 @@ export class CoreError extends Error {
     this.cause = cause;
 
     // 保留原始错误栈
-    if (cause?.stack) {
+    if (cause instanceof Error && cause.stack) {
       this.stack = `${this.stack}\nCaused by: ${cause.stack}`;
     }
 
@@ -138,17 +138,8 @@ export class CoreError extends Error {
       result.stack = this.stack;
     }
 
-    if (this.cause) {
-      result.cause =
-        this.cause instanceof CoreError
-          ? this.cause.toJSON()
-          : {
-              name: this.cause.name,
-              code: 'UNKNOWN_ERROR',
-              message: this.cause.message,
-              timestamp: this.timestamp,
-              stack: this.cause.stack,
-            };
+    if (this.cause !== undefined) {
+      result.cause = serializeCause(this.cause, this.timestamp);
     }
 
     return result;
@@ -189,12 +180,12 @@ export class CoreError extends Error {
   /**
    * 从普通 Error 创建 CoreError
    */
-  static fromError(error: Error, code = 'UNKNOWN_ERROR'): CoreError {
+  static fromError(error: unknown, code = 'UNKNOWN_ERROR'): CoreError {
     if (error instanceof CoreError) {
       return error;
     }
 
-    return new CoreError(code, error.message, undefined, undefined, error);
+    return new CoreError(code, getErrorMessage(error), undefined, undefined, error);
   }
 
   /**
@@ -204,7 +195,7 @@ export class CoreError extends Error {
     code: string,
     message: string,
     context: ErrorContext,
-    cause?: Error
+    cause?: unknown
   ): CoreError {
     return new CoreError(code, message, undefined, context, cause);
   }
@@ -234,6 +225,13 @@ export function getErrorMessage(error: unknown): string {
   if (typeof error === 'string') {
     return error;
   }
+  if (typeof error === 'object' && error !== null) {
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return Object.prototype.toString.call(error);
+    }
+  }
   return String(error);
 }
 
@@ -245,4 +243,39 @@ export function getErrorCode(error: unknown): string {
     return error.code;
   }
   return 'UNKNOWN_ERROR';
+}
+
+function serializeCause(cause: unknown, timestamp: number): SerializedError {
+  if (cause instanceof CoreError) {
+    return cause.toJSON();
+  }
+
+  if (cause instanceof Error) {
+    return {
+      name: cause.name,
+      code: 'UNKNOWN_ERROR',
+      message: cause.message,
+      timestamp,
+      stack: cause.stack,
+    };
+  }
+
+  return {
+    name: 'NonErrorCause',
+    code: 'UNKNOWN_ERROR',
+    message: getErrorMessage(cause),
+    timestamp,
+    details: {
+      value: toJsonSafeValue(cause),
+    },
+  };
+}
+
+function toJsonSafeValue(value: unknown): unknown {
+  try {
+    JSON.stringify(value);
+    return value;
+  } catch {
+    return getErrorMessage(value);
+  }
 }

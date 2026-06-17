@@ -25,6 +25,7 @@ const DEFAULT_MODEL_CONCURRENCY = 1;
 const MAX_MODEL_CONCURRENCY = 8;
 const DEFAULT_INFERENCE_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_INPUT_ELEMENTS = 10_000_000;
+const DEFAULT_MAX_LOADED_MODELS = 8;
 
 // ONNX Runtime 类型（动态导入，避免编译时依赖）
 
@@ -43,7 +44,9 @@ interface LoadedModel {
   loadedAt: number;
   lastUsed: number;
   activeRuns: number;
-  waiters: Array<() => void>;
+  waiters: Array<{ resolve: () => void; reject: (error: Error) => void }>;
+  configuredExecutionProviders: string[];
+  effectiveExecutionProvider: string | null;
 }
 
 /**
@@ -159,6 +162,12 @@ export class ONNXRuntimeService {
     return Math.max(1, Math.trunc(parsed));
   }
 
+  private normalizeMaxLoadedModels(value: unknown): number {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_LOADED_MODELS;
+    return Math.max(1, Math.trunc(parsed));
+  }
+
   private getTensorElementCount(tensorData: TensorData): number {
     if (tensorData.dims.length === 0) {
       return 1;
@@ -219,16 +228,20 @@ export class ONNXRuntimeService {
     }
   }
 
-  private async acquireModelSlot(model: LoadedModel): Promise<() => void> {
+  private async acquireModelSlot(modelId: string, model: LoadedModel): Promise<() => void> {
     const maxConcurrency = this.normalizeConcurrency(model.config.maxConcurrency);
     if (model.activeRuns < maxConcurrency) {
       model.activeRuns += 1;
       return () => this.releaseModelSlot(model);
     }
 
-    await new Promise<void>((resolve) => {
-      model.waiters.push(resolve);
+    await new Promise<void>((resolve, reject) => {
+      model.waiters.push({ resolve, reject });
     });
+
+    if (!this.models.has(modelId)) {
+      throw new ModelNotFoundError(modelId);
+    }
 
     model.activeRuns += 1;
     return () => this.releaseModelSlot(model);
@@ -238,16 +251,85 @@ export class ONNXRuntimeService {
     model.activeRuns = Math.max(0, model.activeRuns - 1);
     const next = model.waiters.shift();
     if (next) {
-      next();
+      next.resolve();
     }
   }
 
-  private async runWithModelQueue<T>(model: LoadedModel, operation: () => Promise<T>): Promise<T> {
-    const release = await this.acquireModelSlot(model);
+  private async runWithModelQueue<T>(
+    modelId: string,
+    model: LoadedModel,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const release = await this.acquireModelSlot(modelId, model);
     try {
       return await operation();
     } finally {
       release();
+    }
+  }
+
+  private rejectModelWaiters(modelId: string, model: LoadedModel): number {
+    const waiters = model.waiters.splice(0);
+    const error = new ModelNotFoundError(modelId);
+    for (const waiter of waiters) {
+      waiter.reject(error);
+    }
+    return waiters.length;
+  }
+
+  private getReleasableSessionMethod(session: InferenceSession): (() => Promise<void> | void) | null {
+    if (typeof session?.release === 'function') {
+      return () => session.release();
+    }
+    if (typeof session?.dispose === 'function') {
+      return () => session.dispose();
+    }
+    return null;
+  }
+
+  private async releaseSessionIfSupported(modelId: string, session: InferenceSession): Promise<void> {
+    const releaseSession = this.getReleasableSessionMethod(session);
+    if (!releaseSession) {
+      logger.debug(`ONNX session for model "${modelId}" has no explicit release method`);
+      return;
+    }
+    await releaseSession();
+    logger.debug(`ONNX session for model "${modelId}" released explicitly`);
+  }
+
+  private detectEffectiveExecutionProvider(
+    session: InferenceSession,
+    configuredExecutionProviders: string[]
+  ): string | null {
+    const raw =
+      session?.executionProvider ??
+      session?.executionProviders?.[0] ??
+      session?._handler?.executionProvider ??
+      session?.handler?.executionProvider;
+    if (typeof raw === 'string' && raw.trim()) {
+      return raw.trim();
+    }
+    if (configuredExecutionProviders.length === 1) {
+      return configuredExecutionProviders[0];
+    }
+    return null;
+  }
+
+  private async enforceLoadedModelLimit(limit: number): Promise<void> {
+    while (this.models.size >= limit) {
+      const candidate = Array.from(this.models.entries())
+        .filter(([, model]) => model.activeRuns === 0 && model.waiters.length === 0)
+        .sort(([, a], [, b]) => a.lastUsed - b.lastUsed)[0];
+
+      if (!candidate) {
+        throw new Error(
+          `Cannot load model: loaded model limit (${limit}) reached and no idle model can be evicted`
+        );
+      }
+
+      const [modelId] = candidate;
+      logger.info(`Evicting least recently used ONNX model "${modelId}" before loading another`);
+      await this.unloadModel(modelId);
     }
   }
 
@@ -295,10 +377,12 @@ export class ONNXRuntimeService {
     }
 
     try {
+      await this.enforceLoadedModelLimit(this.normalizeMaxLoadedModels(config.maxLoadedModels));
       logger.info(`Loading ONNX model: ${config.modelPath}`);
+      const configuredExecutionProviders = this.getExecutionProviders(config.executionProvider);
 
       const sessionOptions: SessionOptions = {
-        executionProviders: this.getExecutionProviders(config.executionProvider),
+        executionProviders: configuredExecutionProviders,
         graphOptimizationLevel: config.graphOptimization !== false ? 'all' : 'disabled',
         enableMemPattern: config.enableMemoryPattern !== false,
       };
@@ -309,6 +393,10 @@ export class ONNXRuntimeService {
 
       const session = await this.ort.InferenceSession.create(config.modelPath, sessionOptions);
       const meta = this.extractModelMeta(session);
+      const effectiveExecutionProvider = this.detectEffectiveExecutionProvider(
+        session,
+        configuredExecutionProviders
+      );
 
       const loadedModel: LoadedModel = {
         session,
@@ -318,10 +406,16 @@ export class ONNXRuntimeService {
         lastUsed: Date.now(),
         activeRuns: 0,
         waiters: [],
+        configuredExecutionProviders,
+        effectiveExecutionProvider,
       };
 
       this.models.set(modelId, loadedModel);
-      logger.info(`Model "${modelId}" loaded successfully`);
+      logger.info(`Model "${modelId}" loaded successfully`, {
+        requestedExecutionProvider: config.executionProvider ?? 'cpu',
+        configuredExecutionProviders,
+        effectiveExecutionProvider,
+      });
 
       return modelId;
     } catch (error) {
@@ -343,11 +437,19 @@ export class ONNXRuntimeService {
     }
 
     try {
-      // InferenceSession 没有 dispose 方法，依赖 GC
+      const rejectedWaiters = this.rejectModelWaiters(modelId, model);
+      if (model.activeRuns > 0) {
+        throw new Error(
+          `Cannot unload model "${modelId}" while ${model.activeRuns} inference run(s) are active`
+        );
+      }
+
       this.models.delete(modelId);
-      logger.info(`Model "${modelId}" unloaded`);
+      await this.releaseSessionIfSupported(modelId, model.session);
+      logger.info(`Model "${modelId}" unloaded`, { rejectedWaiters });
     } catch (error) {
       logger.error(`Failed to unload model "${modelId}":`, error);
+      throw error;
     }
   }
 
@@ -384,7 +486,7 @@ export class ONNXRuntimeService {
       );
       const inputElements = this.assertInputBudget(inputs, maxInputElements);
 
-      return await this.runWithModelQueue(model, async () => {
+      return await this.runWithModelQueue(modelId, model, async () => {
         const startTime = performance.now();
 
         // 构建输入 feeds
@@ -399,6 +501,8 @@ export class ONNXRuntimeService {
           maxInputElements,
           inputElements,
           maxConcurrency: this.normalizeConcurrency(model.config.maxConcurrency),
+          configuredExecutionProviders: model.configuredExecutionProviders,
+          effectiveExecutionProvider: model.effectiveExecutionProvider,
         });
 
         const results = await this.withTimeout<Record<string, Tensor>>(
@@ -448,6 +552,9 @@ export class ONNXRuntimeService {
       loadedAt: model.loadedAt,
       lastUsed: model.lastUsed,
       meta: model.meta,
+      requestedExecutionProvider: model.config.executionProvider,
+      configuredExecutionProviders: model.configuredExecutionProviders,
+      effectiveExecutionProvider: model.effectiveExecutionProvider,
     };
   }
 
@@ -465,6 +572,9 @@ export class ONNXRuntimeService {
         loadedAt: model.loadedAt,
         lastUsed: model.lastUsed,
         meta: model.meta,
+        requestedExecutionProvider: model.config.executionProvider,
+        configuredExecutionProviders: model.configuredExecutionProviders,
+        effectiveExecutionProvider: model.effectiveExecutionProvider,
       });
     }
     return result;

@@ -158,7 +158,7 @@ export const describeHttpApiAuthContract = (
       warning: 'http-no-auth',
       label: 'HTTP 已开启，无 Token 鉴权',
       detail:
-        '开启 HTTP 但关闭 Token 认证时，/api/v1/orchestration/* 与 /mcp 均不要求 Bearer Token；仅在本机可信环境使用。',
+        '开启 HTTP 但关闭 Token 认证时，/api/v1/orchestration/* 与 /mcp 均不要求 Bearer Token；本机其他进程或容器也可调用这些编排能力，仅在本机可信环境使用。',
     };
   }
 

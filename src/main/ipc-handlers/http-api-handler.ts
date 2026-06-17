@@ -74,6 +74,14 @@ export class HttpApiIPCHandler {
     return metricsHeaders;
   }
 
+  private applyWebhookCallback(config: HttpApiConfig): void {
+    if (config.callbackUrl) {
+      this.webhookSender.setCallbackUrl(config.callbackUrl);
+    } else {
+      this.webhookSender.setCallbackUrl(undefined);
+    }
+  }
+
   private async probeRuntime(config: HttpApiConfig) {
     return probeLocalHttpRuntime({
       port: HTTP_SERVER_DEFAULTS.PORT,
@@ -132,21 +140,10 @@ export class HttpApiIPCHandler {
           }
           const nextEffectiveConfig = resolveEffectiveHttpApiConfig(nextStoredConfig);
 
-          this.store.set('httpApiConfig', nextStoredConfig);
-
-          if (nextStoredConfig.callbackUrl) {
-            this.webhookSender.setCallbackUrl(nextStoredConfig.callbackUrl);
-          } else {
-            this.webhookSender.setCallbackUrl(undefined);
-          }
-
-          if (nextEffectiveConfig.enabled && !oldEffectiveConfig.enabled) {
-            await this.startHttpServer();
-          } else if (!nextEffectiveConfig.enabled && oldEffectiveConfig.enabled) {
-            await this.stopHttpServer();
-          } else if (nextEffectiveConfig.enabled) {
-            const needsRestart =
-              nextEffectiveConfig.enableMcp !== oldEffectiveConfig.enableMcp ||
+          const needsRestart =
+            nextEffectiveConfig.enabled &&
+            oldEffectiveConfig.enabled &&
+            (nextEffectiveConfig.enableMcp !== oldEffectiveConfig.enableMcp ||
               nextEffectiveConfig.enableAuth !== oldEffectiveConfig.enableAuth ||
               nextEffectiveConfig.token !== oldEffectiveConfig.token ||
               nextEffectiveConfig.mcpRequireAuth !== oldEffectiveConfig.mcpRequireAuth ||
@@ -157,9 +154,19 @@ export class HttpApiIPCHandler {
               nextEffectiveConfig.enforceOrchestrationScopes !==
                 oldEffectiveConfig.enforceOrchestrationScopes ||
               nextEffectiveConfig.orchestrationIdempotencyStore !==
-                oldEffectiveConfig.orchestrationIdempotencyStore;
+                oldEffectiveConfig.orchestrationIdempotencyStore);
 
-            if (needsRestart) {
+          let stoppedForRestart = false;
+
+          try {
+            this.store.set('httpApiConfig', nextStoredConfig);
+            this.applyWebhookCallback(nextStoredConfig);
+
+            if (nextEffectiveConfig.enabled && !oldEffectiveConfig.enabled) {
+              await this.startHttpServer();
+            } else if (!nextEffectiveConfig.enabled && oldEffectiveConfig.enabled) {
+              await this.stopHttpServer();
+            } else if (needsRestart) {
               logger.info('HTTP API configuration changed; restarting server', {
                 enableMcpChanged: nextEffectiveConfig.enableMcp !== oldEffectiveConfig.enableMcp,
                 enableAuthChanged:
@@ -179,8 +186,30 @@ export class HttpApiIPCHandler {
                   oldEffectiveConfig.orchestrationIdempotencyStore,
               });
               await this.stopHttpServer();
+              stoppedForRestart = true;
               await this.startHttpServer();
             }
+          } catch (error: unknown) {
+            try {
+              this.store.set('httpApiConfig', oldStoredConfig);
+              this.applyWebhookCallback(oldStoredConfig);
+            } catch (restoreError: unknown) {
+              logger.error('Failed to restore HTTP API configuration after runtime update failure', {
+                error: restoreError,
+              });
+            }
+
+            if (stoppedForRestart && oldEffectiveConfig.enabled) {
+              try {
+                await this.startHttpServer();
+              } catch (restoreRuntimeError: unknown) {
+                logger.error('Failed to restart HTTP API server with previous configuration', {
+                  error: restoreRuntimeError,
+                });
+              }
+            }
+
+            throw error;
           }
 
           return { success: true };

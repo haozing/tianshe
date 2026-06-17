@@ -91,6 +91,8 @@ export const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Existing oversized MCP session runtime; session state has been grouped and further route split remains planned.',
   'src/main/scheduler/scheduler-service.ts':
     'Existing oversized scheduler service; split restore, timer, execution, and lifecycle suppression responsibilities.',
+  'src/main/scheduler/scheduler-service.test.ts':
+    'Scheduler failure-path coverage now exceeds the size guard; split creation, execution, retry, and recovery scenarios by behavior family.',
   'src/main/mcp-server-http.auth-invoke.test.ts':
     'Focused split from former MCP giant test; shared HTTP/MCP test helpers live in src/main/__tests__/mcp-server-http-test-utils.ts and remaining scenarios should keep moving by route family.',
   'src/main/mcp-server-http.browser-binding.test.ts':
@@ -270,6 +272,7 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
       'src/main/mcp-server-http.orchestration-routes.test.ts',
       'src/main/mcp-server-http.transport-session.test.ts',
       'src/main/scheduler/scheduler-service.ts',
+      'src/main/scheduler/scheduler-service.test.ts',
     ]
   ),
   ...createSizeRepairTargets(

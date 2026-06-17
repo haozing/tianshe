@@ -84,6 +84,8 @@ export interface ScheduleOptions {
   timeout?: number;
   /** 重试次数，默认 0 */
   retry?: number;
+  /** Set false to suppress retries for non-idempotent scheduled work. */
+  retryable?: boolean;
   /** 重试延迟（毫秒），默认 5000 */
   retryDelay?: number;
   /** 错过执行时的策略，默认 'skip' */
@@ -225,6 +227,7 @@ export class Scheduler {
         payload: options.payload,
         timeout: options.timeout,
         retry: options.retry,
+        retryable: options.retryable,
         retryDelay: options.retryDelay,
         missedPolicy: options.missedPolicy,
         immediate: options.immediate,

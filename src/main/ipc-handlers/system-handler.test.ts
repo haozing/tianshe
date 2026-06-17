@@ -157,7 +157,7 @@ describe('SystemIPCHandler', () => {
       getTaskLogs: vi.fn(() => [{ level: 'info', message: 'test' }]),
       getRecentLogs: vi.fn(() => []),
       getStats: vi.fn(() => ({ total: 100 })),
-      cleanup: vi.fn(() => 10),
+      cleanup: vi.fn(async () => 10),
     } as unknown as LogStorageService;
 
     // 创建 mock DownloadManager
@@ -271,6 +271,16 @@ describe('SystemIPCHandler', () => {
       expect(result.success).toBe(true);
       expect(result.deleted).toBe(10);
       expect(mockLogger.cleanup).toHaveBeenCalledWith(7);
+    });
+
+    it('returns an IPC error when log cleanup fails', async () => {
+      const h = handlers.get('cleanup-logs')!;
+      (mockLogger.cleanup as any).mockRejectedValueOnce(new Error('cleanup failed'));
+
+      const result = await h({} as any, 7);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('cleanup failed');
     });
   });
 

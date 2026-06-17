@@ -177,7 +177,7 @@ export class BrowserPoolManager {
     this.globalPool.setBrowserFactory(browserFactory);
     this.globalPool.setBrowserDestroyer(browserDestroyer);
     this.globalPool.setSessionBrowsersChangedCallback((sessionId) =>
-      this.syncProfileIdleIfNoBrowsers(sessionId)
+      this.handleSessionBrowsersChanged(sessionId)
     );
     this.globalPool.setLockTimeoutReleasedCallback(async ({ browserId, sessionId, pluginId }) => {
       this.eventEmitter.emit('browser:released', {
@@ -305,6 +305,11 @@ export class BrowserPoolManager {
         err,
       });
     }
+  }
+
+  private async handleSessionBrowsersChanged(sessionId: string): Promise<void> {
+    await this.syncProfileIdleIfNoBrowsers(sessionId);
+    await this.acquireCoordinator.processWaitQueue(sessionId);
   }
 
   /**
@@ -589,6 +594,8 @@ export class BrowserPoolManager {
    *
    * @param browserId 浏览器ID
    */
+  // Internal recovery path only: intentionally skips requestId validation so
+  // timeout and health-check cleanup can reclaim stale locks.
   async forceRelease(browserId: string): Promise<void> {
     this.assertStartedAndInitialized();
     const browser = this.globalPool.getBrowser(browserId);

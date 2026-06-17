@@ -205,6 +205,35 @@ describe('SchedulerService', () => {
 
       expect(mockTaskService.createTask).not.toHaveBeenCalled();
     });
+
+    it('createTask should disable retries when retryable is false', async () => {
+      mockTaskService.createTask.mockImplementation(async (params) =>
+        createTestTask({
+          id: params.id,
+          scheduleType: params.scheduleType,
+          intervalMs: params.intervalMs,
+          retryCount: params.retryCount,
+          retryDelayMs: params.retryDelayMs,
+          nextRunAt: params.nextRunAt,
+        })
+      );
+
+      await scheduler.createTask({
+        pluginId: 'test-plugin',
+        name: 'Non-idempotent Task',
+        scheduleType: 'interval',
+        interval: '1m',
+        handlerId: 'test-handler',
+        retry: 5,
+        retryable: false,
+      });
+
+      expect(mockTaskService.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          retryCount: 0,
+        })
+      );
+    });
   });
 
   describe('并发锁测试', () => {
@@ -741,6 +770,46 @@ describe('SchedulerService', () => {
       await expect((scheduler as any).onTimerFired(task.id)).resolves.toBeUndefined();
 
       expect(mockTaskService.updateTask).toHaveBeenCalledWith(task.id, { status: 'disabled' });
+    });
+
+    it('missed once run_once task should be disabled before recovery execution is recorded', async () => {
+      const now = Date.now();
+      const task = createTestTask({
+        id: 'missed-once-task',
+        scheduleType: 'once',
+        intervalMs: undefined,
+        runAt: now - 1000,
+        nextRunAt: now - 1000,
+        missedPolicy: 'run_once',
+      });
+
+      mockTaskService.getActiveTasks.mockResolvedValue([task]);
+      mockTaskService.createExecution.mockResolvedValue({
+        id: 'exec-missed-once',
+        taskId: task.id,
+        status: 'pending',
+        startedAt: now,
+        triggerType: 'recovery',
+      } as TaskExecution);
+
+      const handler = vi.fn().mockResolvedValue({ ok: true });
+      scheduler.registerHandler(task.pluginId, task.handlerId, handler);
+
+      await scheduler.restoreActiveTasks();
+
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          triggerType: 'recovery',
+        })
+      );
+      expect(mockTaskService.updateTask).toHaveBeenCalledWith(task.id, { status: 'disabled' });
+
+      const disableCallIndex = mockTaskService.updateTask.mock.calls.findIndex(
+        (call) => call[0] === task.id && call[1]?.status === 'disabled'
+      );
+      const disableOrder = mockTaskService.updateTask.mock.invocationCallOrder[disableCallIndex];
+      const executionOrder = mockTaskService.createExecution.mock.invocationCallOrder[0];
+      expect(disableOrder).toBeLessThan(executionOrder);
     });
 
     it('cancel running task 应硬结束不响应 AbortSignal 的 handler 状态', async () => {

@@ -435,6 +435,12 @@ HTTP token authentication can be configured in Settings. When enabled, callers m
 Authorization: Bearer <token>
 ```
 
+By default, enabling the HTTP server without token authentication leaves
+`/api/v1/orchestration/*` and `/mcp` available without a Bearer token on the
+local loopback address. Treat that mode as trusted-local only: other local
+processes, containers, or tools running as the user can call the orchestration
+surface.
+
 `/health` is intentionally available for health checks.
 
 ---

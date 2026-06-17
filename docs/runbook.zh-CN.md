@@ -159,3 +159,44 @@ ONNX：
 ```powershell
 npx vitest run src/core/ffi/library.test.ts src/core/ffi/isolated-runner.test.ts src/core/system-automation/ocr/pool.test.ts src/core/onnx-runtime/onnx-service.test.ts
 ```
+
+## 日志保留和清理
+
+1. 结构化运行日志由 `@core/logger` 输出；任务日志持久化在 DuckDB `logs` 表中，用于 UI 查询和故障排查。
+2. 任务日志保留策略是按时间清理，不是无限增长。默认入口保留最近 7 天，可通过 `cleanup-logs` IPC 调整 `daysToKeep`。
+3. 清理操作必须等待 DuckDB 删除完成后再向 UI 返回 deleted 计数；失败时返回 IPC 错误，不应把 Promise 当作成功结果。
+4. 验证：
+```powershell
+npx vitest run src/main/duckdb/log-service.test.ts src/main/ipc-handlers/system-handler.test.ts
+```
+
+## 数据库迁移和回滚策略
+
+1. 主数据库迁移采用前滚策略：每个 migration 的全部 `up` 步骤和 `schema_migrations` 记录写入必须在同一个 DuckDB 事务内完成。
+2. 已应用迁移用 checksum 防漂移；修改已经发布的 migration 会在启动迁移时失败，而不是静默套用新定义。
+3. 当前不自动执行 `down`。失败恢复优先使用升级前数据目录备份；确需手工回退时，先备份用户数据，再按 `schema_migrations.rollback_sql` 和实际 schema 状态人工处理。
+4. 新增 migration 应保持幂等前置检查、清晰错误信息和失败可重入；涉及跨文件或跨目录的步骤必须配套启动期补偿扫描。
+5. 验证：
+```powershell
+npx vitest run src/main/duckdb/migration-engine.test.ts
+```
+
+## 版本协调矩阵
+
+排查升级问题时先记录以下版本，避免只看 app version：
+
+| 项 | 来源 | 用途 |
+| --- | --- | --- |
+| App version | `package.json` / Electron app metadata | 判断发布包 |
+| DB schema head | `schema_migrations` 最新记录 | 判断数据库迁移进度 |
+| MCP protocol | `/health` 的 `mcpProtocolVersion` | 判断 HTTP/MCP 客户端兼容 |
+| Runtime fingerprint | `/health` 的 runtime fingerprint | 判断 build、SDK shim 和 runtime 状态 |
+| Browser runtime | 设置页 runtime status / `/health` | 判断 Electron/extension/Firefox/Cloak 能力 |
+| Plugin version | 插件 manifest | 判断插件升级与卸载恢复 |
+
+## TaskQueue 与 Scheduler 历史边界
+
+1. `TaskQueue` 是进程内瞬态队列，只保留最近完成任务的内存历史；进程重启后不承诺保留。
+2. 需要审计、恢复或长期排障的任务应走 scheduler 持久化路径，或把结果写入业务表、runtime observation、failure bundle。
+3. 非幂等副作用任务必须显式设置 `retryable: false`，或提供稳定的 `idempotencyKey`。
+4. 所有新任务应保留 `traceId`，用同一 trace 串联日志、浏览器、数据层和 observation 查询。

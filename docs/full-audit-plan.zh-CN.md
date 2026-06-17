@@ -3,16 +3,17 @@
 ## 最近一次报告
 
 - 报告文件：`docs/full-audit-report.zh-CN.md`
-- 报告日期：2026-06-15
-- 最近同步：2026-06-15
-- 本轮已完成：AUD-P1-01、AUD-P1-02、AUD-P1-03、AUD-P1-04、AUD-P1-05、AUD-P1-06、AUD-P2-01、AUD-P2-02、AUD-P2-03、AUD-P2-04、AUD-P2-05、AUD-P2-06、AUD-P3-01、AUD-P3-02、AUD-P3-03、AUD-P3-04。
-- 待处理：无。
+- 报告日期：2026-06-17
+- 最近同步：2026-06-17
+- 本轮已完成：八模块纵向审计 + 九主题横向复盘，产出 P0×2 / P1×9 / P2×18 / P3×4 backlog（见报告第 12 节）。测试 baseline 实测 351 文件。
+- 待处理：P0（AUD-M1-01/M7-01 迁移事务化、AUD-M1-02 导入孤儿对账）优先；其余按报告第 13 节路线图。
 
 ### 差异记录
 
 | 日期 | 来源 | 差异 | 处理 |
 | --- | --- | --- | --- |
 | 2026-06-15 | `docs/full-audit-report.zh-CN.md` | 报告新增 P1/P2/P3 修复 backlog，并记录本轮已完成的高优先级稳定性修复。 | 计划新增“最近一次报告”和“差异记录”固定锚点；每轮审计结束时同步完成项、待处理项和新增差异。 |
+| 2026-06-17 | `docs/full-audit-report.zh-CN.md` | 全量重新生成报告：测试 baseline 实测 351 文件（含 `test:inventory`/`test:package-smoke`，证实计划假设的"打包 smoke 真缺口"已部分落地）；发现跨存储非原子（迁移/导入/卸载同构）为最高优先级主题；确认默认 `enableAuth:false` 合约；新增工程卫生项 AUD-HYG-01（scheduler-service.ts 等 3 文件 mojibake）。 | 同步本轮完成项与待处理 P0；下一轮带复现步骤验证报告中"需确认"的开放项（配置原子写、HNSW 版本头、日志 rotation、health 三态）。 |
 
 ## 1. 目标
 
@@ -37,7 +38,7 @@
 3. 审计结论必须能落成 issue、测试、重构任务或文档修订。
 4. 优先审查会造成数据损坏、任务卡死、状态污染、升级失败、资源泄漏和不可诊断故障的问题。
 5. 对高风险流程要求证据：代码位置、复现步骤、现有测试、缺失测试、建议修复方案。
-6. **先盘点后补缺**：本仓库已有 338 个测试文件（296 个 `.test.ts` + 42 个 `.test.tsx`），分层清晰（`.contract.test`、`.integration.test`、`.smoke.test`、`cross-runtime-contract`、`real-contract`、`canary`）。每个模块审计的第一步是列出该子系统现有的 `*.test.ts(x)` 与对应 npm script、标注覆盖层级（unit / contract / integration / smoke），再 diff 出真正的空白。严禁在已有大型测试套件的区域“从零编写测试”——“必要测试建议”一律先判定为“评估现有套件充分性”，确认缺失后才提议新增。
+6. **先盘点后补缺**：本仓库已有大量测试文件（数百个 `.test.ts` + 数十个 `.test.tsx`，具体数量由阶段一 baseline 盘点实测填入，不在本计划写死），分层清晰（`.contract.test`、`.integration.test`、`.smoke.test`、`cross-runtime-contract`、`real-contract`、`canary`）。每个模块审计的第一步是列出该子系统现有的 `*.test.ts(x)` 与对应 npm script、标注覆盖层级（unit / contract / integration / smoke），再 diff 出真正的空白。严禁在已有大型测试套件的区域“从零编写测试”——“必要测试建议”一律先判定为“评估现有套件充分性”，确认缺失后才提议新增。严禁在已有大型测试套件的区域“从零编写测试”——“必要测试建议”一律先判定为“评估现有套件充分性”，确认缺失后才提议新增。
 
 ## 3. 范围
 
@@ -384,7 +385,7 @@
 
 确认本地端点作为 Agent、CLI 工具和编排客户端的入口时，具备清晰、稳定、可测试、可诊断的调用合约。
 
-注意：这里**不是**“HTTP 或 MCP 二选一”的两套服务，而是**单一的 MCP-over-HTTP 统一服务器**——MCP 协议跑在 HTTP 传输之上。审计时按这一事实组织，不要去找两个独立 server。同时必须把“默认是否鉴权”作为合约事实给出结论：`src/constants/http-api.ts` 的 `DEFAULT_HTTP_API_CONFIG` 默认 `enableAuth: false`，`src/main/http-server-composition.ts:108-116` 只有在拿到 token 时才挂 auth 中间件，因此默认状态下 `/api/v1/orchestration/*` 无需 Bearer 即可驱动 browser + profile + plugin + dataset 网关。合约审计不能跳过这一点（参见 section 1 的双面守卫说明）。
+注意：这里**不是**“HTTP 或 MCP 二选一”的两套服务，而是**单一的 MCP-over-HTTP 统一服务器**——MCP 协议跑在 HTTP 传输之上。审计时按这一事实组织，不要去找两个独立 server。同时必须把“默认是否鉴权”作为合约事实给出结论：`src/constants/http-api.ts` 的 `DEFAULT_HTTP_API_CONFIG` 默认 `enableAuth: false`，`src/main/http-server-composition.ts` 只有在拿到 token 时才挂 auth 中间件（`if (authToken) { registerTokenAuthMiddleware(...) }`），因此默认状态下 `/api/v1/orchestration/*` 无需 Bearer 即可驱动 browser + profile + plugin + dataset 网关。合约审计不能跳过这一点（参见 section 1 的双面守卫说明）。
 
 ### 8.2 重点代码区域
 

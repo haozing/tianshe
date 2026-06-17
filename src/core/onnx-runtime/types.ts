@@ -93,6 +93,8 @@ export interface ONNXModelConfig {
   inferenceTimeoutMs?: number;
   /** 单次推理输入元素总数上限（默认 10000000） */
   maxInputElements?: number;
+  /** 全局已加载模型数量上限（默认 8） */
+  maxLoadedModels?: number;
 }
 
 /**
@@ -131,6 +133,12 @@ export interface LoadedModelInfo {
   lastUsed: number;
   /** 模型元信息 */
   meta: ModelMeta;
+  /** 请求的执行提供者 */
+  requestedExecutionProvider?: ExecutionProvider;
+  /** 传给 ONNX Runtime 的执行提供者列表 */
+  configuredExecutionProviders?: string[];
+  /** ONNX Runtime 可观测到的实际执行提供者；不可观测时为 null */
+  effectiveExecutionProvider?: string | null;
 }
 
 /**

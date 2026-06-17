@@ -97,6 +97,7 @@ export interface CreateScheduledTaskParams {
   payload?: Record<string, unknown>;
   timeoutMs?: number;
   retryCount?: number;
+  retryable?: boolean;
   retryDelayMs?: number;
   missedPolicy?: MissedPolicy;
   resourceKeys?: string[];
@@ -175,6 +176,7 @@ export interface ISchedulerService {
     payload?: Record<string, unknown>;
     timeout?: number;
     retry?: number;
+    retryable?: boolean;
     retryDelay?: number;
     missedPolicy?: MissedPolicy;
     immediate?: boolean;

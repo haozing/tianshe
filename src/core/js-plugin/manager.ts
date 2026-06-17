@@ -27,6 +27,13 @@ import { attachErrorContextArtifact } from '../observability/error-context-artif
 
 const logger = createLogger('JSPluginManager');
 
+type PluginUninstallTarget = {
+  id: string;
+  name?: string;
+  path: string;
+  isSymlink?: boolean | null;
+};
+
 // 拆分后的模块
 import { PluginLoader } from './plugin-loader';
 import type { PluginImportOptions } from './plugin-loader';
@@ -125,6 +132,12 @@ export class JSPluginManager {
     } catch (error: unknown) {
       logger.error('[INIT] Failed to ensure plugins directory, plugins disabled:', error);
       return;
+    }
+
+    try {
+      await this.recoverInterruptedUninstalls();
+    } catch (error: unknown) {
+      logger.error('[INIT] Failed to recover interrupted plugin uninstalls, continuing:', error);
     }
 
     try {
@@ -298,6 +311,9 @@ export class JSPluginManager {
         },
       });
 
+      let uninstallMarked = false;
+      let pathRemovalStarted = false;
+
       try {
         logger.info(`[UNINSTALL] Uninstalling plugin: ${pluginId}, deleteTables: ${deleteTables}`);
 
@@ -318,24 +334,14 @@ export class JSPluginManager {
         }
 
         // 3. 处理数据表
-        if (deleteTables) {
-          await this.installer.deletePluginTables(pluginId);
-        } else {
-          await this.installer.orphanPluginTables(pluginId);
-        }
+        await this.markPluginUninstalling(pluginId, deleteTables);
+        uninstallMarked = true;
+
+        await this.cleanupPluginTables(pluginId, deleteTables);
 
         // 5. 安全删除插件目录
-        await this.loader.safeRemovePluginPath(info.path, info.isSymlink ?? false);
-
-        // 6. 删除数据库记录
-        await this.duckdb.executeWithParams(
-          `DELETE FROM js_plugin_custom_pages WHERE plugin_id = ?`,
-          [pluginId]
-        );
-        logger.info(`  ✓ Deleted custom pages for plugin: ${pluginId}`);
-
-        await this.duckdb.executeWithParams(`DELETE FROM js_plugins WHERE id = ?`, [pluginId]);
-        this.runtimeRegistry.removePlugin(pluginId);
+        pathRemovalStarted = true;
+        await this.removePluginFilesAndMetadata(info);
 
         logger.info(`[OK] Plugin uninstalled: ${pluginId}`);
         await span.succeed({
@@ -345,6 +351,15 @@ export class JSPluginManager {
           },
         });
       } catch (error) {
+        if (uninstallMarked && !pathRemovalStarted) {
+          await this.restorePluginInstalledState(pluginId).catch((restoreError) => {
+            logger.error('Failed to restore plugin uninstall marker after uninstall failure', {
+              pluginId,
+              error: getUnknownErrorMessage(restoreError) || String(restoreError),
+            });
+          });
+        }
+
         const failedInfo = await this.getPluginInfo(pluginId).catch(() => null);
         this.runtimeRegistry.recordError(
           pluginId,
@@ -376,6 +391,91 @@ export class JSPluginManager {
   }
 
   /**
+   * Recover plugin uninstalls that were marked before file/metadata deletion completed.
+   */
+  private async recoverInterruptedUninstalls(): Promise<void> {
+    const rows = await this.duckdb.executeSQLWithParams(
+      `SELECT id, name, path, is_symlink, uninstall_delete_tables
+       FROM js_plugins
+       WHERE COALESCE(lifecycle_state, 'installed') = 'uninstalling'`,
+      []
+    );
+
+    if (rows.length === 0) {
+      return;
+    }
+
+    logger.warn('Recovering interrupted plugin uninstall(s)', { count: rows.length });
+
+    for (const row of rows) {
+      const target: PluginUninstallTarget = {
+        id: row.id,
+        name: row.name,
+        path: row.path,
+        isSymlink: row.is_symlink,
+      };
+      const deleteTables = row.uninstall_delete_tables === true;
+
+      try {
+        await this.cleanupPluginTables(target.id, deleteTables);
+        await this.removePluginFilesAndMetadata(target);
+        logger.info('Recovered interrupted plugin uninstall', {
+          pluginId: target.id,
+          deleteTables,
+        });
+      } catch (error: unknown) {
+        logger.error('Failed to recover interrupted plugin uninstall', {
+          pluginId: target.id,
+          deleteTables,
+          error: getUnknownErrorMessage(error) || String(error),
+        });
+      }
+    }
+  }
+
+  private async markPluginUninstalling(pluginId: string, deleteTables: boolean): Promise<void> {
+    await this.duckdb.executeWithParams(
+      `UPDATE js_plugins
+       SET lifecycle_state = 'uninstalling',
+           uninstall_delete_tables = ?,
+           uninstall_started_at = ?
+       WHERE id = ?`,
+      [deleteTables, Date.now(), pluginId]
+    );
+  }
+
+  private async restorePluginInstalledState(pluginId: string): Promise<void> {
+    await this.duckdb.executeWithParams(
+      `UPDATE js_plugins
+       SET lifecycle_state = 'installed',
+           uninstall_delete_tables = NULL,
+           uninstall_started_at = NULL
+       WHERE id = ?`,
+      [pluginId]
+    );
+  }
+
+  private async cleanupPluginTables(pluginId: string, deleteTables: boolean): Promise<void> {
+    if (deleteTables) {
+      await this.installer.deletePluginTables(pluginId);
+    } else {
+      await this.installer.orphanPluginTables(pluginId);
+    }
+  }
+
+  private async removePluginFilesAndMetadata(target: PluginUninstallTarget): Promise<void> {
+    await this.loader.safeRemovePluginPath(target.path, target.isSymlink ?? false);
+
+    await this.duckdb.executeWithParams(`DELETE FROM js_plugin_custom_pages WHERE plugin_id = ?`, [
+      target.id,
+    ]);
+    logger.info(`  ✓ Deleted custom pages for plugin: ${target.id}`);
+
+    await this.duckdb.executeWithParams(`DELETE FROM js_plugins WHERE id = ?`, [target.id]);
+    this.runtimeRegistry.removePlugin(target.id);
+  }
+
+  /**
    * 列出所有已安装的插件
    */
   async listPlugins(): Promise<JSPluginInfo[]> {
@@ -384,6 +484,7 @@ export class JSPluginManager {
        dev_mode, source_path, is_symlink, hot_reload_enabled,
        source_type, install_channel, cloud_plugin_code, cloud_release_version, managed_by_policy, policy_version, last_policy_sync_at
        FROM js_plugins
+       WHERE COALESCE(lifecycle_state, 'installed') <> 'uninstalling'
        ORDER BY installed_at DESC`,
       []
     );
@@ -431,7 +532,8 @@ export class JSPluginManager {
       `SELECT id, name, version, author, description, icon, category, path, installed_at, enabled,
        dev_mode, source_path, is_symlink, hot_reload_enabled,
        source_type, install_channel, cloud_plugin_code, cloud_release_version, managed_by_policy, policy_version, last_policy_sync_at
-       FROM js_plugins WHERE id = ?`,
+       FROM js_plugins
+       WHERE id = ? AND COALESCE(lifecycle_state, 'installed') <> 'uninstalling'`,
       [pluginId]
     );
 

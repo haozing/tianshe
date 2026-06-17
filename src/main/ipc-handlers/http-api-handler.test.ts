@@ -230,6 +230,35 @@ describe('HttpApiIPCHandler', () => {
     expect(stopHttpServer).not.toHaveBeenCalled();
   });
 
+  it('restores the previous HTTP config when enabling the server fails', async () => {
+    storedConfig = {
+      ...DEFAULT_HTTP_API_CONFIG,
+      enabled: false,
+    };
+    startHttpServer.mockRejectedValueOnce(new Error('port unavailable'));
+
+    const setHandler = handlers.get('http-api:set-config');
+    expect(setHandler).toBeTypeOf('function');
+    const result = await setHandler?.({} as any, {
+      enabled: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('port unavailable');
+    expect(storedConfig).toEqual(
+      expect.objectContaining({
+        enabled: false,
+      })
+    );
+    expect(mockStore.set).toHaveBeenLastCalledWith(
+      'httpApiConfig',
+      expect.objectContaining({
+        enabled: false,
+      })
+    );
+    expect(mockWebhookSender.setCallbackUrl).toHaveBeenLastCalledWith(undefined);
+  });
+
   it('rejects enableAuth=true with a blank token before saving config', async () => {
     storedConfig = { ...DEFAULT_HTTP_API_CONFIG, enabled: false };
 
@@ -541,5 +570,43 @@ describe('HttpApiIPCHandler', () => {
         owner: 'other_airpa',
       })
     );
+  });
+
+  it('restores the previous config and restarts the old server when restart apply fails', async () => {
+    storedConfig = {
+      ...DEFAULT_HTTP_API_CONFIG,
+      enabled: true,
+      enableMcp: true,
+      enableAuth: true,
+      token: 'token-1',
+      mcpRequireAuth: true,
+    };
+    startHttpServer
+      .mockRejectedValueOnce(new Error('restart failed'))
+      .mockResolvedValueOnce(undefined);
+
+    const setHandler = handlers.get('http-api:set-config');
+    expect(setHandler).toBeTypeOf('function');
+    const result = await setHandler?.({} as any, {
+      mcpRequireAuth: false,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('restart failed');
+    expect(stopHttpServer).toHaveBeenCalledTimes(1);
+    expect(startHttpServer).toHaveBeenCalledTimes(2);
+    expect(storedConfig).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        mcpRequireAuth: true,
+      })
+    );
+    expect(mockStore.set).toHaveBeenLastCalledWith(
+      'httpApiConfig',
+      expect.objectContaining({
+        mcpRequireAuth: true,
+      })
+    );
+    expect(mockWebhookSender.setCallbackUrl).toHaveBeenLastCalledWith(undefined);
   });
 });

@@ -579,17 +579,18 @@ export class PluginInstaller {
 
     if (tables.length === 0) {
       logger.info(`  [INFO] No tables found for plugin: ${pluginId}`);
-      return;
+    } else {
+      logger.info(`  [INFO] Found ${tables.length} table(s) to orphan`);
     }
-
-    logger.info(`  [INFO] Found ${tables.length} table(s) to orphan`);
 
     // 解除表与插件的关联
     try {
-      await this.duckdb.executeWithParams(
-        `UPDATE datasets SET created_by_plugin = NULL WHERE created_by_plugin = ?`,
-        [pluginId]
-      );
+      if (tables.length > 0) {
+        await this.duckdb.executeWithParams(
+          `UPDATE datasets SET created_by_plugin = NULL WHERE created_by_plugin = ?`,
+          [pluginId]
+        );
+      }
     } catch (error: unknown) {
       const message = getUnknownErrorMessage(error);
       logger.error(`[ERROR] Failed to orphan plugin tables:`, message);
@@ -601,7 +602,9 @@ export class PluginInstaller {
       );
     }
 
-    logger.info(`  [OK] Unlinked ${tables.length} table(s) from plugin`);
+    if (tables.length > 0) {
+      logger.info(`  [OK] Unlinked ${tables.length} table(s) from plugin`);
+    }
 
     // 将插件文件夹转为普通文件夹
     try {

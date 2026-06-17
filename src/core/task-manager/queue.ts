@@ -81,6 +81,7 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
       concurrency: options.concurrency ?? DEFAULT_CONCURRENCY,
       timeout: options.timeout ?? DEFAULT_TIMEOUT_MS,
       retry: options.retry ?? 0,
+      retryable: options.retryable,
       retryDelay: options.retryDelay ?? DEFAULT_RETRY_DELAY_MS,
       rateLimit: options.rateLimit,
       name: options.name ?? 'TaskQueue',
@@ -116,6 +117,7 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
     }
 
     const taskId = options.taskId || `task-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const traceId = options.traceId || taskId;
     const controller = new AbortController();
 
     // 设置外部 signal 监听（如果提供）
@@ -132,10 +134,13 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
 
     const taskInfo: TaskInfo<TMeta> = {
       taskId,
+      traceId,
       name: options.name,
       status: 'pending',
       createdAt: Date.now(),
       retryCount: 0,
+      retryable: options.retryable,
+      idempotencyKey: options.idempotencyKey,
       meta: options.meta,
     };
 
@@ -386,7 +391,8 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
     controller: AbortController,
     taskInfo: TaskInfo<TMeta>
   ): Promise<T> {
-    const maxRetry = options.retry ?? this.options.retry ?? 0;
+    const retryAllowed = options.retryable ?? this.options.retryable ?? true;
+    const maxRetry = retryAllowed ? options.retry ?? this.options.retry ?? 0 : 0;
     const taskTimeout = options.timeout ?? this.options.timeout ?? DEFAULT_TIMEOUT_MS;
     let retryCount = 0;
 
@@ -453,6 +459,7 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
         const ctx: TaskContext<TMeta> = {
           signal: controller.signal,
           taskId,
+          traceId: taskInfo.traceId,
           meta: options.meta,
           updateProgress: (progress: TaskProgress) => {
             taskInfo.progress = progress;
@@ -670,6 +677,7 @@ export class TaskQueue extends TypedEventEmitter<TaskQueueEvents> implements ITa
   private createEvent<TMeta>(taskInfo: TaskInfo<TMeta>): TaskEvent<TMeta> {
     return {
       taskId: taskInfo.taskId,
+      traceId: taskInfo.traceId,
       name: taskInfo.name,
       status: taskInfo.status,
       meta: taskInfo.meta,

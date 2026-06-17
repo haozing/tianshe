@@ -111,6 +111,27 @@ describe('TaskQueue', () => {
 
       expect(capturedTaskId).toBe('my-custom-task-id');
     });
+
+    it('should expose traceId in task context and events', async () => {
+      const completedEvents: TaskEvent[] = [];
+      queue.on('task:completed', (event) => completedEvents.push(event));
+
+      let capturedTraceId = '';
+      await queue.add(
+        async (ctx) => {
+          capturedTraceId = ctx.traceId;
+          return 'done';
+        },
+        { taskId: 'trace-task', traceId: 'trace-123' }
+      );
+
+      expect(capturedTraceId).toBe('trace-123');
+      expect(queue.getTask('trace-task')?.traceId).toBe('trace-123');
+      expect(completedEvents[0]).toMatchObject({
+        taskId: 'trace-task',
+        traceId: 'trace-123',
+      });
+    });
   });
 
   // ========== 任务取消 ==========
@@ -633,6 +654,25 @@ describe('TaskQueue', () => {
 
       expect(result).toBe('success');
       expect(attemptCount).toBe(4); // 1 初始 + 3 任务级重试
+
+      await retryQueue.stop();
+    });
+
+    it('retryable false should suppress queue-level retries', async () => {
+      const retryQueue = createTaskQueue({ retry: 3, retryDelay: 10 });
+      let attemptCount = 0;
+
+      await expect(
+        retryQueue.add(
+          async () => {
+            attemptCount++;
+            throw new Error('Non-idempotent failure');
+          },
+          { retryable: false, idempotencyKey: 'non-idempotent-key' }
+        )
+      ).rejects.toThrow('Non-idempotent failure');
+
+      expect(attemptCount).toBe(1);
 
       await retryQueue.stop();
     });

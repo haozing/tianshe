@@ -760,6 +760,18 @@ describe('JSPluginManager', () => {
       // 验证删除目录
       expect(mockPluginLoader.safeRemovePluginPath).toHaveBeenCalledWith('/path/to/plugin', false);
 
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining("lifecycle_state = 'uninstalling'"),
+        [false, expect.any(Number), 'test-plugin']
+      );
+      const markerCallIndex = vi.mocked(mockDuckDB.executeWithParams).mock.calls.findIndex(
+        (call) => String(call[0]).includes("lifecycle_state = 'uninstalling'")
+      );
+      const markerOrder =
+        vi.mocked(mockDuckDB.executeWithParams).mock.invocationCallOrder[markerCallIndex];
+      const removeOrder = mockPluginLoader.safeRemovePluginPath.mock.invocationCallOrder[0];
+      expect(markerOrder).toBeLessThan(removeOrder);
+
       // 验证删除数据库记录
       expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
         expect.stringContaining('DELETE FROM js_plugin_custom_pages'),
@@ -845,6 +857,39 @@ describe('JSPluginManager', () => {
 
       // 验证以符号链接方式删除
       expect(mockPluginLoader.safeRemovePluginPath).toHaveBeenCalledWith('/path/to/plugin', true);
+    });
+
+    it('init should recover interrupted uninstall records before loading plugins', async () => {
+      vi.spyOn(manager, 'listPlugins').mockResolvedValue([]);
+      vi.mocked(mockDuckDB.executeSQLWithParams).mockImplementation(async (sql: string) => {
+        if (
+          sql.includes('uninstall_delete_tables') &&
+          sql.includes("lifecycle_state, 'installed'")
+        ) {
+          return [
+            {
+              id: 'recover-plugin',
+              name: 'Recover Plugin',
+              path: '/path/to/recover-plugin',
+              is_symlink: false,
+              uninstall_delete_tables: false,
+            },
+          ];
+        }
+        return [];
+      });
+
+      await manager.init();
+
+      expect(mockPluginInstaller.orphanPluginTables).toHaveBeenCalledWith('recover-plugin');
+      expect(mockPluginLoader.safeRemovePluginPath).toHaveBeenCalledWith(
+        '/path/to/recover-plugin',
+        false
+      );
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM js_plugins'),
+        ['recover-plugin']
+      );
     });
   });
 

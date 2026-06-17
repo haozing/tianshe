@@ -103,6 +103,52 @@ describe('SchemaMigrationEngine', () => {
     ).rejects.toThrow('Duplicate schema migration id: duplicate-001');
     expect(await getColumnNames(connection, 'duplicate_items')).toEqual(['id']);
   });
+
+  it('rolls back all migration steps and the migration record when one step fails', async () => {
+    const connection = await openMemoryDb();
+    await connection.run(`CREATE TABLE atomic_items (id VARCHAR PRIMARY KEY)`);
+    const engine = new SchemaMigrationEngine(connection);
+
+    await expect(
+      engine.migrate([
+        {
+          id: 'atomic-001-fail-midway',
+          description: 'Fail after first schema change',
+          up: [
+            addColumnIfMissingStep('atomic_items', 'first_col', 'VARCHAR'),
+            {
+              description: 'throw after first column',
+              run: async () => {
+                throw new Error('boom midway');
+              },
+            },
+          ],
+        },
+      ])
+    ).rejects.toThrow('boom midway');
+
+    expect(await getColumnNames(connection, 'atomic_items')).toEqual(['id']);
+    expect(await engine.listApplied()).toEqual([]);
+
+    await expect(
+      engine.migrate([
+        {
+          id: 'atomic-001-fail-midway',
+          description: 'Retry after failed migration',
+          up: [
+            addColumnIfMissingStep('atomic_items', 'first_col', 'VARCHAR'),
+            addColumnIfMissingStep('atomic_items', 'second_col', 'VARCHAR'),
+          ],
+        },
+      ])
+    ).resolves.toHaveLength(1);
+
+    expect(await getColumnNames(connection, 'atomic_items')).toEqual([
+      'id',
+      'first_col',
+      'second_col',
+    ]);
+  });
 });
 
 async function getColumnNames(conn: DuckDBConnection, tableName: string): Promise<string[]> {

@@ -143,7 +143,7 @@ export class SystemIPCHandler {
       permission: 'trusted-renderer',
       handler: async (_event: IpcMainInvokeEvent, daysToKeep?: number) => {
         try {
-          const deleted = this.logger.cleanup(daysToKeep);
+          const deleted = await this.logger.cleanup(daysToKeep);
           return { success: true, deleted };
         } catch (error: unknown) {
           return handleIPCError(error);

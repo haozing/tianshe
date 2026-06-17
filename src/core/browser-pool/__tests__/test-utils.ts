@@ -37,11 +37,38 @@ export function createMockBrowser(options: MockBrowserOptions = {}): PooledBrows
   viewId: string;
   reset: (opts?: { navigateTo?: string; clearStorage?: boolean }) => Promise<void>;
   isClosed: () => boolean;
+  once: (event: string, listener: () => void) => unknown;
+  removeListener: (event: string, listener: () => void) => unknown;
   _setUrl: (url: string) => void;
   _setClosed: (value: boolean) => void;
+  _emitLifecycle: (event: string) => void;
 } {
   let closed = options.isClosed ?? false;
   let currentUrl = 'about:blank';
+  const listeners = new Map<string, Set<() => void>>();
+
+  const once = (event: string, listener: () => void) => {
+    const wrapped = () => {
+      removeListener(event, wrapped);
+      listener();
+    };
+    const current = listeners.get(event) ?? new Set<() => void>();
+    current.add(wrapped);
+    listeners.set(event, current);
+    return undefined;
+  };
+
+  const removeListener = (event: string, listener: () => void) => {
+    listeners.get(event)?.delete(listener);
+    return undefined;
+  };
+
+  const emitLifecycle = (event: string) => {
+    closed = true;
+    for (const listener of Array.from(listeners.get(event) ?? [])) {
+      listener();
+    }
+  };
 
   return {
     viewId: options.viewId || `view-${Math.random().toString(36).slice(2, 8)}`,
@@ -83,6 +110,8 @@ export function createMockBrowser(options: MockBrowserOptions = {}): PooledBrows
     }),
 
     isClosed: () => closed,
+    once,
+    removeListener,
 
     reset: vi.fn(async () => {
       if (closed) throw new Error('Browser is closed');
@@ -95,6 +124,7 @@ export function createMockBrowser(options: MockBrowserOptions = {}): PooledBrows
     _setClosed: (value: boolean) => {
       closed = value;
     },
+    _emitLifecycle: emitLifecycle,
   };
 }
 

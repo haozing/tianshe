@@ -18,6 +18,7 @@ import { DatasetMetadataService } from './dataset-metadata-service';
 import { DatasetStorageService } from './dataset-storage-service';
 import {
   getDatasetPath,
+  getImportsDir,
   getFileSize,
   parseRows,
   quoteIdentifier,
@@ -29,6 +30,8 @@ import type { DatasetPlacementOptions, ImportTask, ImportProgress } from './type
 import { createLogger } from '../../core/logger';
 
 const logger = createLogger('DatasetImportService');
+const MAX_IMPORT_FILE_SIZE = 500 * 1024 * 1024; // 500MB
+const IMPORT_DB_FILE_PATTERN = /^(dataset|temp_import)_[a-zA-Z0-9_-]+\.db$/;
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -85,6 +88,122 @@ export class DatasetImportService {
         errorMessage: getErrorMessage(error),
       });
     }
+  }
+
+  private async assertImportFileWithinLimit(filePath: string, failureSuggestion: string): Promise<void> {
+    let fileStats: { size: number };
+    try {
+      fileStats = await fs.stat(filePath);
+    } catch (error) {
+      throw new Error(
+        `无法读取导入文件: ${filePath}\n原因: ${getErrorMessage(error)}\n\n${failureSuggestion}`
+      );
+    }
+
+    if (fileStats.size > MAX_IMPORT_FILE_SIZE) {
+      const fileSizeMB = (fileStats.size / 1024 / 1024).toFixed(2);
+      throw new Error(
+        `文件过大！\n当前大小: ${fileSizeMB}MB\n限制大小: 500MB\n\n${failureSuggestion}`
+      );
+    }
+  }
+
+  async reconcileImportArtifacts(): Promise<{
+    metadataChecked: number;
+    orphanMetadataDeleted: number;
+    orphanFilesDeleted: number;
+    failed: number;
+  }> {
+    const summary = {
+      metadataChecked: 0,
+      orphanMetadataDeleted: 0,
+      orphanFilesDeleted: 0,
+      failed: 0,
+    };
+    const importsDir = getImportsDir();
+    const importsDirResolved = path.resolve(importsDir);
+
+    let datasets: Array<{ id: string; filePath: string }> = [];
+    try {
+      datasets = await this.metadataService.listDatasets();
+    } catch (error) {
+      logger.warn('Failed to list dataset metadata during import artifact reconciliation', {
+        errorMessage: getErrorMessage(error),
+      });
+      summary.failed += 1;
+      return summary;
+    }
+
+    const metadataFilePaths = new Set<string>();
+    for (const dataset of datasets) {
+      summary.metadataChecked += 1;
+      const filePath = path.resolve(dataset.filePath);
+      metadataFilePaths.add(filePath);
+
+      if (!isPathInsideDirectory(filePath, importsDirResolved)) {
+        continue;
+      }
+
+      try {
+        if (!(await fs.pathExists(filePath))) {
+          await this.metadataService.deleteMetadata(dataset.id);
+          summary.orphanMetadataDeleted += 1;
+          logger.warn('Deleted dataset metadata for missing import artifact', {
+            datasetId: dataset.id,
+            filePath,
+          });
+        }
+      } catch (error) {
+        summary.failed += 1;
+        logger.warn('Failed to reconcile dataset metadata artifact', {
+          datasetId: dataset.id,
+          filePath,
+          errorMessage: getErrorMessage(error),
+        });
+      }
+    }
+
+    let importFiles: string[] = [];
+    try {
+      importFiles = await fs.readdir(importsDir);
+    } catch (error) {
+      logger.warn('Failed to scan imports directory during artifact reconciliation', {
+        importsDir,
+        errorMessage: getErrorMessage(error),
+      });
+      summary.failed += 1;
+      return summary;
+    }
+
+    for (const fileName of importFiles) {
+      if (!IMPORT_DB_FILE_PATTERN.test(fileName)) {
+        continue;
+      }
+
+      const filePath = path.resolve(importsDir, fileName);
+      if (metadataFilePaths.has(filePath)) {
+        continue;
+      }
+
+      const datasetId = path.basename(fileName, '.db');
+      try {
+        await this.cleanupImportArtifacts(datasetId, filePath);
+        summary.orphanFilesDeleted += 1;
+        logger.warn('Deleted orphan import artifact without dataset metadata', {
+          datasetId,
+          filePath,
+        });
+      } catch (error) {
+        summary.failed += 1;
+        logger.warn('Failed to delete orphan import artifact', {
+          datasetId,
+          filePath,
+          errorMessage: getErrorMessage(error),
+        });
+      }
+    }
+
+    return summary;
   }
 
   private async cleanupTempImportFiles(
@@ -153,28 +272,10 @@ export class DatasetImportService {
     options?: DatasetPlacementOptions,
     onProgress?: (progress: ImportProgress) => void
   ): Promise<string> {
-    // ✅ 文件大小检查（500MB限制）
-    const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB
-    try {
-      const fileStats = await fs.stat(filePath);
-
-      if (fileStats.size > MAX_FILE_SIZE) {
-        const fileSizeMB = (fileStats.size / 1024 / 1024).toFixed(2);
-        throw new Error(
-          `文件过大！\n当前大小: ${fileSizeMB}MB\n限制大小: 500MB\n\n建议：请使用数据库工具或命令行工具导入大文件。`
-        );
-      }
-    } catch (error) {
-      // 如果是文件大小超限错误，重新抛出
-      if (error instanceof Error && error.message.includes('文件过大')) {
-        throw error;
-      }
-      // fs.stat 失败（文件不存在、权限不足等），记录警告但继续尝试导入
-      logger.warn('Failed to check import file size, continuing import', {
-        filePath,
-        errorMessage: getErrorMessage(error),
-      });
-    }
+    await this.assertImportFileWithinLimit(
+      filePath,
+      '建议：请确认文件存在且当前应用有读取权限；大文件请使用数据库工具或命令行工具导入。'
+    );
 
     const datasetId = generateId('dataset');
     const outputPath = getDatasetPath(datasetId);
@@ -343,30 +444,13 @@ export class DatasetImportService {
     filePath: string,
     onProgress?: (progress: ImportProgress) => void
   ): Promise<{ recordsInserted: number }> {
-    // Step 1: 文件大小检查（500MB限制）
-    const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB
-    try {
-      const fileStats = await fs.stat(filePath);
-
-      if (fileStats.size > MAX_FILE_SIZE) {
-        const fileSizeMB = (fileStats.size / 1024 / 1024).toFixed(2);
-        throw new Error(
-          `文件过大！\n当前大小: ${fileSizeMB}MB\n限制大小: 500MB\n\n建议：请分割文件或使用数据库工具导入。`
-        );
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('文件过大')) {
-        throw error;
-      }
-      logger.warn('Failed to check import-records file size', {
-        targetDatasetId,
-        filePath,
-        errorMessage: getErrorMessage(error),
-      });
-    }
+    await this.assertImportFileWithinLimit(
+      filePath,
+      '建议：请确认文件存在且当前应用有读取权限；大文件请分割文件或使用数据库工具导入。'
+    );
 
     // Step 2: 生成临时数据库ID和路径
-    const tempDatasetId = `temp_import_${Date.now()}`;
+    const tempDatasetId = generateId('temp_import');
     const tempOutputPath = getDatasetPath(tempDatasetId);
     this.importTempArtifacts.set(targetDatasetId, {
       datasetId: tempDatasetId,
@@ -661,7 +745,16 @@ export class DatasetImportService {
           errorMessage: getErrorMessage(error),
         });
       }
-      // 目标库保持 ATTACH（由现有的智能管理机制处理）
+
+      try {
+        await this.conn.run(`DETACH ${quoteIdentifier(targetAlias)}`);
+      } catch (error) {
+        logger.warn('Failed to detach import-records target database', {
+          targetDatasetId: safeTargetId,
+          tempDatasetId: safeTempId,
+          errorMessage: getErrorMessage(error),
+        });
+      }
     }
   }
 
@@ -686,4 +779,15 @@ function formatDuration(ms: number): string {
   const seconds = totalSeconds % 60;
   if (minutes <= 0) return `${seconds}s`;
   return `${minutes}m${seconds}s`;
+}
+
+function isPathInsideDirectory(targetPath: string, directoryPath: string): boolean {
+  const normalizedTarget =
+    process.platform === 'win32' ? targetPath.toLowerCase() : targetPath;
+  const normalizedDirectory =
+    process.platform === 'win32' ? directoryPath.toLowerCase() : directoryPath;
+  return (
+    normalizedTarget === normalizedDirectory ||
+    normalizedTarget.startsWith(normalizedDirectory + path.sep)
+  );
 }

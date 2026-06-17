@@ -435,6 +435,10 @@ HTTP Token 认证可以在设置页配置。启用后，调用方需要发送：
 Authorization: Bearer <token>
 ```
 
+默认情况下，如果开启 HTTP 服务但关闭 Token 认证，`/api/v1/orchestration/*`
+和 `/mcp` 在本地 loopback 地址上不要求 Bearer Token。请只在可信本机环境使用
+该模式：同一台机器上的其他进程、容器或以当前用户运行的工具也可以调用编排能力。
+
 `/health` 会刻意保持可访问，用于健康检查。
 
 ---

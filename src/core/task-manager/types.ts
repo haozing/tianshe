@@ -38,6 +38,11 @@ export interface TaskContext<TMeta = any> {
   taskId: string;
 
   /**
+   * Correlation id that can be reused across logs, IPC, browser, and data-layer work.
+   */
+  traceId: string;
+
+  /**
    * 任务元数据（创建时传入）
    */
   meta?: TMeta;
@@ -66,6 +71,11 @@ export interface TaskQueueOptions {
    * 失败自动重试次数（默认：0，不重试）
    */
   retry?: number;
+
+  /**
+   * Set false to disable queue-level retries for non-idempotent work.
+   */
+  retryable?: boolean;
 
   /**
    * 重试延迟时间（毫秒，默认：5000 = 5秒）
@@ -120,6 +130,21 @@ export interface TaskOptions<TMeta = any> {
   retry?: number;
 
   /**
+   * Set false to suppress task/queue retry policy for non-idempotent work.
+   */
+  retryable?: boolean;
+
+  /**
+   * Caller-provided idempotency key when task side effects can be deduped externally.
+   */
+  idempotencyKey?: string;
+
+  /**
+   * Optional correlation id. Defaults to taskId.
+   */
+  traceId?: string;
+
+  /**
    * 任务元数据（传递给任务函数）
    */
   meta?: TMeta;
@@ -144,6 +169,9 @@ export interface TaskInfo<TMeta = any> {
   /** 任务ID */
   taskId: string;
 
+  /** Correlation id for this task. */
+  traceId: string;
+
   /** 任务名称 */
   name?: string;
 
@@ -165,6 +193,12 @@ export interface TaskInfo<TMeta = any> {
   /** 重试次数 */
   retryCount: number;
 
+  /** Whether retry policy is allowed for this task. */
+  retryable?: boolean;
+
+  /** Caller-provided idempotency key, when available. */
+  idempotencyKey?: string;
+
   /** 错误信息 */
   error?: Error;
 
@@ -183,6 +217,9 @@ export interface TaskInfo<TMeta = any> {
 export interface TaskEvent<TMeta = any> {
   /** 任务ID */
   taskId: string;
+
+  /** Correlation id for this task. */
+  traceId: string;
 
   /** 任务名称 */
   name?: string;

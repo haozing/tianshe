@@ -1,6 +1,7 @@
 /**
- * SchedulerService - 定时任务调度核心服务
- * 负责：任务调度、执行、恢�? */
+ * SchedulerService - scheduled task scheduler core service.
+ * Handles task scheduling, execution, and recovery.
+ */
 
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
@@ -45,15 +46,8 @@ class SchedulerTaskCancelledError extends Error {
 }
 
 /**
- * 任务处理器注册信息
-interface TaskHandler {
-  pluginId: string;
-  handlerId: string;
-  handler: (ctx: TaskExecutionContext) => Promise<unknown>;
-}
-
-/**
- * 调度器事�? */
+ * Scheduler event callbacks.
+ */
 export interface SchedulerEvents {
   'task-scheduled': (task: ScheduledTask) => void;
   'task-started': (task: ScheduledTask, execution: TaskExecution) => void;
@@ -75,13 +69,14 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   // 自动清理配置
   private cleanupTimer: NodeJS.Timeout | null = null;
   private readonly CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24小时
-  private readonly CLEANUP_DAYS_TO_KEEP = 30; // 保留30�?
+  private readonly CLEANUP_DAYS_TO_KEEP = 30; // Keep 30 days
   constructor(private taskService: ScheduledTaskService) {
     super();
   }
 
   /**
-   * 初始化调度器：从数据库恢复任�?   */
+   * Initialize the scheduler and prepare startup cleanup.
+   */
   async init(): Promise<void> {
     if (this.initialized) {
       logger.info('[SchedulerService] Already initialized');
@@ -98,7 +93,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       });
     }
 
-    // 启动定期清理任务
+    // Start periodic cleanup.
     this.startCleanupTimer();
 
     this.initialized = true;
@@ -129,9 +124,10 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   }
 
   /**
-   * 注册任务处理�?   * @param pluginId - 插件 ID
-   * @param handlerId - 处理�?ID
-   * @param handler - 处理函数，接收包�?signal 的上下文
+   * Register a task handler.
+   * @param pluginId Plugin ID
+   * @param handlerId Handler ID
+   * @param handler Handler function that receives a context with an abort signal
    */
   registerHandler(
     pluginId: string,
@@ -144,7 +140,8 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   }
 
   /**
-   * 注销任务处理�?   */
+   * Unregister a task handler.
+   */
   unregisterHandler(pluginId: string, handlerId: string): void {
     const key = `${pluginId}:${handlerId}`;
     this.handlers.delete(key);
@@ -178,6 +175,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     payload?: Record<string, unknown>;
     timeout?: number;
     retry?: number;
+    retryable?: boolean;
     retryDelay?: number;
     missedPolicy?: 'skip' | 'run_once';
     immediate?: boolean;
@@ -219,7 +217,7 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       handlerId: params.handlerId,
       payload: params.payload,
       timeoutMs: params.timeout ?? 120000,
-      retryCount: params.retry ?? 0,
+      retryCount: params.retryable === false ? 0 : params.retry ?? 0,
       retryDelayMs: params.retryDelay ?? 5000,
       missedPolicy: params.missedPolicy ?? 'skip',
       resourceKeys: params.resourceKeys,
@@ -376,13 +374,15 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   }
 
   /**
-   * 获取插件的所有任�?   */
+   * Get all tasks owned by a plugin.
+   */
   async getTasksByPlugin(pluginId: string): Promise<ScheduledTask[]> {
     return await this.taskService.getTasksByPlugin(pluginId);
   }
 
   /**
-   * 获取所有任�?   */
+   * Get all tasks.
+   */
   async getAllTasks(options?: {
     status?: string;
     pluginId?: string;
@@ -421,7 +421,8 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   }
 
   /**
-   * 删除插件的所有任�?   */
+   * Delete all tasks owned by a plugin.
+   */
   async deleteTasksByPlugin(pluginId: string): Promise<number> {
     const tasks = await this.taskService.getTasksByPlugin(pluginId);
     for (const task of tasks) {
@@ -447,14 +448,15 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   }
 
   /**
-   * 获取任务的人类可读调度描�?   */
+   * Get a human-readable schedule description.
+   */
   getScheduleDescription(task: ScheduledTask): string {
     if (task.scheduleType === 'cron' && task.cronExpression) {
       return describeCronExpression(task.cronExpression);
     } else if (task.scheduleType === 'interval' && task.intervalMs) {
-      return `�?${formatInterval(task.intervalMs)}`;
+      return `每 ${formatInterval(task.intervalMs)}`;
     } else if (task.scheduleType === 'once' && task.runAt) {
-      return `�?${new Date(task.runAt).toLocaleString()}`;
+      return `一次性 ${new Date(task.runAt).toLocaleString()}`;
     }
     return '未知';
   }
@@ -525,6 +527,9 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
 
     if (!nextRun) {
       logger.info('No next run time for scheduled task', { taskId: task.id });
+      if (task.scheduleType === 'once') {
+        await this.markOnceTaskTriggered(task, 'no-next-run');
+      }
       return;
     }
 
@@ -538,7 +543,18 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
 
       if (task.missedPolicy === 'run_once') {
         logger.info('Running missed scheduled task', { taskId: task.id });
-        await this.executeTask(task, 'recovery');
+        const taskForExecution =
+          task.scheduleType === 'once'
+            ? await this.markOnceTaskTriggered(task, 'missed-recovery')
+            : task;
+        await this.executeTask(taskForExecution, 'recovery');
+      } else if (task.scheduleType === 'once') {
+        await this.markOnceTaskTriggered(task, 'missed-skip');
+        return;
+      }
+
+      if (task.scheduleType === 'once') {
+        return;
       }
 
       // 重新计算下次执行时间
@@ -554,13 +570,14 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   }
 
   /**
-   * 设置定时�?   */
+   * Set a timer for a task.
+   */
   private setTimer(taskId: string, runAt: number): void {
     this.cancelTimer(taskId);
 
     const delay = runAt - Date.now();
 
-    const maxDelay = 24 * 60 * 60 * 1000; // 24 Сʱ
+    const maxDelay = 24 * 60 * 60 * 1000; // 24 hours
 
     if (delay > maxDelay) {
       const timer = setTimeout(() => {
@@ -590,7 +607,8 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   }
 
   /**
-   * 取消定时�?   */
+   * Cancel a task timer.
+   */
   private cancelTimer(taskId: string): void {
     const timer = this.timers.get(taskId);
     if (timer) {
@@ -600,7 +618,8 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   }
 
   /**
-   * 定时器触�?   */
+   * Handle a fired timer.
+   */
   private async onTimerFired(taskId: string): Promise<void> {
     this.timers.delete(taskId);
 
@@ -611,7 +630,11 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     }
 
     try {
-      await this.executeTask(task, 'scheduled');
+      const taskForExecution =
+        task.scheduleType === 'once'
+          ? await this.markOnceTaskTriggered(task, 'scheduled')
+          : task;
+      await this.executeTask(taskForExecution, 'scheduled');
     } catch (error) {
       logger.error('Scheduled task execution failed during timer fire', { taskId, error });
     } finally {
@@ -651,6 +674,26 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     }
 
     await runningTask.promise.catch(() => undefined);
+  }
+
+  /**
+   * 一次性任务触发前先持久化为 disabled，避免崩溃后重复触发。
+   */
+  private async markOnceTaskTriggered(task: ScheduledTask, reason: string): Promise<ScheduledTask> {
+    if (task.scheduleType !== 'once') {
+      return task;
+    }
+
+    await this.taskService.updateTask(task.id, { status: 'disabled' });
+    logger.info('Once scheduled task marked triggered before execution', {
+      taskId: task.id,
+      reason,
+    });
+
+    return {
+      ...task,
+      status: 'disabled',
+    };
   }
 
   /**
@@ -899,8 +942,8 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
       error: lastError?.message ?? 'Unknown error',
     });
 
-    // 更新任务统计
-    // 修复：cancelled 不计�?failCount，lastRunStatus 区分 cancelled �?failed
+    // Update task statistics.
+    // Cancelled runs do not increment failCount, while lastRunStatus preserves cancelled vs failed.
     if (!this.tasksPendingDelete.has(task.id)) {
       await this.taskService.updateTask(task.id, {
         lastRunAt: startTime,
@@ -930,7 +973,8 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   }
 
   /**
-   * 辅助方法：延迟执�?   */
+   * Invoke a handler with hard cancellation.
+   */
   private async invokeHandlerWithHardCancellation(
     task: ScheduledTask,
     controller: AbortController,
@@ -1008,11 +1052,12 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
   }
 
   /**
-   * 启动定期清理定时�?   */
+   * Start the periodic cleanup timer.
+   */
   private startCleanupTimer(): void {
     this.performCleanup();
 
-    // 设置定期清理
+    // Schedule periodic cleanup.
     this.cleanupTimer = setInterval(() => {
       this.performCleanup();
     }, this.CLEANUP_INTERVAL_MS);

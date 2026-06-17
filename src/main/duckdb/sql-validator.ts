@@ -126,6 +126,11 @@ export class SQLValidator {
       { pattern: /\b(PRAGMA)\b/i, reason: '不允许使用PRAGMA命令' },
       { pattern: /\b(LOAD|INSTALL)\b/i, reason: '不允许加载扩展' },
       { pattern: /\b(COPY)\b/i, reason: '不允许使用COPY命令' },
+      {
+        pattern:
+          /\b(query|read_csv|read_csv_auto|read_parquet|read_json|read_json_auto|read_text|read_blob|glob)\s*\(/i,
+        reason: '不允许使用动态SQL或文件读取函数',
+      },
       { pattern: /--/i, reason: '不允许使用SQL注释进行注入' },
       { pattern: /\/\*/i, reason: '不允许使用块注释' },
       { pattern: /\bUNION\b/i, reason: '不允许使用UNION查询' },

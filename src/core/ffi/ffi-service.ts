@@ -50,6 +50,9 @@ export class FFIService {
   /** 已加载的库 */
   private libraries = new Map<string, Library>();
 
+  /** 库首次加载时间 */
+  private libraryLoadedAt = new Map<string, number>();
+
   /** 已创建的回调 */
   private callbacks = new Set<FFICallback>();
 
@@ -137,6 +140,7 @@ export class FFIService {
 
       // 缓存
       this.libraries.set(safePath, library);
+      this.libraryLoadedAt.set(safePath, Date.now());
 
       logger.info('FFI library loaded successfully', {
         callerId: this.callerId,
@@ -272,7 +276,7 @@ export class FFIService {
       result.push({
         path: libPath,
         functions: lib.getDefinedFunctions(),
-        loadedAt: Date.now(), // 简化：实际应该记录真实时间
+        loadedAt: this.libraryLoadedAt.get(libPath) ?? Date.now(),
         unloaded: false,
       });
     }
@@ -292,6 +296,7 @@ export class FFIService {
     if (lib) {
       lib.unload();
       this.libraries.delete(normalizedPath);
+      this.libraryLoadedAt.delete(normalizedPath);
       logger.info('FFI library unloaded', {
         callerId: this.callerId,
         libraryPath: normalizedPath,
@@ -333,6 +338,7 @@ export class FFIService {
       }
     }
     this.libraries.clear();
+    this.libraryLoadedAt.clear();
 
     logger.info('FFI resources disposed', { callerId: this.callerId });
   }

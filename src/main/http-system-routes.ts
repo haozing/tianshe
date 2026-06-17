@@ -129,7 +129,9 @@ const buildHealthAlerts = (
   return alerts;
 };
 
-const resolveHealthStatus = (alerts: readonly HealthAlert[]): HealthStatus => {
+export const resolveHealthStatus = (
+  alerts: readonly { severity: HealthAlertSeverity }[]
+): HealthStatus => {
   if (alerts.some((alert) => alert.severity === 'critical')) {
     return 'error';
   }

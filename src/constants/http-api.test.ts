@@ -37,6 +37,7 @@ describe('HTTP API auth contract', () => {
     );
     expect(contract.detail).toContain('/api/v1/orchestration/*');
     expect(contract.detail).toContain('/mcp');
+    expect(contract.detail).toContain('本机其他进程或容器');
   });
 
   it('distinguishes token-auth HTTP from optional MCP auth', () => {

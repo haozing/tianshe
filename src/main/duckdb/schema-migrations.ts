@@ -316,6 +316,15 @@ export const PLUGIN_TABLE_SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingStep('recordings', 'metadata', 'JSON'),
     ],
   },
+  {
+    id: 'plugin-tables-002-uninstall-state',
+    description: 'Add plugin uninstall compensation state fields',
+    up: [
+      addColumnIfMissingStep('js_plugins', 'lifecycle_state', `VARCHAR DEFAULT 'installed'`),
+      addColumnIfMissingStep('js_plugins', 'uninstall_delete_tables', 'BOOLEAN'),
+      addColumnIfMissingStep('js_plugins', 'uninstall_started_at', 'BIGINT'),
+    ],
+  },
 ];
 
 export async function runSchemaBackfills(
