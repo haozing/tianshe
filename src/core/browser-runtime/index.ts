@@ -18,6 +18,38 @@ export {
   createBrowserRuntimeManager,
 } from './runtime-manager';
 export {
+  BROWSER_CAPABILITY_CONTRACTS,
+  BROWSER_MINIMAL_CORE_METHODS,
+  assertBrowserRuntimeDescriptorContract,
+  createBrowserRuntimeCapabilityMatrix,
+  getBrowserCapabilityContract,
+  getMissingBrowserCapabilityContractMethods,
+  validateBrowserCapabilityContracts,
+  validateBrowserRuntimeDescriptorAgainstContract,
+  type BrowserCapabilityContract,
+  type BrowserCapabilityContractValidationIssue,
+  type BrowserCapabilitySemanticCheck,
+  type BrowserRuntimeCapabilityMatrixRow,
+} from './capability-contract';
+export {
+  createBrowserRuntimePlan,
+  type BrowserRuntimePlan,
+  type BrowserRuntimePlanDecision,
+  type ProfileCandidate,
+  type RuntimeCandidate,
+  type RuntimePlannerInput,
+  type RuntimePlannerLoginState,
+  type RuntimePlannerProfile,
+} from './runtime-planner';
+export {
+  getRuntimeWindowControlContract,
+  getWindowControlContract,
+  type BrowserWindowControlCapability,
+  type BrowserWindowControlCapabilityDescriptor,
+  type BrowserWindowControlContract,
+  type BrowserWindowControlSupport,
+} from './window-control-contract';
+export {
   STATIC_BROWSER_RUNTIME_DESCRIPTORS,
   applyRuntimeCapabilitySupport,
   browserRuntimeSupports,

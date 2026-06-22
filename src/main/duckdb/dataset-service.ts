@@ -20,6 +20,17 @@ import { DatasetExportService, type ExportQuerySQLBuilder } from './dataset-expo
 import { DatasetQueryService } from './dataset-query-service';
 import { DatasetTabGroupService, type GroupTabDataset } from './dataset-tab-group-service';
 import { DatasetRecordMutationService } from './dataset-record-mutation-service';
+import type {
+  CommitDatasetStagedWritePlanOptions,
+  DatasetStagedWriteOperation,
+  DatasetStagedWritePlan,
+  DatasetWriteCommitResult,
+} from './dataset-record-mutation-service';
+import {
+  DatasetProvenanceService,
+  type DatasetProvenanceContext,
+  type DatasetRecordProvenanceEntry,
+} from './dataset-provenance-service';
 import { DatasetMaterializationService } from './dataset-materialization-service';
 import { DatasetGroupTabWorkflowService } from './dataset-group-tab-workflow-service';
 import { SQLValidator } from './sql-validator';
@@ -63,6 +74,7 @@ export class DatasetService {
   private queryService: DatasetQueryService;
   private tabGroupService: DatasetTabGroupService;
   private recordMutationService: DatasetRecordMutationService;
+  private provenanceService: DatasetProvenanceService;
   private materializationService: DatasetMaterializationService;
   private groupTabWorkflowService: DatasetGroupTabWorkflowService;
 
@@ -91,6 +103,7 @@ export class DatasetService {
     // 🔹 数据层：元数据管理
     this.metadataService = new DatasetMetadataService(conn, this.storageService);
     this.tabGroupService = new DatasetTabGroupService(conn);
+    this.provenanceService = new DatasetProvenanceService(conn);
     this.recordMutationService = new DatasetRecordMutationService({
       conn,
       storageService: this.storageService,
@@ -98,6 +111,7 @@ export class DatasetService {
       getTableName: (safeDatasetId) => this.getTableName(safeDatasetId),
       ensureAttached: (dataset) => this.ensureAttached(dataset),
       hookBus: this.hookBus,
+      provenanceService: this.provenanceService,
     });
 
     // 🔹 辅助服务：验证和依赖
@@ -269,6 +283,7 @@ export class DatasetService {
 
   async initTable(): Promise<void> {
     await this.metadataService.initTable();
+    await this.provenanceService.initTable();
     const importArtifactReconciliation = await this.importService.reconcileImportArtifacts();
     if (
       importArtifactReconciliation.orphanFilesDeleted > 0 ||
@@ -424,6 +439,26 @@ export class DatasetService {
     datasetId: string,
     updates: Array<{ rowId: number; updates: DataRecord }>
   ) => this.recordMutationService.batchUpdateRecords(datasetId, updates);
+
+  stageWritePlan = (
+    datasetId: string,
+    operations: DatasetStagedWriteOperation[],
+    context?: DatasetProvenanceContext
+  ): Promise<DatasetStagedWritePlan> =>
+    this.recordMutationService.createStagedWritePlan(datasetId, operations, context);
+
+  commitWritePlan = (
+    plan: DatasetStagedWritePlan,
+    options: CommitDatasetStagedWritePlanOptions
+  ): Promise<DatasetWriteCommitResult> =>
+    this.recordMutationService.commitStagedWritePlan(plan, options);
+
+  listRecordProvenance = (
+    datasetId: string,
+    rowId: number,
+    limit?: number
+  ): Promise<DatasetRecordProvenanceEntry[]> =>
+    this.provenanceService.listRecordProvenance(datasetId, rowId, limit);
 
   insertRecord = (datasetId: string, record: DataRecord) =>
     this.recordMutationService.insertRecord(datasetId, record);

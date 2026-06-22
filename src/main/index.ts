@@ -374,6 +374,7 @@ async function startHttpServer(): Promise<void> {
         mcpRequireAuth: httpApiConfig.mcpRequireAuth,
         mcpAllowedOrigins: httpApiConfig.mcpAllowedOrigins,
         enforceOrchestrationScopes: httpApiConfig.enforceOrchestrationScopes,
+        agentHandMode: httpApiConfig.agentHandMode,
         orchestrationIdempotencyStore: httpApiConfig.orchestrationIdempotencyStore,
       };
 

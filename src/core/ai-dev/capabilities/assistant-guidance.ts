@@ -124,11 +124,6 @@ const advancedSurface = (
   ...orders,
 });
 
-const legacySurface = (): OrchestrationAssistantSurface => ({
-  publicMcp: false,
-  surfaceTier: 'legacy',
-});
-
 const CAPABILITY_MANIFESTS: Record<string, CapabilityAssistantManifest> = {};
 
 Object.assign(CAPABILITY_MANIFESTS, {
@@ -185,6 +180,34 @@ Object.assign(CAPABILITY_MANIFESTS, {
       examples: [{ title: 'Prepare an external session plan', arguments: { query: 'profile-1', visible: false } }],
     },
     surface: advancedSurface(),
+  },
+  profile_ensure_logged_in: {
+    guidance: {
+      workflowStage: 'session',
+      whenToUse:
+        'Prepare a reusable profile for login-state verification or visible human login handoff without exposing passwords, cookies, tokens, CAPTCHA, or 2FA values to the model.',
+      preferredTargetKind: 'profile_query',
+      requiresBoundProfile: false,
+      transportEffect: 'session_state',
+      recommendedToolProfile: 'compact',
+      preferredNextTools: ['browser_observe', 'browser_snapshot', 'session_get_current'],
+      examples: [
+        {
+          title: 'Prepare visible login handoff',
+          arguments: {
+            query: 'profile-1',
+            site: 'example',
+            loginUrl: 'https://example.com/login',
+            visible: true,
+          },
+        },
+      ],
+    },
+    surface: canonicalSurface({ gettingStartedOrder: 25, sessionReuseOrder: 25 }),
+    resultContract: [
+      'Result contract: read structuredContent.data.status, manualHandoffRequired, and profileId before deciding whether to continue browser automation.',
+      'Failure contract: CAPTCHA, 2FA, blocked, and unknown login states require human handoff or a site-specific verifier; do not ask the model to provide secret values.',
+    ],
   },
   session_list: {
     guidance: {

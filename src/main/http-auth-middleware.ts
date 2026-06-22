@@ -29,7 +29,7 @@ export const registerTokenAuthMiddleware = ({
   restApiConfig,
   logger,
 }: RegisterTokenAuthMiddlewareOptions): void => {
-  const mcpRequireAuth = restApiConfig?.mcpRequireAuth ?? true;
+  const mcpRequireAuth = restApiConfig?.agentHandMode === true ? true : restApiConfig?.mcpRequireAuth ?? true;
 
   app.use((req: Request, res: Response, next) => {
     if (req.path === '/health') {

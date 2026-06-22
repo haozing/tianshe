@@ -128,7 +128,10 @@ export class BrowserPoolManager {
       (request, browserId, sessionId) => this.buildBrowserHandle(request, browserId, sessionId),
       (request, browserId, sessionId, waitedMs) =>
         this.emitBrowserAcquired(request, browserId, sessionId, waitedMs),
-      (sessionId, browserId) => this.markProfileActive(sessionId, browserId)
+      (sessionId, browserId) => this.markProfileActive(sessionId, browserId),
+      (event) => {
+        this.eventEmitter.emit('browser:lock-handoff', event);
+      }
     );
   }
 

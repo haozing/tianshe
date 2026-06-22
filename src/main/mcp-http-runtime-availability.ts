@@ -13,6 +13,11 @@ import type { McpSessionSnapshot } from './mcp-http-session-snapshot';
 import { buildMcpSessionSnapshot } from './mcp-http-session-snapshot';
 import type { McpSessionInfo } from './mcp-http-types';
 import { browserRuntimeSupports } from '../core/browser-pool/runtime-capability-registry';
+import {
+  createBrowserRuntimePlan,
+  type BrowserRuntimePlan,
+} from '../core/browser-runtime/runtime-planner';
+import { isBrowserRuntimeId } from '../types/browser-runtime';
 
 export type McpToolRuntimeAvailabilityStatus =
   | 'available'
@@ -31,6 +36,7 @@ export interface McpToolRuntimeAvailability {
   preconditionsNow: string[];
   recommendedActions: string[];
   session: McpToolRuntimeSessionContext;
+  runtimePlan?: BrowserRuntimePlan;
 }
 
 export const buildMcpRuntimeSessionContext = (
@@ -52,6 +58,8 @@ const collectMissingCapabilityRequirements = (
         return !dependencies?.pluginGateway;
       case 'profileGateway':
         return !dependencies?.profileGateway;
+      case 'profileLoginStateGateway':
+        return !dependencies?.profileLoginStateGateway;
       case 'systemGateway':
         return !dependencies?.systemGateway;
       case 'observationGateway':
@@ -110,6 +118,8 @@ const requirementDisplayName = (
       return 'plugin gateway';
     case 'profileGateway':
       return 'profile gateway';
+    case 'profileLoginStateGateway':
+      return 'profile login state gateway';
     case 'systemGateway':
       return 'system gateway';
     case 'observationGateway':
@@ -127,6 +137,16 @@ const requirementDisplayName = (
       return requirement;
   }
 };
+
+const collectBrowserCapabilityNames = (
+  requirements: OrchestrationCapabilityRequirement[]
+): BrowserCapabilityName[] =>
+  requirements
+    .filter(
+      (requirement): requirement is `browserCapability:${BrowserCapabilityName}` =>
+        typeof requirement === 'string' && requirement.startsWith('browserCapability:')
+    )
+    .map((requirement) => requirement.slice('browserCapability:'.length) as BrowserCapabilityName);
 
 const buildUnavailableAvailability = (
   session: McpToolRuntimeSessionContext,
@@ -235,18 +255,34 @@ export const evaluateCapabilityRuntimeAvailability = (
     session
   );
   if (unsupportedRequirements.length > 0) {
-    return buildUnavailableAvailability(
-      session,
-      'unsupported_browser_features',
-      `The active browser session does not support: ${unsupportedRequirements
-        .map(requirementDisplayName)
-        .join(', ')}.`,
-      [],
-      unsupportedRequirements,
-      [
-        'Use a browser implementation that supports the required feature set, or start a new compatible session.',
-      ]
-    );
+    const currentRuntimeId = session.runtimeId;
+    const plan = createBrowserRuntimePlan({
+      requiredCapabilities: collectBrowserCapabilityNames(unsupportedRequirements),
+      currentRuntimeId:
+        typeof currentRuntimeId === 'string' && isBrowserRuntimeId(currentRuntimeId)
+          ? currentRuntimeId
+          : undefined,
+      currentProfileId: typeof session.profileId === 'string' ? session.profileId : undefined,
+      bindingLocked: session.bindingLocked === true,
+      allowNewProfile: true,
+    });
+    return {
+      ...buildUnavailableAvailability(
+        session,
+        'unsupported_browser_features',
+        `The active browser session does not support: ${unsupportedRequirements
+          .map(requirementDisplayName)
+          .join(', ')}.`,
+        [],
+        unsupportedRequirements,
+        [
+          plan.recommendedAction,
+          'Call runtime_plan to inspect compatible runtimes/profiles before retrying.',
+          'Call session_prepare in a new or unlocked session with the recommended runtime/profile.',
+        ]
+      ),
+      runtimePlan: plan,
+    };
   }
 
   const indeterminateRequirements = collectIndeterminateBrowserRequirements(capability, session);
@@ -263,6 +299,7 @@ export const evaluateCapabilityRuntimeAvailability = (
       ],
       recommendedActions: [
         'Bind an explicit runtimeId with session_prepare before relying on runtime-specific browser features.',
+        SESSION_PREPARE_RESOLVED_BINDING_ACTION,
       ],
     });
   }

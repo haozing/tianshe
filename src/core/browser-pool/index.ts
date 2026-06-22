@@ -115,7 +115,14 @@ export {
 
 // 事件系统导出
 export { BrowserPoolEventEmitter, createBrowserPoolEventEmitter } from './events';
-export type { BrowserPoolEvents, BrowserAcquiredEvent, BrowserReleasedEvent } from './events';
+export type {
+  BrowserPoolEvents,
+  BrowserAcquiredEvent,
+  BrowserReleasedEvent,
+  BrowserHandoffRequestedEvent,
+  BrowserLockHandoffEvent,
+  BrowserLockRenewedEvent,
+} from './events';
 
 // ============================================
 // 便捷初始化函数

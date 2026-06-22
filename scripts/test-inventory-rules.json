@@ -126,6 +126,10 @@
       "area": "browser"
     },
     {
+      "pattern": "src/core/site-adapter-runtime/**/*.test.ts",
+      "area": "browser"
+    },
+    {
       "pattern": "src/main/profile/browser-*.test.ts",
       "area": "browser"
     },

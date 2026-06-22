@@ -420,6 +420,50 @@ export interface ProfileListParams {
   offset?: number;
 }
 
+export const PROFILE_LOGIN_STATE_STATUSES = [
+  'logged_in',
+  'needs_manual_login',
+  'captcha',
+  'two_factor',
+  'blocked',
+  'unknown',
+] as const;
+
+export type ProfileLoginStateStatus = (typeof PROFILE_LOGIN_STATE_STATUSES)[number];
+
+export interface ProfileLoginState {
+  id: string;
+  profileId: string;
+  accountId?: string | null;
+  site: string;
+  loginUrl?: string | null;
+  runtimeId?: BrowserRuntimeId | null;
+  status: ProfileLoginStateStatus;
+  verified: boolean;
+  lastCheckedAt: Date;
+  verifiedAt?: Date | null;
+  evidenceArtifactId?: string | null;
+  evidence?: Record<string, unknown> | null;
+  reason?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface UpsertProfileLoginStateParams {
+  profileId: string;
+  accountId?: string | null;
+  site: string;
+  loginUrl?: string | null;
+  runtimeId?: BrowserRuntimeId | null;
+  status: ProfileLoginStateStatus;
+  verified?: boolean;
+  lastCheckedAt?: Date;
+  verifiedAt?: Date | null;
+  evidenceArtifactId?: string | null;
+  evidence?: Record<string, unknown> | null;
+  reason?: string | null;
+}
+
 export interface CreateGroupParams {
   name: string;
   parentId?: string | null;

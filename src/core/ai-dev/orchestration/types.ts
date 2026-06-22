@@ -5,6 +5,10 @@ import type {
   BrowserRuntimeDescriptor,
 } from '../../../types/browser-interface';
 import type { CreateProfileParams, UpdateProfileParams } from '../../../types/profile';
+import type {
+  ProfileLoginStateStatus,
+  UpsertProfileLoginStateParams,
+} from '../../../types/profile';
 import type { CapabilityCallResult } from '../capabilities/types';
 import type { BrowserRuntimeStatus } from '../../browser-runtime';
 import type {
@@ -131,6 +135,7 @@ export type OrchestrationCapabilityRequirement =
   | 'crossPluginGateway'
   | 'pluginGateway'
   | 'profileGateway'
+  | 'profileLoginStateGateway'
   | 'observationGateway'
   | 'mcpSessionGateway';
 
@@ -313,6 +318,58 @@ export interface OrchestrationDatasetQueryResult {
   filteredTotalCount?: number;
 }
 
+export type OrchestrationDatasetWriteOperation =
+  | { type: 'insert'; record: Record<string, unknown> }
+  | { type: 'update'; rowId: number; updates: Record<string, unknown> }
+  | { type: 'delete'; rowIds: number[] };
+
+export interface OrchestrationDatasetProvenanceContext {
+  traceId?: string | null;
+  adapterId?: string | null;
+  adapterVersion?: string | null;
+  runtimeId?: string | null;
+  sourceUrl?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface OrchestrationDatasetStagedWritePlan {
+  planId: string;
+  datasetId: string;
+  createdAt: string;
+  operations: OrchestrationDatasetWriteOperation[];
+  rowCount: number;
+  requiresConfirmation: true;
+  provenance?: OrchestrationDatasetProvenanceContext;
+}
+
+export interface OrchestrationDatasetWriteCommitResult {
+  planId: string;
+  runId: string;
+  datasetId: string;
+  insertedRowIds: number[];
+  updatedRowIds: number[];
+  deletedRowIds: number[];
+  affectedRowCount: number;
+  provenanceRecorded: boolean;
+}
+
+export interface OrchestrationDatasetRecordProvenance {
+  id: string;
+  datasetId: string;
+  rowId: number | null;
+  runId: string;
+  operation: string;
+  occurredAt: number;
+  traceId?: string | null;
+  adapterId?: string | null;
+  adapterVersion?: string | null;
+  runtimeId?: string | null;
+  sourceUrl?: string | null;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+}
+
 export interface OrchestrationDatasetGateway {
   listDatasets(): Promise<unknown[]>;
   getDatasetInfo(datasetId: string): Promise<unknown | null>;
@@ -331,6 +388,20 @@ export interface OrchestrationDatasetGateway {
     datasetName: string,
     options?: { folderId?: string | null }
   ): Promise<string>;
+  stageWritePlan?(
+    datasetId: string,
+    operations: OrchestrationDatasetWriteOperation[],
+    context?: OrchestrationDatasetProvenanceContext
+  ): Promise<OrchestrationDatasetStagedWritePlan>;
+  commitWritePlan?(
+    plan: OrchestrationDatasetStagedWritePlan,
+    options: OrchestrationDatasetProvenanceContext & { confirmRisk: true }
+  ): Promise<OrchestrationDatasetWriteCommitResult>;
+  listRecordProvenance?(
+    datasetId: string,
+    rowId: number,
+    limit?: number
+  ): Promise<OrchestrationDatasetRecordProvenance[]>;
   renameDataset(datasetId: string, newName: string): Promise<void>;
   deleteDataset(datasetId: string): Promise<void>;
 }
@@ -421,6 +492,24 @@ export interface OrchestrationProfileResolveResult {
   profile: OrchestrationProfileInfo;
 }
 
+export interface OrchestrationProfileLoginState {
+  id: string;
+  profileId: string;
+  accountId?: string | null;
+  site: string;
+  loginUrl?: string | null;
+  runtimeId?: string | null;
+  status: ProfileLoginStateStatus;
+  verified: boolean;
+  lastCheckedAt: string;
+  verifiedAt?: string | null;
+  evidenceArtifactId?: string | null;
+  evidence?: Record<string, unknown> | null;
+  reason?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface OrchestrationPluginInfo {
   id: string;
   name: string;
@@ -502,6 +591,17 @@ export interface OrchestrationProfileGateway {
   createProfile(params: CreateProfileParams): Promise<OrchestrationProfileInfo>;
   updateProfile(id: string, params: UpdateProfileParams): Promise<OrchestrationProfileInfo>;
   deleteProfile(id: string): Promise<void>;
+}
+
+export interface OrchestrationProfileLoginStateGateway {
+  getLoginState(query: {
+    profileId: string;
+    site?: string | null;
+    accountId?: string | null;
+  }): Promise<OrchestrationProfileLoginState | null>;
+  upsertLoginState(
+    params: UpsertProfileLoginStateParams
+  ): Promise<OrchestrationProfileLoginState>;
 }
 
 export interface OrchestrationMcpSessionInfo {
@@ -649,6 +749,7 @@ export interface OrchestrationDependencies {
   crossPluginGateway?: OrchestrationCrossPluginGateway;
   pluginGateway?: OrchestrationPluginGateway;
   profileGateway?: OrchestrationProfileGateway;
+  profileLoginStateGateway?: OrchestrationProfileLoginStateGateway;
   observationGateway?: OrchestrationObservationGateway;
   mcpSessionGateway?: OrchestrationMcpSessionGateway;
   mcpSessionContext?: OrchestrationBrowserSessionContext;

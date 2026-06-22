@@ -6,6 +6,7 @@ import type {
   OrchestrationIdempotencyEntry,
   OrchestrationDatasetGateway,
   OrchestrationObservationGateway,
+  OrchestrationProfileLoginStateGateway,
   OrchestrationPluginGateway,
   OrchestrationProfileGateway,
   OrchestrationSystemGateway,
@@ -39,6 +40,7 @@ export interface RestApiDependencies {
   crossPluginGateway?: OrchestrationCrossPluginGateway;
   pluginGateway?: OrchestrationPluginGateway;
   profileGateway?: OrchestrationProfileGateway;
+  profileLoginStateGateway?: OrchestrationProfileLoginStateGateway;
   observationGateway?: OrchestrationObservationGateway;
   idempotencyPersistence?: OrchestrationIdempotencyPersistenceStore;
 }
@@ -63,6 +65,10 @@ export interface RestApiConfig {
    * 是否强制执行 orchestration requiredScopes 校验
    */
   enforceOrchestrationScopes?: boolean;
+  /**
+   * agent-hand 安全默认模式：开启后强制 Token 鉴权、MCP 鉴权和 requiredScopes 校验
+   */
+  agentHandMode?: boolean;
   /**
    * 编排幂等存储策略
    * - memory: 仅会话内内存（默认，兼容）

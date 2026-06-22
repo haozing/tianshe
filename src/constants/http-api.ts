@@ -26,6 +26,8 @@ export interface HttpApiConfig {
   enableMcp?: boolean;
   /** 是否强制执行 orchestration requiredScopes 校验 */
   enforceOrchestrationScopes: boolean;
+  /** agent-hand 安全默认模式：开启后强制 Token 鉴权与 orchestration scope 校验 */
+  agentHandMode: boolean;
   /**
    * 编排幂等存储策略
    * - memory: 默认，仅会话内内存
@@ -59,6 +61,7 @@ export const DEFAULT_HTTP_API_CONFIG: HttpApiConfig = {
   callbackUrl: '',
   enableMcp: false,
   enforceOrchestrationScopes: false,
+  agentHandMode: false,
   orchestrationIdempotencyStore: 'memory',
   enableDevMode: false,
 };
@@ -94,13 +97,16 @@ const readIdempotencyStore = (value: unknown): 'memory' | 'duckdb' => {
  */
 export const normalizeHttpApiConfig = (input: Partial<HttpApiConfig> | null | undefined): HttpApiConfig => {
   const config = input ?? {};
+  const agentHandMode = readBoolean(config.agentHandMode, DEFAULT_HTTP_API_CONFIG.agentHandMode);
 
   return {
     enabled: readBoolean(config.enabled, DEFAULT_HTTP_API_CONFIG.enabled),
     // Port is fixed by runtime config. Ignore any legacy value persisted in electron-store.
     port: DEFAULT_HTTP_API_CONFIG.port,
-    enableAuth: readBoolean(config.enableAuth, DEFAULT_HTTP_API_CONFIG.enableAuth),
-    mcpRequireAuth: readBoolean(config.mcpRequireAuth, DEFAULT_HTTP_API_CONFIG.mcpRequireAuth),
+    enableAuth: agentHandMode ? true : readBoolean(config.enableAuth, DEFAULT_HTTP_API_CONFIG.enableAuth),
+    mcpRequireAuth: agentHandMode
+      ? true
+      : readBoolean(config.mcpRequireAuth, DEFAULT_HTTP_API_CONFIG.mcpRequireAuth),
     mcpAllowedOrigins: readStringArray(
       config.mcpAllowedOrigins,
       DEFAULT_HTTP_API_CONFIG.mcpAllowedOrigins
@@ -108,10 +114,13 @@ export const normalizeHttpApiConfig = (input: Partial<HttpApiConfig> | null | un
     token: readString(config.token, DEFAULT_HTTP_API_CONFIG.token || ''),
     callbackUrl: readString(config.callbackUrl, DEFAULT_HTTP_API_CONFIG.callbackUrl || ''),
     enableMcp: readBoolean(config.enableMcp, DEFAULT_HTTP_API_CONFIG.enableMcp || false),
-    enforceOrchestrationScopes: readBoolean(
-      config.enforceOrchestrationScopes,
-      DEFAULT_HTTP_API_CONFIG.enforceOrchestrationScopes
-    ),
+    enforceOrchestrationScopes: agentHandMode
+      ? true
+      : readBoolean(
+          config.enforceOrchestrationScopes,
+          DEFAULT_HTTP_API_CONFIG.enforceOrchestrationScopes
+        ),
+    agentHandMode,
     orchestrationIdempotencyStore: readIdempotencyStore(
       config.orchestrationIdempotencyStore
     ),

@@ -4,28 +4,42 @@ import { Mutex } from 'async-mutex';
 
 export interface ResourceLeaseContext {
   ownerToken: string;
+  ownerSource?: ResourceOwnerSource | null;
   heldKeys: Set<string>;
   profileLeases: Map<string, unknown>;
 }
 
+export type ResourceOwnerSource = 'http' | 'mcp' | 'ipc' | 'internal' | 'plugin' | 'unknown';
+
 export interface ResourceAcquireOptions {
   ownerToken?: string;
+  ownerSource?: ResourceOwnerSource;
   timeoutMs?: number;
   signal?: AbortSignal;
 }
 
 export interface ResourceHandoffOptions {
   ownerToken?: string;
+  ownerSource?: ResourceOwnerSource;
 }
 
 export interface ResourceLease {
   ownerToken: string;
+  ownerSource?: ResourceOwnerSource | null;
   keys: string[];
   release: () => Promise<void>;
 }
 
+export interface ResourceOwnerSnapshot {
+  ownerToken: string | null;
+  ownerSource: ResourceOwnerSource | null;
+  refCount: number;
+  waitingCount: number;
+}
+
 interface QueuedWaiter {
   ownerToken: string;
+  ownerSource: ResourceOwnerSource | null;
   enqueuedAt: number;
   resolved: boolean;
   resolve: () => void;
@@ -35,6 +49,7 @@ interface QueuedWaiter {
 
 interface ResourceState {
   ownerToken: string | null;
+  ownerSource: ResourceOwnerSource | null;
   refCount: number;
   queue: QueuedWaiter[];
 }
@@ -80,14 +95,17 @@ class ResourceCoordinator {
 
     const parentContext = this.getCurrentContext();
     const ownerToken = options?.ownerToken || parentContext?.ownerToken || uuidv4();
+    const ownerSource = options?.ownerSource || parentContext?.ownerSource || null;
     const lease = await this.acquire(normalizedKeys, {
       ownerToken,
+      ...(ownerSource ? { ownerSource } : {}),
       timeoutMs: options?.timeoutMs,
       signal: options?.signal,
     });
 
     const nextContext: ResourceLeaseContext = {
       ownerToken,
+      ownerSource,
       heldKeys: new Set([...(parentContext?.heldKeys || []), ...normalizedKeys]),
       profileLeases: parentContext?.profileLeases || new Map(),
     };
@@ -107,17 +125,19 @@ class ResourceCoordinator {
     if (normalizedKeys.length === 0) {
       return {
         ownerToken: options.ownerToken || uuidv4(),
+        ownerSource: options.ownerSource || null,
         keys: [],
         release: async () => undefined,
       };
     }
 
     const ownerToken = options.ownerToken || uuidv4();
+    const ownerSource = options.ownerSource || null;
     const acquiredKeys: string[] = [];
 
     try {
       for (const key of normalizedKeys) {
-        await this.acquireOne(key, ownerToken, options.timeoutMs, options.signal);
+        await this.acquireOne(key, ownerToken, ownerSource, options.timeoutMs, options.signal);
         acquiredKeys.push(key);
       }
     } catch (error) {
@@ -128,6 +148,7 @@ class ResourceCoordinator {
     let released = false;
     return {
       ownerToken,
+      ownerSource,
       keys: normalizedKeys,
       release: async () => {
         if (released) return;
@@ -145,19 +166,22 @@ class ResourceCoordinator {
     if (normalizedKeys.length === 0) {
       return {
         ownerToken: options.ownerToken || uuidv4(),
+        ownerSource: options.ownerSource || null,
         keys: [],
         release: async () => undefined,
       };
     }
 
     const ownerToken = options.ownerToken || uuidv4();
+    const ownerSource = options.ownerSource || null;
     for (const key of normalizedKeys) {
-      await this.handoffOne(key, ownerToken);
+      await this.handoffOne(key, ownerToken, ownerSource);
     }
 
     let released = false;
     return {
       ownerToken,
+      ownerSource,
       keys: normalizedKeys,
       release: async () => {
         if (released) return;
@@ -185,6 +209,26 @@ class ResourceCoordinator {
     }
   }
 
+  async getOwner(key: string): Promise<ResourceOwnerSnapshot | null> {
+    const normalizedKeys = this.normalizeKeys(key);
+    const normalizedKey = normalizedKeys[0];
+    if (!normalizedKey) return null;
+
+    const release = await this.mutex.acquire();
+    try {
+      const state = this.resources.get(normalizedKey);
+      if (!state) return null;
+      return {
+        ownerToken: state.ownerToken,
+        ownerSource: state.ownerSource,
+        refCount: state.refCount,
+        waitingCount: state.queue.filter((waiter) => !waiter.resolved).length,
+      };
+    } finally {
+      release();
+    }
+  }
+
   private normalizeKeys(keys: string[] | string): string[] {
     const values = Array.isArray(keys) ? keys : [keys];
     return Array.from(
@@ -200,10 +244,11 @@ class ResourceCoordinator {
   private async acquireOne(
     key: string,
     ownerToken: string,
+    ownerSource: ResourceOwnerSource | null,
     timeoutMs?: number,
     signal?: AbortSignal
   ): Promise<void> {
-    const waiter = await this.tryAcquireImmediately(key, ownerToken);
+    const waiter = await this.tryAcquireImmediately(key, ownerToken, ownerSource);
     if (!waiter) {
       return;
     }
@@ -252,19 +297,22 @@ class ResourceCoordinator {
 
   private async tryAcquireImmediately(
     key: string,
-    ownerToken: string
+    ownerToken: string,
+    ownerSource: ResourceOwnerSource | null
   ): Promise<QueuedWaiter | null> {
     const release = await this.mutex.acquire();
     try {
       const state = this.getOrCreateState(key);
       if (!state.ownerToken || state.ownerToken === ownerToken) {
         state.ownerToken = ownerToken;
+        state.ownerSource = state.ownerSource || ownerSource;
         state.refCount += 1;
         return null;
       }
 
       const waiter: QueuedWaiter = {
         ownerToken,
+        ownerSource,
         enqueuedAt: Date.now(),
         resolved: false,
         resolve: () => undefined,
@@ -277,7 +325,7 @@ class ResourceCoordinator {
     }
   }
 
-  private async cancelWaiter(key: string, waiter: QueuedWaiter, message: string): Promise<void> {
+  private async cancelWaiter(key: string, waiter: QueuedWaiter, _message: string): Promise<void> {
     const release = await this.mutex.acquire();
     try {
       if (waiter.resolved) return;
@@ -302,15 +350,21 @@ class ResourceCoordinator {
     }
   }
 
-  private async handoffOne(key: string, ownerToken: string): Promise<void> {
+  private async handoffOne(
+    key: string,
+    ownerToken: string,
+    ownerSource: ResourceOwnerSource | null
+  ): Promise<void> {
     const release = await this.mutex.acquire();
     try {
       const state = this.getOrCreateState(key);
       if (state.ownerToken === ownerToken) {
+        state.ownerSource = state.ownerSource || ownerSource;
         state.refCount += 1;
         return;
       }
       state.ownerToken = ownerToken;
+      state.ownerSource = ownerSource;
       state.refCount = 1;
     } finally {
       release();
@@ -346,9 +400,11 @@ class ResourceCoordinator {
 
       if (nextWaiter) {
         state.ownerToken = nextWaiter.ownerToken;
+        state.ownerSource = nextWaiter.ownerSource;
         state.refCount = 1;
       } else {
         state.ownerToken = null;
+        state.ownerSource = null;
         state.refCount = 0;
         if (state.queue.length === 0) {
           this.resources.delete(key);
@@ -369,7 +425,7 @@ class ResourceCoordinator {
   private getOrCreateState(key: string): ResourceState {
     let state = this.resources.get(key);
     if (!state) {
-      state = { ownerToken: null, refCount: 0, queue: [] };
+      state = { ownerToken: null, ownerSource: null, refCount: 0, queue: [] };
       this.resources.set(key, state);
     }
     return state;

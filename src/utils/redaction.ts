@@ -15,6 +15,11 @@ const SQL_STATEMENT_PATTERN =
 
 export function redactSensitiveText(value: string): string {
   return String(value)
+    .replace(
+      /(\b(?:authorization|proxy-authorization)\s*:\s*)(Bearer\s+)?[^\s\r\n,;]+/gi,
+      (_match, prefix: string, scheme: string = '') => `${prefix}${scheme}${REDACTED_VALUE}`
+    )
+    .replace(/(\b(?:set-cookie|cookie)\s*:\s*)[^\r\n]+/gi, `$1${REDACTED_VALUE}`)
     .replace(/(Bearer\s+)[^\s,;]+/gi, `$1${REDACTED_VALUE}`)
     .replace(
       /((?:token|secret|password|passwd|api[_-]?key|access[_-]?key|session)=)[^&\s]+/gi,

@@ -36,6 +36,7 @@ import { QueryTemplateService } from './query-template-service';
 import { DatasetFolderService } from './dataset-folder-service';
 import { ScheduledTaskService } from './scheduled-task-service';
 import { ProfileService } from './profile-service';
+import { ProfileLoginStateService } from './profile-login-state-service';
 import { ProfileGroupService } from './profile-group-service';
 import { AccountService } from './account-service';
 import { SavedSiteService } from './saved-site-service';
@@ -69,6 +70,7 @@ export class DuckDBService implements IDatasetResolver {
   private folderService: DatasetFolderService | null = null;
   private scheduledTaskService: ScheduledTaskService | null = null;
   private profileService: ProfileService | null = null;
+  private profileLoginStateService: ProfileLoginStateService | null = null;
   private profileGroupService: ProfileGroupService | null = null;
   private accountService: AccountService | null = null;
   private savedSiteService: SavedSiteService | null = null;
@@ -176,6 +178,7 @@ export class DuckDBService implements IDatasetResolver {
     this.folderService = new DatasetFolderService(this.conn);
     this.scheduledTaskService = new ScheduledTaskService(this.conn);
     this.profileService = new ProfileService(this.conn);
+    this.profileLoginStateService = new ProfileLoginStateService(this.conn);
     this.profileGroupService = new ProfileGroupService(this.conn);
     this.accountService = new AccountService(this.conn);
     this.savedSiteService = new SavedSiteService(this.conn);
@@ -205,6 +208,7 @@ export class DuckDBService implements IDatasetResolver {
       !this.folderService ||
       !this.scheduledTaskService ||
       !this.profileService ||
+      !this.profileLoginStateService ||
       !this.profileGroupService ||
       !this.accountService ||
       !this.savedSiteService ||
@@ -224,6 +228,7 @@ export class DuckDBService implements IDatasetResolver {
     await this.folderService.initTable();
     await this.scheduledTaskService.initTable();
     await this.profileService.initTable();
+    await this.profileLoginStateService.initTable();
     await this.savedSiteService.initTable();
     await this.tagService.initTable();
     await this.accountService.initTable();
@@ -260,6 +265,7 @@ export class DuckDBService implements IDatasetResolver {
       logger.warn('DuckDB WAL checkpoint failed after initialization', { error });
     }
   }  // ========== 日志服务代理方法 ==========
+
   // ?? 设计说明：以下代理方法是 Facade 模式的实现
   // 优点：统一 API 入口、可添加横切关注点（日志、监控、权限）
   // 权衡：增加了代码量，但提高了模块化和可维护性
@@ -444,6 +450,13 @@ export class DuckDBService implements IDatasetResolver {
       throw new Error('ProfileService not initialized');
     }
     return this.profileService;
+  }
+
+  getProfileLoginStateService(): ProfileLoginStateService {
+    if (!this.profileLoginStateService) {
+      throw new Error('ProfileLoginStateService not initialized');
+    }
+    return this.profileLoginStateService;
   }
 
   getProfileGroupService(): ProfileGroupService {

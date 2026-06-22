@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import type { BrowserFactory } from '../../core/browser-pool/global-pool';
 import type { BrowserRuntimeProvider, ResolvedBrowserRuntime } from '../../core/browser-runtime';
+import { assertBrowserRuntimeDescriptorContract } from '../../core/browser-runtime';
 import { getStaticRuntimeDescriptor } from '../../core/browser-pool/runtime-capability-registry';
 import { getDefaultRuntimeSource } from '../../types/browser-runtime';
 import type { SessionConfig } from '../../core/browser-pool/types';
@@ -157,10 +158,16 @@ function createFactoryBackedProvider(
     },
     async create(session: SessionConfig) {
       const created = await browserFactory(session);
+      if (!created.runtimeDescriptor) {
+        throw new Error(
+          `Browser runtime factory for ${runtimeId} must return runtimeDescriptor to avoid descriptor drift`
+        );
+      }
+      assertBrowserRuntimeDescriptorContract(created.runtimeDescriptor);
       return {
         browser: created.browser,
         runtimeId,
-        runtimeDescriptor: created.runtimeDescriptor ?? getStaticRuntimeDescriptor(runtimeId),
+        runtimeDescriptor: created.runtimeDescriptor,
         resolvedRuntime:
           created.resolvedRuntime ??
           (await this.resolveRuntime({

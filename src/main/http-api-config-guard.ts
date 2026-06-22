@@ -2,6 +2,7 @@ const HTTP_API_TOKEN_REQUIRED_MESSAGE = 'HTTP API token is required when authent
 
 interface HttpApiAuthConfig {
   enableAuth: boolean;
+  agentHandMode?: boolean;
   token?: string;
 }
 
@@ -10,13 +11,13 @@ function readToken(config: HttpApiAuthConfig): string {
 }
 
 export function assertValidHttpApiConfig(config: HttpApiAuthConfig): void {
-  if (config.enableAuth && !readToken(config)) {
+  if ((config.enableAuth || config.agentHandMode === true) && !readToken(config)) {
     throw new Error(HTTP_API_TOKEN_REQUIRED_MESSAGE);
   }
 }
 
 export function getHttpApiAuthToken(config: HttpApiAuthConfig): string | undefined {
-  if (!config.enableAuth) {
+  if (!config.enableAuth && config.agentHandMode !== true) {
     return undefined;
   }
 

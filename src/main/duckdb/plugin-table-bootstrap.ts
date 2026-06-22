@@ -338,10 +338,9 @@ export async function initPluginTables(conn: DuckDBConnection): Promise<void> {
       for (const statement of PLUGIN_TABLE_CREATE_STATEMENTS) {
         await conn.run(statement);
       }
-
-      await new SchemaMigrationEngine(conn).migrate(PLUGIN_TABLE_SCHEMA_MIGRATIONS);
     });
-    logger.info('Plugin tables created in transaction');
+    await new SchemaMigrationEngine(conn).migrate(PLUGIN_TABLE_SCHEMA_MIGRATIONS);
+    logger.info('Plugin tables created and migrated');
   } catch (error) {
     logger.error('Plugin tables creation failed', {
       errorMessage: error instanceof Error ? error.message : String(error),

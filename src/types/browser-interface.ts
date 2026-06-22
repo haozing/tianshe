@@ -635,14 +635,16 @@ export interface BrowserVisibilityCapability {
 export interface BrowserCore
   extends BrowserRuntimeIntrospection,
     BrowserAbortSignalCapability,
-    BrowserNavigationCapability,
-    BrowserPageContentCapability,
-    BrowserElementInteractionCapability,
-    BrowserCookieCapability,
-    BrowserVisibilityCapability,
-    BrowserCoordinateCapability,
-    BrowserNativeInputCapability,
-    BrowserTextCapability {}
+    BrowserNavigationCapability {}
+
+export type BrowserCapabilitySurface =
+  BrowserPageContentCapability &
+  BrowserElementInteractionCapability &
+  BrowserCookieCapability &
+  BrowserVisibilityCapability &
+  BrowserCoordinateCapability &
+  BrowserNativeInputCapability &
+  BrowserTextCapability;
 
 export type BrowserOptionalCapabilitySet =
   Partial<BrowserNetworkCaptureCapability> &
@@ -659,7 +661,7 @@ export type BrowserOptionalCapabilitySet =
   Partial<BrowserEmulationCapability> &
   Partial<BrowserInterceptCapability>;
 
-export type BrowserInterface = BrowserCore & BrowserOptionalCapabilitySet;
+export type BrowserInterface = BrowserCore & BrowserCapabilitySurface & BrowserOptionalCapabilitySet;
 
 type BrowserCapabilityMethodName<TCapability extends object> = Extract<keyof TCapability, string>;
 

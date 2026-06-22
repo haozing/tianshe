@@ -179,6 +179,7 @@ export class ProfileLaunchNamespace {
       [resourceKey],
       {
         ownerToken: currentContext?.ownerToken,
+        ownerSource: currentContext?.ownerSource || 'plugin',
         timeoutMs: resourceWaitTimeoutMs,
         signal: options?.signal,
       },
@@ -189,6 +190,7 @@ export class ProfileLaunchNamespace {
   async launch(profileId: string, options?: LaunchOptions): Promise<BrowserHandle> {
     const poolManager = getBrowserPoolManager();
     const profileLease = await acquireProfileLiveSessionLease(profileId, {
+      source: 'plugin',
       timeoutMs: options?.timeout || 30000,
       signal: options?.signal,
     });
@@ -313,6 +315,7 @@ export class ProfileLaunchNamespace {
     let reusedHandle: BrowserHandle | null = null;
     try {
       reusedLease = await acquireProfileLiveSessionLease(profileId, {
+        source: 'plugin',
         timeoutMs: options?.timeout || 30000,
         signal: options?.signal,
       });

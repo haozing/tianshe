@@ -373,6 +373,27 @@ const INTERACTION_DIAGNOSTICS_SCHEMA = {
   },
 } as const;
 
+const WINDOW_CONTROL_CONTRACT_SCHEMA = {
+  type: ['object', 'null'],
+  additionalProperties: true,
+  properties: {
+    runtimeId: { type: 'string' },
+    visibilityMode: { type: 'string' },
+    capabilities: {
+      type: 'object',
+      additionalProperties: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          status: { type: 'string', enum: ['supported', 'degraded', 'unsupported'] },
+          reason: { type: 'string' },
+          requiredBrowserCapability: { type: 'string' },
+        },
+      },
+    },
+  },
+} as const;
+
 const INTERACTION_HEALTH_OUTPUT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -382,6 +403,7 @@ const INTERACTION_HEALTH_OUTPUT_SCHEMA = {
     'sessionVisibility',
     'hostWindowId',
     'offscreenDetected',
+    'windowControl',
   ],
   properties: {
     interactionReady: { type: 'boolean' },
@@ -391,6 +413,7 @@ const INTERACTION_HEALTH_OUTPUT_SCHEMA = {
     hostWindowId: { type: ['string', 'null'] },
     offscreenDetected: { type: 'boolean' },
     diagnostics: INTERACTION_DIAGNOSTICS_SCHEMA,
+    windowControl: WINDOW_CONTROL_CONTRACT_SCHEMA,
   },
 } as const;
 
@@ -791,6 +814,7 @@ const BROWSER_OUTPUT_SCHEMAS: Partial<Record<BrowserToolName, Record<string, unk
       'sessionVisibility',
       'hostWindowId',
       'offscreenDetected',
+      'windowControl',
       'snapshot',
     ],
     properties: {
@@ -806,6 +830,7 @@ const BROWSER_OUTPUT_SCHEMAS: Partial<Record<BrowserToolName, Record<string, unk
       hostWindowId: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.hostWindowId,
       offscreenDetected: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.offscreenDetected,
       diagnostics: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.diagnostics,
+      windowControl: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.windowControl,
       snapshot: PAGE_SNAPSHOT_SCHEMA,
     },
   }),
@@ -814,7 +839,9 @@ const BROWSER_OUTPUT_SCHEMAS: Partial<Record<BrowserToolName, Record<string, unk
     additionalProperties: false,
     required: [
       'currentUrl',
+      'afterUrl',
       'navigationPerformed',
+      'sideEffect',
       'waitApplied',
       'waitTarget',
       'url',
@@ -827,11 +854,14 @@ const BROWSER_OUTPUT_SCHEMAS: Partial<Record<BrowserToolName, Record<string, unk
       'sessionVisibility',
       'hostWindowId',
       'offscreenDetected',
+      'windowControl',
       'snapshot',
     ],
     properties: {
       currentUrl: { type: 'string' },
+      afterUrl: { type: 'string' },
       navigationPerformed: { type: 'boolean' },
+      sideEffect: { type: 'string', enum: ['none', 'navigation'] },
       waitApplied: { type: 'boolean' },
       waitTarget: ACTION_WAIT_TARGET_OUTPUT_SCHEMA,
       url: { type: 'string' },
@@ -846,6 +876,7 @@ const BROWSER_OUTPUT_SCHEMAS: Partial<Record<BrowserToolName, Record<string, unk
       hostWindowId: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.hostWindowId,
       offscreenDetected: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.offscreenDetected,
       diagnostics: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.diagnostics,
+      windowControl: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.windowControl,
       snapshot: PAGE_SNAPSHOT_SCHEMA,
     },
   }),
@@ -1106,6 +1137,7 @@ const BROWSER_OUTPUT_SCHEMAS: Partial<Record<BrowserToolName, Record<string, unk
       'sessionVisibility',
       'hostWindowId',
       'offscreenDetected',
+      'windowControl',
       'format',
       'mimeType',
     ],
@@ -1130,6 +1162,7 @@ const BROWSER_OUTPUT_SCHEMAS: Partial<Record<BrowserToolName, Record<string, unk
       hostWindowId: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.hostWindowId,
       offscreenDetected: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.offscreenDetected,
       diagnostics: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.diagnostics,
+      windowControl: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.windowControl,
     },
   }),
   browser_find_text: createStructuredEnvelopeSchema({
@@ -1204,6 +1237,7 @@ const BROWSER_OUTPUT_SCHEMAS: Partial<Record<BrowserToolName, Record<string, unk
       'sessionVisibility',
       'hostWindowId',
       'offscreenDetected',
+      'windowControl',
       'console',
       'network',
     ],
@@ -1215,6 +1249,7 @@ const BROWSER_OUTPUT_SCHEMAS: Partial<Record<BrowserToolName, Record<string, unk
       hostWindowId: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.hostWindowId,
       offscreenDetected: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.offscreenDetected,
       diagnostics: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.diagnostics,
+      windowControl: INTERACTION_HEALTH_OUTPUT_SCHEMA.properties.windowControl,
       snapshot: PAGE_SNAPSHOT_SCHEMA,
       screenshot: DEBUG_SCREENSHOT_SCHEMA,
       console: {

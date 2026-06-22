@@ -337,6 +337,19 @@ describe('BrowserPoolManager', () => {
       expect(stats!.lockedCount).toBe(0);
     });
 
+    it('默认 release 不应清理持久 profile 存储', async () => {
+      const handle = await manager.acquire('test-session');
+      const reset = vi.spyOn(handle.browser as any, 'reset');
+
+      await handle.release();
+
+      expect(reset).not.toHaveBeenCalled();
+      const secondHandle = await manager.acquire('test-session');
+      expect(secondHandle.browserId).toBe(handle.browserId);
+
+      await secondHandle.release();
+    });
+
     it('stale handle 的 release 不应误释放他人的锁', async () => {
       const handle = await manager.acquire('test-session');
 
@@ -765,6 +778,36 @@ describe('BrowserPoolManager', () => {
       await handle1.release();
       await handle2.release();
       await handle3.release();
+    });
+
+    it('接管 locked browser 时发出可观测的暂停/交接事件', async () => {
+      const events: unknown[] = [];
+      manager.getEventEmitter().on('browser:lock-handoff', (event) => {
+        events.push(event);
+      });
+
+      const pluginHandle = await manager.acquire('test-session', {}, 'plugin', 'plugin-A');
+      const agentHandle = await manager.takeoverLockedBrowser('test-session', {}, 'mcp');
+
+      expect(agentHandle).not.toBeNull();
+      expect(agentHandle?.browserId).toBe(pluginHandle.browserId);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        browserId: pluginHandle.browserId,
+        sessionId: 'test-session',
+        previousHolder: {
+          source: 'plugin',
+          pluginId: 'plugin-A',
+        },
+        newHolder: {
+          source: 'mcp',
+        },
+        reason: 'agent_takeover',
+        pausePreviousHolder: true,
+      });
+
+      await agentHandle?.release();
+      await pluginHandle.release().catch(() => undefined);
     });
   });
 

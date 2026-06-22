@@ -12,6 +12,42 @@ const logger = createLogger('RuntimeObservationService');
 const DEFAULT_RUNTIME_OBSERVATION_RETENTION_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+const RUNTIME_EVENT_COMPAT_COLUMNS = [
+  ['span_id', 'VARCHAR'],
+  ['parent_span_id', 'VARCHAR'],
+  ['outcome', 'VARCHAR'],
+  ['message', 'TEXT'],
+  ['duration_ms', 'BIGINT'],
+  ['source', 'VARCHAR'],
+  ['capability', 'VARCHAR'],
+  ['plugin_id', 'VARCHAR'],
+  ['browser_runtime_id', 'VARCHAR'],
+  ['session_id', 'VARCHAR'],
+  ['profile_id', 'VARCHAR'],
+  ['dataset_id', 'VARCHAR'],
+  ['browser_id', 'VARCHAR'],
+  ['attrs', 'JSON'],
+  ['error', 'JSON'],
+  ['artifact_refs', 'JSON'],
+] as const;
+
+const RUNTIME_ARTIFACT_COMPAT_COLUMNS = [
+  ['span_id', 'VARCHAR'],
+  ['parent_span_id', 'VARCHAR'],
+  ['label', 'VARCHAR'],
+  ['mime_type', 'VARCHAR'],
+  ['source', 'VARCHAR'],
+  ['capability', 'VARCHAR'],
+  ['plugin_id', 'VARCHAR'],
+  ['browser_runtime_id', 'VARCHAR'],
+  ['session_id', 'VARCHAR'],
+  ['profile_id', 'VARCHAR'],
+  ['dataset_id', 'VARCHAR'],
+  ['browser_id', 'VARCHAR'],
+  ['attrs', 'JSON'],
+  ['data', 'JSON'],
+] as const;
+
 interface RuntimeEventRow {
   id: string;
   trace_id: string;
@@ -161,6 +197,8 @@ export class RuntimeObservationService implements ObservationSink {
       )
     `);
 
+    await this.ensureCompatColumns();
+
     await this.conn.run(
       `CREATE INDEX IF NOT EXISTS idx_runtime_events_trace_seq ON runtime_events(trace_id, seq)`
     );
@@ -173,6 +211,19 @@ export class RuntimeObservationService implements ObservationSink {
     await this.conn.run(
       `CREATE INDEX IF NOT EXISTS idx_runtime_artifacts_type ON runtime_artifacts(type)`
     );
+  }
+
+  private async ensureCompatColumns(): Promise<void> {
+    for (const [columnName, definition] of RUNTIME_EVENT_COMPAT_COLUMNS) {
+      await this.conn.run(
+        `ALTER TABLE runtime_events ADD COLUMN IF NOT EXISTS ${columnName} ${definition}`
+      );
+    }
+    for (const [columnName, definition] of RUNTIME_ARTIFACT_COMPAT_COLUMNS) {
+      await this.conn.run(
+        `ALTER TABLE runtime_artifacts ADD COLUMN IF NOT EXISTS ${columnName} ${definition}`
+      );
+    }
   }
 
   async recordEvent(event: RuntimeEvent): Promise<void> {

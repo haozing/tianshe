@@ -345,6 +345,7 @@ export function buildRestApiDependencies(
   });
 
   const profileService = duckdbService.getProfileService();
+  const profileLoginStateService = duckdbService.getProfileLoginStateService();
   const hasProfileRuntimeMutation = (params: UpdateProfileParams) =>
     params.fingerprint !== undefined ||
     params.runtimeId !== undefined ||
@@ -560,6 +561,32 @@ export function buildRestApiDependencies(
         }
 
         await profileService.deleteWithCascade(id);
+      },
+    },
+    profileLoginStateGateway: {
+      getLoginState: async (query) => {
+        const state = await profileLoginStateService.getLoginState(query);
+        return state
+          ? {
+              ...state,
+              runtimeId: state.runtimeId ?? null,
+              lastCheckedAt: state.lastCheckedAt.toISOString(),
+              verifiedAt: state.verifiedAt ? state.verifiedAt.toISOString() : null,
+              createdAt: state.createdAt.toISOString(),
+              updatedAt: state.updatedAt.toISOString(),
+            }
+          : null;
+      },
+      upsertLoginState: async (params) => {
+        const state = await profileLoginStateService.upsertLoginState(params);
+        return {
+          ...state,
+          runtimeId: state.runtimeId ?? null,
+          lastCheckedAt: state.lastCheckedAt.toISOString(),
+          verifiedAt: state.verifiedAt ? state.verifiedAt.toISOString() : null,
+          createdAt: state.createdAt.toISOString(),
+          updatedAt: state.updatedAt.toISOString(),
+        };
       },
     },
     observationGateway: {

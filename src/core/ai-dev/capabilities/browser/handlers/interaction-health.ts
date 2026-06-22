@@ -1,4 +1,5 @@
 import { decorateSnapshotElementsWithRefs } from '../../../../browser-automation/element-ref';
+import { getWindowControlContract } from '../../../../browser-runtime/window-control-contract';
 import { createInteractionNotReadyError } from './action-verification';
 import { asNonEmptyString } from './target-resolution';
 import type { BrowserInterface, ToolHandlerDependencies } from './types';
@@ -72,6 +73,7 @@ export async function collectInteractionHealth(
   hostWindowId: string | null;
   offscreenDetected: boolean;
   diagnostics: Record<string, unknown>;
+  windowControl: ReturnType<typeof getWindowControlContract> | null;
 }> {
   let viewportWidth = 0;
   let viewportHeight = 0;
@@ -140,6 +142,13 @@ export async function collectInteractionHealth(
   const interactionReady =
     sessionInteractionReady ||
     (viewportHealth === 'ready' && viewportWidth > 0 && viewportHeight > 0);
+  const windowControl = (() => {
+    try {
+      return getWindowControlContract(browser.describeRuntime());
+    } catch {
+      return null;
+    }
+  })();
 
   return {
     interactionReady,
@@ -157,6 +166,7 @@ export async function collectInteractionHealth(
       negativeBoundsCount,
       overflowBoundsCount,
     },
+    windowControl,
   };
 }
 

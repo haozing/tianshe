@@ -77,6 +77,7 @@ export async function handleBrowserSnapshot(
       hostWindowId: interactionHealth.hostWindowId,
       offscreenDetected: interactionHealth.offscreenDetected,
       diagnostics: interactionHealth.diagnostics,
+      windowControl: interactionHealth.windowControl,
       snapshot: snapshotResult.snapshot,
     },
     truncated: snapshotResult.truncated,
@@ -185,7 +186,9 @@ export async function handleBrowserObserve(
       .join(' '),
     data: {
       currentUrl,
+      afterUrl: currentUrl,
       navigationPerformed: Boolean(params.url),
+      sideEffect: params.url ? 'navigation' : 'none',
       waitApplied,
       waitTarget,
       url: snapshotResult.snapshot.url || currentUrl,
@@ -200,6 +203,7 @@ export async function handleBrowserObserve(
       hostWindowId: interactionHealth.hostWindowId,
       offscreenDetected: interactionHealth.offscreenDetected,
       diagnostics: interactionHealth.diagnostics,
+      windowControl: interactionHealth.windowControl,
       snapshot: snapshotResult.snapshot,
     },
     truncated: snapshotResult.truncated,
@@ -356,6 +360,7 @@ export async function handleBrowserScreenshot(
           hostWindowId: interactionHealth.hostWindowId,
           offscreenDetected: interactionHealth.offscreenDetected,
           diagnostics: interactionHealth.diagnostics,
+          windowControl: interactionHealth.windowControl,
         },
         nextActionHints: [
           'Use browser_snapshot when you also need selectors and semantic structure.',

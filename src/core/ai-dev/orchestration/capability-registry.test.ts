@@ -1,4 +1,3 @@
-import path from 'node:path';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -64,9 +63,12 @@ describe('orchestration capability registry', () => {
         'browser_snapshot',
         'browser_wait_for',
         'dataset_create_empty',
+        'dataset_commit_write_plan',
         'dataset_delete',
+        'dataset_get_record_provenance',
         'dataset_import_file',
         'dataset_rename',
+        'dataset_stage_write_plan',
         'observation_get_failure_bundle',
         'observation_get_trace_timeline',
         'observation_get_trace_summary',
@@ -78,9 +80,11 @@ describe('orchestration capability registry', () => {
         'plugin_uninstall',
         'profile_create',
         'profile_delete',
+        'profile_ensure_logged_in',
         'profile_list',
         'profile_resolve',
         'profile_update',
+        'runtime_plan',
         'system_bootstrap',
         'system_get_health',
         'session_end_current',
@@ -567,6 +571,136 @@ describe('orchestration capability registry', () => {
     });
   });
 
+  it('stages and commits dataset write plans through the dataset gateway', async () => {
+    const stagedPlan = {
+      planId: 'plan-1',
+      datasetId: 'dataset-1',
+      createdAt: '2026-06-22T00:00:00.000Z',
+      operations: [{ type: 'insert' as const, record: { name: 'Alice' } }],
+      rowCount: 1,
+      requiresConfirmation: true as const,
+      provenance: {
+        traceId: 'trace-1',
+        adapterVersion: '1.0.0',
+        runtimeId: 'electron-webcontents',
+        sourceUrl: 'https://example.test/source',
+      },
+    };
+    const stageWritePlan = vi.fn().mockResolvedValue(stagedPlan);
+    const commitWritePlan = vi.fn().mockResolvedValue({
+      planId: 'plan-1',
+      runId: 'plan-1',
+      datasetId: 'dataset-1',
+      insertedRowIds: [1],
+      updatedRowIds: [],
+      deletedRowIds: [],
+      affectedRowCount: 1,
+      provenanceRecorded: true,
+    });
+    const listRecordProvenance = vi.fn().mockResolvedValue([
+      {
+        id: 'prov-1',
+        datasetId: 'dataset-1',
+        rowId: 1,
+        runId: 'plan-1',
+        operation: 'insert',
+        occurredAt: 1_700_000_000_000,
+        traceId: 'trace-1',
+        adapterVersion: '1.0.0',
+        runtimeId: 'electron-webcontents',
+        sourceUrl: 'https://example.test/source',
+      },
+    ]);
+    const executor = createOrchestrationExecutor({
+      datasetGateway: {
+        listDatasets: async () => [],
+        getDatasetInfo: async () => null,
+        queryDataset: async () => ({
+          columns: [],
+          rows: [],
+          rowCount: 0,
+        }),
+        createEmptyDataset: async () => 'dataset-new',
+        importDatasetFile: async () => 'dataset-imported',
+        renameDataset: async () => undefined,
+        deleteDataset: async () => undefined,
+        stageWritePlan,
+        commitWritePlan,
+        listRecordProvenance,
+      },
+    });
+
+    const stage = await executor.invokeApi({
+      name: 'dataset_stage_write_plan',
+      arguments: {
+        datasetId: 'dataset-1',
+        operations: [{ type: 'insert', record: { name: 'Alice' } }],
+        provenance: stagedPlan.provenance,
+      },
+    });
+    expect(stage.ok).toBe(true);
+    expect(stage.output.structuredContent).toMatchObject({
+      data: {
+        planId: 'plan-1',
+        datasetId: 'dataset-1',
+        rowCount: 1,
+        requiresConfirmation: true,
+      },
+      recommendedNextTools: ['dataset_commit_write_plan', 'dataset_get_record_provenance'],
+    });
+    expect(stageWritePlan).toHaveBeenCalledWith(
+      'dataset-1',
+      [{ type: 'insert', record: { name: 'Alice' } }],
+      {
+        ...stagedPlan.provenance,
+        adapterId: null,
+        metadata: null,
+      }
+    );
+
+    const rejectedCommit = await executor.invokeApi({
+      name: 'dataset_commit_write_plan',
+      arguments: { plan: stagedPlan },
+    });
+    expect(rejectedCommit.ok).toBe(false);
+    expect(commitWritePlan).not.toHaveBeenCalled();
+
+    const commit = await executor.invokeApi({
+      name: 'dataset_commit_write_plan',
+      arguments: { plan: stagedPlan, confirmRisk: true },
+    });
+    expect(commit.ok).toBe(true);
+    expect(commit.output.structuredContent).toMatchObject({
+      data: {
+        planId: 'plan-1',
+        runId: 'plan-1',
+        committed: true,
+        provenanceRecorded: true,
+      },
+    });
+    expect(commitWritePlan).toHaveBeenCalledWith(stagedPlan, { confirmRisk: true });
+
+    const provenance = await executor.invokeApi({
+      name: 'dataset_get_record_provenance',
+      arguments: { datasetId: 'dataset-1', rowId: 1 },
+    });
+    expect(provenance.ok).toBe(true);
+    expect(provenance.output.structuredContent).toMatchObject({
+      data: {
+        datasetId: 'dataset-1',
+        rowId: 1,
+        total: 1,
+        provenance: [
+          expect.objectContaining({
+            runId: 'plan-1',
+            traceId: 'trace-1',
+            sourceUrl: 'https://example.test/source',
+          }),
+        ],
+      },
+    });
+  });
+
   it('returns NOT_FOUND for unknown capabilities', async () => {
     const executor = createOrchestrationExecutor({});
     const result = await executor.invokeApi({
@@ -988,6 +1122,248 @@ describe('orchestration capability registry', () => {
         profile: { id: 'profile-1' },
       },
     });
+  });
+
+  it('prepares profile login handoff without exposing secret values', async () => {
+    const prepareCurrentSession = vi.fn().mockResolvedValue({
+      sessionId: 'session-login',
+      prepared: true,
+      idempotent: false,
+      profileId: 'profile-1',
+      runtimeId: 'electron-webcontents',
+      visible: true,
+      effectiveScopes: [],
+      browserAcquired: false,
+      phase: 'prepared_unacquired',
+      bindingLocked: false,
+      changed: ['profile', 'runtimeId', 'visible'],
+    });
+    const upsertLoginState = vi.fn().mockImplementation(async (params) => ({
+      id: 'login-state-1',
+      profileId: params.profileId,
+      accountId: params.accountId ?? null,
+      site: params.site,
+      loginUrl: params.loginUrl ?? null,
+      runtimeId: params.runtimeId ?? null,
+      status: params.status,
+      verified: params.verified ?? false,
+      lastCheckedAt: '2026-06-22T00:00:00.000Z',
+      verifiedAt: null,
+      evidenceArtifactId: null,
+      evidence: params.evidence ?? null,
+      reason: params.reason ?? null,
+      createdAt: '2026-06-22T00:00:00.000Z',
+      updatedAt: '2026-06-22T00:00:00.000Z',
+    }));
+    const executor = createOrchestrationExecutor({
+      mcpSessionGateway: {
+        getCurrentSessionId: () => 'session-login',
+        listSessions: async () => [],
+        prepareCurrentSession,
+        closeSession: async () => ({ closed: true }),
+      },
+      profileGateway: {
+        listProfiles: async () => [],
+        getProfile: async () => null,
+        resolveProfile: async (query: string) =>
+          query === '555'
+            ? {
+                query,
+                matchedBy: 'name',
+                profile: {
+                  id: 'profile-1',
+                  name: '555',
+                  runtimeId: 'electron-webcontents',
+                  status: 'idle',
+                  partition: 'persist:profile-1',
+                },
+              }
+            : null,
+        createProfile: async () => ({
+          id: 'profile-new',
+          name: 'Shop QA',
+          runtimeId: 'electron-webcontents',
+          status: 'idle',
+          partition: 'persist:profile-new',
+          isSystem: false,
+        }),
+        updateProfile: async () => ({
+          id: 'profile-1',
+          name: '555',
+          runtimeId: 'electron-webcontents',
+          status: 'idle',
+          partition: 'persist:profile-1',
+          isSystem: false,
+        }),
+        deleteProfile: async () => undefined,
+      },
+      profileLoginStateGateway: {
+        getLoginState: async () => null,
+        upsertLoginState,
+      },
+    });
+
+    const result = await executor.invokeApi({
+      name: 'profile_ensure_logged_in',
+      arguments: {
+        query: '555',
+        site: 'example',
+        loginUrl: 'https://example.com/login',
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.output.structuredContent).toMatchObject({
+      data: {
+        profileId: 'profile-1',
+        status: 'needs_manual_login',
+        verified: false,
+        manualHandoffRequired: true,
+        loginState: {
+          id: 'login-state-1',
+          status: 'needs_manual_login',
+        },
+        evidence: {
+          credentialValuesReturned: false,
+          cookieValuesReturned: false,
+        },
+      },
+      recommendedNextTools: ['browser_observe', 'browser_snapshot', 'session_get_current'],
+    });
+    expect(JSON.stringify(result.output.structuredContent)).not.toMatch(
+      /password_value|cookie_value|authorization/i
+    );
+    expect(prepareCurrentSession).toHaveBeenCalledWith({
+      profileId: 'profile-1',
+      runtimeId: 'electron-webcontents',
+      visible: true,
+    });
+    expect(upsertLoginState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: 'profile-1',
+        site: 'example',
+        loginUrl: 'https://example.com/login',
+        runtimeId: 'electron-webcontents',
+        status: 'needs_manual_login',
+        verified: false,
+      })
+    );
+  });
+
+  it('returns stored verified login state without requiring manual handoff', async () => {
+    const prepareCurrentSession = vi.fn().mockResolvedValue({
+      sessionId: 'session-login',
+      prepared: true,
+      idempotent: true,
+      profileId: 'profile-1',
+      runtimeId: 'electron-webcontents',
+      visible: true,
+      effectiveScopes: [],
+      browserAcquired: false,
+      phase: 'prepared_unacquired',
+      bindingLocked: false,
+      changed: [],
+    });
+    const upsertLoginState = vi.fn().mockImplementation(async (params) => ({
+      id: 'login-state-ready',
+      profileId: params.profileId,
+      accountId: null,
+      site: params.site,
+      loginUrl: null,
+      runtimeId: params.runtimeId ?? null,
+      status: params.status,
+      verified: params.verified ?? false,
+      lastCheckedAt: '2026-06-22T00:00:00.000Z',
+      verifiedAt: '2026-06-22T00:00:00.000Z',
+      evidenceArtifactId: null,
+      evidence: params.evidence ?? null,
+      reason: params.reason ?? null,
+      createdAt: '2026-06-22T00:00:00.000Z',
+      updatedAt: '2026-06-22T00:00:00.000Z',
+    }));
+    const executor = createOrchestrationExecutor({
+      mcpSessionGateway: {
+        getCurrentSessionId: () => 'session-login',
+        listSessions: async () => [],
+        prepareCurrentSession,
+        closeSession: async () => ({ closed: true }),
+      },
+      profileGateway: {
+        listProfiles: async () => [],
+        getProfile: async () => ({
+          id: 'profile-1',
+          name: '555',
+          runtimeId: 'electron-webcontents',
+          status: 'idle',
+          partition: 'persist:profile-1',
+        }),
+        resolveProfile: async () => null,
+        createProfile: async () => ({
+          id: 'profile-new',
+          name: 'Shop QA',
+          runtimeId: 'electron-webcontents',
+          status: 'idle',
+          partition: 'persist:profile-new',
+          isSystem: false,
+        }),
+        updateProfile: async () => ({
+          id: 'profile-1',
+          name: '555',
+          runtimeId: 'electron-webcontents',
+          status: 'idle',
+          partition: 'persist:profile-1',
+          isSystem: false,
+        }),
+        deleteProfile: async () => undefined,
+      },
+      profileLoginStateGateway: {
+        getLoginState: async () => ({
+          id: 'login-state-ready',
+          profileId: 'profile-1',
+          site: 'example',
+          runtimeId: 'electron-webcontents',
+          status: 'logged_in',
+          verified: true,
+          lastCheckedAt: '2026-06-22T00:00:00.000Z',
+          verifiedAt: '2026-06-22T00:00:00.000Z',
+          createdAt: '2026-06-22T00:00:00.000Z',
+          updatedAt: '2026-06-22T00:00:00.000Z',
+        }),
+        upsertLoginState,
+      },
+    });
+
+    const result = await executor.invokeApi({
+      name: 'profile_ensure_logged_in',
+      arguments: {
+        profileId: 'profile-1',
+        site: 'example',
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.output.structuredContent).toMatchObject({
+      data: {
+        profileId: 'profile-1',
+        status: 'logged_in',
+        verified: true,
+        manualHandoffRequired: false,
+        loginState: {
+          id: 'login-state-ready',
+          status: 'logged_in',
+          verified: true,
+        },
+      },
+      recommendedNextTools: ['browser_observe', 'browser_snapshot', 'session_get_current'],
+    });
+    expect(upsertLoginState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: 'profile-1',
+        site: 'example',
+        status: 'logged_in',
+        verified: true,
+      })
+    );
   });
 
   it('supports canonical current-session inspection, preparation, and teardown', async () => {

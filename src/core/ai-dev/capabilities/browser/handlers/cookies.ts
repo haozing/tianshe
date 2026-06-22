@@ -10,6 +10,13 @@ import {
 import type { ToolHandler } from './types';
 import type { ToolCallResult, ToolHandlerDependencies } from './types';
 
+function redactCookieValues<TCookie extends { value?: unknown }>(cookies: TCookie[]): Array<Omit<TCookie, 'value'>> {
+  return cookies.map((cookie) => {
+    const { value: _value, ...metadata } = cookie;
+    return metadata;
+  });
+}
+
 function formatCookiePreview(
   cookies: Array<{
     name?: string;
@@ -43,14 +50,17 @@ export async function handleBrowserCookiesGet(
   }
 
   const cookies = await deps.browser.getCookies();
+  const cookieMetadata = redactCookieValues(cookies);
   return withBrowserResources('browser_cookies_get', {
     summary: [`Retrieved ${cookies.length} cookie(s).`, ...formatCookiePreview(cookies)].join('\n'),
     data: {
       total: cookies.length,
-      cookies,
+      cookies: cookieMetadata,
+      valuesRedacted: true,
     },
     nextActionHints: [
-      'Use browser_cookies_set to add or update cookies.',
+      'Cookie values are redacted from this diagnostic output by default.',
+      'Use browser_cookies_set to add or update cookies when explicitly needed.',
       'Use browser_cookies_clear to reset session state.',
     ],
   });

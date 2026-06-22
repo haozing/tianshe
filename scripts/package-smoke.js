@@ -90,14 +90,34 @@ function assertDirectory(dirPath, label) {
 }
 
 function readAsarText(asarPath, entryPath, asarApi = asar) {
-  const normalized = entryPath.replace(/\\/g, '/');
-  return asarApi.extractFile(asarPath, normalized).toString('utf8');
+  return extractAsarFile(asarPath, entryPath, asarApi).toString('utf8');
+}
+
+function extractAsarFile(asarPath, entryPath, asarApi = asar) {
+  const candidates = Array.from(
+    new Set([
+      entryPath,
+      entryPath.replace(/\\/g, '/'),
+      entryPath.replace(/\//g, '\\'),
+    ])
+  );
+
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      return asarApi.extractFile(asarPath, candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error(`Missing app.asar entry ${entryPath}`);
 }
 
 function assertAsarFiles(asarPath, asarApi = asar) {
   for (const entryPath of REQUIRED_APP_ASAR_FILES) {
     try {
-      asarApi.extractFile(asarPath, entryPath);
+      extractAsarFile(asarPath, entryPath, asarApi);
     } catch (error) {
       throw new Error(`Missing app.asar entry ${entryPath}: ${error.message}`);
     }

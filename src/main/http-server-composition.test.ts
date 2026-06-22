@@ -47,6 +47,7 @@ describe('http-server-composition', () => {
       token?: string;
       mcpRequireAuth?: boolean;
       enableMcp?: boolean;
+      agentHandMode?: boolean;
     },
     compositionOptions?: Partial<Parameters<typeof createHttpServerComposition>[0]>
   ) => {
@@ -121,6 +122,28 @@ describe('http-server-composition', () => {
     expect(response.status).toBe(200);
     expect(payload.success).toBe(true);
     expect(Array.isArray(payload.data)).toBe(true);
+  });
+
+  it('agentHandMode=true forces auth at the server composition boundary', async () => {
+    const { baseUrl } = await startServer({
+      enableAuth: false,
+      token: 'secret-token',
+      mcpRequireAuth: false,
+      enableMcp: true,
+      agentHandMode: true,
+    });
+
+    const orchestrationResponse = await fetch(`${baseUrl}/api/v1/orchestration/capabilities`);
+    expect(orchestrationResponse.status).toBe(401);
+
+    const mcpResponse = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    });
+    expect(mcpResponse.status).toBe(401);
   });
 
   it('rejects enableAuth=true when token is blank', () => {

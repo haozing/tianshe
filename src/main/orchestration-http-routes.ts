@@ -269,10 +269,16 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
         ...(options.dependencies?.profileGateway
           ? { profileGateway: options.dependencies.profileGateway }
           : {}),
+        ...(options.dependencies?.profileLoginStateGateway
+          ? { profileLoginStateGateway: options.dependencies.profileLoginStateGateway }
+          : {}),
         ...(options.dependencies?.observationGateway
           ? { observationGateway: options.dependencies.observationGateway }
           : {}),
-        enforceScopes: options.restApiConfig?.enforceOrchestrationScopes ?? false,
+        enforceScopes:
+          options.restApiConfig?.agentHandMode === true
+            ? true
+            : options.restApiConfig?.enforceOrchestrationScopes ?? false,
       });
       options.orchestrationSessions.set(sessionId, {
         browserHandle,

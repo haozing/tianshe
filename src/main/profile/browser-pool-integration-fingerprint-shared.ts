@@ -1,7 +1,7 @@
 import http from 'node:http';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import type { BrowserCore } from '../../types/browser-interface';
+import type { BrowserPageContentCapability } from '../../types/browser-interface';
 import { waitForCondition } from './browser-pool-integration-smoke-shared';
 
 export interface FingerprintProbeServer {
@@ -216,13 +216,13 @@ export async function createFingerprintProbeServer(options: {
 }
 
 export async function readFingerprintProbe(
-  browser: Pick<BrowserCore, 'evaluate'>
+  browser: Pick<BrowserPageContentCapability, 'evaluate'>
 ): Promise<FingerprintProbeSnapshot> {
   return browser.evaluate<FingerprintProbeSnapshot>(FINGERPRINT_PROBE_SCRIPT);
 }
 
 export async function waitForFingerprintProbe(
-  browser: Pick<BrowserCore, 'evaluate'>,
+  browser: Pick<BrowserPageContentCapability, 'evaluate'>,
   label: string
 ): Promise<FingerprintProbeSnapshot> {
   let latest: FingerprintProbeSnapshot | null = null;
@@ -243,7 +243,7 @@ export async function waitForFingerprintProbe(
 }
 
 export async function waitForFingerprintProbeMatch(
-  browser: Pick<BrowserCore, 'evaluate'>,
+  browser: Pick<BrowserPageContentCapability, 'evaluate'>,
   label: string,
   predicate: (snapshot: FingerprintProbeSnapshot) => boolean,
   timeoutMs: number = 15_000

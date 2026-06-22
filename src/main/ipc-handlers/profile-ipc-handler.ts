@@ -36,6 +36,7 @@ import {
 import {
   acquireProfileLiveSessionLease,
   attachProfileLiveSessionLease,
+  takeoverProfileLiveSessionLease,
 } from '../../core/browser-pool/profile-live-session-lease';
 import { fingerprintManager } from '../../core/stealth';
 import { createIPCFailureResponse } from '../ipc-utils';
@@ -71,6 +72,22 @@ function isPersistentBrowserClosedError(error: unknown): boolean {
     message.includes('Extension browser has been closed') ||
     message.includes('Extension relay has been stopped')
   );
+}
+
+function findAgentHeldLockedBrowser(
+  poolManager: ReturnType<typeof getBrowserPoolManager>,
+  profileId: string,
+  runtimeId?: BrowserRuntimeId
+): { id: string } | null {
+  const browsers = poolManager.listBrowsers();
+  const candidate = browsers.find((browser) => {
+    if (browser.sessionId !== profileId) return false;
+    if (browser.status !== 'locked') return false;
+    if (runtimeId && browser.runtimeId !== runtimeId) return false;
+    const source = browser.lockedBy?.source;
+    return source === 'mcp' || source === 'http';
+  });
+  return candidate ? { id: candidate.id } : null;
 }
 
 /**
@@ -359,28 +376,43 @@ export function registerProfileHandlers(
         }
 
         // 获取浏览器（可能复用空闲的，或创建新的，或进入等待队列）
-        const profileLease = await acquireProfileLiveSessionLease(profileId, {
-          timeoutMs: launchOptions?.timeout || 30000,
-        });
+        const acquireOptions = {
+          strategy,
+          browserId: launchOptions?.browserId,
+          timeout: launchOptions?.timeout || 30000,
+          runtimeId: launchOptions?.runtimeId,
+        };
+        const agentHeldBrowser = findAgentHeldLockedBrowser(
+          poolManager,
+          profileId,
+          launchOptions?.runtimeId
+        );
+        const profileLease = agentHeldBrowser
+          ? await takeoverProfileLiveSessionLease(profileId, { source: 'ipc' })
+          : await acquireProfileLiveSessionLease(profileId, {
+              source: 'ipc',
+              timeoutMs: launchOptions?.timeout || 30000,
+            });
         const releaseLease = async (): Promise<void> => {
           await profileLease?.release().catch(() => undefined);
         };
         let handle: BrowserHandle;
         try {
-          handle = attachProfileLiveSessionLease(
-            await poolManager.acquire(
-              profileId,
-              {
-                strategy,
-                browserId: launchOptions?.browserId,
-                timeout: launchOptions?.timeout || 30000,
-                runtimeId: launchOptions?.runtimeId,
-              },
-              'ipc',
-              launchOptions?.pluginId
-            ),
-            profileLease
-          );
+          const acquiredHandle = agentHeldBrowser
+            ? await poolManager.takeoverLockedBrowser(
+                profileId,
+                {
+                  ...acquireOptions,
+                  browserId: launchOptions?.browserId || agentHeldBrowser.id,
+                },
+                'ipc',
+                launchOptions?.pluginId
+              )
+            : await poolManager.acquire(profileId, acquireOptions, 'ipc', launchOptions?.pluginId);
+          if (!acquiredHandle) {
+            throw new Error('No locked browser was available for human handoff takeover');
+          }
+          handle = attachProfileLiveSessionLease(acquiredHandle, profileLease);
         } catch (error) {
           await profileLease?.release().catch(() => undefined);
           throw error;
@@ -580,6 +612,7 @@ export function registerProfileHandlers(
             await poolManager.destroyBrowser(browserId).catch(() => undefined);
 
             const profileLease = await acquireProfileLiveSessionLease(pooled.sessionId, {
+              source: 'ipc',
               timeoutMs: 30000,
             });
             let relaunched: BrowserHandle;

@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserHandle, BrowserPoolManager } from '../core/browser-pool';
+import { createBrowserPoolEventEmitter } from '../core/browser-pool/events';
 import { buildProfileResourceKey, resourceCoordinator } from '../core/resource-coordinator';
 import type { RuntimeMetricsSnapshot } from './http-session-manager';
 import {
   acquireBrowserFromPool,
   BrowserAcquireTimeoutDiagnosticsError,
+  BrowserManualHandoffRequiredError,
 } from './http-browser-pool-adapter';
 
 const createRuntimeMetrics = (): RuntimeMetricsSnapshot => ({
@@ -204,6 +206,7 @@ describe('http-browser-pool-adapter', () => {
   it('surfaces profile lease contention diagnostics when the profile resource is already held', async () => {
     const heldLease = await resourceCoordinator.acquire(buildProfileResourceKey('profile-1'), {
       ownerToken: 'holder-1',
+      ownerSource: 'plugin',
     });
     const poolManager = {
       acquire: vi.fn(),
@@ -263,6 +266,7 @@ describe('http-browser-pool-adapter', () => {
   it('allows mcp to take over a plugin-held browser and profile lease', async () => {
     const heldLease = await resourceCoordinator.acquire(buildProfileResourceKey('profile-1'), {
       ownerToken: 'holder-1',
+      ownerSource: 'plugin',
     });
     const takeoverRelease = vi.fn().mockResolvedValue(undefined);
     const takenOverHandle = {
@@ -327,9 +331,84 @@ describe('http-browser-pool-adapter', () => {
     await contenderLease.release();
   });
 
-  it('allows mcp to take over a held profile lease even when no pooled browser is visible yet', async () => {
+  it('requires manual handoff instead of silently taking over an ipc-held browser', async () => {
     const heldLease = await resourceCoordinator.acquire(buildProfileResourceKey('profile-1'), {
       ownerToken: 'holder-1',
+      ownerSource: 'ipc',
+    });
+    const eventEmitter = createBrowserPoolEventEmitter();
+    const handoffRequested = vi.fn();
+    eventEmitter.on('browser:handoff-requested', handoffRequested);
+    const poolManager = {
+      acquire: vi.fn(),
+      takeoverLockedBrowser: vi.fn(),
+      getEventEmitter: vi.fn(() => eventEmitter),
+      listBrowsers: vi.fn().mockReturnValue([
+        {
+          id: 'browser-human',
+          sessionId: 'profile-1',
+          runtimeId: 'electron-webcontents',
+          status: 'locked',
+          viewId: 'view-1',
+          lockedBy: {
+            source: 'ipc',
+            requestId: 'req-human',
+          },
+        },
+      ]),
+    } as unknown as BrowserPoolManager;
+    const runtimeMetrics = createRuntimeMetrics();
+
+    try {
+      await acquireBrowserFromPool({
+        getBrowserPoolManager: () => poolManager,
+        runtimeMetrics,
+        logger: createLogger(),
+        profileId: 'profile-1',
+        runtimeId: 'electron-webcontents',
+        source: 'mcp',
+        timeoutMs: 25,
+      }).catch((error) => {
+        expect(error).toBeInstanceOf(BrowserManualHandoffRequiredError);
+        expect(String(error.message)).toContain('manual handoff');
+        expect((error as BrowserManualHandoffRequiredError).diagnostics).toMatchObject({
+          profileId: 'profile-1',
+          lockedBrowserCount: 1,
+          browsers: [
+            expect.objectContaining({
+              browserId: 'browser-human',
+              source: 'ipc',
+            }),
+          ],
+        });
+      });
+
+      expect((poolManager as any).takeoverLockedBrowser).not.toHaveBeenCalled();
+      expect(poolManager.acquire).not.toHaveBeenCalled();
+      expect(handoffRequested).toHaveBeenCalledWith(
+        expect.objectContaining({
+          browserId: 'browser-human',
+          sessionId: 'profile-1',
+          requestedBy: { source: 'mcp' },
+          currentHolder: expect.objectContaining({
+            source: 'ipc',
+            requestId: 'req-human',
+          }),
+          policy: 'human_priority',
+          manualRequired: true,
+        })
+      );
+      expect(runtimeMetrics.browserAcquireFailureCount).toBe(1);
+      expect(runtimeMetrics.browserAcquireTimeoutCount).toBe(0);
+    } finally {
+      await heldLease.release();
+    }
+  });
+
+  it('allows mcp to take over a plugin-held profile lease even when no pooled browser is visible yet', async () => {
+    const heldLease = await resourceCoordinator.acquire(buildProfileResourceKey('profile-1'), {
+      ownerToken: 'holder-1',
+      ownerSource: 'plugin',
     });
     const acquiredHandle = {
       browserId: 'browser-fresh',
@@ -374,5 +453,50 @@ describe('http-browser-pool-adapter', () => {
     const contenderLease = await contenderPromise;
     expect(contenderResolved).toBe(true);
     await contenderLease.release();
+  });
+
+  it('requires manual handoff instead of silently taking over an ipc-held profile lease before a browser is visible', async () => {
+    const heldLease = await resourceCoordinator.acquire(buildProfileResourceKey('profile-1'), {
+      ownerToken: 'human-holder',
+      ownerSource: 'ipc',
+    });
+    const eventEmitter = createBrowserPoolEventEmitter();
+    const handoffRequested = vi.fn();
+    eventEmitter.on('browser:handoff-requested', handoffRequested);
+    const poolManager = {
+      acquire: vi.fn(),
+      getEventEmitter: vi.fn(() => eventEmitter),
+      listBrowsers: vi.fn().mockReturnValue([]),
+    } as unknown as BrowserPoolManager;
+    const runtimeMetrics = createRuntimeMetrics();
+
+    try {
+      await expect(
+        acquireBrowserFromPool({
+          getBrowserPoolManager: () => poolManager,
+          runtimeMetrics,
+          logger: createLogger(),
+          profileId: 'profile-1',
+          runtimeId: 'electron-webcontents',
+          source: 'mcp',
+          timeoutMs: 25,
+        })
+      ).rejects.toBeInstanceOf(BrowserManualHandoffRequiredError);
+
+      expect(poolManager.acquire).not.toHaveBeenCalled();
+      expect(handoffRequested).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'profile-1',
+          requestedBy: { source: 'mcp' },
+          currentHolder: { source: 'ipc' },
+          policy: 'human_priority',
+          manualRequired: true,
+        })
+      );
+      expect(runtimeMetrics.browserAcquireFailureCount).toBe(1);
+      expect(runtimeMetrics.browserAcquireTimeoutCount).toBe(0);
+    } finally {
+      await heldLease.release();
+    }
   });
 });

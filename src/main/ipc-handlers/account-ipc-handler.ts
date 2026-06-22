@@ -254,6 +254,7 @@ export function registerAccountHandlers(
         // 通过浏览器池获取浏览器（使用关联的 Profile）
         const poolManager = getBrowserPoolManager();
         const profileLease = await acquireProfileLiveSessionLease(effectiveProfileId, {
+          source: 'ipc',
           timeoutMs: 30000,
         });
         let handle: BrowserHandle;

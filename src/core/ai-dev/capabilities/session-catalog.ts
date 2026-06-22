@@ -5,6 +5,16 @@ import {
   isBrowserRuntimeId,
   type BrowserRuntimeId,
 } from '../../../types/browser-runtime';
+import {
+  BROWSER_CAPABILITY_NAMES,
+  type BrowserCapabilityName,
+} from '../../../types/browser-interface';
+import {
+  createBrowserRuntimePlan,
+  type BrowserRuntimePlan,
+  type RuntimePlannerLoginState,
+  type RuntimePlannerProfile,
+} from '../../browser-runtime/runtime-planner';
 import type {
   OrchestrationCapabilityDefinition,
   OrchestrationDependencies,
@@ -212,6 +222,58 @@ const EFFECTIVE_PROFILE_SCHEMA = {
   },
 } as const;
 
+const RUNTIME_PLAN_SCHEMA = {
+  type: 'object',
+  additionalProperties: true,
+  required: [
+    'decision',
+    'candidateRuntimes',
+    'candidateProfiles',
+    'requiredCapabilities',
+    'reasons',
+    'recommendedAction',
+    'bindingLocked',
+  ],
+  properties: {
+    decision: {
+      type: 'string',
+      enum: [
+        'ready',
+        'needs_profile_switch',
+        'needs_runtime_install',
+        'needs_manual_login',
+        'blocked',
+      ],
+    },
+    recommendedRuntimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
+    recommendedProfileId: { type: 'string' },
+    candidateRuntimes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: true,
+      },
+    },
+    candidateProfiles: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: true,
+      },
+    },
+    requiredCapabilities: {
+      type: 'array',
+      items: { type: 'string', enum: BROWSER_CAPABILITY_NAMES },
+    },
+    reasons: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    recommendedAction: { type: 'string' },
+    bindingLocked: { type: 'boolean' },
+  },
+} as const;
+
 const SESSION_OUTPUT_SCHEMAS: Partial<Record<string, Record<string, unknown>>> = {
   session_list: createStructuredEnvelopeSchema({
     type: 'object',
@@ -291,6 +353,8 @@ const SESSION_OUTPUT_SCHEMAS: Partial<Record<string, Record<string, unknown>>> =
         items: { type: 'string' },
       },
       browserAcquired: { type: 'boolean' },
+      planOnly: { type: 'boolean' },
+      runtimePlan: RUNTIME_PLAN_SCHEMA,
       acquireReadiness: SESSION_ACQUIRE_READINESS_SCHEMA,
       phase: {
         type: 'string',
@@ -313,6 +377,7 @@ const SESSION_OUTPUT_SCHEMAS: Partial<Record<string, Record<string, unknown>>> =
       },
     },
   }),
+  runtime_plan: createStructuredEnvelopeSchema(RUNTIME_PLAN_SCHEMA),
   session_close: createStructuredEnvelopeSchema({
     type: 'object',
     additionalProperties: false,
@@ -441,6 +506,25 @@ const readOptionalStringArrayArg = (
   });
 
   return Array.from(new Set(values));
+};
+
+const readOptionalBrowserCapabilityArrayArg = (
+  args: Record<string, unknown>,
+  key: string
+): BrowserCapabilityName[] | undefined => {
+  const values = readOptionalStringArrayArg(args, key);
+  if (!values) {
+    return undefined;
+  }
+  const valid = new Set<string>(BROWSER_CAPABILITY_NAMES);
+  const invalid = values.filter((value) => !valid.has(value));
+  if (invalid.length > 0) {
+    throw createStructuredError(
+      ErrorCode.INVALID_PARAMETER,
+      `Parameter ${key} contains unknown browser capabilities: ${invalid.join(', ')}`
+    );
+  }
+  return values as BrowserCapabilityName[];
 };
 
 const readStringArg = (
@@ -660,6 +744,82 @@ const assertRuntimeCompatibleWithProfile = (options: {
       },
     }
   );
+};
+
+const listPlannerProfiles = async (
+  deps: OrchestrationDependencies
+): Promise<RuntimePlannerProfile[]> => {
+  const profiles = deps.profileGateway ? await deps.profileGateway.listProfiles() : [];
+  return profiles.map((profile) => ({
+    id: asText(profile.id),
+    name: asText(profile.name) || undefined,
+    runtimeId: asText(profile.runtimeId) || undefined,
+    status: asText(profile.status) || undefined,
+    isSystem: profile.isSystem === true,
+  }));
+};
+
+const listPlannerLoginStates = async (
+  deps: OrchestrationDependencies,
+  profiles: RuntimePlannerProfile[],
+  site: string | undefined
+): Promise<RuntimePlannerLoginState[]> => {
+  if (!site || !deps.profileLoginStateGateway) {
+    return [];
+  }
+
+  const states: RuntimePlannerLoginState[] = [];
+  for (const profile of profiles) {
+    if (!profile.id) {
+      continue;
+    }
+    const state = await deps.profileLoginStateGateway
+      .getLoginState({ profileId: profile.id, site })
+      .catch(() => null);
+    if (!state) {
+      continue;
+    }
+    states.push({
+      profileId: state.profileId,
+      site: state.site,
+      status: state.status,
+      verified: state.verified,
+      verifiedAt: state.verifiedAt ?? null,
+      reason: state.reason ?? null,
+    });
+  }
+  return states;
+};
+
+const buildRuntimePlanForSession = async (
+  deps: OrchestrationDependencies,
+  options: {
+    currentSession: OrchestrationMcpSessionInfo | null;
+    requiredCapabilities?: BrowserCapabilityName[];
+    preferredProfileId?: string;
+    site?: string;
+    needsVisible?: boolean;
+    allowNewProfile?: boolean;
+    requestedRuntimeId?: string;
+  }
+): Promise<BrowserRuntimePlan> => {
+  const profiles = await listPlannerProfiles(deps);
+  const loginStates = await listPlannerLoginStates(deps, profiles, options.site);
+  return createBrowserRuntimePlan({
+    requiredCapabilities: options.requiredCapabilities,
+    preferredProfileId:
+      asText(options.preferredProfileId) || asText(options.currentSession?.profileId) || undefined,
+    site: asText(options.site) || undefined,
+    needsVisible: options.needsVisible,
+    allowNewProfile: options.allowNewProfile,
+    currentRuntimeId:
+      normalizeRuntimeId(options.requestedRuntimeId) ||
+      normalizeRuntimeId(options.currentSession?.runtimeId),
+    currentProfileId: asText(options.currentSession?.profileId) || undefined,
+    bindingLocked: options.currentSession?.bindingLocked === true,
+    profiles,
+    loginStates,
+  });
 };
 
 const ensureSessionGateway = (deps: OrchestrationDependencies) => {
@@ -947,6 +1107,62 @@ const sessionCloseProfileHandler: CapabilityHandler<OrchestrationDependencies> =
   );
 };
 
+const runtimePlanHandler: CapabilityHandler<OrchestrationDependencies> = async (args, deps) => {
+  const sessionGateway = ensureSessionGateway(deps);
+  const currentSession = await getCurrentSessionInfo(sessionGateway);
+  const requiredCapabilities = readOptionalBrowserCapabilityArrayArg(args, 'requiredCapabilities');
+  const preferredProfileId = readStringArg(args, 'preferredProfileId', { required: false });
+  const site = readStringArg(args, 'site', { required: false });
+  const needsVisible = readOptionalBooleanArg(args, 'needsVisible');
+  const allowNewProfile = readOptionalBooleanArg(args, 'allowNewProfile');
+  const runtimeId = readStringArg(args, 'runtimeId', { required: false });
+  if (runtimeId && !isBrowserRuntimeId(runtimeId)) {
+    throw createStructuredError(
+      ErrorCode.INVALID_PARAMETER,
+      `Parameter runtimeId must be one of: ${BROWSER_RUNTIME_IDS.join(', ')}`
+    );
+  }
+
+  const runtimePlan = await buildRuntimePlanForSession(deps, {
+    currentSession,
+    requiredCapabilities,
+    preferredProfileId,
+    site,
+    needsVisible,
+    allowNewProfile,
+    requestedRuntimeId: runtimeId,
+  });
+
+  return createStructuredResult({
+    summary: [
+      `Runtime plan decision: ${runtimePlan.decision}.`,
+      runtimePlan.recommendedRuntimeId
+        ? `Recommended runtime: ${runtimePlan.recommendedRuntimeId}.`
+        : '',
+      runtimePlan.recommendedProfileId
+        ? `Recommended profile: ${runtimePlan.recommendedProfileId}.`
+        : '',
+      runtimePlan.reasons.length ? `Reasons: ${runtimePlan.reasons.join(' ')}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    data: runtimePlan as unknown as Record<string, unknown>,
+    nextActionHints: [
+      runtimePlan.recommendedAction,
+      'Use session_prepare after selecting a concrete profile/runtime from the plan.',
+    ],
+    recommendedNextTools:
+      runtimePlan.decision === 'needs_manual_login'
+        ? ['profile_ensure_logged_in', 'session_prepare']
+        : ['session_prepare', 'profile_resolve'],
+    authoritativeFields: [
+      'structuredContent.data.decision',
+      'structuredContent.data.recommendedRuntimeId',
+      'structuredContent.data.recommendedProfileId',
+    ],
+  });
+};
+
 const sessionPrepareHandler: CapabilityHandler<OrchestrationDependencies> = async (args, deps) => {
   const sessionGateway = ensureSessionGateway(deps);
   const prepareCurrentSession = sessionGateway.prepareCurrentSession;
@@ -964,6 +1180,10 @@ const sessionPrepareHandler: CapabilityHandler<OrchestrationDependencies> = asyn
   const runtimeId = readStringArg(args, 'runtimeId', { required: false });
   const visible = readOptionalBooleanArg(args, 'visible');
   const scopes = readOptionalStringArrayArg(args, 'scopes');
+  const planOnly = readOptionalBooleanArg(args, 'planOnly') === true;
+  const requiredCapabilities = readOptionalBrowserCapabilityArrayArg(args, 'requiredCapabilities');
+  const site = readStringArg(args, 'site', { required: false });
+  const allowNewProfile = readOptionalBooleanArg(args, 'allowNewProfile');
   if (runtimeId && !isBrowserRuntimeId(runtimeId)) {
     throw createStructuredError(
       ErrorCode.INVALID_PARAMETER,
@@ -1006,6 +1226,77 @@ const sessionPrepareHandler: CapabilityHandler<OrchestrationDependencies> = asyn
     stickySessionRuntimeId: currentSession?.runtimeId,
     effectiveProfile: effectiveProfileState.profile,
   });
+  const runtimePlan = await buildRuntimePlanForSession(deps, {
+    currentSession,
+    requiredCapabilities,
+    preferredProfileId: resolved?.profile.id,
+    site,
+    needsVisible: visible,
+    allowNewProfile,
+    requestedRuntimeId: runtimeId,
+  });
+  const effectiveProfile =
+    effectiveProfileState.profile && effectiveProfileState.source !== 'none'
+      ? {
+          id: asText(effectiveProfileState.profile.id),
+          name: asText(effectiveProfileState.profile.name),
+          runtimeId: asText(effectiveProfileState.profile.runtimeId),
+          source: effectiveProfileState.source,
+        }
+      : null;
+
+  if (planOnly) {
+    const currentSessionId = asText(currentSession?.sessionId) || asText(sessionGateway.getCurrentSessionId());
+    return createStructuredResult({
+      summary: [
+        `Runtime plan for current MCP session ${currentSessionId || 'unavailable'}: ${runtimePlan.decision}.`,
+        runtimePlan.recommendedRuntimeId
+          ? `Recommended runtime: ${runtimePlan.recommendedRuntimeId}.`
+          : '',
+        runtimePlan.recommendedProfileId
+          ? `Recommended profile: ${runtimePlan.recommendedProfileId}.`
+          : '',
+        runtimePlan.reasons.length ? `Reasons: ${runtimePlan.reasons.join(' ')}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      data: {
+        sessionId: currentSessionId,
+        query: resolved?.query || null,
+        matchedBy: resolved?.matchedBy || null,
+        profile: resolved?.profile || null,
+        effectiveProfile,
+        prepared: false,
+        idempotent: true,
+        runtimeId: asText(currentSession?.runtimeId) || null,
+        effectiveRuntime: effectiveRuntimeState.runtimeId,
+        effectiveRuntimeSource: effectiveRuntimeState.source,
+        visible: currentSession?.visible === true,
+        effectiveScopes: currentSession?.effectiveScopes || [],
+        browserAcquired: currentSession?.browserAcquired === true,
+        acquireReadiness: currentSession?.acquireReadiness || null,
+        phase: currentSession?.phase || 'fresh_unbound',
+        bindingLocked: currentSession?.bindingLocked === true,
+        changed: [],
+        planOnly: true,
+        runtimePlan,
+      },
+      nextActionHints: [
+        runtimePlan.recommendedAction,
+        'Call session_prepare without planOnly only after selecting the recommended profile/runtime.',
+      ],
+      recommendedNextTools:
+        runtimePlan.decision === 'needs_manual_login'
+          ? ['profile_ensure_logged_in', 'session_prepare']
+          : ['session_prepare', 'profile_resolve'],
+      authoritativeFields: [
+        'structuredContent.data.runtimePlan.decision',
+        'structuredContent.data.runtimePlan.recommendedRuntimeId',
+        'structuredContent.data.runtimePlan.recommendedProfileId',
+      ],
+    });
+  }
+
   assertRuntimeCompatibleWithProfile({
     profile: effectiveProfileState.profile,
     effectiveRuntime: effectiveRuntimeState.runtimeId || undefined,
@@ -1068,15 +1359,6 @@ const sessionPrepareHandler: CapabilityHandler<OrchestrationDependencies> = asyn
     ? prepared.effectiveScopes.join(', ')
     : 'none';
   const changedSummary = prepared.changed.length ? prepared.changed.join(', ') : 'none';
-  const effectiveProfile =
-    effectiveProfileState.profile && effectiveProfileState.source !== 'none'
-      ? {
-          id: asText(effectiveProfileState.profile.id),
-          name: asText(effectiveProfileState.profile.name),
-          runtimeId: asText(effectiveProfileState.profile.runtimeId),
-          source: effectiveProfileState.source,
-        }
-      : null;
   const effectiveRuntime = resolveEffectiveRuntimeState({
     requestedRuntimeId: runtimeId,
     stickySessionRuntimeId: prepared.runtimeId,
@@ -1122,6 +1404,8 @@ const sessionPrepareHandler: CapabilityHandler<OrchestrationDependencies> = asyn
         phase: prepared.phase,
         bindingLocked: prepared.bindingLocked,
         changed: prepared.changed,
+        planOnly: false,
+        runtimePlan,
       },
       nextActionHints: [
         ...(prepared.acquireReadiness?.busy
@@ -1176,6 +1460,7 @@ const SESSION_OBSERVATION_EVENTS: Record<string, string> = {
   session_end_current: 'session.lifecycle.end_current',
   session_close_profile: 'session.lifecycle.close_profile',
   session_prepare: 'session.lifecycle.prepare',
+  runtime_plan: 'session.lifecycle.runtime_plan',
 };
 
 const withSessionObservation = (
@@ -1353,6 +1638,13 @@ const SESSION_CAPABILITIES: Array<{
           query: { type: 'string', minLength: 1 },
           runtimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
           visible: { type: 'boolean' },
+          planOnly: { type: 'boolean' },
+          requiredCapabilities: {
+            type: 'array',
+            items: { type: 'string', enum: BROWSER_CAPABILITY_NAMES },
+          },
+          site: { type: 'string', minLength: 1 },
+          allowNewProfile: { type: 'boolean' },
           scopes: {
             type: 'array',
             items: { type: 'string', minLength: 1 },
@@ -1363,6 +1655,55 @@ const SESSION_CAPABILITIES: Array<{
     },
     metadata: SESSION_PREPARE_METADATA,
     handler: withSessionObservation('session_prepare', sessionPrepareHandler),
+  },
+  {
+    key: 'runtime_plan',
+    definition: {
+      name: 'runtime_plan',
+      description:
+        'Plan compatible browser runtime/profile/login options for required browser capabilities without mutating the current MCP session.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          requiredCapabilities: {
+            type: 'array',
+            items: { type: 'string', enum: BROWSER_CAPABILITY_NAMES },
+          },
+          preferredProfileId: { type: 'string', minLength: 1 },
+          runtimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
+          site: { type: 'string', minLength: 1 },
+          needsVisible: { type: 'boolean' },
+          allowNewProfile: { type: 'boolean' },
+        },
+      },
+      outputSchema: SESSION_OUTPUT_SCHEMAS.runtime_plan,
+      assistantGuidance: {
+        workflowStage: 'session',
+        whenToUse:
+          'Use before binding a browser session when a task depends on runtime-specific browser capabilities, a reusable profile, site login state, or visible manual handoff.',
+        preferredTargetKind: 'browser_runtime_plan',
+        transportEffect: 'Read-only; does not mutate the current MCP session.',
+        recommendedToolProfile: 'compact',
+        preferredNextTools: ['session_prepare', 'profile_ensure_logged_in'],
+        examples: [
+          {
+            title: 'Plan a runtime for network response body capture',
+            arguments: {
+              requiredCapabilities: ['network.responseBody'],
+              needsVisible: false,
+            },
+          },
+        ],
+      },
+      assistantSurface: {
+        publicMcp: true,
+        surfaceTier: 'canonical',
+        sessionReuseOrder: 12,
+      },
+    },
+    metadata: SESSION_READ_METADATA,
+    handler: withSessionObservation('runtime_plan', runtimePlanHandler),
   },
 ];
 

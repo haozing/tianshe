@@ -160,6 +160,41 @@ export class ObservationQueryService {
       ...(selectLatestArtifact(artifacts, 'error_context')
         ? { errorContext: selectLatestArtifact(artifacts, 'error_context') }
         : {}),
+      ...(selectLatestArtifact(artifacts, 'site_adapter_result')
+        ? { siteAdapterResult: selectLatestArtifact(artifacts, 'site_adapter_result') }
+        : {}),
+      ...(selectLatestArtifact(artifacts, 'site_adapter_failure')
+        ? { siteAdapterFailure: selectLatestArtifact(artifacts, 'site_adapter_failure') }
+        : {}),
+      ...(selectLatestArtifact(artifacts, 'site_adapter_repair_evidence')
+        ? {
+            siteAdapterRepairEvidence: selectLatestArtifact(
+              artifacts,
+              'site_adapter_repair_evidence'
+            ),
+          }
+        : {}),
+      ...(selectLatestArtifact(artifacts, 'site_adapter_repair_bundle')
+        ? {
+            siteAdapterRepairBundle: selectLatestArtifact(
+              artifacts,
+              'site_adapter_repair_bundle'
+            ),
+          }
+        : {}),
+      ...(selectLatestArtifact(artifacts, 'interactor_action_trace')
+        ? {
+            interactorActionTrace: selectLatestArtifact(artifacts, 'interactor_action_trace'),
+          }
+        : {}),
+      ...(selectLatestArtifact(artifacts, 'procedure_state_transition')
+        ? {
+            procedureStateTransition: selectLatestArtifact(
+              artifacts,
+              'procedure_state_transition'
+            ),
+          }
+        : {}),
     };
   }
 

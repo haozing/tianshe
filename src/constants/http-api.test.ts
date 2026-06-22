@@ -84,4 +84,33 @@ describe('HTTP API auth contract', () => {
     expect(normalized.enableAuth).toBe(DEFAULT_HTTP_API_CONFIG.enableAuth);
     expect(describeHttpApiAuthContract(normalized).mode).toBe('no-auth');
   });
+
+  it('agent-hand mode forces auth and scope enforcement', () => {
+    const normalized = normalizeHttpApiConfig({
+      ...DEFAULT_HTTP_API_CONFIG,
+      enabled: true,
+      enableAuth: false,
+      mcpRequireAuth: false,
+      enforceOrchestrationScopes: false,
+      agentHandMode: true,
+    });
+
+    expect(normalized).toEqual(
+      expect.objectContaining({
+        agentHandMode: true,
+        enableAuth: true,
+        mcpRequireAuth: true,
+        enforceOrchestrationScopes: true,
+      })
+    );
+    expect(describeHttpApiAuthContract(normalized)).toEqual(
+      expect.objectContaining({
+        mode: 'token-auth',
+        httpRequiresBearer: true,
+        mcpRequiresBearer: true,
+        orchestrationRequiresBearer: true,
+        warning: 'token-required',
+      })
+    );
+  });
 });

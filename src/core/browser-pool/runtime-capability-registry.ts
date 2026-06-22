@@ -13,6 +13,7 @@ import type {
   BrowserRuntimeSource,
   BrowserVisibilityMode,
 } from '../../types/browser-runtime';
+import { assertBrowserRuntimeDescriptorContract } from '../browser-runtime/capability-contract';
 
 type StaticDescriptorInput = {
   runtimeId: BrowserRuntimeId;
@@ -68,7 +69,7 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
     runtimeId: 'electron-webcontents',
     browserFamily: 'electron',
     controlProtocol: 'webcontents',
-    profileMode: 'ephemeral',
+    profileMode: 'persistent',
     visibilityMode: 'embedded-view',
     fingerprintBackend: 'electron-stealth',
     source: { type: 'bundled' },
@@ -100,7 +101,13 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'intercept.control': false,
     },
     notes: {
+      'storage.dom':
+        'Electron storage helpers are not exposed through the unified BrowserStorageCapability yet; use page-level behavior or future runtime probes instead.',
       'network.responseBody': 'Electron path does not persist response bodies in capture history.',
+      'input.native':
+        'Electron currently uses selector/DOM-backed interaction rather than unified OS-level native input.',
+      'input.touch':
+        'Electron touch gestures are not exposed through the unified runtime API.',
       'dialog.basic':
         'Electron runtime does not expose JavaScript dialog interception in the unified browser API.',
       'dialog.promptText':
@@ -110,6 +117,8 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'emulation.identity':
         'Electron identity emulation is exposed through the legacy session/CDP override path, but it is a browser control capability rather than part of the supported fingerprint contract. Treat real-page results as the source of truth.',
       'tabs.manage': 'Electron automation is scoped to the acquired view, not multi-tab browsing.',
+      'events.runtime':
+        'Electron does not yet emit normalized BrowserRuntimeEvent subscriptions through the unified runtime API.',
       'intercept.observe':
         'Electron currently exposes rule-based interception only, not blocked-request observation in the unified runtime.',
       'intercept.control':
@@ -164,10 +173,20 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'intercept.control': 'experimental',
     },
     notes: {
+      'storage.dom':
+        'Chromium extension relay does not expose local/session storage helpers through the unified runtime API yet.',
+      'pdf.print':
+        'Chromium extension relay does not expose a unified print-to-PDF path.',
+      'input.touch':
+        'Chromium extension relay does not expose touch gesture dispatch through the unified runtime API.',
       'dialog.basic':
         'Basic JavaScript dialog handling is exposed through the Chromium extension debugger relay and remains experimental.',
       'dialog.promptText':
         'Real JavaScript prompt handling through the Chromium extension debugger route is currently too unreliable to expose as a supported unified capability.',
+      'download.manage':
+        'Chromium extension relay download lifecycle management is not wired into the unified browser API yet.',
+      'events.runtime':
+        'Chromium extension relay does not yet publish normalized runtime event subscriptions through BrowserEventCapability.',
       'emulation.viewport':
         'Chromium extension relay viewport emulation is available as a runtime debugger override after startup, but it is not part of the supported fingerprint contract.',
       'emulation.identity':
@@ -310,15 +329,39 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'intercept.control': 'planned',
     },
     notes: {
+      'pdf.print':
+        'Cloak Playwright print-to-PDF remains withheld from the unified runtime until filesystem/output semantics are hardened.',
       'window.showHide':
         'Cloak Playwright runs as an external browser; direct show/hide semantics need a window controller.',
       'window.openPolicy':
         'Window open policy requires Playwright context/page event handling before it can be exposed as a stable runtime capability.',
       'input.native':
         'Cloak Playwright currently exposes selector-based click/type/select through the unified API; coordinate-native mouse and keyboard actions are intentionally withheld until the Playwright controller exposes that lower-level surface.',
+      'input.touch':
+        'Cloak Playwright touch gestures are not exposed through the unified runtime API.',
+      'text.ocr':
+        'Cloak Playwright does not bundle an OCR-backed text recognition path.',
+      'network.responseBody':
+        'Cloak Playwright network capture currently exposes metadata only in the unified runtime descriptor.',
+      'download.manage':
+        'Cloak Playwright download lifecycle management is not exposed through the unified runtime API yet.',
+      'dialog.basic':
+        'Cloak Playwright dialog handling is not exposed through the unified browser API.',
+      'dialog.promptText':
+        'Cloak Playwright prompt text entry is not exposed through the unified browser API.',
+      'events.runtime':
+        'Cloak Playwright does not yet emit normalized BrowserRuntimeEvent subscriptions.',
+      'intercept.observe':
+        'Cloak Playwright request interception observation is not exposed on the production unified runtime surface.',
+      'intercept.control':
+        'Cloak Playwright request interception mutation is not exposed on the production unified runtime surface.',
     },
   }),
 });
+
+for (const descriptor of Object.values(STATIC_BROWSER_RUNTIME_DESCRIPTORS)) {
+  assertBrowserRuntimeDescriptorContract(descriptor);
+}
 
 export function cloneBrowserRuntimeDescriptor(
   descriptor: BrowserRuntimeDescriptor

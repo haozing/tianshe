@@ -1240,6 +1240,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
                 "url": "https://contract.example/success",
                 "viewportHealth": "ready",
                 "viewportHealthReason": "page viewport and returned element bounds look healthy",
+                "windowControl": null,
               },
               "nextActionHints": [
                 "Prefer snapshot.elements[*].elementRef for follow-up actions. Use preferredSelector only as a fallback.",

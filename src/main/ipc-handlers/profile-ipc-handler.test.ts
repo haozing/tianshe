@@ -7,6 +7,7 @@ import { getBrowserPoolManager } from '../../core/browser-pool';
 import {
   acquireProfileLiveSessionLease,
   attachProfileLiveSessionLease,
+  takeoverProfileLiveSessionLease,
 } from '../../core/browser-pool/profile-live-session-lease';
 
 vi.mock('electron', () => ({
@@ -33,6 +34,7 @@ vi.mock('../../core/browser-pool', () => ({
 
 vi.mock('../../core/browser-pool/profile-live-session-lease', () => ({
   acquireProfileLiveSessionLease: vi.fn(),
+  takeoverProfileLiveSessionLease: vi.fn(),
   attachProfileLiveSessionLease: vi.fn((handle) => handle),
 }));
 
@@ -90,6 +92,7 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
     release: vi.fn(),
     getStats: vi.fn(),
     listBrowsers: vi.fn().mockReturnValue([]),
+    takeoverLockedBrowser: vi.fn(),
     getProfileStats: vi.fn(),
     destroyBrowser: vi.fn(),
     updateConfig: vi.fn(),
@@ -120,6 +123,9 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
     poolManager.getEventEmitter.mockReturnValue(poolEvents);
     (attachProfileLiveSessionLease as Mock).mockImplementation((handle) => handle);
     (acquireProfileLiveSessionLease as Mock).mockResolvedValue({
+      release: vi.fn().mockResolvedValue(undefined),
+    });
+    (takeoverProfileLiveSessionLease as Mock).mockResolvedValue({
       release: vi.fn().mockResolvedValue(undefined),
     });
 
@@ -158,6 +164,7 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
 
     expect(launchResult.success).toBe(true);
     expect(acquireProfileLiveSessionLease).toHaveBeenCalledWith('profile-1', {
+      source: 'ipc',
       timeoutMs: 15000,
     });
     expect(attachProfileLiveSessionLease).toHaveBeenCalledWith(
@@ -187,5 +194,65 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
 
     expect(result.success).toBe(false);
     expect(lease.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets human IPC launch take over an agent-held profile instead of waiting behind MCP', async () => {
+    const handle = {
+      browserId: 'browser-agent-held',
+      sessionId: 'profile-1',
+      runtimeId: 'electron-webcontents',
+      browser: {},
+      release: vi.fn().mockResolvedValue({
+        browserId: 'browser-agent-held',
+        sessionId: 'profile-1',
+        remainingBrowserCount: 0,
+        state: 'idle',
+      }),
+    };
+    poolManager.listBrowsers.mockReturnValue([
+      {
+        id: 'browser-agent-held',
+        sessionId: 'profile-1',
+        runtimeId: 'electron-webcontents',
+        status: 'locked',
+        lockedBy: {
+          source: 'mcp',
+          requestId: 'agent-request',
+        },
+      },
+    ]);
+    poolManager.takeoverLockedBrowser.mockResolvedValue(handle);
+
+    const launchHandler = getHandler('profile:pool-launch');
+    const launchResult = (await launchHandler(null, 'profile-1', {
+      strategy: 'any',
+      timeout: 15000,
+      runtimeId: 'electron-webcontents',
+    })) as { success: boolean; data?: { browserId?: string } };
+
+    expect(launchResult).toMatchObject({
+      success: true,
+      data: {
+        browserId: 'browser-agent-held',
+      },
+    });
+    expect(acquireProfileLiveSessionLease).not.toHaveBeenCalled();
+    expect(takeoverProfileLiveSessionLease).toHaveBeenCalledWith('profile-1', { source: 'ipc' });
+    expect(poolManager.acquire).not.toHaveBeenCalled();
+    expect(poolManager.takeoverLockedBrowser).toHaveBeenCalledWith(
+      'profile-1',
+      expect.objectContaining({
+        strategy: 'any',
+        timeout: 15000,
+        runtimeId: 'electron-webcontents',
+        browserId: 'browser-agent-held',
+      }),
+      'ipc',
+      undefined
+    );
+    expect(attachProfileLiveSessionLease).toHaveBeenCalledWith(
+      expect.objectContaining({ browserId: 'browser-agent-held' }),
+      expect.objectContaining({ release: expect.any(Function) })
+    );
   });
 });

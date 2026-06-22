@@ -49,6 +49,44 @@ export interface BrowserLockRenewedEvent {
   extensionMs?: number;
 }
 
+export interface BrowserHandoffRequestedEvent {
+  browserId?: string | null;
+  /** 会话ID（对应 Profile ID） */
+  sessionId: string;
+  runtimeId?: string | null;
+  viewId?: string | null;
+  requestedBy: {
+    source: 'http' | 'mcp' | 'ipc' | 'internal' | 'plugin';
+  };
+  currentHolder: {
+    source: 'http' | 'mcp' | 'ipc' | 'internal' | 'plugin';
+    pluginId?: string | null;
+    requestId?: string | null;
+  };
+  policy: 'human_priority';
+  manualRequired: true;
+  requestedAt: number;
+}
+
+export interface BrowserLockHandoffEvent {
+  browserId: string;
+  /** 会话ID（对应 Profile ID） */
+  sessionId: string;
+  previousHolder: {
+    source: 'http' | 'mcp' | 'ipc' | 'internal' | 'plugin';
+    pluginId?: string;
+    requestId?: string;
+  };
+  newHolder: {
+    source: 'http' | 'mcp' | 'ipc' | 'internal' | 'plugin';
+    pluginId?: string;
+    requestId: string;
+  };
+  reason: 'agent_takeover';
+  pausePreviousHolder: true;
+  handedOffAt: number;
+}
+
 // ============================================
 // 事件映射
 // ============================================
@@ -57,6 +95,8 @@ export interface BrowserPoolEvents {
   'browser:acquired': BrowserAcquiredEvent;
   'browser:released': BrowserReleasedEvent;
   'browser:lock-renewed': BrowserLockRenewedEvent;
+  'browser:handoff-requested': BrowserHandoffRequestedEvent;
+  'browser:lock-handoff': BrowserLockHandoffEvent;
 }
 
 // ============================================

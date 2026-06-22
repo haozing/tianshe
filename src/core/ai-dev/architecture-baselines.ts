@@ -9,6 +9,8 @@ export const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Existing oversized static fingerprint defaults; split by data family when fingerprint presets are next touched.',
   'src/core/ai-dev/capabilities/browser-catalog.ts':
     'Existing oversized AI browser catalog; split by browser capability family during catalog modularization.',
+  'src/core/ai-dev/capabilities/dataset-catalog.ts':
+    'Existing oversized AI dataset catalog; split dataset read, mutation, import/export, and workspace capability groups during catalog modularization.',
   'src/core/ai-dev/capabilities/browser/handlers/action-verification.ts':
     'Existing oversized action verification handler; split by verification strategy during browser capability cleanup.',
   'src/core/ai-dev/capabilities/plugin-catalog.ts':
@@ -177,6 +179,7 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
     'Each catalog or registry file stays below 900 lines and capability groups live in dedicated modules.',
     [
       'src/core/ai-dev/capabilities/browser-catalog.ts',
+      'src/core/ai-dev/capabilities/dataset-catalog.ts',
       'src/core/ai-dev/capabilities/browser/handlers/action-verification.ts',
       'src/core/ai-dev/capabilities/plugin-catalog.ts',
       'src/core/ai-dev/capabilities/profile-catalog.ts',

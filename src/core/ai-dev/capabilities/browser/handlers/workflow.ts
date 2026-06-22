@@ -706,6 +706,7 @@ export async function handleBrowserDebugState(
     hostWindowId: interactionHealth.hostWindowId,
     offscreenDetected: interactionHealth.offscreenDetected,
     diagnostics: interactionHealth.diagnostics,
+    windowControl: interactionHealth.windowControl,
     snapshot: snapshotResult.snapshot,
     screenshot: screenshotPayload
       ? {

@@ -248,6 +248,10 @@ describe('mcp http runtime availability', () => {
       status: 'unavailable',
       reasonCode: 'unsupported_browser_features',
       unsupportedRequirements: ['browserCapability:network.responseBody'],
+      runtimePlan: {
+        decision: 'blocked',
+        recommendedRuntimeId: 'electron-webcontents',
+      },
       session: {
         resolvedRuntimeDescriptor: {
           capabilities: {
@@ -261,6 +265,10 @@ describe('mcp http runtime availability', () => {
         },
       },
     });
+    expect(runtime.recommendedActions).toEqual(
+      expect.arrayContaining([expect.stringContaining('runtime_plan')])
+    );
+    expect(runtime.runtimePlan?.recommendedAction).toContain('Create a new MCP session');
   });
 
   it('keeps browser tools available with a notice before first acquire', () => {

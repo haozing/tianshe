@@ -159,6 +159,12 @@ describe('RuntimeObservationService', () => {
     expect(mockConnection.run).toHaveBeenCalledWith(
       expect.stringContaining('idx_runtime_events_trace_seq')
     );
+    expect(mockConnection.run).toHaveBeenCalledWith(
+      'ALTER TABLE runtime_events ADD COLUMN IF NOT EXISTS browser_runtime_id VARCHAR'
+    );
+    expect(mockConnection.run).toHaveBeenCalledWith(
+      'ALTER TABLE runtime_artifacts ADD COLUMN IF NOT EXISTS browser_runtime_id VARCHAR'
+    );
   });
 
   it('serializes runtime events on write', async () => {

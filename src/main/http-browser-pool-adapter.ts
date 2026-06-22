@@ -2,11 +2,13 @@
 import {
   acquireProfileLiveSessionLease,
   attachProfileLiveSessionLease,
+  getProfileLiveSessionLeaseOwner,
   takeoverProfileLiveSessionLease,
 } from '../core/browser-pool/profile-live-session-lease';
 import { DEFAULT_BROWSER_PROFILE } from '../constants/browser-pool';
 import { ResourceAcquireTimeoutError } from '../core/resource-coordinator';
 import type { BrowserRuntimeId, PooledBrowser } from '../core/browser-pool/types';
+import type { BrowserPoolEventEmitter } from '../core/browser-pool/events';
 import type { RuntimeMetricsSnapshot } from './http-session-manager';
 
 interface LoggerLike {
@@ -25,6 +27,7 @@ interface AcquireBrowserFromPoolOptions {
 }
 
 type TakeoverCapablePoolManager = BrowserPoolManager & {
+  getEventEmitter?: () => BrowserPoolEventEmitter;
   takeoverLockedBrowser?: (
     profileId: string | undefined,
     options?: {
@@ -82,6 +85,21 @@ export class BrowserAcquireTimeoutDiagnosticsError extends Error {
   }
 }
 
+export class BrowserManualHandoffRequiredError extends Error {
+  readonly diagnostics: BrowserAcquireReadiness;
+
+  constructor(
+    message: string,
+    options: {
+      diagnostics: BrowserAcquireReadiness;
+    }
+  ) {
+    super(message);
+    this.name = 'BrowserManualHandoffRequiredError';
+    this.diagnostics = options.diagnostics;
+  }
+}
+
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 30000;
 
 const asText = (value: unknown): string => String(value == null ? '' : value).trim();
@@ -99,6 +117,17 @@ const summarizeReadiness = (readiness: BrowserAcquireReadiness): string => {
   }
   return `${readiness.browserCount} pooled browser(s): ${readiness.lockedBrowserCount} locked, ${readiness.creatingBrowserCount} creating, ${readiness.idleBrowserCount} idle, ${readiness.destroyingBrowserCount} destroying`;
 };
+
+const createEmptyReadiness = (profileId: string): BrowserAcquireReadiness => ({
+  profileId,
+  browserCount: 0,
+  lockedBrowserCount: 0,
+  creatingBrowserCount: 0,
+  idleBrowserCount: 0,
+  destroyingBrowserCount: 0,
+  busy: false,
+  browsers: [],
+});
 
 const inspectProfileBrowsers = (
   poolManager: BrowserPoolManager,
@@ -170,16 +199,7 @@ const wrapAcquireError = (
   }
   const diagnostics =
     getProfileAcquireReadiness(poolManager, profileId) ||
-    ({
-      profileId,
-      browserCount: 0,
-      lockedBrowserCount: 0,
-      creatingBrowserCount: 0,
-      idleBrowserCount: 0,
-      destroyingBrowserCount: 0,
-      busy: false,
-      browsers: [],
-    } satisfies BrowserAcquireReadiness);
+    createEmptyReadiness(profileId);
   const stageLabel =
     stage === 'profile_lease' ? 'profile live-session lease' : 'browser pool acquire';
   return new BrowserAcquireTimeoutDiagnosticsError(
@@ -190,6 +210,35 @@ const wrapAcquireError = (
       cause: error,
     }
   );
+};
+
+const emitManualHandoffRequested = ({
+  poolManager,
+  profileId,
+  source,
+  holder,
+  browser,
+}: {
+  poolManager: BrowserPoolManager;
+  profileId: string;
+  source: 'mcp' | 'http';
+  holder: { source: 'ipc'; pluginId?: string | null; requestId?: string | null };
+  browser?: BrowserAcquireReadinessBrowserInfo | null;
+}): void => {
+  const eventEmitter = (poolManager as TakeoverCapablePoolManager).getEventEmitter?.();
+  eventEmitter?.emit('browser:handoff-requested', {
+    ...(browser?.browserId ? { browserId: browser.browserId } : {}),
+    sessionId: profileId,
+    runtimeId: browser?.runtimeId ?? null,
+    viewId: browser?.viewId ?? null,
+    requestedBy: {
+      source,
+    },
+    currentHolder: holder,
+    policy: 'human_priority',
+    manualRequired: true,
+    requestedAt: Date.now(),
+  });
 };
 
 const recordAcquireFailureMetrics = (
@@ -227,6 +276,28 @@ const tryTakeoverLockedBrowser = async ({
   if (!readiness || readiness.lockedBrowserCount <= 0) {
     return null;
   }
+  const humanLockedBrowser = readiness.browsers.find(
+    (browser) => browser.status === 'locked' && browser.source === 'ipc'
+  );
+  if (humanLockedBrowser) {
+    emitManualHandoffRequested({
+      poolManager,
+      profileId,
+      source,
+      browser: humanLockedBrowser,
+      holder: {
+        source: 'ipc',
+        ...(humanLockedBrowser.pluginId ? { pluginId: humanLockedBrowser.pluginId } : {}),
+        ...(humanLockedBrowser.requestId ? { requestId: humanLockedBrowser.requestId } : {}),
+      },
+    });
+    throw new BrowserManualHandoffRequiredError(
+      `Profile ${profileId} is currently controlled by a human window; agent takeover requires manual handoff instead of silent lock takeover.`,
+      {
+        diagnostics: readiness,
+      }
+    );
+  }
 
   const takeoverLockedBrowser = (poolManager as TakeoverCapablePoolManager).takeoverLockedBrowser;
   if (typeof takeoverLockedBrowser !== 'function') {
@@ -243,7 +314,7 @@ const tryTakeoverLockedBrowser = async ({
     return null;
   }
 
-  const profileLease = await takeoverProfileLiveSessionLease(profileId);
+  const profileLease = await takeoverProfileLiveSessionLease(profileId, { source });
   const attached = attachProfileLiveSessionLease(takenOver, profileLease);
   logger.debug(`Browser taken over from existing holder: ${attached.browserId}`);
   return attached;
@@ -270,7 +341,24 @@ const tryTakeoverProfileLeaseAndAcquire = async ({
     return null;
   }
 
-  const profileLease = await takeoverProfileLiveSessionLease(profileId);
+  const leaseOwner = await getProfileLiveSessionLeaseOwner(profileId);
+  if (leaseOwner?.ownerSource === 'ipc') {
+    const diagnostics = getProfileAcquireReadiness(poolManager, profileId) || createEmptyReadiness(profileId);
+    emitManualHandoffRequested({
+      poolManager,
+      profileId,
+      source,
+      holder: { source: 'ipc' },
+    });
+    throw new BrowserManualHandoffRequiredError(
+      `Profile ${profileId} is currently controlled by a human live-session lease; agent takeover requires manual handoff instead of silent lease takeover.`,
+      {
+        diagnostics,
+      }
+    );
+  }
+
+  const profileLease = await takeoverProfileLiveSessionLease(profileId, { source });
   if (!profileLease) {
     return null;
   }
@@ -313,27 +401,9 @@ export const acquireBrowserFromPool = async ({
   const resolvedProfileId = String(profileId || '').trim() || DEFAULT_BROWSER_PROFILE.id;
   const effectiveTimeoutMs = Math.max(1, Number(timeoutMs) || DEFAULT_ACQUIRE_TIMEOUT_MS);
 
-  const takenOverImmediately = await tryTakeoverLockedBrowser({
-    poolManager,
-    profileId: resolvedProfileId,
-    requestedProfileId: profileId,
-    runtimeId,
-    source,
-    timeoutMs: effectiveTimeoutMs,
-    logger,
-  });
-  if (takenOverImmediately) {
-    return takenOverImmediately;
-  }
-
-  let profileLease = null;
+  let takenOverImmediately: BrowserHandle | null = null;
   try {
-    profileLease = await acquireProfileLiveSessionLease(resolvedProfileId, {
-      timeoutMs: effectiveTimeoutMs,
-      signal,
-    });
-  } catch (error) {
-    const takenOverAfterLeaseContention = await tryTakeoverLockedBrowser({
+    takenOverImmediately = await tryTakeoverLockedBrowser({
       poolManager,
       profileId: resolvedProfileId,
       requestedProfileId: profileId,
@@ -342,6 +412,37 @@ export const acquireBrowserFromPool = async ({
       timeoutMs: effectiveTimeoutMs,
       logger,
     });
+  } catch (error) {
+    recordAcquireFailureMetrics(runtimeMetrics, error);
+    throw error;
+  }
+  if (takenOverImmediately) {
+    return takenOverImmediately;
+  }
+
+  let profileLease = null;
+  try {
+    profileLease = await acquireProfileLiveSessionLease(resolvedProfileId, {
+      source,
+      timeoutMs: effectiveTimeoutMs,
+      signal,
+    });
+  } catch (error) {
+    let takenOverAfterLeaseContention: BrowserHandle | null = null;
+    try {
+      takenOverAfterLeaseContention = await tryTakeoverLockedBrowser({
+        poolManager,
+        profileId: resolvedProfileId,
+        requestedProfileId: profileId,
+        runtimeId,
+        source,
+        timeoutMs: effectiveTimeoutMs,
+        logger,
+      });
+    } catch (takeoverError) {
+      recordAcquireFailureMetrics(runtimeMetrics, takeoverError);
+      throw takeoverError;
+    }
     if (takenOverAfterLeaseContention) {
       return takenOverAfterLeaseContention;
     }

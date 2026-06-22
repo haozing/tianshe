@@ -180,12 +180,18 @@ const createMcpServer = (options: RegisterMcpRoutesOptions, mcpSession: McpSessi
     ...(options.routeContext.dependencies?.profileGateway
       ? { profileGateway: options.routeContext.dependencies.profileGateway }
       : {}),
+    ...(options.routeContext.dependencies?.profileLoginStateGateway
+      ? { profileLoginStateGateway: options.routeContext.dependencies.profileLoginStateGateway }
+      : {}),
     ...(options.routeContext.dependencies?.observationGateway
       ? { observationGateway: options.routeContext.dependencies.observationGateway }
       : {}),
     mcpSessionGateway: createMcpSessionGateway(createSessionRuntimeOptions(options), mcpSession),
     mcpSessionContext: createMcpSessionContextAdapter(mcpSession),
-    enforceScopes: options.routeContext.restApiConfig?.enforceOrchestrationScopes ?? false,
+    enforceScopes:
+      options.routeContext.restApiConfig?.agentHandMode === true
+        ? true
+        : options.routeContext.restApiConfig?.enforceOrchestrationScopes ?? false,
   };
   const executor = createOrchestrationExecutor(deps);
   const listPublicCapabilities = (): OrchestrationCapabilityDefinition[] =>

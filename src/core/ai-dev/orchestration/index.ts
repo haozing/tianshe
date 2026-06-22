@@ -28,6 +28,12 @@ export type {
   OrchestrationSystemHealthAlert,
   OrchestrationSystemHealthSnapshot,
   OrchestrationSystemGateway,
+  OrchestrationDatasetGateway,
+  OrchestrationDatasetProvenanceContext,
+  OrchestrationDatasetRecordProvenance,
+  OrchestrationDatasetStagedWritePlan,
+  OrchestrationDatasetWriteCommitResult,
+  OrchestrationDatasetWriteOperation,
   OrchestrationPluginInfo,
   OrchestrationPluginRuntimeStatus,
   OrchestrationPluginGateway,
@@ -59,6 +65,13 @@ export {
   SESSION_PREPARE_RESOLVED_BINDING_ACTION,
   SESSION_PREPARE_RESOLVED_BINDING_PRECONDITION,
 } from '../capabilities/assistant-guidance';
+export {
+  getLifecycleContractRule,
+  ORCHESTRATION_LIFECYCLE_CONTRACT,
+  ORCHESTRATION_LIFECYCLE_CONTRACT_VERSION,
+  type LifecycleContractRule,
+  type LifecycleResourceKind,
+} from './lifecycle-contract';
 export {
   buildMcpSessionStateSnapshot,
   isMcpSessionBindingLocked,

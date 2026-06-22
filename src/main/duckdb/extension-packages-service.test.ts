@@ -50,6 +50,13 @@ function createReader(rows: Array<Record<string, unknown>>) {
   };
 }
 
+function expectLastTransaction(
+  transactionCommands: string[],
+  expectedCommands: string[]
+): void {
+  expect(transactionCommands.slice(-expectedCommands.length)).toEqual(expectedCommands);
+}
+
 describe('ExtensionPackagesService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -93,7 +100,7 @@ describe('ExtensionPackagesService', () => {
     ).rejects.toThrow('Extension package not found or disabled: ext.demo@1.0.0');
 
     expect(conn.prepare).not.toHaveBeenCalled();
-    expect(transactionCommands).toEqual(['BEGIN TRANSACTION', 'ROLLBACK']);
+    expectLastTransaction(transactionCommands, ['BEGIN TRANSACTION', 'ROLLBACK']);
   });
 
   it('wraps batch bind writes in a transaction and rolls back on insert failure', async () => {
@@ -125,7 +132,7 @@ describe('ExtensionPackagesService', () => {
       )
     ).rejects.toThrow('insert failed');
 
-    expect(transactionCommands).toEqual(['BEGIN TRANSACTION', 'ROLLBACK']);
+    expectLastTransaction(transactionCommands, ['BEGIN TRANSACTION', 'ROLLBACK']);
   });
 
   it('wraps setProfileBindings in a transaction and rolls back when replace write fails', async () => {
@@ -155,7 +162,7 @@ describe('ExtensionPackagesService', () => {
       ])
     ).rejects.toThrow('replace failed');
 
-    expect(transactionCommands).toEqual(['BEGIN TRANSACTION', 'ROLLBACK']);
+    expectLastTransaction(transactionCommands, ['BEGIN TRANSACTION', 'ROLLBACK']);
   });
 
   it('wraps batch unbind in a transaction and commits on success', async () => {
@@ -169,7 +176,7 @@ describe('ExtensionPackagesService', () => {
     const removed = await service.unbindExtensionsFromProfiles(['profile-1'], ['ext.demo']);
 
     expect(removed).toBe(2);
-    expect(transactionCommands).toEqual(['BEGIN TRANSACTION', 'COMMIT']);
+    expectLastTransaction(transactionCommands, ['BEGIN TRANSACTION', 'COMMIT']);
   });
 
   it('returns removed package records before deleting packages', async () => {

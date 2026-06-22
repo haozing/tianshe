@@ -16,7 +16,13 @@ export type RuntimeArtifactType =
   | 'console_tail'
   | 'network_summary'
   | 'screenshot'
-  | 'error_context';
+  | 'error_context'
+  | 'site_adapter_result'
+  | 'site_adapter_failure'
+  | 'site_adapter_repair_evidence'
+  | 'site_adapter_repair_bundle'
+  | 'interactor_action_trace'
+  | 'procedure_state_transition';
 
 export interface TraceContext {
   traceId: string;
@@ -132,6 +138,12 @@ export interface FailureBundle {
   consoleTail?: RuntimeArtifact;
   networkSummary?: RuntimeArtifact;
   errorContext?: RuntimeArtifact;
+  siteAdapterResult?: RuntimeArtifact;
+  siteAdapterFailure?: RuntimeArtifact;
+  siteAdapterRepairEvidence?: RuntimeArtifact;
+  siteAdapterRepairBundle?: RuntimeArtifact;
+  interactorActionTrace?: RuntimeArtifact;
+  procedureStateTransition?: RuntimeArtifact;
 }
 
 export interface TraceTimeline {

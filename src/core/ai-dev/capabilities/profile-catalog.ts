@@ -3,13 +3,19 @@ import type {
   BrowserRuntimeId,
   CreateProfileParams,
   FingerprintConfig,
+  ProfileLoginStateStatus,
   ProxyConfig,
   UpdateProfileParams,
 } from '../../../types/profile';
-import { BROWSER_RUNTIME_IDS, isBrowserRuntimeId } from '../../../types/profile';
+import {
+  BROWSER_RUNTIME_IDS,
+  PROFILE_LOGIN_STATE_STATUSES,
+  isBrowserRuntimeId,
+} from '../../../types/profile';
 import type {
   OrchestrationCapabilityDefinition,
   OrchestrationDependencies,
+  OrchestrationProfileLoginState,
   OrchestrationProfileInfo,
 } from '../orchestration/types';
 import type { CapabilityHandler } from './types';
@@ -83,6 +89,40 @@ const PROFILE_INFO_SCHEMA = {
   },
 } as const;
 
+const PROFILE_LOGIN_STATE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'id',
+    'profileId',
+    'site',
+    'status',
+    'verified',
+    'lastCheckedAt',
+    'createdAt',
+    'updatedAt',
+  ],
+  properties: {
+    id: { type: 'string' },
+    profileId: { type: 'string' },
+    accountId: { type: ['string', 'null'] },
+    site: { type: 'string' },
+    loginUrl: { type: ['string', 'null'] },
+    runtimeId: { type: ['string', 'null'] },
+    status: { type: 'string', enum: PROFILE_LOGIN_STATE_STATUSES },
+    verified: { type: 'boolean' },
+    lastCheckedAt: { type: 'string' },
+    verifiedAt: { type: ['string', 'null'] },
+    evidenceArtifactId: { type: ['string', 'null'] },
+    evidence: {
+      anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: true }],
+    },
+    reason: { type: ['string', 'null'] },
+    createdAt: { type: 'string' },
+    updatedAt: { type: 'string' },
+  },
+} as const;
+
 const PROFILE_OUTPUT_SCHEMAS: Partial<Record<string, Record<string, unknown>>> = {
   profile_list: createStructuredEnvelopeSchema({
     type: 'object',
@@ -145,6 +185,46 @@ const PROFILE_OUTPUT_SCHEMAS: Partial<Record<string, Record<string, unknown>>> =
         },
       },
       note: { type: 'string' },
+    },
+  }),
+  profile_ensure_logged_in: createStructuredEnvelopeSchema({
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'query',
+      'matchedBy',
+      'profileId',
+      'profile',
+      'status',
+      'verified',
+      'manualHandoffRequired',
+      'preparedSession',
+      'loginState',
+    ],
+    properties: {
+      query: { type: 'string' },
+      matchedBy: { type: 'string', enum: ['id', 'name'] },
+      profileId: { type: 'string' },
+      profile: PROFILE_INFO_SCHEMA,
+      site: { type: 'string' },
+      loginUrl: { type: 'string' },
+      status: { type: 'string', enum: PROFILE_LOGIN_STATE_STATUSES },
+      verified: { type: 'boolean' },
+      manualHandoffRequired: { type: 'boolean' },
+      preparedSession: {
+        anyOf: [
+          { type: 'null' },
+          {
+            type: 'object',
+            additionalProperties: true,
+          },
+        ],
+      },
+      loginState: PROFILE_LOGIN_STATE_SCHEMA,
+      evidence: {
+        type: 'object',
+        additionalProperties: true,
+      },
     },
   }),
   profile_create: createStructuredEnvelopeSchema({
@@ -464,6 +544,19 @@ const ensureProfileGateway = (deps: OrchestrationDependencies) => {
   return deps.profileGateway;
 };
 
+const ensureProfileLoginStateGateway = (deps: OrchestrationDependencies) => {
+  if (!deps.profileLoginStateGateway) {
+    throw createStructuredError(
+      ErrorCode.OPERATION_FAILED,
+      'Profile login state gateway is not configured',
+      {
+        suggestion: 'Please inject profileLoginStateGateway into orchestration dependencies',
+      }
+    );
+  }
+  return deps.profileLoginStateGateway;
+};
+
 const profileListHandler: CapabilityHandler<OrchestrationDependencies> = async (args, deps) => {
   const gateway = ensureProfileGateway(deps);
   const query = asText(readStringArg(args, 'query', { required: false })).toLowerCase();
@@ -656,6 +749,190 @@ const profileStartSessionHandler: CapabilityHandler<OrchestrationDependencies> =
   );
 };
 
+const resolveProfileForLogin = async (
+  gateway: ReturnType<typeof ensureProfileGateway>,
+  args: Record<string, unknown>
+): Promise<{
+  query: string;
+  matchedBy: 'id' | 'name';
+  profile: OrchestrationProfileInfo;
+}> => {
+  const profileId = readStringArg(args, 'profileId', { required: false });
+  if (profileId) {
+    const profile = await gateway.getProfile(profileId);
+    if (!profile) {
+      throw createStructuredError(ErrorCode.NOT_FOUND, `Profile not found: ${profileId}`, {
+        context: { profileId },
+      });
+    }
+    return {
+      query: profileId,
+      matchedBy: 'id',
+      profile: normalizeProfile(profile),
+    };
+  }
+
+  const query = readStringArg(args, 'query', { required: false });
+  if (!query) {
+    throw createStructuredError(
+      ErrorCode.INVALID_PARAMETER,
+      'profile_ensure_logged_in requires either profileId or query'
+    );
+  }
+
+  const inspection = await inspectProfileResolution(gateway, query);
+  if (inspection.status !== 'resolved' || !inspection.result) {
+    throw createProfileResolutionError(inspection, {
+      notFoundMessage: `Profile query not matched: ${query}`,
+      recommendedNextTools: ['profile_list', 'profile_resolve'],
+    });
+  }
+  return {
+    query: inspection.result.query,
+    matchedBy: inspection.result.matchedBy,
+    profile: normalizeProfile(inspection.result.profile),
+  };
+};
+
+const deriveLoginSite = (site: string | undefined, loginUrl: string | undefined): string => {
+  if (site) return site;
+  if (loginUrl) {
+    try {
+      const parsed = new URL(loginUrl);
+      return parsed.hostname || parsed.origin || loginUrl;
+    } catch {
+      return loginUrl;
+    }
+  }
+  return 'default';
+};
+
+const hasUsableStoredLogin = (
+  state: OrchestrationProfileLoginState | null
+): state is OrchestrationProfileLoginState =>
+  state?.status === 'logged_in' && state.verified === true;
+
+const profileEnsureLoggedInHandler: CapabilityHandler<OrchestrationDependencies> = async (
+  args,
+  deps
+) => {
+  const gateway = ensureProfileGateway(deps);
+  const loginStateGateway = ensureProfileLoginStateGateway(deps);
+  const { query, matchedBy, profile } = await resolveProfileForLogin(gateway, args);
+  const site = readStringArg(args, 'site', { required: false });
+  const loginUrl = readStringArg(args, 'loginUrl', { required: false });
+  const accountId = readStringArg(args, 'accountId', { required: false });
+  const visible = readBooleanArg(args, 'visible', true);
+  const prepareSession = readBooleanArg(args, 'prepareSession', true);
+  const runtimeId = normalizeRuntimeId(profile.runtimeId);
+  const loginSite = deriveLoginSite(site, loginUrl);
+
+  const storedLoginState = await loginStateGateway.getLoginState({
+    profileId: profile.id,
+    site: loginSite,
+    ...(accountId ? { accountId } : {}),
+  });
+
+  const preparedSession =
+    prepareSession && deps.mcpSessionGateway?.prepareCurrentSession
+      ? await deps.mcpSessionGateway.prepareCurrentSession({
+          profileId: profile.id,
+          ...(runtimeId ? { runtimeId } : {}),
+          visible,
+        })
+      : null;
+
+  const status: ProfileLoginStateStatus =
+    storedLoginState?.status && storedLoginState.status !== 'unknown'
+      ? storedLoginState.status
+      : preparedSession && visible
+        ? 'needs_manual_login'
+        : 'unknown';
+  const verified = hasUsableStoredLogin(storedLoginState) && status === 'logged_in';
+  const manualHandoffRequired = status !== 'logged_in';
+  const evidence = {
+    kind: 'profile_login_state',
+    verifier: storedLoginState ? 'stored_login_state' : 'manual_handoff_prepared',
+    previousStateId: storedLoginState?.id ?? null,
+    preparedSession: preparedSession
+      ? {
+          sessionId: preparedSession.sessionId,
+          prepared: preparedSession.prepared,
+          visible: preparedSession.visible,
+          phase: preparedSession.phase,
+          bindingLocked: preparedSession.bindingLocked,
+        }
+      : null,
+    credentialValuesReturned: false,
+    cookieValuesReturned: false,
+  };
+  const loginState = await loginStateGateway.upsertLoginState({
+    profileId: profile.id,
+    ...(accountId ? { accountId } : {}),
+    site: loginSite,
+    ...(loginUrl ? { loginUrl } : {}),
+    ...(runtimeId ? { runtimeId } : {}),
+    status,
+    verified,
+    evidence,
+    reason: manualHandoffRequired
+      ? 'manual login handoff or site-specific verification is required'
+      : 'stored login state is marked verified',
+  });
+  const nextActionHints = manualHandoffRequired
+    ? [
+        preparedSession
+          ? 'Use the prepared visible session for human login handoff before continuing browser automation.'
+          : 'Call session_prepare with this profile and visible=true before asking for human login handoff.',
+        'Do not ask the model to type passwords, one-time codes, recovery codes, CAPTCHA text, or token values.',
+        'After the human completes login, verify the page with browser_observe or browser_snapshot using site-specific success text or URL conditions.',
+      ]
+    : [
+        'Stored login state is verified for this profile and site; continue with capability-level browser observation before any site action.',
+        'Do not read or return cookie values, authorization headers, passwords, one-time codes, or token values.',
+      ];
+
+  if (loginUrl && manualHandoffRequired) {
+    nextActionHints.unshift(
+      `If the session is not already on the login page, navigate to ${loginUrl} with browser_observe after preparation.`
+    );
+  }
+
+  return createStructuredResult({
+    summary: [
+      manualHandoffRequired
+        ? `Prepared login handoff status for profile ${profile.id}.`
+        : `Verified stored login state for profile ${profile.id}.`,
+      `Login status is ${status}; no password, token, or cookie value was read or returned.`,
+    ].join('\n'),
+    data: {
+      query,
+      matchedBy,
+      profileId: profile.id,
+      profile,
+      site: loginSite,
+      ...(loginUrl ? { loginUrl } : {}),
+      status,
+      verified,
+      manualHandoffRequired,
+      preparedSession,
+      loginState,
+      evidence,
+    },
+    nextActionHints,
+    recommendedNextTools:
+      preparedSession || !manualHandoffRequired
+        ? ['browser_observe', 'browser_snapshot', 'session_get_current']
+        : ['session_prepare', 'profile_ensure_logged_in'],
+    authoritativeFields: [
+      'structuredContent.data.status',
+      'structuredContent.data.manualHandoffRequired',
+      'structuredContent.data.profileId',
+      'structuredContent.data.loginState.id',
+    ],
+  });
+};
+
 const profileCreateHandler: CapabilityHandler<OrchestrationDependencies> = async (args, deps) => {
   const gateway = ensureProfileGateway(deps);
   readRequiredConfirmationArg(args, 'confirmRisk', 'profile creation');
@@ -839,6 +1116,36 @@ const PROFILE_CAPABILITIES: Array<{
       outputSchema: PROFILE_OUTPUT_SCHEMAS.profile_start_session,
     },
     handler: profileStartSessionHandler,
+  },
+  {
+    key: 'profile_ensure_logged_in',
+    metadata: {
+      ...PROFILE_WRITE_METADATA,
+      sideEffectLevel: 'low',
+      estimatedLatencyMs: 800,
+      requiredScopes: ['profile.read', 'browser.write'],
+      requires: ['profileGateway', 'profileLoginStateGateway'],
+    },
+    definition: {
+      name: 'profile_ensure_logged_in',
+      description:
+        'Resolve a reusable profile and prepare a visible manual login handoff without returning credentials, cookies, or tokens.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          profileId: { type: 'string', minLength: 1 },
+          query: { type: 'string', minLength: 1 },
+          accountId: { type: 'string', minLength: 1 },
+          site: { type: 'string', minLength: 1 },
+          loginUrl: { type: 'string', minLength: 1 },
+          visible: { type: 'boolean' },
+          prepareSession: { type: 'boolean' },
+        },
+      },
+      outputSchema: PROFILE_OUTPUT_SCHEMAS.profile_ensure_logged_in,
+    },
+    handler: profileEnsureLoggedInHandler,
   },
   {
     key: 'profile_create',

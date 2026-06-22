@@ -132,6 +132,14 @@ describe('ObservationQueryService', () => {
         component: 'duckdb',
         label: 'query failure context',
       },
+      {
+        artifactId: 'artifact-site-repair',
+        timestamp: 205,
+        traceId: 'trace-2',
+        type: 'site_adapter_repair_evidence',
+        component: 'site-adapter-runtime',
+        label: 'site adapter repair evidence',
+      },
     ];
 
     const service = new ObservationQueryService({
@@ -162,9 +170,12 @@ describe('ObservationQueryService', () => {
       errorContext: {
         artifactId: 'artifact-context',
       },
+      siteAdapterRepairEvidence: {
+        artifactId: 'artifact-site-repair',
+      },
     });
     expect(bundle.recentEvents).toHaveLength(2);
-    expect(bundle.artifactRefs).toHaveLength(4);
+    expect(bundle.artifactRefs).toHaveLength(5);
   });
 
   it('builds trace timelines and recent failure summaries', async () => {

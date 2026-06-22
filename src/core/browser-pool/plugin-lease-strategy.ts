@@ -13,6 +13,7 @@ import type {
   SessionConfig,
 } from './types';
 import { isReadyBrowser } from './types';
+import type { BrowserLockHandoffEvent } from './events';
 
 const logger = createLogger('PluginLeaseStrategy');
 
@@ -36,7 +37,8 @@ export class PluginLeaseStrategy {
       sessionId: string,
       waitedMs: number
     ) => void,
-    private readonly markProfileActive: (sessionId: string, browserId: string) => Promise<void>
+    private readonly markProfileActive: (sessionId: string, browserId: string) => Promise<void>,
+    private readonly emitLockHandoff?: (event: BrowserLockHandoffEvent) => void
   ) {}
 
   async adoptSamePluginLockedBrowser(
@@ -117,10 +119,14 @@ export class PluginLeaseStrategy {
     }
 
     const previousLock = candidate.lockedBy;
+    if (!previousLock) {
+      return null;
+    }
     const request = this.requestFactory.create(session, acquireOptions, source, normalizedPluginId);
+    const newLock = this.createLockInfo(request, session);
     const handedOff = await this.globalPool.handoffLock(
       candidate.id,
-      this.createLockInfo(request, session)
+      newLock
     );
     if (!handedOff) {
       return null;
@@ -129,6 +135,23 @@ export class PluginLeaseStrategy {
     const handle = this.buildBrowserHandle(request, candidate.id, session.id);
     this.emitBrowserAcquired(request, candidate.id, session.id, 0);
     await this.markProfileActive(session.id, candidate.id);
+    this.emitLockHandoff?.({
+      browserId: candidate.id,
+      sessionId: session.id,
+      previousHolder: {
+        source: previousLock.source,
+        ...(previousLock.pluginId ? { pluginId: previousLock.pluginId } : {}),
+        ...(previousLock.requestId ? { requestId: previousLock.requestId } : {}),
+      },
+      newHolder: {
+        source: newLock.source,
+        ...(newLock.pluginId ? { pluginId: newLock.pluginId } : {}),
+        requestId: newLock.requestId,
+      },
+      reason: 'agent_takeover',
+      pausePreviousHolder: true,
+      handedOffAt: Date.now(),
+    });
     logger.warn('Took over locked browser', {
       profileId: session.id,
       browserId: candidate.id,

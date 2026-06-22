@@ -1,0 +1,12 @@
+{
+  "name": "product-page",
+  "snapshot": {
+    "url": "https://static-product.example/products/sku-1",
+    "title": "Steel Widget",
+    "fields": {
+      "productName": "Steel Widget",
+      "price": "12.50",
+      "seller": "Demo Supply"
+    }
+  }
+}

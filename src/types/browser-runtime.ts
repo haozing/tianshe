@@ -10,6 +10,7 @@ export type BrowserRuntimeId = (typeof BROWSER_RUNTIME_IDS)[number];
 export const DEFAULT_BROWSER_RUNTIME_ID: BrowserRuntimeId = 'electron-webcontents';
 
 export const PERSISTENT_BROWSER_RUNTIME_IDS = [
+  'electron-webcontents',
   'chromium-extension-relay',
   'firefox-bidi',
   'chromium-cloak-playwright',

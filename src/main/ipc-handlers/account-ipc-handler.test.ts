@@ -493,6 +493,7 @@ describe('registerAccountHandlers - account:login', () => {
 
     expect(result.success).toBe(true);
     expect(acquireProfileLiveSessionLease).toHaveBeenCalledWith('legacy-profile', {
+      source: 'ipc',
       timeoutMs: 30000,
     });
     expect(attachProfileLiveSessionLease).toHaveBeenCalledWith(

@@ -18,6 +18,7 @@ describe('browser runtime helpers', () => {
       'chromium-cloak-playwright',
     ]);
     expect(PERSISTENT_BROWSER_RUNTIME_IDS).toEqual([
+      'electron-webcontents',
       'chromium-extension-relay',
       'firefox-bidi',
       'chromium-cloak-playwright',
@@ -45,8 +46,8 @@ describe('browser runtime helpers', () => {
     expect(normalizeBrowserRuntimeId('firefox', 'firefox-bidi')).toBe('firefox-bidi');
   });
 
-  it('marks only persistent runtimes as persistent', () => {
-    expect(isPersistentBrowserRuntimeId('electron-webcontents')).toBe(false);
+  it('marks profile-backed runtimes as persistent', () => {
+    expect(isPersistentBrowserRuntimeId('electron-webcontents')).toBe(true);
     expect(isPersistentBrowserRuntimeId('chromium-extension-relay')).toBe(true);
     expect(isPersistentBrowserRuntimeId('firefox-bidi')).toBe(true);
     expect(isPersistentBrowserRuntimeId('chromium-cloak-playwright')).toBe(true);

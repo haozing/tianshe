@@ -12,6 +12,13 @@ import { observationService } from '../../core/observability/observation-service
 import type { Dataset, DatasetPlacementOptions, ImportProgress, QueryResult } from './types';
 import type { DatasetService } from './dataset-service';
 import type { QueryTemplateService } from './query-template-service';
+import type {
+  CommitDatasetStagedWritePlanOptions,
+  DatasetStagedWriteOperation,
+  DatasetStagedWritePlan,
+  DatasetWriteCommitResult,
+} from './dataset-record-mutation-service';
+import type { DatasetProvenanceContext, DatasetRecordProvenanceEntry } from './dataset-provenance-service';
 import { quoteQualifiedName } from './utils';
 
 const logger = createLogger('DuckDBServiceDatasetFacade');
@@ -68,6 +75,20 @@ export interface DuckDBServiceDatasetFacade {
     datasetId: string,
     updates: Array<{ rowId: number; updates: Record<string, any> }>
   ): Promise<void>;
+  stageWritePlan(
+    datasetId: string,
+    operations: DatasetStagedWriteOperation[],
+    context?: DatasetProvenanceContext
+  ): Promise<DatasetStagedWritePlan>;
+  commitWritePlan(
+    plan: DatasetStagedWritePlan,
+    options: CommitDatasetStagedWritePlanOptions
+  ): Promise<DatasetWriteCommitResult>;
+  listRecordProvenance(
+    datasetId: string,
+    rowId: number,
+    limit?: number
+  ): Promise<DatasetRecordProvenanceEntry[]>;
   cancelImport(datasetId: string): Promise<void>;
   insertRow(datasetId: string, data: any): Promise<void>;
   updateColumnMetadata(datasetId: string, columnName: string, metadata: any): Promise<void>;
@@ -610,6 +631,32 @@ async batchUpdateRecords(
 ): Promise<void> {
   if (!this.datasetService) return;
   await this.datasetService.batchUpdateRecords(datasetId, updates);
+},
+
+async stageWritePlan(
+  datasetId: string,
+  operations: DatasetStagedWriteOperation[],
+  context?: DatasetProvenanceContext
+): Promise<DatasetStagedWritePlan> {
+  if (!this.datasetService) throw new Error('Dataset service not initialized');
+  return await this.datasetService.stageWritePlan(datasetId, operations, context);
+},
+
+async commitWritePlan(
+  plan: DatasetStagedWritePlan,
+  options: CommitDatasetStagedWritePlanOptions
+): Promise<DatasetWriteCommitResult> {
+  if (!this.datasetService) throw new Error('Dataset service not initialized');
+  return await this.datasetService.commitWritePlan(plan, options);
+},
+
+async listRecordProvenance(
+  datasetId: string,
+  rowId: number,
+  limit?: number
+): Promise<DatasetRecordProvenanceEntry[]> {
+  if (!this.datasetService) throw new Error('Dataset service not initialized');
+  return await this.datasetService.listRecordProvenance(datasetId, rowId, limit);
 },
 
 async cancelImport(datasetId: string): Promise<void> {
