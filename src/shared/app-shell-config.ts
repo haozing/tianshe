@@ -12,8 +12,14 @@ export type AppShellActiveView = AppShellControlledPageKey | 'workbench' | 'plug
 
 export type AppShellPageVisibility = Record<AppShellControlledPageKey, boolean>;
 
+export interface AppShellActivityBarConfig {
+  visible: boolean;
+}
+
 export interface AppShellConfig {
   pages: AppShellPageVisibility;
+  activityBar: AppShellActivityBarConfig;
+  defaultPlugin?: string;
   source?: string;
 }
 
@@ -23,6 +29,9 @@ export const DEFAULT_APP_SHELL_CONFIG: AppShellConfig = {
     marketplace: true,
     accountCenter: true,
     settings: true,
+  },
+  activityBar: {
+    visible: true,
   },
 };
 
@@ -101,10 +110,43 @@ function applyHiddenPages(
   return pages;
 }
 
+function normalizeActivityBarConfig(raw: Record<string, unknown>): AppShellActivityBarConfig {
+  const activityBar: AppShellActivityBarConfig = {
+    ...DEFAULT_APP_SHELL_CONFIG.activityBar,
+  };
+
+  const rawActivityBar = raw.activityBar ?? raw.activity_bar;
+  if (rawActivityBar && typeof rawActivityBar === 'object' && !Array.isArray(rawActivityBar)) {
+    const visible = toBoolean((rawActivityBar as Record<string, unknown>).visible);
+    if (visible !== null) {
+      activityBar.visible = visible;
+    }
+  }
+
+  const directVisible = toBoolean(
+    raw.activityBarVisible ?? raw.activity_bar_visible ?? raw.showActivityBar
+  );
+  if (directVisible !== null) {
+    activityBar.visible = directVisible;
+  }
+
+  return activityBar;
+}
+
+function normalizeDefaultPlugin(raw: Record<string, unknown>): string | undefined {
+  const rawDefaultPlugin = raw.defaultPlugin ?? raw.default_plugin ?? raw.startupPlugin;
+  if (typeof rawDefaultPlugin !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = rawDefaultPlugin.trim();
+  return trimmed || undefined;
+}
+
 export function normalizeAppShellConfig(rawConfig: unknown): AppShellConfig {
   const pages: AppShellPageVisibility = { ...DEFAULT_APP_SHELL_CONFIG.pages };
   if (!rawConfig || typeof rawConfig !== 'object' || Array.isArray(rawConfig)) {
-    return { pages };
+    return { pages, activityBar: { ...DEFAULT_APP_SHELL_CONFIG.activityBar } };
   }
 
   const raw = rawConfig as Record<string, unknown>;
@@ -112,7 +154,12 @@ export function normalizeAppShellConfig(rawConfig: unknown): AppShellConfig {
   applyPageVisibility(pages, raw.pageVisibility);
   applyHiddenPages(pages, raw.hiddenPages);
 
-  return { pages };
+  const defaultPlugin = normalizeDefaultPlugin(raw);
+  return {
+    pages,
+    activityBar: normalizeActivityBarConfig(raw),
+    ...(defaultPlugin ? { defaultPlugin } : {}),
+  };
 }
 
 export function areControlledAppShellPagesHidden(config: AppShellConfig): boolean {

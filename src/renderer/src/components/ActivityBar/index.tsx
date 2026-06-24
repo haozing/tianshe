@@ -373,7 +373,14 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
       return;
     }
 
+    const preferredPluginId =
+      typeof appShellConfig.defaultPlugin === 'string'
+        ? appShellConfig.defaultPlugin.trim()
+        : '';
     const selectedPlugin =
+      (preferredPluginId
+        ? plugins.find((plugin) => plugin.id === preferredPluginId)
+        : undefined) ??
       plugins.find((plugin) => plugin.id === activePluginView) ??
       plugins[0];
     if (!selectedPlugin) {
@@ -388,6 +395,7 @@ export function ActivityBar({ appShellConfig = DEFAULT_APP_SHELL_CONFIG }: Activ
   }, [
     activePluginView,
     activeView,
+    appShellConfig.defaultPlugin,
     handlePluginClick,
     plugins,
     shouldAutoOpenFirstPlugin,

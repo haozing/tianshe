@@ -2,7 +2,7 @@
  * 主应用组件
  */
 
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ActivityBar } from './components/ActivityBar';
 import { useUIStore } from './stores/uiStore';
@@ -19,6 +19,7 @@ import {
   resolveAppShellActiveView,
   type AppShellConfig,
 } from '../../shared/app-shell-config';
+import type { JSPluginInfo } from '../../types/js-plugin';
 
 const logger = createRendererLogger('App');
 
@@ -90,6 +91,8 @@ type AppInfoResult = {
 function App() {
   const activeView = useUIStore((state) => state.activeView);
   const setActiveView = useUIStore((state) => state.setActiveView);
+  const activePluginView = useUIStore((state) => state.activePluginView);
+  const setActivePluginView = useUIStore((state) => state.setActivePluginView);
   const isActivityBarCollapsed = useUIStore((state) => state.isActivityBarCollapsed);
   const [showUpdateNotification, setShowUpdateNotification] = useState(false);
   const [appPlatform, setAppPlatform] = useState<string>('');
@@ -101,6 +104,8 @@ function App() {
   const effectiveActiveView = resolveAppShellActiveView(activeView, appShellConfig, {
     workbenchAvailable: cloudWorkbenchAvailable,
   });
+  const isActivityBarVisible = appShellConfig.activityBar.visible !== false;
+  const autoOpenedHiddenActivityBarPluginRef = useRef<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -189,10 +194,114 @@ function App() {
   }, [isActivityBarCollapsed]);
 
   useEffect(() => {
+    if (isActivityBarVisible) {
+      return;
+    }
+
+    const setWidth = window.electronAPI?.view?.setActivityBarWidth;
+    if (typeof setWidth !== 'function') {
+      return;
+    }
+
+    setWidth(0).catch((error) => {
+      logger.error('Failed to sync hidden activity bar width', {
+        operation: 'app.activityBar.hideWidth',
+        error,
+      });
+    });
+  }, [isActivityBarVisible]);
+
+  useEffect(() => {
     if (effectiveActiveView !== activeView) {
       setActiveView(effectiveActiveView);
     }
   }, [activeView, effectiveActiveView, setActiveView]);
+
+  useEffect(() => {
+    if (isActivityBarVisible || effectiveActiveView !== 'plugin') {
+      autoOpenedHiddenActivityBarPluginRef.current = null;
+      return;
+    }
+
+    const jsPlugin = window.electronAPI?.jsPlugin;
+    if (typeof jsPlugin?.list !== 'function' || typeof jsPlugin?.showPluginView !== 'function') {
+      return;
+    }
+
+    let disposed = false;
+
+    const openDefaultPlugin = async () => {
+      const result = await jsPlugin.list();
+      if (disposed || result?.success !== true || !Array.isArray(result.plugins)) {
+        return;
+      }
+
+      const plugins = (result.plugins as JSPluginInfo[]).filter(
+        (plugin) => plugin.hasActivityBarView && plugin.enabled !== false
+      );
+      const preferredPluginId =
+        typeof appShellConfig.defaultPlugin === 'string'
+          ? appShellConfig.defaultPlugin.trim()
+          : '';
+      const selectedPlugin =
+        (preferredPluginId
+          ? plugins.find((plugin) => plugin.id === preferredPluginId)
+          : undefined) ??
+        (activePluginView
+          ? plugins.find((plugin) => plugin.id === activePluginView)
+          : undefined) ??
+        plugins[0];
+
+      if (!selectedPlugin?.id || autoOpenedHiddenActivityBarPluginRef.current === selectedPlugin.id) {
+        return;
+      }
+
+      autoOpenedHiddenActivityBarPluginRef.current = selectedPlugin.id;
+      setActivePluginView(selectedPlugin.id);
+
+      try {
+        await jsPlugin.showPluginView(selectedPlugin.id);
+      } catch (error) {
+        if (autoOpenedHiddenActivityBarPluginRef.current === selectedPlugin.id) {
+          autoOpenedHiddenActivityBarPluginRef.current = null;
+        }
+        throw error;
+      }
+    };
+
+    const runOpenDefaultPlugin = () => {
+      void openDefaultPlugin().catch((error) => {
+        logger.error('Failed to auto open default plugin view', {
+          operation: 'app.pluginView.autoOpenDefault',
+          defaultPlugin: appShellConfig.defaultPlugin,
+          error,
+        });
+      });
+    };
+
+    runOpenDefaultPlugin();
+
+    const unsubscribe =
+      typeof jsPlugin.onPluginStateChanged === 'function'
+        ? jsPlugin.onPluginStateChanged(() => {
+            autoOpenedHiddenActivityBarPluginRef.current = null;
+            runOpenDefaultPlugin();
+          })
+        : undefined;
+
+    return () => {
+      disposed = true;
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, [
+    activePluginView,
+    appShellConfig.defaultPlugin,
+    effectiveActiveView,
+    isActivityBarVisible,
+    setActivePluginView,
+  ]);
 
   // ✅ 统一管理视图切换时的清理逻辑
   useEffect(() => {
@@ -201,18 +310,18 @@ function App() {
     }
 
     const handleViewSwitch = async () => {
-      const { activePluginView } = useUIStore.getState();
+      const { activePluginView: currentActivePluginView } = useUIStore.getState();
 
       const hideActivePluginView = async () => {
-        if (!activePluginView) return;
+        if (!currentActivePluginView) return;
         const hidePluginView = window.electronAPI?.jsPlugin?.hidePluginView;
         if (typeof hidePluginView !== 'function') return;
         try {
-          await hidePluginView(activePluginView);
+          await hidePluginView(currentActivePluginView);
         } catch (error) {
           logger.error('Failed to hide plugin view', {
             operation: 'app.pluginView.hide',
-            pluginViewId: activePluginView,
+            pluginViewId: currentActivePluginView,
             error,
           });
         }
@@ -305,7 +414,7 @@ function App() {
         }`}
       >
         {/* 左侧 Activity Bar */}
-        <ActivityBar appShellConfig={appShellConfig} />
+        {isActivityBarVisible ? <ActivityBar appShellConfig={appShellConfig} /> : null}
 
         {/* 主内容区域 */}
         <main className="shell-content-surface flex flex-1 flex-col overflow-hidden">

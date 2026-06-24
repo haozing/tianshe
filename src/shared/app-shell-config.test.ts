@@ -24,6 +24,20 @@ describe('app shell config', () => {
     });
   });
 
+  it('normalizes activity bar visibility and default plugin', () => {
+    const config = normalizeAppShellConfig({
+      hiddenPages: ['datasets', 'marketplace', 'accountCenter', 'settings'],
+      activityBar: {
+        visible: false,
+      },
+      defaultPlugin: '  xiaojingbao-client  ',
+    });
+
+    expect(config.activityBar).toEqual({ visible: false });
+    expect(config.defaultPlugin).toBe('xiaojingbao-client');
+    expect(areControlledAppShellPagesHidden(config)).toBe(true);
+  });
+
   it('falls back to plugin when every controlled page is hidden', () => {
     const config = normalizeAppShellConfig({
       pages: {

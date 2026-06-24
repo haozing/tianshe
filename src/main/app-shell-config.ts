@@ -56,5 +56,6 @@ export function getAppShellConfig(): AppShellConfig {
 
   return {
     pages: { ...DEFAULT_APP_SHELL_CONFIG.pages },
+    activityBar: { ...DEFAULT_APP_SHELL_CONFIG.activityBar },
   };
 }

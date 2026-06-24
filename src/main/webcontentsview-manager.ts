@@ -173,9 +173,9 @@ export class WebContentsViewManager {
 
     const mainWindow = this.windowManager.getMainWindowV3();
     const contentBounds = mainWindow?.getContentBounds();
-    const maxWidth = contentBounds ? Math.max(contentBounds.width - MIN_VIEW_SIZE, 1) : undefined;
+    const maxWidth = contentBounds ? Math.max(contentBounds.width - MIN_VIEW_SIZE, 0) : undefined;
 
-    const normalized = Math.max(1, Math.round(raw));
+    const normalized = Math.max(0, Math.round(raw));
     const clamped = maxWidth !== undefined ? Math.min(normalized, maxWidth) : normalized;
 
     if (clamped === this.activityBarWidth) {

@@ -51,6 +51,27 @@ describe('plugin-layout', () => {
     });
   });
 
+  it('lets plugin pages use the full width when the activity bar is hidden', () => {
+    const layout = calculateMainWindowPluginLayout(
+      { x: 0, y: 0, width: 1400, height: 900 },
+      0,
+      'win32'
+    );
+
+    expect(layout.fullBounds).toEqual({
+      x: 0,
+      y: 1,
+      width: 1400,
+      height: 899,
+    });
+    expect(layout.pluginBounds).toEqual({
+      x: 0,
+      y: 45,
+      width: 1400,
+      height: 855,
+    });
+  });
+
   it('only shifts the plugin primary pane when a right dock is visible', () => {
     const layout = calculateMainWindowPluginLayout(
       { x: 0, y: 0, width: 1400, height: 900 },
