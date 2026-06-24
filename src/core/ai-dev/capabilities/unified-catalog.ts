@@ -7,6 +7,7 @@ import { createProfileCapabilityCatalog } from './profile-catalog';
 import { createObservationCapabilityCatalog } from './observation-catalog';
 import { createSystemCapabilityCatalog } from './system-catalog';
 import { createSessionCapabilityCatalog } from './session-catalog';
+import { createSiteCapabilityCatalog } from './site-capability-catalog';
 import { withAssistantGuidance } from './assistant-guidance';
 
 export type CapabilityCatalog = Record<string, RegisteredCapability>;
@@ -22,6 +23,7 @@ const CAPABILITY_CATALOG_FACTORIES: readonly CapabilityCatalogFactory[] = [
   createObservationCapabilityCatalog,
   createSystemCapabilityCatalog,
   createSessionCapabilityCatalog,
+  createSiteCapabilityCatalog,
 ];
 
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+$/;

@@ -7,11 +7,14 @@ import { getDefaultRuntimeSource } from '../../types/browser-runtime';
 import type { SessionConfig } from '../../core/browser-pool/types';
 import { resolveChromeExecutablePath, validateChromeRuntime } from './chrome-runtime-shared';
 import { resolveFirefoxExecutablePath } from './ruyi-runtime-shared';
+import { createLogger } from '../../core/logger';
 import {
   getCloakRuntimeDescriptor,
   installCloakRuntime,
   resolveCloakRuntimeInfo,
 } from './browser-pool-integration-cloak';
+
+const logger = createLogger('BrowserRuntimeProviders');
 
 type ProviderFactoryOptions = {
   electronBrowserFactory: BrowserFactory;
@@ -157,25 +160,40 @@ function createFactoryBackedProvider(
       };
     },
     async create(session: SessionConfig) {
-      const created = await browserFactory(session);
-      if (!created.runtimeDescriptor) {
-        throw new Error(
-          `Browser runtime factory for ${runtimeId} must return runtimeDescriptor to avoid descriptor drift`
-        );
+      let created: Awaited<ReturnType<BrowserFactory>> | null = null;
+      try {
+        created = await browserFactory(session);
+        if (!created.runtimeDescriptor) {
+          throw new Error(
+            `Browser runtime factory for ${runtimeId} must return runtimeDescriptor to avoid descriptor drift`
+          );
+        }
+        assertBrowserRuntimeDescriptorContract(created.runtimeDescriptor);
+        return {
+          browser: created.browser,
+          runtimeId,
+          runtimeDescriptor: created.runtimeDescriptor,
+          resolvedRuntime:
+            created.resolvedRuntime ??
+            (await this.resolveRuntime({
+              runtimeId,
+              sourceOverride: session.runtimeSourceOverride ?? null,
+            })),
+          viewId: created.viewId,
+        };
+      } catch (error) {
+        if (created?.browser) {
+          try {
+            await created.browser.closeInternal();
+          } catch (closeError) {
+            logger.warn('Failed to close browser after runtime provider create failure', {
+              runtimeId,
+              error: closeError instanceof Error ? closeError.message : String(closeError),
+            });
+          }
+        }
+        throw error;
       }
-      assertBrowserRuntimeDescriptorContract(created.runtimeDescriptor);
-      return {
-        browser: created.browser,
-        runtimeId,
-        runtimeDescriptor: created.runtimeDescriptor,
-        resolvedRuntime:
-          created.resolvedRuntime ??
-          (await this.resolveRuntime({
-            runtimeId,
-            sourceOverride: session.runtimeSourceOverride ?? null,
-          })),
-        viewId: created.viewId,
-      };
     },
   };
 }

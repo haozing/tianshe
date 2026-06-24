@@ -919,6 +919,45 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(response.json._meta.scopeDecision.allowed).toBe(false);
   });
 
+  it('agentHandMode=true enforces orchestration scopes even when compatibility scope enforcement is disabled', async () => {
+    await startServer(createMockBrowser(), {
+      restApiConfig: {
+        agentHandMode: true,
+        enforceOrchestrationScopes: false,
+        token: 'secret-token',
+      },
+    });
+    const authHeaders = { authorization: 'Bearer secret-token' };
+
+    const createResponse = await postJson(
+      baseUrl,
+      '/api/v1/orchestration/sessions',
+      {},
+      authHeaders
+    );
+    const sessionId = createResponse.json.data.sessionId as string;
+
+    const response = await postJson(
+      baseUrl,
+      '/api/v1/orchestration/invoke',
+      {
+        sessionId,
+        name: 'browser_snapshot',
+        arguments: {},
+      },
+      authHeaders
+    );
+
+    expect(response.status).toBe(403);
+    expect(response.json.success).toBe(false);
+    expect(response.json.code).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(response.json._meta.scopeDecision).toMatchObject({
+      enforced: true,
+      allowed: false,
+      missingScopes: ['browser.read'],
+    });
+  });
+
   it('enforceOrchestrationScopes allows invocation with scopes', async () => {
     const browser = createMockBrowser({
       snapshot: vi

@@ -15,6 +15,7 @@ import type {
   BrowserPdfResult,
   BrowserRuntimeEvent,
   BrowserRuntimeEventType,
+  BrowserStorageArea,
   ConsoleMessage,
   Cookie,
   NetworkEntry,
@@ -31,10 +32,7 @@ import type { BrowserRuntimeSource } from '../../types/browser-runtime';
 import type { Bounds, NormalizedBounds, NormalizedPoint } from '../../core/coordinate/types';
 import type { BrowserFactory } from '../../core/browser-pool/global-pool';
 import type { PooledBrowserController, SessionConfig } from '../../core/browser-pool/types';
-import {
-  applyRuntimeCapabilitySupport,
-  getStaticRuntimeDescriptor,
-} from '../../core/browser-pool/runtime-capability-registry';
+import { getKnownEffectiveRuntimeDescriptor } from '../../core/browser-runtime';
 import {
   classifyNetworkEntry,
   matchesNetworkFilter,
@@ -47,6 +45,7 @@ import { getUserDataBaseDir, resolveExtensionProxy } from './chrome-runtime-shar
 type PlaywrightCookie = {
   name: string;
   value: string;
+  url?: string;
   domain?: string;
   path?: string;
   expires?: number;
@@ -169,8 +168,36 @@ function getCloakDownloadDir(sessionId: string): string {
   return path.join(getUserDataBaseDir(), 'cloak', 'downloads', sessionId);
 }
 
+function getCloakDomStorageSnapshotPath(sessionId: string): string {
+  return path.join(getCloakUserDataDir(sessionId), 'dom-storage-snapshot.json');
+}
+
 function getCloakCacheDir(): string {
   return path.join(app.getPath('userData'), 'runtimes', 'cloakbrowser');
+}
+
+function toCloakFingerprintPlatform(osFamily?: string, platform?: string): string | null {
+  const source = `${osFamily || ''} ${platform || ''}`.toLowerCase();
+  if (source.includes('mac')) return 'macos';
+  if (source.includes('linux')) return 'linux';
+  if (source.includes('win')) return 'windows';
+  return null;
+}
+
+function stableFingerprintSeedFromText(text: string): string {
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+  return String(10000 + (hash % 90000));
+}
+
+function toCloakFingerprintSeed(seed: number | undefined, fallbackKey: string): string {
+  if (typeof seed !== 'number' || !Number.isFinite(seed)) {
+    return stableFingerprintSeedFromText(fallbackKey || 'cloak');
+  }
+  const normalized = Math.abs(Math.trunc(seed));
+  return normalized > 0 ? String(normalized) : stableFingerprintSeedFromText(fallbackKey || 'cloak');
 }
 
 function sourcePath(source: BrowserRuntimeSource | null | undefined): string | undefined {
@@ -316,6 +343,7 @@ export function buildCloakLaunchOptions(session: SessionConfig, runtime: CloakRu
   const region = identity?.region;
   const display = identity?.display;
   const hardware = identity?.hardware;
+  const graphics = identity?.graphics;
   const userDataDir = getCloakUserDataDir(session.id);
   const downloadDir = getCloakDownloadDir(session.id);
   fs.mkdirSync(userDataDir, { recursive: true });
@@ -323,6 +351,9 @@ export function buildCloakLaunchOptions(session: SessionConfig, runtime: CloakRu
 
   const args: string[] = [];
   if (hardware?.userAgent) args.push(`--user-agent=${hardware.userAgent}`);
+  args.push(`--fingerprint=${toCloakFingerprintSeed(graphics?.canvasSeed, session.id)}`);
+  const fingerprintPlatform = toCloakFingerprintPlatform(hardware?.osFamily, hardware?.platform);
+  if (fingerprintPlatform) args.push(`--fingerprint-platform=${fingerprintPlatform}`);
   const proxy = toCloakProxy(session);
   return {
     userDataDir,
@@ -368,15 +399,23 @@ function mapCookie(cookie: PlaywrightCookie): Cookie {
 }
 
 function toPlaywrightCookie(cookie: Cookie, currentUrl: string): PlaywrightCookie {
-  return {
+  const base = {
     name: cookie.name,
     value: cookie.value,
-    domain: cookie.domain,
-    path: cookie.path ?? '/',
     expires: cookie.expirationDate,
     httpOnly: cookie.httpOnly,
     secure: cookie.secure,
-    ...(cookie.domain ? {} : { url: currentUrl }),
+  };
+  if (cookie.domain) {
+    return {
+      ...base,
+      domain: cookie.domain,
+      path: cookie.path ?? '/',
+    } as PlaywrightCookie;
+  }
+  return {
+    ...base,
+    url: cookie.url ?? currentUrl,
   } as PlaywrightCookie;
 }
 
@@ -390,6 +429,20 @@ function filterCookies(cookies: Cookie[], filter?: BrowserCookieFilter): Cookie[
     if (filter.httpOnly !== undefined && cookie.httpOnly !== filter.httpOnly) return false;
     return true;
   });
+}
+
+type DomStorageSnapshot = Record<string, Record<string, string>>;
+
+function getPageOrigin(page: PlaywrightPage): string | null {
+  try {
+    const url = new URL(page.url());
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return null;
+    }
+    return url.origin;
+  } catch {
+    return null;
+  }
 }
 
 function createSnapshotElementScript(limit: number): string {
@@ -460,6 +513,11 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
   private readonly interceptedRequests = new Map<string, { request: BrowserInterceptedRequest; route: PlaywrightRoute }>();
   private readonly interceptWaiters = new Set<InterceptWaiter>();
   private readonly responseWaiters = new Set<ResponseWaiter>();
+  private readonly attachedPages = new WeakSet<PlaywrightPage>();
+  private readonly tabIds = new WeakMap<PlaywrightPage, string>();
+  private readonly navigationIds = new WeakMap<PlaywrightPage, string>();
+  private readonly gotoNavigationPages = new WeakSet<PlaywrightPage>();
+  private tabSequence = 0;
   private downloadBehavior: { policy: 'allow' | 'deny'; downloadPath?: string } = { policy: 'allow' };
   private interceptPatterns: BrowserInterceptPattern[] = [];
   private routeHandlerActive = false;
@@ -469,9 +527,11 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
   constructor(
     private readonly context: PlaywrightContext,
     private page: PlaywrightPage,
-    descriptor: BrowserRuntimeDescriptor
+    descriptor: BrowserRuntimeDescriptor,
+    private readonly domStorageSnapshotPath: string
   ) {
     this.descriptor = descriptor;
+    this.getTabId(page);
     this.attachPageListeners(page);
     this.attachContextListeners(context);
   }
@@ -493,10 +553,28 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
       options?.waitUntil === 'networkidle0' || options?.waitUntil === 'networkidle2'
         ? 'networkidle'
         : options?.waitUntil;
-    await this.page.goto(url, {
-      timeout: options?.timeout,
-      waitUntil,
-    });
+    const navigationId = this.beginNavigation(this.page);
+    this.gotoNavigationPages.add(this.page);
+    this.emitNavigationEvent('navigation.started', this.page, url, undefined, navigationId);
+    try {
+      await this.page.goto(url, {
+        timeout: options?.timeout,
+        waitUntil,
+      });
+      await this.restoreDomStorageSnapshot(this.page);
+      this.emitNavigationEvent('navigation.completed', this.page, this.page.url(), undefined, navigationId);
+    } catch (error) {
+      this.emitNavigationEvent(
+        'navigation.failed',
+        this.page,
+        url,
+        error instanceof Error ? error.message : String(error),
+        navigationId
+      );
+      throw error;
+    } finally {
+      this.gotoNavigationPages.delete(this.page);
+    }
   }
 
   async back(): Promise<void> {
@@ -561,7 +639,16 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
     pageFunction: (...args: unknown[]) => T | Promise<T>,
     ...args: unknown[]
   ): Promise<T> {
-    return this.page.evaluate<T>(pageFunction, ...args);
+    if (args.length <= 1) {
+      return this.page.evaluate<T>(pageFunction, ...args);
+    }
+    return this.page.evaluate<T>(
+      (payload: any) => {
+        const fn = (0, eval)(`(${payload.source})`);
+        return fn(...payload.args);
+      },
+      { source: pageFunction.toString(), args }
+    );
   }
 
   async screenshot(options?: ScreenshotOptions): Promise<string> {
@@ -647,6 +734,50 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
 
   async getUserAgent(): Promise<string> {
     return this.page.evaluate<string>('navigator.userAgent');
+  }
+
+  async getStorageItem(area: BrowserStorageArea, key: string): Promise<string | null> {
+    return this.page.evaluate<string | null>(
+      (input: any) => {
+        const storage =
+          input.area === 'session' ? globalThis.sessionStorage : globalThis.localStorage;
+        return storage.getItem(input.key);
+      },
+      { area, key }
+    );
+  }
+
+  async setStorageItem(area: BrowserStorageArea, key: string, value: string): Promise<void> {
+    await this.page.evaluate<void>(
+      (input: any) => {
+        const storage =
+          input.area === 'session' ? globalThis.sessionStorage : globalThis.localStorage;
+        storage.setItem(input.key, input.value);
+      },
+      { area, key, value }
+    );
+  }
+
+  async removeStorageItem(area: BrowserStorageArea, key: string): Promise<void> {
+    await this.page.evaluate<void>(
+      (input: any) => {
+        const storage =
+          input.area === 'session' ? globalThis.sessionStorage : globalThis.localStorage;
+        storage.removeItem(input.key);
+      },
+      { area, key }
+    );
+  }
+
+  async clearStorageArea(area: BrowserStorageArea): Promise<void> {
+    await this.page.evaluate<void>(
+      (input: any) => {
+        const storage =
+          input.area === 'session' ? globalThis.sessionStorage : globalThis.localStorage;
+        storage.clear();
+      },
+      { area }
+    );
   }
 
   async show(): Promise<void> {
@@ -940,8 +1071,8 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
 
   async listTabs(): Promise<BrowserTabInfo[]> {
     return Promise.all(
-      this.context.pages().map(async (page, index) => ({
-        id: String(index),
+      this.context.pages().map(async (page) => ({
+        id: this.getTabId(page),
         url: page.url(),
         title: await page.title().catch(() => undefined),
         active: page === this.page,
@@ -954,12 +1085,13 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
     this.attachPageListeners(page);
     if (options?.url) await page.goto(options.url);
     if (options?.active !== false) this.page = page;
+    const id = this.getTabId(page);
     this.emitRuntimeEvent('tab.created', {
-      id: String(this.context.pages().indexOf(page)),
+      id,
       url: page.url(),
     });
     return {
-      id: String(this.context.pages().indexOf(page)),
+      id,
       url: page.url(),
       title: await page.title().catch(() => undefined),
       active: page === this.page,
@@ -967,7 +1099,7 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
   }
 
   async activateTab(id: string): Promise<void> {
-    const page = this.context.pages()[Number.parseInt(id, 10)];
+    const page = this.findPageByTabId(id);
     if (!page) throw new Error(`Cloak tab not found: ${id}`);
     this.page = page;
     await page.bringToFront();
@@ -975,7 +1107,7 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
   }
 
   async closeTab(id: string): Promise<void> {
-    const page = this.context.pages()[Number.parseInt(id, 10)];
+    const page = this.findPageByTabId(id);
     if (!page) throw new Error(`Cloak tab not found: ${id}`);
     await page.close();
     this.page = this.context.pages()[0] ?? this.page;
@@ -1125,10 +1257,85 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
     await this.releaseInterceptedRequests('abort').catch(() => undefined);
     this.rejectInterceptWaiters(new Error('Cloak browser closed'));
     this.rejectResponseWaiters(new Error('Cloak browser closed'));
+    await this.persistDomStorageSnapshot().catch((error) => {
+      logger.warn('Failed to persist Cloak DOM storage snapshot', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     await this.context.close();
   }
 
+  private getTabId(page: PlaywrightPage): string {
+    const existing = this.tabIds.get(page);
+    if (existing) return existing;
+    this.tabSequence += 1;
+    const id = `cloak-tab-${this.tabSequence}`;
+    this.tabIds.set(page, id);
+    return id;
+  }
+
+  private findPageByTabId(id: string): PlaywrightPage | null {
+    return this.context.pages().find((page) => this.getTabId(page) === id) ?? null;
+  }
+
+  private beginNavigation(page: PlaywrightPage): string {
+    const id = `cloak-nav-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    this.navigationIds.set(page, id);
+    return id;
+  }
+
+  private getNavigationId(page: PlaywrightPage): string {
+    const existing = this.navigationIds.get(page);
+    if (existing) return existing;
+    return this.beginNavigation(page);
+  }
+
   private attachPageListeners(page: PlaywrightPage): void {
+    if (this.attachedPages.has(page)) {
+      return;
+    }
+    this.attachedPages.add(page);
+    this.getTabId(page);
+    page.on('framenavigated', (frame: any) => {
+      const parentFrame = typeof frame.parentFrame === 'function' ? frame.parentFrame() : null;
+      if (parentFrame) return;
+      const url = typeof frame.url === 'function' ? frame.url() : page.url();
+      const isGotoNavigation = this.gotoNavigationPages.has(page);
+      const navigationId = isGotoNavigation ? this.getNavigationId(page) : this.beginNavigation(page);
+      if (!isGotoNavigation) {
+        this.emitNavigationEvent('navigation.started', page, url, undefined, navigationId);
+      }
+      this.emitNavigationEvent('navigation.committed', page, url, undefined, navigationId);
+    });
+    page.on('domcontentloaded', () => {
+      void this.restoreDomStorageSnapshot(page).catch((error) => {
+        logger.warn('Failed to restore Cloak DOM storage snapshot', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      this.emitNavigationEvent('navigation.domContentLoaded', page, page.url());
+    });
+    page.on('load', () => {
+      this.emitNavigationEvent('navigation.completed', page, page.url());
+    });
+    page.on('requestfailed', (request: any) => {
+      const isNavigationRequest =
+        typeof request.isNavigationRequest === 'function'
+          ? request.isNavigationRequest()
+          : false;
+      if (!isNavigationRequest) return;
+      const failure = typeof request.failure === 'function' ? request.failure() : null;
+      const navigationId = this.gotoNavigationPages.has(page)
+        ? this.getNavigationId(page)
+        : this.beginNavigation(page);
+      this.emitNavigationEvent(
+        'navigation.failed',
+        page,
+        typeof request.url === 'function' ? request.url() : page.url(),
+        failure?.errorText,
+        navigationId
+      );
+    });
     page.on('dialog', (dialog: any) => {
       const type = typeof dialog.type === 'function' ? dialog.type() : 'alert';
       const state: BrowserDialogState = {
@@ -1186,7 +1393,7 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
   private attachContextListeners(context: PlaywrightContext): void {
     context.on('page', (page: PlaywrightPage) => {
       this.attachPageListeners(page);
-      const id = String(context.pages().indexOf(page));
+      const id = this.getTabId(page);
       this.emitRuntimeEvent('tab.created', {
         id,
         url: page.url(),
@@ -1210,6 +1417,114 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
         // ignore listener failures
       }
     }
+  }
+
+  private emitNavigationEvent(
+    type: Extract<
+      BrowserRuntimeEventType,
+      | 'navigation.started'
+      | 'navigation.committed'
+      | 'navigation.domContentLoaded'
+      | 'navigation.completed'
+      | 'navigation.failed'
+    >,
+    page: PlaywrightPage,
+    url: string,
+    message?: string,
+    navigationId = this.getNavigationId(page)
+  ): void {
+    this.emitRuntimeEvent(type, {
+      url,
+      navigationId,
+      ...(message ? { message } : {}),
+    });
+  }
+
+  private readDomStorageSnapshot(): DomStorageSnapshot {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.domStorageSnapshotPath, 'utf8'));
+      if (!parsed || typeof parsed !== 'object') {
+        return {};
+      }
+      const snapshot: DomStorageSnapshot = {};
+      for (const [origin, values] of Object.entries(parsed as Record<string, unknown>)) {
+        if (!origin || !values || typeof values !== 'object') {
+          continue;
+        }
+        snapshot[origin] = {};
+        for (const [key, value] of Object.entries(values as Record<string, unknown>)) {
+          snapshot[origin][key] = String(value ?? '');
+        }
+      }
+      return snapshot;
+    } catch {
+      return {};
+    }
+  }
+
+  private async writeDomStorageSnapshot(snapshot: DomStorageSnapshot): Promise<void> {
+    await fs.promises.mkdir(path.dirname(this.domStorageSnapshotPath), { recursive: true });
+    await fs.promises.writeFile(
+      this.domStorageSnapshotPath,
+      `${JSON.stringify(snapshot, null, 2)}\n`,
+      'utf8'
+    );
+  }
+
+  private async persistDomStorageSnapshot(): Promise<void> {
+    const snapshot = this.readDomStorageSnapshot();
+    for (const page of this.context.pages()) {
+      if (page.isClosed()) {
+        continue;
+      }
+      const origin = getPageOrigin(page);
+      if (!origin) {
+        continue;
+      }
+      const values = await page
+        .evaluate<Record<string, string>>(() => {
+          const result: Record<string, string> = {};
+          for (let index = 0; index < globalThis.localStorage.length; index += 1) {
+            const key = globalThis.localStorage.key(index);
+            if (key === null) {
+              continue;
+            }
+            result[key] = globalThis.localStorage.getItem(key) ?? '';
+          }
+          return result;
+        })
+        .catch(() => null);
+      if (values) {
+        snapshot[origin] = values;
+      }
+    }
+    await this.writeDomStorageSnapshot(snapshot);
+  }
+
+  private async restoreDomStorageSnapshot(page: PlaywrightPage): Promise<void> {
+    if (page.isClosed()) {
+      return;
+    }
+    const origin = getPageOrigin(page);
+    if (!origin) {
+      return;
+    }
+    const values = this.readDomStorageSnapshot()[origin];
+    if (!values || Object.keys(values).length === 0) {
+      return;
+    }
+    await page.evaluate<void>(
+      (entries: unknown) => {
+        const values =
+          entries && typeof entries === 'object'
+            ? (entries as Record<string, string>)
+            : {};
+        for (const [key, value] of Object.entries(values)) {
+          globalThis.localStorage.setItem(key, value);
+        }
+      },
+      values
+    );
   }
 
   private async finalizeDownload(id: string, download: PlaywrightDownload): Promise<void> {
@@ -1440,7 +1755,8 @@ export function createCloakBrowserFactory(): BrowserFactory {
     const browser = new CloakPlaywrightBrowser(
       context,
       page,
-      getCloakRuntimeDescriptor()
+      getCloakRuntimeDescriptor(),
+      getCloakDomStorageSnapshotPath(session.id)
     );
     return {
       browser,
@@ -1458,18 +1774,5 @@ export function createCloakBrowserFactory(): BrowserFactory {
 }
 
 export function getCloakRuntimeDescriptor() {
-  return applyRuntimeCapabilitySupport(
-    getStaticRuntimeDescriptor(CLOAK_RUNTIME_ID),
-    {
-      'pdf.print': true,
-      'input.native': true,
-      'download.manage': true,
-      'dialog.basic': true,
-      'dialog.promptText': true,
-      'events.runtime': true,
-      'intercept.observe': true,
-      'intercept.control': true,
-    },
-    { source: 'static-runtime' }
-  );
+  return getKnownEffectiveRuntimeDescriptor(CLOAK_RUNTIME_ID);
 }

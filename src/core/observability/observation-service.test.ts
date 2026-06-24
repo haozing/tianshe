@@ -196,4 +196,229 @@ describe('ObservationService', () => {
     expect(serialized).toContain('[redacted]');
     expect(serialized).toContain('visible-value');
   });
+
+  it('applies a golden redaction gate to failure, repair, browser, and profile artifacts', async () => {
+    const sink = new MemoryObservationSink();
+    setObservationSink(sink);
+
+    await withTraceContext(
+      createRootTraceContext({
+        traceId: 'trace-artifact-golden-redaction',
+        source: 'test',
+        profileId: 'profile-1',
+      }),
+      async () => {
+        await observationService.attachArtifact({
+          component: 'site-adapter',
+          type: 'site_adapter_failure',
+          label: 'failure artifact',
+          attrs: {
+            credentialId: 'failure-credential-secret',
+            safe: 'visible-attr',
+          },
+          data: {
+            currentUrl: 'https://example.test/path?token=failure-url-secret&safe=1',
+            headers: {
+              authorization: 'Bearer failure-header-secret',
+            },
+            errorMessage: 'password=failure-password-secret',
+            selectorHits: [
+              {
+                selector: '#login',
+                text: 'Authorization: Bearer failure-text-secret',
+              },
+            ],
+          },
+        });
+
+        await observationService.attachArtifact({
+          component: 'repair-studio',
+          type: 'site_adapter_repair_bundle',
+          label: 'repair artifact',
+          attrs: {
+            accessKey: 'repair-attr-secret',
+          },
+          data: {
+            changeSet: {
+              patch: 'set password=repair-patch-secret',
+            },
+            reviewer: {
+              credential: 'repair-credential-secret',
+            },
+            cookies: [
+              {
+                name: 'sid',
+                value: 'repair-cookie-secret',
+                domain: 'example.test',
+                path: '/',
+              },
+            ],
+            sql: 'SELECT * FROM users WHERE token=repair-sql-secret',
+          },
+        });
+
+        await observationService.attachArtifact({
+          component: 'browser',
+          type: 'snapshot',
+          label: 'browser artifact',
+          attrs: {
+            cookie: 'sid=browser-attr-secret',
+          },
+          data: {
+            currentUrl:
+              'https://alice:browser-url-secret@example.test/?access_key=browser-query-secret',
+            snapshot: {
+              text: 'Set-Cookie: sid=browser-text-secret; Path=/',
+              linkText: 'Bearer browser-link-secret',
+            },
+            localStorage: {
+              session: 'browser-session-secret',
+            },
+          },
+        });
+
+        await observationService.attachArtifact({
+          component: 'profile',
+          type: 'error_context',
+          label: 'profile artifact',
+          attrs: {
+            profileSessionId: 'profile-attr-secret',
+            safe: 'visible-profile-attr',
+          },
+          data: {
+            status: 'expired',
+            profileId: 'profile-1',
+            cookies: [
+              {
+                name: 'sid',
+                value: 'profile-cookie-secret',
+                domain: 'example.test',
+                path: '/',
+                httpOnly: true,
+              },
+            ],
+            localStorage: {
+              token: 'profile-token-secret',
+              safe: 'visible-profile',
+            },
+            password: 'profile-password-secret',
+            note: 'Authorization: Bearer profile-note-secret',
+          },
+        });
+      }
+    );
+
+    const stableArtifacts = sink.artifacts.map((artifact) => ({
+      type: artifact.type,
+      label: artifact.label,
+      attrs: artifact.attrs,
+      data: artifact.data,
+    }));
+
+    expect(stableArtifacts).toMatchInlineSnapshot(`
+      [
+        {
+          "attrs": {
+            "credentialId": "[redacted]",
+            "safe": "visible-attr",
+          },
+          "data": {
+            "currentUrl": "https://example.test/path?token=[redacted]&safe=1",
+            "errorMessage": "password=[redacted]",
+            "headers": {
+              "authorization": "[redacted]",
+            },
+            "selectorHits": [
+              {
+                "selector": "#login",
+                "text": "Authorization: Bearer [redacted]",
+              },
+            ],
+          },
+          "label": "failure artifact",
+          "type": "site_adapter_failure",
+        },
+        {
+          "attrs": {
+            "accessKey": "[redacted]",
+          },
+          "data": {
+            "changeSet": {
+              "patch": "set password=[redacted]",
+            },
+            "cookies": "[redacted]",
+            "reviewer": {
+              "credential": "[redacted]",
+            },
+            "sql": "[REDACTED_SQL]",
+          },
+          "label": "repair artifact",
+          "type": "site_adapter_repair_bundle",
+        },
+        {
+          "attrs": {
+            "cookie": "[redacted]",
+          },
+          "data": {
+            "currentUrl": "https://[redacted]:[redacted]@example.test/?access_key=[redacted]",
+            "localStorage": {
+              "session": "[redacted]",
+            },
+            "snapshot": {
+              "linkText": "Bearer [redacted]",
+              "text": "Set-Cookie: [redacted]",
+            },
+          },
+          "label": "browser artifact",
+          "type": "snapshot",
+        },
+        {
+          "attrs": {
+            "profileSessionId": "[redacted]",
+            "safe": "visible-profile-attr",
+          },
+          "data": {
+            "cookies": "[redacted]",
+            "localStorage": {
+              "safe": "visible-profile",
+              "token": "[redacted]",
+            },
+            "note": "Authorization: Bearer [redacted]",
+            "password": "[redacted]",
+            "profileId": "profile-1",
+            "status": "expired",
+          },
+          "label": "profile artifact",
+          "type": "error_context",
+        },
+      ]
+    `);
+
+    const serialized = JSON.stringify(stableArtifacts);
+    for (const secret of [
+      'failure-credential-secret',
+      'failure-url-secret',
+      'failure-header-secret',
+      'failure-password-secret',
+      'failure-text-secret',
+      'repair-attr-secret',
+      'repair-patch-secret',
+      'repair-credential-secret',
+      'repair-cookie-secret',
+      'repair-sql-secret',
+      'browser-attr-secret',
+      'browser-url-secret',
+      'browser-query-secret',
+      'browser-text-secret',
+      'browser-link-secret',
+      'browser-session-secret',
+      'profile-attr-secret',
+      'profile-cookie-secret',
+      'profile-token-secret',
+      'profile-password-secret',
+      'profile-note-secret',
+    ]) {
+      expect(serialized).not.toContain(secret);
+    }
+  });
 });

@@ -116,7 +116,18 @@ async function removeAllCookies() {
   }
 }
 
-async function setCookie(cookie, fallbackUrl) {
+async function flushCookiesToDisk(tabId) {
+  try {
+    await withDebugger(tabId, async () => {
+      await chrome.debugger.sendCommand({ tabId }, 'Storage.flushCookies');
+    });
+  } catch {
+    // Older Chromium builds may not expose Storage.flushCookies; cookie persistence
+    // still falls back to the browser's normal shutdown flush.
+  }
+}
+
+async function setCookie(tabId, cookie, fallbackUrl) {
   const domain = String((cookie && cookie.domain) || '').replace(/^\./, '');
   const explicitUrl = String((cookie && cookie.url) || '').trim();
   const cookiePath = String((cookie && cookie.path) || '/');
@@ -142,15 +153,85 @@ async function setCookie(cookie, fallbackUrl) {
     throw new Error('Cookie url or domain is required');
   }
 
-  await chrome.cookies.set({
+  const details = {
     url,
     name: cookie.name,
     value: cookie.value,
-    domain: cookie.domain,
     path: cookie.path || '/',
     secure: !!cookie.secure,
     httpOnly: !!cookie.httpOnly,
-    expirationDate: cookie.expirationDate,
+  };
+  if (domain) {
+    details.domain = cookie.domain;
+  }
+  if (Number.isFinite(cookie.expirationDate)) {
+    details.expirationDate = cookie.expirationDate;
+  }
+
+  const setResult = await chrome.cookies.set(details);
+  if (!setResult) {
+    throw new Error('Cookie write failed: ' + cookie.name);
+  }
+
+  await withDebugger(tabId, async () => {
+    const cdpDetails = {
+      url,
+      name: cookie.name,
+      value: cookie.value,
+      path: cookie.path || '/',
+      secure: !!cookie.secure,
+      httpOnly: !!cookie.httpOnly,
+    };
+    if (domain) {
+      cdpDetails.domain = cookie.domain;
+    }
+    if (Number.isFinite(cookie.expirationDate)) {
+      cdpDetails.expires = cookie.expirationDate;
+    }
+    await chrome.debugger.sendCommand({ tabId }, 'Network.setCookie', cdpDetails);
   });
+}
+
+async function dispatchTouchEvent(tabId, type, points) {
+  const normalizedPoints = Array.isArray(points)
+    ? points.map((point) => ({
+        x: Number(point && point.x) || 0,
+        y: Number(point && point.y) || 0,
+      }))
+    : [];
+  await withDebugger(tabId, async () => {
+    await chrome.debugger
+      .sendCommand({ tabId }, 'Emulation.setTouchEmulationEnabled', {
+        enabled: true,
+        maxTouchPoints: Math.max(1, normalizedPoints.length || 1),
+      })
+      .catch(() => undefined);
+    await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchTouchEvent', {
+      type,
+      touchPoints: normalizedPoints,
+    });
+  });
+}
+
+async function dispatchTouchTap(tabId, x, y, holdMs) {
+  await dispatchTouchEvent(tabId, 'touchStart', [{ x, y }]);
+  await sleep(Math.max(20, Math.trunc(Number(holdMs) || 50)));
+  await dispatchTouchEvent(tabId, 'touchEnd', []);
+}
+
+async function dispatchTouchDrag(tabId, fromX, fromY, toX, toY) {
+  await dispatchTouchEvent(tabId, 'touchStart', [{ x: fromX, y: fromY }]);
+  const steps = 8;
+  for (let index = 1; index <= steps; index += 1) {
+    const progress = index / steps;
+    await dispatchTouchEvent(tabId, 'touchMove', [
+      {
+        x: fromX + (toX - fromX) * progress,
+        y: fromY + (toY - fromY) * progress,
+      },
+    ]);
+    await sleep(16);
+  }
+  await dispatchTouchEvent(tabId, 'touchEnd', []);
 }`;
 }

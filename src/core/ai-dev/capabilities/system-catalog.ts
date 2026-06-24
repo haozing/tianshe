@@ -24,7 +24,7 @@ import {
   toCapabilityTitle,
 } from './catalog-utils';
 import { BROWSER_RUNTIME_IDS } from '../../../types/browser-runtime';
-import { getStaticRuntimeDescriptor } from '../../browser-pool/runtime-capability-registry';
+import { buildEffectiveRuntimeDescriptorMap } from '../../browser-runtime';
 
 const SYSTEM_CAPABILITY_VERSION = '1.0.0';
 
@@ -282,18 +282,19 @@ const buildStaticBrowserRuntimes = async (gateway?: OrchestrationDependencies['s
         .catch(() => [])
     : [];
   const statusMap = new Map(runtimeStatuses.map((status) => [status.runtimeId, status]));
+  const descriptorMap = buildEffectiveRuntimeDescriptorMap(runtimeStatuses);
   return {
   total: BROWSER_RUNTIME_IDS.length,
   descriptors: Object.fromEntries(
-    BROWSER_RUNTIME_IDS.map((runtimeId) => [runtimeId, getStaticRuntimeDescriptor(runtimeId)])
+    BROWSER_RUNTIME_IDS.map((runtimeId) => [runtimeId, descriptorMap[runtimeId]])
   ),
   statuses: Object.fromEntries(
     BROWSER_RUNTIME_IDS.map((runtimeId) => [
       runtimeId,
       statusMap.get(runtimeId) ?? {
         runtimeId,
-        descriptor: getStaticRuntimeDescriptor(runtimeId),
-        source: getStaticRuntimeDescriptor(runtimeId).source,
+        descriptor: descriptorMap[runtimeId],
+        source: descriptorMap[runtimeId].source,
         resolvedRuntime: null,
         installed: false,
         healthy: false,

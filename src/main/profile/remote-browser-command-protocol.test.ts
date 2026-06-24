@@ -26,6 +26,8 @@ describe('remote browser command protocol', () => {
       REMOTE_BROWSER_COMMAND.emulationViewportSet
     );
     expect(EXTENSION_REMOTE_BROWSER_COMMANDS).toContain(REMOTE_BROWSER_COMMAND.emulationClear);
+    expect(EXTENSION_REMOTE_BROWSER_COMMANDS).toContain(REMOTE_BROWSER_COMMAND.storageGetItem);
+    expect(EXTENSION_REMOTE_BROWSER_COMMANDS).toContain(REMOTE_BROWSER_COMMAND.touchTap);
 
     expect(RUYI_REMOTE_BROWSER_COMMANDS).toContain(
       REMOTE_BROWSER_COMMAND.networkInterceptEnable
@@ -39,8 +41,6 @@ describe('remote browser command protocol', () => {
     expect(RUYI_REMOTE_BROWSER_COMMANDS).toContain(REMOTE_BROWSER_COMMAND.pdfSave);
     expect(RUYI_REMOTE_BROWSER_COMMANDS).not.toContain(REMOTE_BROWSER_COMMAND.networkStart);
     expect(RUYI_REMOTE_BROWSER_COMMANDS).not.toContain(REMOTE_BROWSER_COMMAND.dialogArm);
-    expect(EXTENSION_REMOTE_BROWSER_COMMANDS).not.toContain(REMOTE_BROWSER_COMMAND.storageGetItem);
-    expect(EXTENSION_REMOTE_BROWSER_COMMANDS).not.toContain(REMOTE_BROWSER_COMMAND.touchTap);
     expect(EXTENSION_REMOTE_BROWSER_COMMANDS).not.toContain(REMOTE_BROWSER_COMMAND.downloadList);
     expect(EXTENSION_REMOTE_BROWSER_COMMANDS).not.toContain(REMOTE_BROWSER_COMMAND.pdfSave);
   });

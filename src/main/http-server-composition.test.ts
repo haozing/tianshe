@@ -9,7 +9,7 @@ import {
 } from './http-error-utils';
 import { createHttpRuntimeState } from './http-runtime-state';
 import { createHttpSessionBridge } from './http-session-bridge';
-import { createHttpServerComposition } from './http-server-composition';
+import { buildRestApiDependencies, createHttpServerComposition } from './http-server-composition';
 
 const FETCH_FORBIDDEN_PORTS = new Set([
   1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,
@@ -280,5 +280,113 @@ describe('http-server-composition', () => {
     expect(response.status).toBe(503);
     expect(payload.code).toBe('BROWSER_POOL_NOT_INITIALIZED');
     expect(getBrowserPoolManager).not.toHaveBeenCalled();
+  });
+
+  it('wires staged dataset write and provenance methods into orchestration dependencies', async () => {
+    const stagedPlan = {
+      planId: 'plan-1',
+      datasetId: 'dataset-1',
+      createdAt: '2026-06-23T00:00:00.000Z',
+      operations: [{ type: 'insert' as const, record: { name: 'Alice' } }],
+      rowCount: 1,
+      requiresConfirmation: true as const,
+    };
+    const commitResult = {
+      planId: 'plan-1',
+      runId: 'plan-1',
+      datasetId: 'dataset-1',
+      insertedRowIds: [1],
+      updatedRowIds: [],
+      deletedRowIds: [],
+      affectedRowCount: 1,
+      provenanceRecorded: true,
+    };
+    const provenance = [
+      {
+        id: 'prov-1',
+        datasetId: 'dataset-1',
+        rowId: 1,
+        runId: 'plan-1',
+        operation: 'insert',
+        occurredAt: 1,
+      },
+    ];
+    const duckdbService = {
+      listDatasets: vi.fn().mockResolvedValue([]),
+      getDatasetInfo: vi.fn().mockResolvedValue(null),
+      queryDataset: vi.fn().mockResolvedValue({ columns: [], rows: [], rowCount: 0 }),
+      createEmptyDataset: vi.fn().mockResolvedValue('dataset-new'),
+      importDatasetFile: vi.fn().mockResolvedValue('dataset-import'),
+      stageWritePlan: vi.fn().mockResolvedValue(stagedPlan),
+      commitWritePlan: vi.fn().mockResolvedValue(commitResult),
+      listRecordProvenance: vi.fn().mockResolvedValue(provenance),
+      renameDataset: vi.fn().mockResolvedValue(undefined),
+      deleteDataset: vi.fn().mockResolvedValue(undefined),
+      getProfileService: vi.fn().mockReturnValue({
+        list: vi.fn().mockResolvedValue([]),
+        get: vi.fn().mockResolvedValue(null),
+        resolve: vi.fn().mockResolvedValue(null),
+        create: vi.fn(),
+        update: vi.fn(),
+        deleteWithCascade: vi.fn(),
+      }),
+      getProfileLoginStateService: vi.fn().mockReturnValue({
+        getLoginState: vi.fn().mockResolvedValue(null),
+        upsertLoginState: vi.fn(),
+      }),
+    };
+    const dependencies = buildRestApiDependencies({
+      runtime: {
+        duckdbService: duckdbService as never,
+        jsPluginManager: {
+          listPlugins: vi.fn().mockResolvedValue([]),
+          getPluginInfo: vi.fn().mockResolvedValue(null),
+          listRuntimeStatuses: vi.fn().mockResolvedValue([]),
+          getRuntimeStatus: vi.fn().mockResolvedValue(null),
+          import: vi.fn(),
+          installOrUpdateCloudPlugin: vi.fn(),
+          reload: vi.fn(),
+          uninstall: vi.fn(),
+        } as never,
+        viewManager: {} as never,
+        windowManager: {} as never,
+        fingerprintManager: {} as never,
+        getBrowserPoolManager: vi.fn() as never,
+        getPluginRegistry: () =>
+          ({
+            listMCPCallableAPIs: vi.fn().mockReturnValue([]),
+            callPluginAPIFromMCP: vi.fn(),
+          }) as never,
+      },
+      httpApiConfig: {},
+    });
+
+    await expect(
+      dependencies.datasetGateway?.stageWritePlan?.(
+        'dataset-1',
+        [{ type: 'insert', record: { name: 'Alice' } }],
+        { traceId: 'trace-1' }
+      )
+    ).resolves.toBe(stagedPlan);
+    await expect(
+      dependencies.datasetGateway?.commitWritePlan?.(stagedPlan, {
+        traceId: 'trace-1',
+        confirmRisk: true,
+      })
+    ).resolves.toBe(commitResult);
+    await expect(
+      dependencies.datasetGateway?.listRecordProvenance?.('dataset-1', 1, 20)
+    ).resolves.toBe(provenance);
+
+    expect(duckdbService.stageWritePlan).toHaveBeenCalledWith(
+      'dataset-1',
+      [{ type: 'insert', record: { name: 'Alice' } }],
+      { traceId: 'trace-1' }
+    );
+    expect(duckdbService.commitWritePlan).toHaveBeenCalledWith(stagedPlan, {
+      traceId: 'trace-1',
+      confirmRisk: true,
+    });
+    expect(duckdbService.listRecordProvenance).toHaveBeenCalledWith('dataset-1', 1, 20);
   });
 });

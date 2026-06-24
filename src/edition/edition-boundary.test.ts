@@ -146,6 +146,7 @@ describe('open/cloud edition boundary', () => {
       './api/query-template',
       './api/runtime',
       './api/saved-site',
+      './api/site-adapter-lab',
       './api/system',
       './api/tag',
       './api/view',

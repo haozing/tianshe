@@ -9,6 +9,7 @@ export function registerDatasetRecordRoutes(duckdb: DuckDBService): void {
   registerBatchInsertRecords(duckdb);
   registerUpdateRecord(duckdb);
   registerBatchUpdateRecords(duckdb);
+  registerGetRecordEvidence(duckdb);
   registerHardDeleteRows(duckdb);
   registerDeleteRowsByAhoCorasickFilter(duckdb);
 }
@@ -87,6 +88,27 @@ function registerBatchUpdateRecords(duckdb: DuckDBService): void {
       try {
         await duckdb.batchUpdateRecords(datasetId, updates);
         return { success: true };
+      } catch (error: unknown) {
+        return createDatasetRouteErrorResult(error);
+      }
+    },
+  });
+}
+
+function registerGetRecordEvidence(duckdb: DuckDBService): void {
+  ipcRouteRegistry.register({
+    channel: 'duckdb:get-record-evidence',
+    kind: 'handle',
+    permission: 'trusted-renderer',
+    handler: async (
+      _event: IpcMainInvokeEvent,
+      datasetId: string,
+      rowId: number,
+      limit?: number
+    ) => {
+      try {
+        const evidence = await duckdb.getDatasetRecordEvidence(datasetId, rowId, limit);
+        return { success: true, evidence };
       } catch (error: unknown) {
         return createDatasetRouteErrorResult(error);
       }

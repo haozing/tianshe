@@ -429,9 +429,13 @@ function applyOpenSourceOverlay(outputDir) {
     'test:browser-pool':
       'vitest run src/core/browser-pool/__tests__/pool-manager.test.ts src/core/browser-pool/__tests__/pool-manager.closed-persistent.test.ts src/core/browser-pool/__tests__/wait-queue.test.ts src/core/browser-pool/__tests__/global-pool.test.ts src/core/browser-pool/__tests__/profile-live-session-lease.test.ts',
     'test:browser-canary': 'node scripts/browser-canary.js',
+    'test:site-adapter-canary': 'node scripts/site-adapter-canary.js',
     'test:dataset-ipc':
       'vitest run src/main/ipc-handlers/dataset-handler.test.ts src/renderer/src/stores/__tests__/datasetStore.test.ts',
     'test:package-smoke': 'npm run package:open:dir && node scripts/package-smoke.js',
+    'v4:snapshots': 'node scripts/generate-v4-governance-snapshots.js',
+    'v4:release-gate': 'node scripts/v4-release-gate.js',
+    'v4:status': 'node scripts/v4-status-summary.js',
     typecheck: 'tsc --noEmit',
     lint: 'eslint .',
     'format:check': 'prettier --check "src/**/*.{ts,tsx,json}"',
@@ -439,7 +443,7 @@ function applyOpenSourceOverlay(outputDir) {
     sbom: 'node scripts/generate-sbom.js',
     'verify:open-source-boundary': 'node scripts/open-source-boundary.js',
     'verify:ci':
-      'npm run test:architecture && npm run test:inventory && npm run typecheck && npm run lint && npm run test:open:full && npm run verify:supply-chain && npm run verify:open-source-boundary && npm run sbom && npm run build:open && npm run test:package-smoke',
+      'npm run test:architecture && npm run test:inventory && npm run typecheck && npm run v4:snapshots && npm run test:site-adapter-canary -- --suite all && npm run v4:release-gate && npm run lint && npm run test:open:full && npm run verify:supply-chain && npm run verify:open-source-boundary && npm run sbom && npm run build:open && npm run test:package-smoke',
   };
   writeJson(outputDir, 'package.json', packageJson);
 
@@ -490,10 +494,14 @@ require(mainEntry);
     'build:open',
     'package:open:portable',
     'test:browser-canary',
+    'test:site-adapter-canary',
     'test:open',
     'test:open:full',
     'test:inventory',
     'test:package-smoke',
+    'v4:snapshots',
+    'v4:release-gate',
+    'v4:status',
     'verify:supply-chain',
     'sbom',
     'verify:open-source-boundary',

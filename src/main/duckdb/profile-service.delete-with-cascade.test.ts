@@ -58,6 +58,7 @@ describe('ProfileService.deleteWithCascade', () => {
     } as never);
     vi.spyOn(service as never, 'purgePartitionData').mockResolvedValue(undefined);
     vi.spyOn(service as never, 'purgeExtensionProfileData').mockResolvedValue(undefined);
+    vi.spyOn(service as never, 'purgeCloakProfileData').mockResolvedValue(undefined);
   });
 
   it('should mark accounts as unbound before deleting profile', async () => {
@@ -77,6 +78,7 @@ describe('ProfileService.deleteWithCascade', () => {
 
     expect(markAccountStmt?.bind).toHaveBeenCalledWith([UNBOUND_PROFILE_ID, 'profile-1']);
     expect(deleteProfileStmt?.bind).toHaveBeenCalledWith(['profile-1']);
+    expect((service as never).purgeCloakProfileData).toHaveBeenCalledWith('profile-1');
   });
 
   it('should rollback transaction when deletion fails', async () => {
@@ -101,5 +103,6 @@ describe('ProfileService.deleteWithCascade', () => {
     expect(conn.run).not.toHaveBeenCalledWith('COMMIT');
     expect((service as never).purgePartitionData).not.toHaveBeenCalled();
     expect((service as never).purgeExtensionProfileData).not.toHaveBeenCalled();
+    expect((service as never).purgeCloakProfileData).not.toHaveBeenCalled();
   });
 });

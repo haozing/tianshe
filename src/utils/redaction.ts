@@ -13,8 +13,16 @@ const POSIX_ABSOLUTE_PATH_PATTERN =
 const SQL_STATEMENT_PATTERN =
   /\b(?:SELECT\b[\s\S]*?\bFROM\b|INSERT\s+INTO\b|UPDATE\b[\s\S]*?\bSET\b|DELETE\s+FROM\b|CREATE\s+TABLE\b|DROP\s+TABLE\b|ALTER\s+TABLE\b|WITH\b[\s\S]*?\bSELECT\b)[^\r\n]*/gi;
 
+export function isSensitiveRedactionKey(key: string): boolean {
+  return SENSITIVE_KEY_PATTERN.test(key);
+}
+
 export function redactSensitiveText(value: string): string {
   return String(value)
+    .replace(
+      /(\bhttps?:\/\/)([^:\s/@]+):([^@\s/]+)@/gi,
+      `${'$1'}${REDACTED_VALUE}:${REDACTED_VALUE}@`
+    )
     .replace(
       /(\b(?:authorization|proxy-authorization)\s*:\s*)(Bearer\s+)?[^\s\r\n,;]+/gi,
       (_match, prefix: string, scheme: string = '') => `${prefix}${scheme}${REDACTED_VALUE}`
@@ -90,7 +98,7 @@ export function redactSensitiveValue(
 
   const out: Record<string, unknown> = {};
   for (const [key, entryValue] of Object.entries(value)) {
-    out[key] = SENSITIVE_KEY_PATTERN.test(key)
+    out[key] = isSensitiveRedactionKey(key)
       ? REDACTED_VALUE
       : redactSensitiveValue(entryValue, depth + 1, seen);
   }

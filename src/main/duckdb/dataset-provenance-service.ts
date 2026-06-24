@@ -370,6 +370,31 @@ export class DatasetProvenanceService {
     }));
   }
 
+  async countRecordProvenance(datasetId: string, rowId: number): Promise<number> {
+    let total = 0;
+    for (const table of [
+      this.getRecordProvenanceTable({ datasetSidecar: datasetId }),
+      this.getRecordProvenanceTable(),
+    ]) {
+      try {
+        const result = await allPrepared(
+          this.conn,
+          `
+          SELECT COUNT(*) AS total
+          FROM ${table}
+          WHERE dataset_id = ? AND row_id = ?
+        `,
+          [datasetId, rowId]
+        );
+        const row = parseRows(result)[0];
+        total += Number(row?.total ?? 0);
+      } catch {
+        // Sidecar table may not exist for legacy datasets.
+      }
+    }
+    return total;
+  }
+
   async getRun(runId: string): Promise<DatasetRunLedgerEntry | null> {
     const result = await allPrepared(
       this.conn,

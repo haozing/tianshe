@@ -287,11 +287,7 @@ describe('DatasetsPage workspace regressions', () => {
       datasets: imported ? [importedDataset] : [],
     }));
 
-    const analyzeTypes = vi.fn(async () => ({
-      success: true,
-      schema: [],
-      sampleData: [],
-    }));
+    const analyzeTypes = vi.fn();
     const applySchema = vi.fn(async () => ({ success: true }));
 
     (window as any).electronAPI = {
@@ -366,8 +362,8 @@ describe('DatasetsPage workspace regressions', () => {
 
     await waitFor(
       () => {
-        expect(analyzeTypes).toHaveBeenCalledWith(importedDatasetId);
-        expect(applySchema).toHaveBeenCalledWith(importedDatasetId, []);
+        expect(analyzeTypes).not.toHaveBeenCalled();
+        expect(applySchema).not.toHaveBeenCalled();
         expect(screen.getByTestId('selected-category').textContent).toBe('folder-1');
         expect(screen.getByTestId('selected-table-id').textContent).toBe(
           `table_${importedDatasetId}`
@@ -381,11 +377,11 @@ describe('DatasetsPage workspace regressions', () => {
     expect(screen.queryByText(`select-category:${importedDatasetId}`)).not.toBeInTheDocument();
   });
 
-  it('does not mark an import as processed when type analysis fails', async () => {
-    const importedDatasetId = 'dataset-import-failed';
+  it('does not run legacy type analysis after importing a dataset', async () => {
+    const importedDatasetId = 'dataset-import-no-legacy-analysis';
     const importedDataset = {
       id: importedDatasetId,
-      name: 'contacts-failed',
+      name: 'contacts-no-legacy-analysis',
       rowCount: 8,
       columnCount: 3,
       sizeBytes: 128,
@@ -395,10 +391,7 @@ describe('DatasetsPage workspace regressions', () => {
 
     let imported = false;
 
-    const analyzeTypes = vi.fn(async () => ({
-      success: false,
-      error: 'analyze failed',
-    }));
+    const analyzeTypes = vi.fn();
     const applySchema = vi.fn(async () => ({ success: true }));
 
     (window as any).electronAPI = {
@@ -474,10 +467,7 @@ describe('DatasetsPage workspace regressions', () => {
     fireEvent.click(screen.getByText('import-folder-1'));
 
     await waitFor(() => {
-      expect(analyzeTypes).toHaveBeenCalledWith(importedDatasetId);
-    });
-
-    await waitFor(() => {
+      expect(analyzeTypes).not.toHaveBeenCalled();
       expect(applySchema).not.toHaveBeenCalled();
       expect(useDatasetStore.getState().processedImports.has(importedDatasetId)).toBe(false);
       expect(screen.getByTestId('selected-category').textContent).toBe('folder-1');

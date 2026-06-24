@@ -81,6 +81,7 @@ describe('DatasetIPCHandler', () => {
       batchInsertRecords: vi.fn(),
       updateRecord: vi.fn(),
       batchUpdateRecords: vi.fn(),
+      getDatasetRecordEvidence: vi.fn(),
       queryWithEngine: vi.fn(),
       previewQuerySQL: vi.fn(),
       previewClean: vi.fn(),
@@ -141,6 +142,7 @@ describe('DatasetIPCHandler', () => {
         'duckdb:batch-insert-records',
         'duckdb:update-record',
         'duckdb:batch-update-records',
+        'duckdb:get-record-evidence',
         'duckdb:execute-query',
         'duckdb:preview-query-sql',
         'duckdb:preview-clean',
@@ -543,6 +545,42 @@ describe('DatasetIPCHandler', () => {
 
       expect(result.success).toBe(true);
       expect(mockDuckDB.batchUpdateRecords).toHaveBeenCalledWith('ds1', updates);
+    });
+  });
+
+  describe('duckdb:get-record-evidence', () => {
+    it('应该返回数据行来源证据包', async () => {
+      const h = handlers.get('duckdb:get-record-evidence')!;
+      const mockEvent = createMockEvent();
+      const evidence = {
+        datasetId: 'ds1',
+        rowId: 7,
+        limit: 20,
+        provenance: [],
+        sources: [],
+        traceIds: ['trace-1'],
+        traces: [],
+      };
+      (mockDuckDB.getDatasetRecordEvidence as any).mockResolvedValue(evidence);
+
+      const result = await h(mockEvent, 'ds1', 7, 20);
+
+      expect(result).toEqual({ success: true, evidence });
+      expect(mockDuckDB.getDatasetRecordEvidence).toHaveBeenCalledWith('ds1', 7, 20);
+    });
+
+    it('should return a stable error code when record evidence lookup fails', async () => {
+      const h = handlers.get('duckdb:get-record-evidence')!;
+      const mockEvent = createMockEvent();
+      (mockDuckDB.getDatasetRecordEvidence as any).mockRejectedValue(
+        new Error('invalid rowId: must be a finite number')
+      );
+
+      const result = await h(mockEvent, 'ds1', Number.NaN);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('invalid rowId: must be a finite number');
+      expect(result.code).toBe('INVALID_INPUT');
     });
   });
 

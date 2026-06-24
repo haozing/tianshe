@@ -50,6 +50,50 @@ describe('browser runtime providers', () => {
     ).rejects.toThrow(/must return runtimeDescriptor/);
   });
 
+  it('closes an already-created browser when descriptor validation fails', async () => {
+    const invalidDescriptor = getStaticRuntimeDescriptor('electron-webcontents');
+    invalidDescriptor.capabilities['network.responseBody'] = {
+      supported: true,
+      stability: 'planned',
+      source: 'runtime',
+      notes: 'Invalid runtime descriptor used to verify provider cleanup.',
+    };
+    const browser = createBrowser();
+
+    const providers = createDefaultBrowserRuntimeProviders({
+      electronBrowserFactory: createBrowserFactory({
+        browser,
+        runtimeId: 'electron-webcontents',
+        runtimeDescriptor: invalidDescriptor,
+      }),
+      extensionBrowserFactory: createBrowserFactory({
+        browser: createBrowser(),
+        runtimeId: 'chromium-extension-relay',
+        runtimeDescriptor: getStaticRuntimeDescriptor('chromium-extension-relay'),
+      }),
+      ruyiBrowserFactory: createBrowserFactory({
+        browser: createBrowser(),
+        runtimeId: 'firefox-bidi',
+        runtimeDescriptor: getStaticRuntimeDescriptor('firefox-bidi'),
+      }),
+      cloakBrowserFactory: createBrowserFactory({
+        browser: createBrowser(),
+        runtimeId: 'chromium-cloak-playwright',
+        runtimeDescriptor: getStaticRuntimeDescriptor('chromium-cloak-playwright'),
+      }),
+    });
+
+    const electron = providers.find((provider) => provider.id === 'electron-webcontents');
+    await expect(
+      electron?.create({
+        id: 'profile-1',
+        runtimeId: 'electron-webcontents',
+        runtimeDescriptor: getStaticRuntimeDescriptor('electron-webcontents'),
+      } as any)
+    ).rejects.toThrow(/cannot be supported while stability=planned/);
+    expect(browser.closeInternal).toHaveBeenCalledTimes(1);
+  });
+
   it('returns the factory runtimeDescriptor without replacing dynamic descriptors', async () => {
     const descriptor = getStaticRuntimeDescriptor('electron-webcontents');
     descriptor.capabilities['network.responseBody'] = {

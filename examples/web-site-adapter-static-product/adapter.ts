@@ -12,7 +12,16 @@ export const staticProductAdapter: SiteAdapterModule = {
     extractors: [
       {
         id: 'product',
-        outputFields: ['productName', 'price', 'seller'],
+        outputFields: [
+          'productName',
+          'price',
+          'seller',
+          'sourceUrl',
+          'confidence',
+          'missingFields',
+          'selectorHits',
+          'pageFingerprint',
+        ],
       },
     ],
     verifiers: [

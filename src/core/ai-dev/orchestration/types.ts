@@ -318,9 +318,12 @@ export interface OrchestrationDatasetQueryResult {
   filteredTotalCount?: number;
 }
 
+export type OrchestrationDatasetRecordValue = string | number | boolean | null;
+export type OrchestrationDatasetRecord = Record<string, OrchestrationDatasetRecordValue>;
+
 export type OrchestrationDatasetWriteOperation =
-  | { type: 'insert'; record: Record<string, unknown> }
-  | { type: 'update'; rowId: number; updates: Record<string, unknown> }
+  | { type: 'insert'; record: OrchestrationDatasetRecord }
+  | { type: 'update'; rowId: number; updates: OrchestrationDatasetRecord }
   | { type: 'delete'; rowIds: number[] };
 
 export interface OrchestrationDatasetProvenanceContext {

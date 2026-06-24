@@ -127,6 +127,59 @@ describe('ProfileList runtime refresh', () => {
     });
   });
 
+  it('fronts an MCP-held profile browser for visible manual login handoff', async () => {
+    const onProfileDataChanged = vi.fn().mockResolvedValue(undefined);
+    (window as any).electronAPI.profile.poolListBrowsers.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'browser-mcp-login',
+          sessionId: 'profile-1',
+          runtimeId: 'electron-webcontents',
+          status: 'locked',
+          viewId: 'view-login',
+          lastAccessedAt: 2,
+          lockedBy: {
+            source: 'mcp',
+          },
+        },
+      ],
+    });
+
+    render(
+      <ProfileList
+        profiles={[
+          buildProfile({
+            status: 'active',
+          }),
+        ]}
+        viewMode="grid"
+        isLoading={false}
+        cloudEnabled={true}
+        cloudActionProfileId={null}
+        onPushCloud={vi.fn()}
+        onDeleteCloud={vi.fn()}
+        onEdit={vi.fn()}
+        onProfileDataChanged={onProfileDataChanged}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '前置窗口' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '前置窗口' }));
+
+    await waitFor(() => {
+      expect((window as any).electronAPI.profile.poolShowBrowser).toHaveBeenCalledWith(
+        'browser-mcp-login',
+        { title: '浏览器 - 环境-1' }
+      );
+      expect((window as any).electronAPI.profile.poolLaunch).not.toHaveBeenCalled();
+      expect(onProfileDataChanged).toHaveBeenCalledWith({ refreshRunning: true });
+    });
+  });
+
   it('shows runtime-derived status labels instead of the legacy active label', async () => {
     (window as any).electronAPI.profile.poolListBrowsers.mockResolvedValue({
       success: true,

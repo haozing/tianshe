@@ -10,6 +10,7 @@ import {
   createCloakBrowserFactory,
   getCloakRuntimeDescriptor,
 } from './browser-pool-integration-cloak';
+import { validateBrowserRuntimeDescriptorAgainstContract } from '../../core/browser-runtime';
 import { createDefaultBrowserRuntimeProviders } from './browser-runtime-providers';
 
 const electronState = vi.hoisted(() => ({
@@ -41,7 +42,30 @@ vi.mock('cloakbrowser', () => ({
   binaryInfo: cloakState.binaryInfo,
 }));
 
-type PageEvent = 'dialog' | 'download' | 'response';
+type PageEvent =
+  | 'dialog'
+  | 'download'
+  | 'response'
+  | 'framenavigated'
+  | 'domcontentloaded'
+  | 'load'
+  | 'requestfailed';
+
+function createMemoryStorage() {
+  const values = new Map<string, string>();
+  return {
+    getItem: vi.fn((key: string) => values.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      values.set(key, String(value));
+    }),
+    removeItem: vi.fn((key: string) => {
+      values.delete(key);
+    }),
+    clear: vi.fn(() => {
+      values.clear();
+    }),
+  };
+}
 
 function createSession(overrides?: Partial<SessionConfig>): SessionConfig {
   return {
@@ -62,11 +86,24 @@ function createSession(overrides?: Partial<SessionConfig>): SessionConfig {
 
 function createMockPage() {
   const listeners = new Map<string, Array<(...args: any[]) => void>>();
+  const localStorage = createMemoryStorage();
+  const sessionStorage = createMemoryStorage();
   const page = {
     goto: vi.fn(async () => undefined),
     title: vi.fn(async () => 'Cloak Test'),
     url: vi.fn(() => 'https://example.test'),
-    evaluate: vi.fn(async () => []),
+    evaluate: vi.fn(async (fn: any, ...args: any[]) => {
+      if (typeof fn !== 'function') {
+        return [];
+      }
+      const previousWindow = (globalThis as any).window;
+      (globalThis as any).window = { localStorage, sessionStorage };
+      try {
+        return await fn(...args);
+      } finally {
+        (globalThis as any).window = previousWindow;
+      }
+    }),
     screenshot: vi.fn(async () => Buffer.from('screenshot')),
     click: vi.fn(async () => undefined),
     fill: vi.fn(async () => undefined),
@@ -190,6 +227,21 @@ describe('Cloak browser integration contract', () => {
     expect(options).toHaveProperty('launchOptions.downloadsPath');
   });
 
+  it('passes stable profile fingerprint seed and platform flags to CloakBrowser', () => {
+    const options = buildCloakLaunchOptions(createSession(), {
+      source: { type: 'managed-download', channel: 'cloakbrowser' },
+      installed: true,
+      warnings: [],
+    });
+
+    expect(options).toMatchObject({
+      args: expect.arrayContaining([
+        expect.stringMatching(/^--fingerprint=\d+$/),
+        '--fingerprint-platform=windows',
+      ]),
+    });
+  });
+
   it('uses the same Cloak descriptor in providers and created browsers', async () => {
     const executablePath = path.join(tempRoot, 'cloak.exe');
     fs.writeFileSync(executablePath, '');
@@ -209,12 +261,152 @@ describe('Cloak browser integration contract', () => {
     });
     const provider = providers.find((item) => item.id === 'chromium-cloak-playwright');
     expect(provider?.descriptor.capabilities['download.manage']?.supported).toBe(true);
+    expect(validateBrowserRuntimeDescriptorAgainstContract(getCloakRuntimeDescriptor())).toEqual([]);
 
-    const created = await createCloakBrowserFactory()(createSession());
+    const created = await provider?.create(createSession());
 
-    expect(created.runtimeDescriptor).toEqual(getCloakRuntimeDescriptor());
-    expect(created.browser.describeRuntime()).toEqual(provider?.descriptor);
-    expect(created.browser.hasCapability('intercept.control')).toBe(true);
+    expect(created?.runtimeDescriptor).toEqual(getCloakRuntimeDescriptor());
+    expect(created?.browser.describeRuntime()).toEqual(provider?.descriptor);
+    expect(created?.browser.hasCapability('intercept.control')).toBe(true);
+  });
+
+  it('round-trips local and session storage through the unified storage capability', async () => {
+    const { created } = await createMockCloakBrowser(tempRoot);
+
+    await created.browser.setStorageItem('local', 'token', 'local-value');
+    await created.browser.setStorageItem('session', 'token', 'session-value');
+
+    await expect(created.browser.getStorageItem('local', 'token')).resolves.toBe('local-value');
+    await expect(created.browser.getStorageItem('session', 'token')).resolves.toBe('session-value');
+
+    await created.browser.removeStorageItem('local', 'token');
+    await expect(created.browser.getStorageItem('local', 'token')).resolves.toBeNull();
+
+    await created.browser.clearStorageArea('session');
+    await expect(created.browser.getStorageItem('session', 'token')).resolves.toBeNull();
+  });
+
+  it('sets host-only cookies with a Playwright url instead of a domain/path tuple', async () => {
+    const { created, context } = await createMockCloakBrowser(tempRoot);
+
+    await created.browser.setCookie({
+      name: 'host_cookie',
+      value: '1',
+      path: '/',
+    });
+
+    expect(context.addCookies).toHaveBeenCalledWith([
+      expect.objectContaining({
+        name: 'host_cookie',
+        value: '1',
+        url: 'https://example.test',
+      }),
+    ]);
+    const cookieArg = context.addCookies.mock.calls[0][0][0];
+    expect(cookieArg).not.toHaveProperty('domain');
+    expect(cookieArg).not.toHaveProperty('path');
+  });
+
+  it('supports variadic evaluateWithArgs through Playwright single-argument evaluate', async () => {
+    const { created } = await createMockCloakBrowser(tempRoot);
+
+    await expect(
+      created.browser.evaluateWithArgs(
+        (left, right) => `${String(left)}:${String(right)}`,
+        'hello',
+        'cloak'
+      )
+    ).resolves.toBe('hello:cloak');
+  });
+
+  it('emits normalized navigation runtime events', async () => {
+    const { created, page } = await createMockCloakBrowser(tempRoot);
+    const events: any[] = [];
+    const unsubscribe = created.browser.onRuntimeEvent((event) => {
+      events.push(event);
+    });
+
+    page.goto.mockImplementationOnce(async () => {
+      page.url.mockReturnValue('https://example.test/orders');
+      page.emit('framenavigated', {
+        parentFrame: () => null,
+        url: () => 'https://example.test/orders',
+      });
+      page.emit('domcontentloaded');
+      page.emit('load');
+    });
+    await created.browser.goto('https://example.test/orders');
+    page.url.mockReturnValue('https://example.test/orders/next');
+    page.emit('framenavigated', {
+      parentFrame: () => null,
+      url: () => 'https://example.test/orders/next',
+    });
+    page.emit('domcontentloaded');
+    page.emit('load');
+    page.emit('requestfailed', {
+      isNavigationRequest: () => true,
+      url: () => 'https://example.test/fail',
+      failure: () => ({ errorText: 'net::ERR_FAILED' }),
+    });
+    unsubscribe();
+
+    expect(events.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        'navigation.started',
+        'navigation.committed',
+        'navigation.domContentLoaded',
+        'navigation.completed',
+        'navigation.failed',
+      ])
+    );
+    const navigationLifecycleEvents = events.filter((event) =>
+      [
+        'navigation.started',
+        'navigation.committed',
+        'navigation.domContentLoaded',
+        'navigation.completed',
+      ].includes(event.type) && event.payload.url === 'https://example.test/orders'
+    );
+    expect(new Set(navigationLifecycleEvents.map((event) => event.payload.navigationId)).size).toBe(1);
+    const firstNavigationId = navigationLifecycleEvents[0]?.payload.navigationId;
+    const secondNavigationEvents = events.filter(
+      (event) =>
+        [
+          'navigation.started',
+          'navigation.committed',
+          'navigation.domContentLoaded',
+          'navigation.completed',
+        ].includes(event.type) && event.payload.url === 'https://example.test/orders/next'
+    );
+    expect(new Set(secondNavigationEvents.map((event) => event.payload.navigationId)).size).toBe(1);
+    expect(secondNavigationEvents[0]?.payload.navigationId).not.toBe(firstNavigationId);
+    expect(events.find((event) => event.type === 'navigation.failed')?.payload).toMatchObject({
+      url: 'https://example.test/fail',
+      message: 'net::ERR_FAILED',
+    });
+  });
+
+  it('keeps Cloak tab ids stable when page indexes change', async () => {
+    const { created, page, context } = await createMockCloakBrowser(tempRoot);
+    const secondPage = createMockPage().page;
+    const pages = [page, secondPage];
+    context.pages.mockImplementation(() => pages);
+    context.newPage.mockResolvedValue(secondPage);
+
+    const initialTab = (await created.browser.listTabs())[0];
+    const createdTab = await created.browser.createTab({ active: true });
+    expect(createdTab.id).not.toBe(initialTab.id);
+
+    pages.shift();
+    await created.browser.activateTab(createdTab.id);
+
+    expect(secondPage.bringToFront).toHaveBeenCalledTimes(1);
+    await expect(created.browser.listTabs()).resolves.toEqual([
+      expect.objectContaining({
+        id: createdTab.id,
+        active: true,
+      }),
+    ]);
   });
 
   it('waits for future responses and stores matching network entries', async () => {

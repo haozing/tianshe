@@ -76,6 +76,9 @@ describe('unified capability catalog', () => {
     expect(catalog.session_end_current).toBeDefined();
     expect(catalog.session_close).toBeDefined();
     expect(catalog.session_close_profile).toBeDefined();
+    expect(catalog['books_to_scrape.extract_product']).toBeDefined();
+    expect(catalog['github.extract_profile_summary']).toBeDefined();
+    expect(catalog.site_capability_list).toBeDefined();
   });
 
   it('merge 时 capability key 冲突应抛出 VALIDATION_ERROR', () => {

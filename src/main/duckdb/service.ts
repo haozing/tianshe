@@ -9,7 +9,13 @@
  */
 
 import { DuckDBInstance, DuckDBConnection } from '@duckdb/node-api';
-import type { LogEntry } from './types';
+import type {
+  DatasetRecordEvidenceBundle,
+  DatasetRecordEvidenceSummaryBucket,
+  DatasetRecordEvidenceSource,
+  DatasetRecordEvidenceTrace,
+  LogEntry,
+} from './types';
 import { ensureDirectories, getMainDBPath } from './utils';
 import fs from 'fs-extra';
 import path from 'path';
@@ -50,6 +56,49 @@ import { setObservationSink, getObservationSink } from '../../core/observability
 // import { getGlobalConnectionPool } from './connection-pool';  // ? 已移除：统一使用主连接（方案A）
 
 const logger = createLogger('DuckDBService');
+
+function getDatasetRecordEvidenceMetadataString(
+  metadata: Record<string, unknown> | null | undefined,
+  ...keys: string[]
+): string | null {
+  if (!metadata) {
+    return null;
+  }
+
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function getDatasetRecordEvidenceTraceStatus(trace: DatasetRecordEvidenceTrace): string {
+  if (trace.error) {
+    return 'error';
+  }
+  const summary = trace.summary as Record<string, unknown> | null;
+  const status = summary && typeof summary.status === 'string' ? summary.status.trim() : '';
+  return status || 'available';
+}
+
+function incrementDatasetRecordEvidenceBucket(
+  counts: Map<string, number>,
+  value: string | null | undefined
+): void {
+  const key = value && value.trim() ? value.trim() : 'unknown';
+  counts.set(key, (counts.get(key) || 0) + 1);
+}
+
+function toDatasetRecordEvidenceBuckets(
+  counts: Map<string, number>
+): DatasetRecordEvidenceSummaryBucket[] {
+  return Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([key, count]) => ({ key, count }));
+}
 
 /**
  * DuckDB 服务协调器
@@ -330,6 +379,122 @@ export class DuckDBService implements IDatasetResolver {
       throw new Error('ObservationQueryService not initialized');
     }
     return await this.observationQueryService.searchRecentFailures(limit);
+  }
+
+  async getDatasetRecordEvidence(
+    datasetId: string,
+    rowId: number,
+    limit = 50
+  ): Promise<DatasetRecordEvidenceBundle> {
+    if (!this.datasetService) {
+      throw new Error('DatasetService not initialized');
+    }
+
+    const normalizedDatasetId = String(datasetId || '').trim();
+    const normalizedRowId = Math.trunc(Number(rowId));
+    const safeLimit = Math.max(1, Math.min(500, Math.trunc(Number(limit) || 50)));
+
+    if (!normalizedDatasetId) {
+      throw new Error('datasetId is required');
+    }
+    if (!Number.isFinite(normalizedRowId)) {
+      throw new Error('invalid rowId: must be a finite number');
+    }
+
+    const provenance = await this.datasetService.listRecordProvenance(
+      normalizedDatasetId,
+      normalizedRowId,
+      safeLimit
+    );
+    const totalProvenanceRecords =
+      typeof this.datasetService.countRecordProvenance === 'function'
+        ? await this.datasetService.countRecordProvenance(normalizedDatasetId, normalizedRowId)
+        : provenance.length;
+    const traceIds = Array.from(
+      new Set(
+        provenance
+          .map((entry) => (typeof entry.traceId === 'string' ? entry.traceId.trim() : ''))
+          .filter(Boolean)
+      )
+    );
+    const sources: DatasetRecordEvidenceSource[] = provenance.map((entry) => ({
+      id: entry.id,
+      runId: entry.runId,
+      operation: entry.operation,
+      occurredAt: entry.occurredAt,
+      traceId: entry.traceId ?? null,
+      adapterId: entry.adapterId ?? null,
+      adapterVersion: entry.adapterVersion ?? null,
+      runtimeId: entry.runtimeId ?? null,
+      sourceUrl: entry.sourceUrl ?? null,
+      profileId: getDatasetRecordEvidenceMetadataString(entry.metadata, 'profileId', 'profile_id'),
+    }));
+    const traces: DatasetRecordEvidenceTrace[] = [];
+
+    for (const traceId of traceIds) {
+      if (!this.observationQueryService) {
+        traces.push({
+          traceId,
+          summary: null,
+          failureBundle: null,
+          timeline: null,
+          error: 'ObservationQueryService not initialized',
+        });
+        continue;
+      }
+
+      try {
+        const [summary, failureBundle, timeline] = await Promise.all([
+          this.observationQueryService.getTraceSummary(traceId),
+          this.observationQueryService.getFailureBundle(traceId),
+          this.observationQueryService.getTraceTimeline(traceId, 100),
+        ]);
+        traces.push({ traceId, summary, failureBundle, timeline });
+      } catch (error) {
+        traces.push({
+          traceId,
+          summary: null,
+          failureBundle: null,
+          timeline: null,
+          error: getUnknownErrorMessage(error),
+        });
+      }
+    }
+
+    const operationCounts = new Map<string, number>();
+    const adapterCounts = new Map<string, number>();
+    const runtimeCounts = new Map<string, number>();
+    const traceStatusCounts = new Map<string, number>();
+    for (const source of sources) {
+      incrementDatasetRecordEvidenceBucket(operationCounts, source.operation);
+      incrementDatasetRecordEvidenceBucket(adapterCounts, source.adapterId);
+      incrementDatasetRecordEvidenceBucket(runtimeCounts, source.runtimeId);
+    }
+    for (const trace of traces) {
+      incrementDatasetRecordEvidenceBucket(
+        traceStatusCounts,
+        getDatasetRecordEvidenceTraceStatus(trace)
+      );
+    }
+
+    return {
+      datasetId: normalizedDatasetId,
+      rowId: normalizedRowId,
+      limit: safeLimit,
+      summary: {
+        totalProvenanceRecords,
+        returnedProvenanceRecords: provenance.length,
+        hasMoreProvenance: totalProvenanceRecords > provenance.length,
+        operationCounts: toDatasetRecordEvidenceBuckets(operationCounts),
+        adapterCounts: toDatasetRecordEvidenceBuckets(adapterCounts),
+        runtimeCounts: toDatasetRecordEvidenceBuckets(runtimeCounts),
+        traceStatusCounts: toDatasetRecordEvidenceBuckets(traceStatusCounts),
+      },
+      provenance,
+      sources,
+      traceIds,
+      traces,
+    };
   }
 
   getRuntimeObservationService(): RuntimeObservationService {

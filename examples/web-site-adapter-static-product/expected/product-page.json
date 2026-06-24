@@ -1,5 +1,33 @@
 {
   "productName": "Steel Widget",
   "price": "12.50",
-  "seller": "Demo Supply"
+  "seller": "Demo Supply",
+  "sourceUrl": "https://static-product.example/products/sku-1",
+  "confidence": 1,
+  "missingFields": [],
+  "selectorHits": [
+    {
+      "field": "productName",
+      "selector": "fields.productName",
+      "count": 1,
+      "sampleText": "Steel Widget"
+    },
+    {
+      "field": "price",
+      "selector": "fields.price",
+      "count": 1,
+      "sampleText": "12.50"
+    },
+    {
+      "field": "seller",
+      "selector": "fields.seller",
+      "count": 1,
+      "sampleText": "Demo Supply"
+    }
+  ],
+  "pageFingerprint": {
+    "url": "https://static-product.example/products/sku-1",
+    "title": "Steel Widget",
+    "elementCount": 0
+  }
 }

@@ -1,6 +1,4 @@
 ﻿import { useCallback, useEffect, useMemo } from 'react';
-import { toast } from '../../lib/toast';
-import { createRendererLogger } from '../../lib/logger';
 import { datasetFacade } from '../../services/datasets/datasetFacade';
 import { workspaceFacade } from '../../services/datasets/workspaceFacade';
 import { useElectronAPI } from '../../hooks/useElectronAPI';
@@ -20,15 +18,11 @@ import {
   type WorkspaceSnapshot,
 } from '../../services/datasets/workspaceCategoryService';
 
-const logger = createRendererLogger('DatasetsWorkspaceController');
-
 export function useDatasetsWorkspaceController() {
   const electronAPI = useElectronAPI();
   const {
     datasets,
     loadDatasets,
-    isImportProcessed,
-    markImportAsProcessed,
     currentGroupId,
     groupTabs,
     selectedTabDatasetId,
@@ -50,7 +44,6 @@ export function useDatasetsWorkspaceController() {
     selectWorkspaceDataset,
     clearWorkspaceSelection,
     resetWorkspaceViewState,
-    setWorkspaceAnalyzingTypes,
     reconcileWorkspaceSelection,
   } = useDatasetStore();
 
@@ -162,56 +155,6 @@ export function useDatasetsWorkspaceController() {
     selectGroupTab,
   ]);
 
-  const analyzeImportedDataset = useCallback(
-    async (datasetId: string) => {
-      if (isImportProcessed(datasetId)) {
-        return;
-      }
-
-      setWorkspaceAnalyzingTypes(true);
-
-      try {
-        await new Promise((resolve) => setTimeout(resolve, 300));
-
-        const result = await datasetFacade.analyzeTypes(datasetId);
-        if (!result.success || !result.schema || !result.sampleData) {
-          logger.error('Type analysis failed', {
-            operation: 'dataset.import.typeAnalysis',
-            datasetId,
-            error: result.error,
-          });
-          toast.error('类型分析失败', result.error || '未知错误');
-          return;
-        }
-
-        const applyResult = await datasetFacade.applySchema(datasetId, result.schema);
-        if (!applyResult.success) {
-          logger.error('Failed to apply imported schema', {
-            operation: 'dataset.import.schema.apply',
-            datasetId,
-            fieldCount: result.schema.length,
-            error: applyResult.error,
-          });
-          toast.error('应用字段类型失败', applyResult.error || '未知错误');
-          return;
-        }
-
-        markImportAsProcessed(datasetId);
-        useDatasetStore.getState().applyLocalDatasetSchema(datasetId, result.schema as any);
-      } catch (error) {
-        logger.error('Type analysis error', {
-          operation: 'dataset.import.typeAnalysis',
-          datasetId,
-          error,
-        });
-        toast.error('类型分析错误', error instanceof Error ? error.message : '未知错误');
-      } finally {
-        setWorkspaceAnalyzingTypes(false);
-      }
-    },
-    [isImportProcessed, markImportAsProcessed, setWorkspaceAnalyzingTypes]
-  );
-
   const importDataset = useCallback(
     async (options?: { folderId?: string | null }): Promise<boolean> => {
       const folderId = options?.folderId ?? null;
@@ -233,7 +176,6 @@ export function useDatasetsWorkspaceController() {
         datasetId = await startImportDatasetFile(selectResponse.filePath, datasetName, {
           folderId,
         });
-        await analyzeImportedDataset(datasetId);
 
         return true;
       } finally {
@@ -243,7 +185,7 @@ export function useDatasetsWorkspaceController() {
         }
       }
     },
-    [analyzeImportedDataset, refreshWorkspace, selectDataset, startImportDatasetFile]
+    [refreshWorkspace, selectDataset, startImportDatasetFile]
   );
 
   const createDataset = useCallback(

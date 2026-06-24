@@ -4,11 +4,12 @@ import type {
 } from '../../types/browser-interface';
 import { BROWSER_CAPABILITY_NAMES } from '../../types/browser-interface';
 import type { BrowserRuntimeId } from '../../types/browser-runtime';
+import { BROWSER_RUNTIME_IDS, isBrowserRuntimeId } from '../../types/browser-runtime';
 import {
-  STATIC_BROWSER_RUNTIME_DESCRIPTORS,
   browserRuntimeSupports,
   cloneBrowserRuntimeDescriptor,
 } from '../browser-pool/runtime-capability-registry';
+import { getKnownEffectiveRuntimeDescriptor } from './effective-descriptor';
 
 export type BrowserRuntimePlanDecision =
   | 'ready'
@@ -90,18 +91,15 @@ const normalizeCapabilityNames = (
 };
 
 const normalizeRuntimeId = (value: string | undefined): BrowserRuntimeId | undefined =>
-  Object.prototype.hasOwnProperty.call(STATIC_BROWSER_RUNTIME_DESCRIPTORS, String(value || ''))
-    ? (value as BrowserRuntimeId)
-    : undefined;
+  isBrowserRuntimeId(value) ? value : undefined;
 
 const getRuntimeDescriptors = (
   overrides: RuntimePlannerInput['runtimeDescriptors']
 ): Record<BrowserRuntimeId, BrowserRuntimeDescriptor> =>
   Object.fromEntries(
-    Object.entries(STATIC_BROWSER_RUNTIME_DESCRIPTORS).map(([runtimeId, descriptor]) => [
+    BROWSER_RUNTIME_IDS.map((runtimeId) => [
       runtimeId,
-      overrides?.[runtimeId as BrowserRuntimeId] ||
-        cloneBrowserRuntimeDescriptor(descriptor),
+      overrides?.[runtimeId] || cloneBrowserRuntimeDescriptor(getKnownEffectiveRuntimeDescriptor(runtimeId)),
     ])
   ) as Record<BrowserRuntimeId, BrowserRuntimeDescriptor>;
 

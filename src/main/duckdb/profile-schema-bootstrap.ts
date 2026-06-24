@@ -205,6 +205,7 @@ export class ProfileSchemaBootstrap {
         await this.partitionCleanup.purgePartitionData(profile.partition);
       }
       await this.partitionCleanup.purgeExtensionProfileData(profile.id);
+      await this.partitionCleanup.purgeCloakProfileData(profile.id);
     }
 
     logger.warn('Removed invalid stored profiles', {

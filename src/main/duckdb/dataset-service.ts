@@ -460,6 +460,9 @@ export class DatasetService {
   ): Promise<DatasetRecordProvenanceEntry[]> =>
     this.provenanceService.listRecordProvenance(datasetId, rowId, limit);
 
+  countRecordProvenance = (datasetId: string, rowId: number): Promise<number> =>
+    this.provenanceService.countRecordProvenance(datasetId, rowId);
+
   insertRecord = (datasetId: string, record: DataRecord) =>
     this.recordMutationService.insertRecord(datasetId, record);
 

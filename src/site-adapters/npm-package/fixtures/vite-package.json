@@ -1,0 +1,72 @@
+{
+  "name": "vite-package",
+  "snapshot": {
+    "url": "https://www.npmjs.com/package/vite",
+    "title": "vite - npm",
+    "elements": [
+      {
+        "tag": "h1",
+        "role": "heading",
+        "name": "vite",
+        "text": "vite",
+        "preferredSelector": "[data-testid=\"package-name\"]",
+        "selectorCandidates": ["h1", "[data-testid=\"package-name\"]"],
+        "attributes": { "data-testid": "package-name" }
+      },
+      {
+        "tag": "p",
+        "role": "text",
+        "name": "Native-ESM powered web dev build tool",
+        "text": "Native-ESM powered web dev build tool",
+        "preferredSelector": "[data-testid=\"package-description\"]",
+        "selectorCandidates": [
+          "[data-testid=\"package-description\"]",
+          ".package-description"
+        ],
+        "attributes": { "data-testid": "package-description" }
+      },
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "Version 7.2.4",
+        "text": "Version 7.2.4",
+        "preferredSelector": "[data-testid=\"package-version\"]",
+        "selectorCandidates": ["[data-testid=\"package-version\"]", ".version"],
+        "attributes": { "data-testid": "package-version" }
+      },
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "39,281,430 weekly downloads",
+        "text": "39,281,430 weekly downloads",
+        "preferredSelector": "[data-testid=\"weekly-downloads\"]",
+        "selectorCandidates": ["[data-testid=\"weekly-downloads\"]", ".downloads"],
+        "attributes": { "data-testid": "weekly-downloads" }
+      },
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "MIT",
+        "text": "MIT",
+        "preferredSelector": "[data-testid=\"license\"]",
+        "selectorCandidates": ["[data-testid=\"license\"]", ".license"],
+        "attributes": { "data-testid": "license" }
+      },
+      {
+        "tag": "a",
+        "role": "link",
+        "name": "Repository",
+        "text": "Repository",
+        "preferredSelector": "a[aria-label=\"Repository\"]",
+        "selectorCandidates": ["a[aria-label=\"Repository\"]", ".repository"],
+        "attributes": {
+          "aria-label": "Repository",
+          "href": "https://github.com/vitejs/vite"
+        }
+      }
+    ]
+  },
+  "input": {
+    "runner": "fixture"
+  }
+}

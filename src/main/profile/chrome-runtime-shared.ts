@@ -5,7 +5,11 @@ import { app } from 'electron';
 import type { SessionConfig } from '../../core/browser-pool/types';
 import { getFingerprintPreflightIssues as getCanonicalFingerprintPreflightIssues } from '../../core/fingerprint/fingerprint-validation';
 import { createLogger } from '../../core/logger';
-import { AIRPA_RUNTIME_CONFIG, resolveUserDataDir } from '../../constants/runtime-config';
+import {
+  AIRPA_RUNTIME_CONFIG,
+  resolveChromeExecutablePathOverride,
+  resolveUserDataDir,
+} from '../../constants/runtime-config';
 
 const logger = createLogger('ChromeRuntimeShared');
 
@@ -51,14 +55,54 @@ export function getExtensionControlRuntimeDir(sessionId: string, browserId: stri
   return path.join(getUserDataBaseDir(), 'extension', 'chrome', 'control-runtime', sessionId, browserId);
 }
 
+function getCommonChromeExecutableCandidates(): string[] {
+  if (process.platform === 'win32') {
+    return [
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      ...(AIRPA_RUNTIME_CONFIG.paths.localAppDataDir
+        ? [
+            path.join(
+              AIRPA_RUNTIME_CONFIG.paths.localAppDataDir,
+              'Google',
+              'Chrome',
+              'Application',
+              'chrome.exe'
+            ),
+          ]
+        : []),
+    ];
+  }
+  if (process.platform === 'darwin') {
+    return ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'];
+  }
+  return ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'];
+}
+
 export function resolveChromeExecutablePath(): string {
+  const override = resolveChromeExecutablePathOverride();
+  if (override) {
+    return override;
+  }
+
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'chrome', 'chrome.exe');
+    const packagedCandidates = [
+      path.join(process.resourcesPath, 'client', 'chrome', 'chrome.exe'),
+      path.join(process.resourcesPath, 'chrome', 'chrome.exe'),
+    ];
+    for (const packagedCandidate of packagedCandidates) {
+      if (fs.existsSync(packagedCandidate)) {
+        return packagedCandidate;
+      }
+    }
   }
 
   const candidates = [
+    path.join(app.getAppPath(), 'client', 'chrome', 'chrome.exe'),
     path.join(app.getAppPath(), 'chrome', 'chrome.exe'),
+    path.join(process.cwd(), 'client', 'chrome', 'chrome.exe'),
     path.join(process.cwd(), 'chrome', 'chrome.exe'),
+    ...getCommonChromeExecutableCandidates(),
   ];
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) return candidate;

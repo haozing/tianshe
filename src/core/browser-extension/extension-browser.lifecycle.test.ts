@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 vi.mock('../../utils/platform/windows-dialog', () => ({
   sendWindowsDialogKeys: vi.fn(async () => false),
 }));
@@ -173,6 +177,101 @@ describe('ExtensionBrowser lifecycle', () => {
 
     await expect(browser.getCurrentUrl()).rejects.toThrow('Extension relay is closed');
     expect(relay.dispatchCommand).not.toHaveBeenCalled();
+  });
+
+  it('restores profile sidecar cookies into a newly created extension browser before navigation', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'extension-cookie-sidecar-'));
+    const cookieStorePath = path.join(tempRoot, 'cookies.json');
+
+    try {
+      const firstRelay = {
+        onEvent: vi.fn(() => () => undefined),
+        dispatchCommand: vi.fn(async (name: string) => {
+          if (name === 'getCurrentUrl') {
+            return 'https://example.com/orders';
+          }
+          return true;
+        }),
+        getClientState: vi.fn(() => ({
+          registeredAt: Date.now(),
+          tabId: 11,
+          windowId: 5,
+          url: 'https://example.com/orders',
+          title: 'Orders',
+        })),
+        isStopped: vi.fn(() => false),
+      } as any;
+
+      const firstBrowser = new ExtensionBrowser({
+        relay: firstRelay,
+        closeInternal: vi.fn(async () => undefined),
+        cookieStorePath,
+      });
+
+      await firstBrowser.setCookie({
+        name: 'login',
+        value: 'ok',
+        path: '/',
+        expirationDate: Math.floor(Date.now() / 1000) + 3600,
+      });
+
+      const secondRelay = {
+        onEvent: vi.fn(() => () => undefined),
+        dispatchCommand: vi.fn(async (name: string) => {
+          if (name === 'goto') {
+            return {
+              registeredAt: Date.now(),
+              tabId: 22,
+              windowId: 7,
+              url: 'https://example.com/orders',
+              title: 'Orders',
+            };
+          }
+          return true;
+        }),
+        getClientState: vi.fn(() => ({
+          registeredAt: Date.now(),
+          tabId: 22,
+          windowId: 7,
+          url: 'about:blank',
+          title: '',
+        })),
+        isStopped: vi.fn(() => false),
+      } as any;
+
+      const secondBrowser = new ExtensionBrowser({
+        relay: secondRelay,
+        closeInternal: vi.fn(async () => undefined),
+        cookieStorePath,
+      });
+
+      await secondBrowser.goto('https://example.com/orders');
+
+      expect(secondRelay.dispatchCommand).toHaveBeenNthCalledWith(
+        1,
+        'cookies.set',
+        {
+          cookie: expect.objectContaining({
+            name: 'login',
+            value: 'ok',
+            url: 'https://example.com/orders',
+          }),
+          target: { tabId: 22, windowId: 7 },
+        },
+        undefined
+      );
+      expect(secondRelay.dispatchCommand).toHaveBeenNthCalledWith(
+        2,
+        'goto',
+        expect.objectContaining({
+          url: 'https://example.com/orders',
+          target: { tabId: 22, windowId: 7 },
+        }),
+        undefined
+      );
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('resolves dialog waits from relay events without dispatching dialog.wait commands', async () => {

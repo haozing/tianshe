@@ -19,6 +19,8 @@ export const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Existing oversized profile catalog; split profile lifecycle and runtime diagnostics during AI catalog cleanup.',
   'src/core/ai-dev/capabilities/session-catalog.ts':
     'Existing oversized session catalog; split session lifecycle, queue, and browser binding capability groups.',
+  'src/core/ai-dev/capabilities/site-capability-catalog.ts':
+    'New v4 site capability catalog owns discovery, public read-only site handlers, and logged-in handoff flow; split site-specific capability handlers after the first v4 vertical slice stabilizes.',
   'src/core/ai-dev/orchestration/capability-registry.test.ts':
     'Existing oversized orchestration registry contract test; split capability families when adding new registry cases.',
   'src/core/ai-dev/orchestration/capability-registry.ts':
@@ -184,6 +186,7 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
       'src/core/ai-dev/capabilities/plugin-catalog.ts',
       'src/core/ai-dev/capabilities/profile-catalog.ts',
       'src/core/ai-dev/capabilities/session-catalog.ts',
+      'src/core/ai-dev/capabilities/site-capability-catalog.ts',
       'src/core/ai-dev/orchestration/capability-registry.ts',
       'src/core/ai-dev/orchestration/capability-registry.test.ts',
     ]

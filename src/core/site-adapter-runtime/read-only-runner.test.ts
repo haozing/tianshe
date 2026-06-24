@@ -42,11 +42,13 @@ describe('read-only site adapter runner', () => {
       ok: true,
       result: expected,
       artifactRefs: [],
-      diagnostics: [
-        { path: 'productName', ok: true },
-        { path: 'price', ok: true },
-        { path: 'seller', ok: true },
-      ],
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ path: 'productName', ok: true }),
+        expect.objectContaining({ path: 'price', ok: true }),
+        expect.objectContaining({ path: 'seller', ok: true }),
+        expect.objectContaining({ path: 'sourceUrl', ok: true }),
+        expect.objectContaining({ path: 'pageFingerprint', ok: true }),
+      ]),
     });
   });
 
@@ -116,6 +118,45 @@ describe('read-only site adapter runner', () => {
         after: null,
       },
     });
+    expect(sink.artifacts[3]).toMatchObject({
+      type: 'site_adapter_failure',
+      traceId: 'trace-site-adapter-failure',
+      data: {
+        adapterId: 'static-product.example',
+        fixtureName: 'product-page',
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({
+            path: 'price',
+            ok: false,
+            expected: '99.99',
+            actual: '12.50',
+          }),
+        ]),
+      },
+    });
+    expect(sink.artifacts[5]).toMatchObject({
+      type: 'site_adapter_repair_bundle',
+      traceId: 'trace-site-adapter-failure',
+      data: {
+        adapterId: 'static-product.example',
+        fixtureName: 'product-page',
+        sideEffectLevel: 'read-only',
+        repairEvidence: expect.objectContaining({
+          adapterId: 'static-product.example',
+          fixtureName: 'product-page',
+          before: expect.objectContaining({ price: '12.50' }),
+          after: null,
+        }),
+        actionTrace: expect.arrayContaining([
+          expect.objectContaining({ stepId: 'product', action: 'extract' }),
+        ]),
+        transitions: expect.arrayContaining([
+          expect.objectContaining({ stepId: 'site-adapter-run', to: 'failed' }),
+          expect.objectContaining({ stepId: 'site-adapter-repair', to: 'repair_evidence' }),
+        ]),
+      },
+    });
+    expect(result.artifactRefs).toEqual(sink.artifacts.map((artifact) => artifact.artifactId));
   });
 
   it('aborts fixture execution through AbortSignal before side-effect-free extraction continues', async () => {

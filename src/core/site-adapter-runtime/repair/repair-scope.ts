@@ -1,9 +1,11 @@
 import path from 'node:path';
+import type { SiteAdapterManifest, SiteAdapterModule } from '../types';
 
 export type SiteAdapterRepairScopeReason =
   | 'allowed'
   | 'empty_path'
   | 'outside_workspace'
+  | 'forbidden_file'
   | 'denied_framework_path'
   | 'outside_site_adapter_root'
   | 'outside_repair_subpath';
@@ -13,6 +15,7 @@ export interface SiteAdapterRepairScopeOptions {
   allowedAdapterRootPattern?: RegExp;
   allowedRepairSubpaths?: readonly string[];
   deniedRoots?: readonly string[];
+  forbiddenFiles?: readonly string[];
 }
 
 export interface SiteAdapterRepairScopeDecision {
@@ -22,7 +25,30 @@ export interface SiteAdapterRepairScopeDecision {
   relativePath: string;
 }
 
-export const DEFAULT_SITE_ADAPTER_REPAIR_ROOT_PATTERN = /^examples[\\/]+web-site-adapter-[^\\/]+/;
+export interface SiteAdapterRepairScopeMatrixCandidate {
+  candidatePath: string;
+  expectedAllowed: boolean;
+  expectedReason?: SiteAdapterRepairScopeReason;
+  decision: SiteAdapterRepairScopeDecision;
+  ok: boolean;
+}
+
+export interface SiteAdapterRepairScopeMatrixRow {
+  adapterId: string;
+  roots: string[];
+  allowedSubpaths: string[];
+  forbiddenFiles: string[];
+  candidates: SiteAdapterRepairScopeMatrixCandidate[];
+  ok: boolean;
+}
+
+export interface SiteAdapterRepairScopeMatrix {
+  ok: boolean;
+  rows: SiteAdapterRepairScopeMatrixRow[];
+}
+
+export const DEFAULT_SITE_ADAPTER_REPAIR_ROOT_PATTERN =
+  /^(?:examples[\\/]+web-site-adapter-[^\\/]+|site-adapters[\\/]+[^\\/]+|src[\\/]+site-adapters[\\/]+[^\\/]+)/;
 
 export const DEFAULT_SITE_ADAPTER_REPAIR_SUBPATHS = [
   'extractors',
@@ -45,6 +71,8 @@ const isWithinPath = (candidate: string, root: string): boolean => {
 
 const toPortableRelativePath = (relativePath: string): string =>
   relativePath.split(path.sep).join('/');
+
+const toPortablePath = (value: string): string => value.split(/[\\/]+/).filter(Boolean).join('/');
 
 const getPathSegments = (relativePath: string): string[] =>
   toPortableRelativePath(relativePath)
@@ -94,6 +122,19 @@ export function evaluateSiteAdapterRepairPath(
     };
   }
 
+  const forbiddenFile = options.forbiddenFiles?.find((entry) => {
+    const forbiddenAbsolute = path.resolve(workspaceRoot, entry);
+    return isWithinPath(normalizedCandidate, normalizeForComparison(forbiddenAbsolute));
+  });
+  if (forbiddenFile) {
+    return {
+      allowed: false,
+      reason: 'forbidden_file',
+      absolutePath,
+      relativePath,
+    };
+  }
+
   const adapterRootPattern =
     options.allowedAdapterRootPattern ?? DEFAULT_SITE_ADAPTER_REPAIR_ROOT_PATTERN;
   if (!adapterRootPattern.test(relativePath)) {
@@ -134,4 +175,112 @@ export function assertSiteAdapterRepairPath(
     throw new Error(`Site adapter repair path is not allowed: ${decision.reason} (${decision.relativePath})`);
   }
   return decision;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getManifestRepairRoots(manifest: SiteAdapterManifest): string[] {
+  const roots = manifest.repairScope?.roots?.length
+    ? manifest.repairScope.roots
+    : [`src/site-adapters/${manifest.id}`, `site-adapters/${manifest.id}`];
+  return roots.map(toPortablePath);
+}
+
+function createAdapterRootPattern(roots: readonly string[]): RegExp {
+  const source = roots.map((root) => escapeRegExp(toPortablePath(root))).join('|');
+  return new RegExp(`^(?:${source})(?:/|$)`);
+}
+
+export function createSiteAdapterRepairScopeOptionsFromManifest(
+  manifest: SiteAdapterManifest,
+  workspaceRoot: string
+): SiteAdapterRepairScopeOptions {
+  const roots = getManifestRepairRoots(manifest);
+  return {
+    workspaceRoot,
+    allowedAdapterRootPattern: createAdapterRootPattern(roots),
+    allowedRepairSubpaths:
+      manifest.repairScope?.allowedSubpaths?.length
+        ? manifest.repairScope.allowedSubpaths
+        : DEFAULT_SITE_ADAPTER_REPAIR_SUBPATHS,
+    forbiddenFiles: manifest.repairScope?.forbiddenFiles || [],
+  };
+}
+
+export function createSiteAdapterRepairScopeMatrix(
+  adapters: readonly SiteAdapterModule[],
+  options: { workspaceRoot: string }
+): SiteAdapterRepairScopeMatrix {
+  const rows = adapters.map((adapter) => {
+    const roots = getManifestRepairRoots(adapter.manifest);
+    const allowedSubpaths = [
+      ...(adapter.manifest.repairScope?.allowedSubpaths?.length
+        ? adapter.manifest.repairScope.allowedSubpaths
+        : DEFAULT_SITE_ADAPTER_REPAIR_SUBPATHS),
+    ];
+    const forbiddenFiles = [...(adapter.manifest.repairScope?.forbiddenFiles || [])].map(
+      toPortablePath
+    );
+    const scopeOptions = createSiteAdapterRepairScopeOptionsFromManifest(
+      adapter.manifest,
+      options.workspaceRoot
+    );
+    const rootCandidates = roots.flatMap((root) => [
+      ...allowedSubpaths.map((subpath) => ({
+        candidatePath: `${root}/${subpath}/__repair_scope_probe__.ts`,
+        expectedAllowed: true,
+        expectedReason: 'allowed' as const,
+      })),
+      {
+        candidatePath: `${root}/README.md`,
+        expectedAllowed: false,
+        expectedReason: 'outside_repair_subpath' as const,
+      },
+    ]);
+    const forbiddenCandidates = forbiddenFiles.map((candidatePath) => ({
+      candidatePath,
+      expectedAllowed: false,
+      expectedReason: 'forbidden_file' as const,
+    }));
+    const globalDenyCandidates = [
+      {
+        candidatePath: 'src/core/site-adapter-runtime/read-only-runner.ts',
+        expectedAllowed: false,
+        expectedReason: 'denied_framework_path' as const,
+      },
+      {
+        candidatePath: '../outside-repo/extractors/product.ts',
+        expectedAllowed: false,
+        expectedReason: 'outside_workspace' as const,
+      },
+    ];
+    const candidates = [...rootCandidates, ...forbiddenCandidates, ...globalDenyCandidates].map(
+      (candidate) => {
+        const decision = evaluateSiteAdapterRepairPath(candidate.candidatePath, scopeOptions);
+        const ok =
+          decision.allowed === candidate.expectedAllowed &&
+          (!candidate.expectedReason || decision.reason === candidate.expectedReason);
+        return {
+          ...candidate,
+          decision,
+          ok,
+        };
+      }
+    );
+    return {
+      adapterId: adapter.manifest.id,
+      roots,
+      allowedSubpaths,
+      forbiddenFiles,
+      candidates,
+      ok: candidates.every((candidate) => candidate.ok),
+    };
+  });
+
+  return {
+    ok: rows.every((row) => row.ok),
+    rows,
+  };
 }

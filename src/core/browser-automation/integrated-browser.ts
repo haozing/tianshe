@@ -47,6 +47,7 @@ import type {
   BrowserPdfOptions,
   BrowserPdfResult,
   BrowserScreenshotResult,
+  BrowserStorageArea,
   BrowserTextClickResult as TextClickResult,
   BrowserTextMatchNormalizedResult as TextMatchNormalizedResult,
   BrowserTextQueryOptions as TextQueryOptions,
@@ -1064,6 +1065,57 @@ export class IntegratedBrowser implements BrowserInterface {
     return this.browser.session.getUserAgent();
   }
 
+  async getStorageItem(area: BrowserStorageArea, key: string): Promise<string | null> {
+    return this.evaluateWithArgs<string | null>(
+      (nextArea, nextKey) => {
+        const storage =
+          nextArea === 'session' ? globalThis.sessionStorage : globalThis.localStorage;
+        return storage.getItem(String(nextKey));
+      },
+      area,
+      key
+    );
+  }
+
+  async setStorageItem(area: BrowserStorageArea, key: string, value: string): Promise<void> {
+    await this.evaluateWithArgs(
+      (nextArea, nextKey, nextValue) => {
+        const storage =
+          nextArea === 'session' ? globalThis.sessionStorage : globalThis.localStorage;
+        storage.setItem(String(nextKey), String(nextValue));
+        return true;
+      },
+      area,
+      key,
+      value
+    );
+  }
+
+  async removeStorageItem(area: BrowserStorageArea, key: string): Promise<void> {
+    await this.evaluateWithArgs(
+      (nextArea, nextKey) => {
+        const storage =
+          nextArea === 'session' ? globalThis.sessionStorage : globalThis.localStorage;
+        storage.removeItem(String(nextKey));
+        return true;
+      },
+      area,
+      key
+    );
+  }
+
+  async clearStorageArea(area: BrowserStorageArea): Promise<void> {
+    await this.evaluateWithArgs(
+      (nextArea) => {
+        const storage =
+          nextArea === 'session' ? globalThis.sessionStorage : globalThis.localStorage;
+        storage.clear();
+        return true;
+      },
+      area
+    );
+  }
+
   // ========== 网络监控 ==========
 
   /**
@@ -1235,6 +1287,59 @@ export class IntegratedBrowser implements BrowserInterface {
       throw new Error(`Download not found: ${id}`);
     }
     item.cancel();
+  }
+
+  private async dispatchTouchEvent(
+    type: 'touchStart' | 'touchMove' | 'touchEnd',
+    points: Array<{ x: number; y: number }>
+  ): Promise<void> {
+    await this.browser.cdp.sendCommand('Input.dispatchTouchEvent', {
+      type,
+      touchPoints: points.map((point) => ({
+        x: Number(point.x) || 0,
+        y: Number(point.y) || 0,
+      })),
+    });
+  }
+
+  async touchTap(x: number, y: number): Promise<void> {
+    await this.browser.cdp.sendCommand('Emulation.setTouchEmulationEnabled', {
+      enabled: true,
+      maxTouchPoints: 1,
+    });
+    await this.dispatchTouchEvent('touchStart', [{ x, y }]);
+    await sleep(50);
+    await this.dispatchTouchEvent('touchEnd', []);
+  }
+
+  async touchLongPress(x: number, y: number, durationMs?: number): Promise<void> {
+    await this.browser.cdp.sendCommand('Emulation.setTouchEmulationEnabled', {
+      enabled: true,
+      maxTouchPoints: 1,
+    });
+    await this.dispatchTouchEvent('touchStart', [{ x, y }]);
+    await sleep(Math.max(50, Math.trunc(durationMs ?? 600)));
+    await this.dispatchTouchEvent('touchEnd', []);
+  }
+
+  async touchDrag(fromX: number, fromY: number, toX: number, toY: number): Promise<void> {
+    await this.browser.cdp.sendCommand('Emulation.setTouchEmulationEnabled', {
+      enabled: true,
+      maxTouchPoints: 1,
+    });
+    await this.dispatchTouchEvent('touchStart', [{ x: fromX, y: fromY }]);
+    const steps = 8;
+    for (let index = 1; index <= steps; index += 1) {
+      const progress = index / steps;
+      await this.dispatchTouchEvent('touchMove', [
+        {
+          x: fromX + (toX - fromX) * progress,
+          y: fromY + (toY - fromY) * progress,
+        },
+      ]);
+      await sleep(16);
+    }
+    await this.dispatchTouchEvent('touchEnd', []);
   }
 
   async setEmulationIdentity(options: BrowserEmulationIdentityOptions): Promise<void> {

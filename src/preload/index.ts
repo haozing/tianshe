@@ -21,6 +21,8 @@ import { createProfileAPI } from './api/profile';
 import { createQueryTemplateAPI } from './api/query-template';
 import { createRuntimeAPI } from './api/runtime';
 import { createSavedSiteAPI } from './api/saved-site';
+import { createSiteAdapterLabAPI } from './api/site-adapter-lab';
+import { createSiteAdapterRepairStudioAPI } from './api/site-adapter-repair-studio';
 import { createSystemAPI } from './api/system';
 import { createTagAPI } from './api/tag';
 import { createViewAPI } from './api/view';
@@ -142,6 +144,9 @@ const electronAPI = {
   account: createAccountAPI(ipcRenderer),
 
   savedSite: createSavedSiteAPI(ipcRenderer),
+
+  siteAdapterLab: createSiteAdapterLabAPI(ipcRenderer),
+  siteAdapterRepairStudio: createSiteAdapterRepairStudioAPI(ipcRenderer),
 
   tag: createTagAPI(ipcRenderer),
 };

@@ -571,6 +571,98 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     );
   });
 
+  it('MCP business site capabilities prepare the requested session before browser acquisition', async () => {
+    const productFixture = JSON.parse(
+      readFileSync(
+        join(__dirname, '../site-adapters/books-to-scrape/fixtures/product-page.json'),
+        'utf8'
+      )
+    ) as { snapshot: { url: string; title: string; elements: unknown[] } };
+    const browser = createMockBrowser({
+      snapshot: vi.fn().mockResolvedValue(productFixture.snapshot),
+      getCurrentUrl: vi.fn().mockResolvedValue(productFixture.snapshot.url),
+    });
+
+    await startServer(browser, {
+      enableMcp: true,
+      dependencies: {
+        profileGateway: {
+          listProfiles: vi.fn().mockResolvedValue([]),
+          getProfile: vi.fn().mockImplementation(async (profileId: string) => {
+            if (profileId === 'profile-books') {
+              return {
+                id: 'profile-books',
+                name: 'Books Profile',
+                runtimeId: 'electron-webcontents',
+                status: 'idle',
+                partition: 'persist:profile-books',
+              };
+            }
+            return null;
+          }),
+          resolveProfile: vi.fn().mockResolvedValue(null),
+          createProfile: vi.fn().mockResolvedValue(null),
+          updateProfile: vi.fn().mockResolvedValue(null),
+          deleteProfile: vi.fn().mockResolvedValue(undefined),
+        },
+      },
+    });
+
+    mcpClient = new Client({
+      name: 'test-mcp-client-site-capability-session-prepare',
+      version: '1.0.0',
+    });
+    mcpTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
+    await mcpClient.connect(mcpTransport);
+
+    const result = await mcpClient.callTool({
+      name: 'books_to_scrape.extract_product',
+      arguments: {
+        url: productFixture.snapshot.url,
+        profileId: 'profile-books',
+        runtimeId: 'electron-webcontents',
+        visible: true,
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      data: {
+        sessionPrepare: expect.objectContaining({
+          profileId: 'profile-books',
+          runtimeId: 'electron-webcontents',
+          visible: true,
+          browserAcquired: false,
+          changed: ['profile', 'runtimeId', 'visible', 'scopes'],
+        }),
+        fields: {
+          productName: 'A Light in the Attic',
+        },
+      },
+    });
+    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(acquire).toHaveBeenCalledWith(
+      'profile-books',
+      expect.objectContaining({ strategy: 'any', runtimeId: 'electron-webcontents' }),
+      'mcp'
+    );
+
+    const currentSession = await mcpClient.callTool({
+      name: 'session_get_current',
+      arguments: {},
+    });
+    expect(currentSession.structuredContent).toMatchObject({
+      data: {
+        session: expect.objectContaining({
+          profileId: 'profile-books',
+          runtimeId: 'electron-webcontents',
+          visible: true,
+          browserAcquired: true,
+        }),
+      },
+    });
+  });
+
   it('MCP session self-inspection excludes the current session_* invocation from queue counters', async () => {
     await startServer(createMockBrowser(), { enableMcp: true });
 

@@ -102,6 +102,10 @@ export class ProfileService {
     await this.partitionCleanupService.purgeExtensionProfileData(profileId);
   }
 
+  private async purgeCloakProfileData(profileId: string): Promise<void> {
+    await this.partitionCleanupService.purgeCloakProfileData(profileId);
+  }
+
   private normalizeProxyConfig(proxy: ProxyConfig | null | undefined): ProxyConfig | null {
     if (!proxy || proxy.type === 'none') return null;
 
@@ -676,6 +680,7 @@ export class ProfileService {
     // 闁告帞濞€濞?Profile 闂侇偅鑹鹃悥鍫曞箛韫囨挻鍤勯柣顐熷亾闁活潿鍔嶉崺娑氭暜鐏炵偓绠块柛姘湰濡炲倿宕氶悩缁樼彑闁哄牜鍓欏﹢瀛樺濮樺磭妯堥柡浣哄瀹?
     await this.purgePartitionData(profile.partition);
     await this.purgeExtensionProfileData(id);
+    await this.purgeCloakProfileData(id);
 
     logger.info('Deleted profile', { profileId: id });
   }
@@ -750,6 +755,7 @@ export class ProfileService {
         // 濞存粌顑呮慨鐔煎箵閹邦亝鍞夐柛姘閸熲偓婵炴挸鎳愰幃?partition 闁轰胶澧楀畵渚€鏁嶅畝鍕級闁稿繐绉村ú婊勭▔閻戞顏搁柣鐐叉閵囨垹鎷归妷銉殼闁煎嘲鐡ㄩ弳鐔煎箲椤旇偐姘ㄩ柛銉у仦缁?
         await this.purgePartitionData(profile.partition);
         await this.purgeExtensionProfileData(id);
+        await this.purgeCloakProfileData(id);
 
         await span.succeed({
           attrs: {

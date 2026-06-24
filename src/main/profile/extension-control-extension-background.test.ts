@@ -63,10 +63,28 @@ describe('extension background script render', () => {
   it('falls back to the bound tab url when cookies.set omits explicit url and domain', () => {
     const script = renderBackgroundScript();
 
-    expect(script).toContain('async function setCookie(cookie, fallbackUrl)');
+    expect(script).toContain('async function setCookie(tabId, cookie, fallbackUrl)');
     expect(script).toContain('const resolved = new URL(String(fallbackUrl));');
-    expect(script).toContain("await setCookie(params.cookie || {}, tab.url || '');");
+    expect(script).toContain('const cookie = params.cookie || {};');
+    expect(script).toContain("await setCookie(tabId, cookie, tab.url || '');");
+    expect(script).toContain("'Network.setCookie'");
+    expect(script).toContain("await runDomTask(tabId, 'setDocumentCookie'");
+    expect(script).toContain('async function flushCookiesToDisk(tabId)');
+    expect(script).toContain("await chrome.debugger.sendCommand({ tabId }, 'Storage.flushCookies');");
     expect(script).toContain("throw new Error('Cookie url or domain is required');");
+  });
+
+  it('renders DOM storage and touch command handlers for the extension relay', () => {
+    const script = renderBackgroundScript();
+
+    expect(script).toContain("case 'storage.getItem'");
+    expect(script).toContain("case 'storage.setItem'");
+    expect(script).toContain("case 'storage.removeItem'");
+    expect(script).toContain("case 'storage.clearArea'");
+    expect(script).toContain("case 'touch.tap'");
+    expect(script).toContain("case 'touch.longPress'");
+    expect(script).toContain("case 'touch.drag'");
+    expect(script).toContain("'Input.dispatchTouchEvent'");
   });
 
   it('never renders an invalid maxTouchPoints=0 payload for touch emulation updates', () => {

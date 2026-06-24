@@ -317,6 +317,7 @@ export interface NetworkCaptureOptions {
 export interface Cookie {
   name: string;
   value: string;
+  url?: string;
   domain?: string;
   path?: string;
   secure?: boolean;

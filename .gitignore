@@ -32,6 +32,10 @@ qa-results/
 coverage/
 .nyc_output/
 
+# Generated governance and release evidence
+docs/generated/*.json
+docs/evidence/**/*.json
+
 # Temporary files
 *.tmp
 *.temp
@@ -71,3 +75,4 @@ tianshe-review
 .claude
 .mcp.json
 skills-lock.json
+client

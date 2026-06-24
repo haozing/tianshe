@@ -539,7 +539,7 @@ export class RuyiFirefoxClient {
       if (this.child && this.child.exitCode === null) {
         const exited = await Promise.race([
           waitForChildExit(this.child).then(() => true),
-          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000)),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 15000)),
         ]);
         if (!exited) {
           await killChildProcess(this.child).catch(() => undefined);

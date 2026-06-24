@@ -32,7 +32,10 @@ vi.mock('electron', () => ({
 import { AIRPA_RUNTIME_CONFIG } from '../../constants/runtime-config';
 import { createExtensionBrowserFactory } from './browser-pool-integration-extension';
 import { resolveChromeExecutablePath } from './chrome-runtime-shared';
-import { createBrowserBusinessCanaryServer } from './browser-pool-integration-business-shared';
+import {
+  createBrowserBusinessCanaryServer,
+  waitForFilteredOrdersResponse,
+} from './browser-pool-integration-business-shared';
 import { waitForCondition } from './browser-pool-integration-smoke-shared';
 
 const shouldRunCanary =
@@ -136,16 +139,21 @@ describe('createExtensionBrowserFactory business canary', () => {
 
         await created.browser.type('#keyword', 'alpha', { clear: true });
         await created.browser.select('#status', 'open');
+        created.browser.clearNetworkEntries();
         await created.browser.click('#apply-filters');
         logCanaryStep('applied filters');
 
-        const responseEntry = await created.browser.waitForResponse('/api/orders', 30_000);
+        const responseEntry = await waitForFilteredOrdersResponse(created.browser, {
+          keyword: 'alpha',
+          status: 'open',
+          timeoutMs: 30_000,
+        });
         expect(responseEntry.url).toContain('/api/orders');
         expect(responseEntry.status).toBe(200);
         await waitForCondition(async () => {
           const summary = await created.browser.getText('#orders-summary');
           return summary.includes('1 result');
-        }, 10_000, 'filtered order summary');
+        }, 30_000, 'filtered order summary');
         expect(await created.browser.getText('#detail-link-1001')).toBe('View Details');
         logCanaryStep('filtered order list verified');
 

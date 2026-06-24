@@ -51,6 +51,17 @@ const toMcpToolResult = (result: ExecutorCallResult): CallToolResult => ({
   ...(result._meta ? { _meta: result._meta } : {}),
 });
 
+export const shouldPreAcquireBrowserForCapability = (
+  definition: OrchestrationCapabilityDefinition | undefined
+): boolean => {
+  const requires = definition?.requires ?? [];
+  const isBusinessSiteCapability = Boolean(definition?.name && definition.name.includes('.'));
+  return (
+    !isBusinessSiteCapability &&
+    (requires.includes('browser') || requires.includes('sessionBrowser'))
+  );
+};
+
 const createMcpSessionContextAdapter = (
   mcpSession: McpSessionInfo
 ): OrchestrationBrowserSessionContext => {
@@ -262,8 +273,7 @@ const createMcpServer = (options: RegisterMcpRoutesOptions, mcpSession: McpSessi
               suggestion: 'Call tools/list and use one of the canonical MCP tools exposed on /mcp.',
             });
           }
-          const requires = definition?.requires ?? [];
-          const needsBrowser = requires.includes('browser') || requires.includes('sessionBrowser');
+          const needsBrowser = shouldPreAcquireBrowserForCapability(definition);
           if (needsBrowser) {
             deps.browser = await ensureBrowser();
           } else {

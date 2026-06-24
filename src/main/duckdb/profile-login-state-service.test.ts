@@ -88,4 +88,32 @@ describe('ProfileLoginStateService', () => {
       },
     });
   });
+
+  it('persists expired login state as an unverified human-handoff state', async () => {
+    const service = await openService();
+
+    const state = await service.upsertLoginState({
+      profileId: 'profile-1',
+      site: 'example',
+      runtimeId: 'electron-webcontents',
+      status: 'expired',
+      reason: 'session cookie expired',
+    });
+
+    expect(state.status).toBe('expired');
+    expect(state.verified).toBe(false);
+    expect(state.verifiedAt).toBeNull();
+
+    const latest = await service.getLoginState({
+      profileId: 'profile-1',
+      site: 'example',
+    });
+    expect(latest).toMatchObject({
+      profileId: 'profile-1',
+      site: 'example',
+      status: 'expired',
+      verified: false,
+      reason: 'session cookie expired',
+    });
+  });
 });

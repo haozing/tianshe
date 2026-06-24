@@ -30,7 +30,10 @@ vi.mock('electron', () => ({
 }));
 
 import { createRuyiBrowserFactory } from './browser-pool-integration-ruyi';
-import { createBrowserBusinessCanaryServer } from './browser-pool-integration-business-shared';
+import {
+  createBrowserBusinessCanaryServer,
+  waitForFilteredOrdersResponse,
+} from './browser-pool-integration-business-shared';
 import { waitForCondition } from './browser-pool-integration-smoke-shared';
 import { resolveFirefoxExecutablePath } from './ruyi-runtime-shared';
 
@@ -140,15 +143,42 @@ describe('createRuyiBrowserFactory business canary', () => {
 
         await created.browser.type('#keyword', 'alpha', { clear: true });
         await created.browser.select('#status', 'open');
+        created.browser.clearNetworkEntries();
         await created.browser.click('#apply-filters');
 
-        const responseEntry = await created.browser.waitForResponse('/api/orders', 30_000);
+        const responseEntry = await waitForFilteredOrdersResponse(created.browser, {
+          keyword: 'alpha',
+          status: 'open',
+          timeoutMs: 30_000,
+        });
         expect(responseEntry.url).toContain('/api/orders');
         expect(responseEntry.status).toBe(200);
-        await waitForCondition(async () => {
-          const summary = await created.browser.getText('#orders-summary');
-          return summary.includes('1 result');
-        }, 10_000, 'filtered order summary');
+        try {
+          await waitForCondition(async () => {
+            const summary = await created.browser.getText('#orders-summary');
+            return summary.includes('1 result');
+          }, 30_000, 'filtered order summary');
+        } catch (error) {
+          const summary = await created.browser
+            .getText('#orders-summary')
+            .catch((summaryError) => `unavailable: ${String(summaryError)}`);
+          const formState = await created.browser
+            .evaluateWithArgs(() => ({
+              keyword: (document.querySelector('#keyword') as HTMLInputElement | null)?.value,
+              status: (document.querySelector('#status') as HTMLSelectElement | null)?.value,
+            }))
+            .catch((stateError) => ({ error: String(stateError) }));
+          const apiEntries = created.browser
+            .getNetworkEntries({ type: 'api' })
+            .map((entry) => `${entry.status ?? 'n/a'} ${entry.url}`);
+          throw new Error(
+            `${error instanceof Error ? error.message : String(error)}; summary=${JSON.stringify(
+              summary
+            )}; formState=${JSON.stringify(formState)}; apiHits=${JSON.stringify(
+              canaryServer.apiHits
+            )}; apiEntries=${JSON.stringify(apiEntries)}`
+          );
+        }
         expect(await created.browser.getText('#detail-link-1001')).toBe('View Details');
 
         const dialogWait = created.browser.waitForDialog({ timeoutMs: 30_000 });

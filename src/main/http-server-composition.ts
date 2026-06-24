@@ -367,6 +367,11 @@ export function buildRestApiDependencies(
         duckdbService.createEmptyDataset(datasetName, options),
       importDatasetFile: (filePath, datasetName, options) =>
         duckdbService.importDatasetFile(filePath, datasetName, options),
+      stageWritePlan: (datasetId, operations, context) =>
+        duckdbService.stageWritePlan(datasetId, operations, context),
+      commitWritePlan: (plan, options) => duckdbService.commitWritePlan(plan, options),
+      listRecordProvenance: (datasetId, rowId, limit) =>
+        duckdbService.listRecordProvenance(datasetId, rowId, limit),
       renameDataset: (datasetId, newName) => duckdbService.renameDataset(datasetId, newName),
       deleteDataset: (datasetId) => duckdbService.deleteDataset(datasetId),
     },

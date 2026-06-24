@@ -90,6 +90,10 @@ extraResources:
     to: chrome/
   - from: firefox/
     to: firefox/
+  - from: client/chrome/
+    to: client/chrome/
+  - from: client/firefox/
+    to: client/firefox/
 
 files:
   - index.js

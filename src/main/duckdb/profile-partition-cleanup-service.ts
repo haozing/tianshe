@@ -99,6 +99,27 @@ export class ProfilePartitionCleanupService {
     }
   }
 
+  async purgeCloakProfileData(profileId: string): Promise<void> {
+    const userDataDir = this.getUserDataDir();
+    const targets = [
+      path.join(userDataDir, 'cloak', 'profiles', profileId),
+      path.join(userDataDir, 'cloak', 'downloads', profileId),
+    ];
+
+    for (const target of targets) {
+      try {
+        if (fs.existsSync(target)) {
+          await fs.promises.rm(target, { recursive: true, force: true });
+        }
+      } catch (error) {
+        logger.warn('Failed to purge Cloak profile data', {
+          target,
+          error,
+        });
+      }
+    }
+  }
+
   private getUserDataDir(): string {
     return resolveUserDataDir(app.getPath('userData'));
   }

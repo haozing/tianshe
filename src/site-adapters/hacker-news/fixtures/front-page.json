@@ -1,0 +1,71 @@
+{
+  "name": "front-page",
+  "snapshot": {
+    "url": "https://news.ycombinator.com/news",
+    "title": "Hacker News",
+    "elements": [
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "1.",
+        "text": "1.",
+        "preferredSelector": "span.rank",
+        "selectorCandidates": ["span.rank", ".rank"]
+      },
+      {
+        "tag": "a",
+        "role": "link",
+        "name": "Launch HN: ExampleDB",
+        "text": "Launch HN: ExampleDB",
+        "attributes": { "href": "https://example.com/exampledb" },
+        "preferredSelector": ".titleline a",
+        "selectorCandidates": [".titleline a", ".storylink"]
+      },
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "128 points",
+        "text": "128 points",
+        "preferredSelector": "span.score",
+        "selectorCandidates": ["span.score", ".score"]
+      },
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "2.",
+        "text": "2.",
+        "preferredSelector": "span.rank",
+        "selectorCandidates": ["span.rank", ".rank"]
+      },
+      {
+        "tag": "a",
+        "role": "link",
+        "name": "Show HN: Local-first spreadsheet",
+        "text": "Show HN: Local-first spreadsheet",
+        "attributes": { "href": "https://example.com/sheet" },
+        "preferredSelector": ".titleline a",
+        "selectorCandidates": [".titleline a", ".storylink"]
+      },
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "86 points",
+        "text": "86 points",
+        "preferredSelector": "span.score",
+        "selectorCandidates": ["span.score", ".score"]
+      },
+      {
+        "tag": "a",
+        "role": "link",
+        "name": "More",
+        "text": "More",
+        "attributes": { "href": "news?p=2" },
+        "preferredSelector": "a.morelink",
+        "selectorCandidates": ["a.morelink", ".morelink"]
+      }
+    ]
+  },
+  "input": {
+    "runner": "fixture"
+  }
+}

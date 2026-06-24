@@ -1,6 +1,10 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildSiteAdapterRepairEvidence } from './repair-evidence';
+import {
+  SITE_ADAPTER_REPAIR_BUNDLE_DATA_SCHEMA,
+  assertSiteAdapterRepairBundleData,
+} from './repair-bundle-schema';
 
 const workspaceRoot = path.resolve('D:/workspace/tianshe-client-open');
 
@@ -96,5 +100,33 @@ describe('site adapter repair evidence gate', () => {
         { workspaceRoot }
       )
     ).toThrow('selectorDiagnostics are required');
+  });
+
+  it('validates repair bundle artifact data against the authoritative schema', () => {
+    const evidence = buildSiteAdapterRepairEvidence(baseEvidenceInput, { workspaceRoot });
+    const bundleData = {
+      adapterId: 'static-product.example',
+      fixtureName: 'product-page',
+      sideEffectLevel: 'read-only',
+      repairEvidence: evidence,
+      diagnostics: evidence.fieldDiagnostics,
+      verifierResults: [],
+      actionTrace: [{ stepId: 'product', action: 'extract' }],
+      transitions: [{ stepId: 'product', to: 'failed' }],
+    };
+
+    expect(SITE_ADAPTER_REPAIR_BUNDLE_DATA_SCHEMA).toMatchObject({
+      required: expect.arrayContaining(['adapterId', 'fixtureName', 'repairEvidence']),
+    });
+    expect(() => assertSiteAdapterRepairBundleData(bundleData)).not.toThrow();
+    expect(() =>
+      assertSiteAdapterRepairBundleData({
+        ...bundleData,
+        repairEvidence: {
+          ...evidence,
+          selectorDiagnostics: [],
+        },
+      })
+    ).toThrow('failed schema validation');
   });
 });

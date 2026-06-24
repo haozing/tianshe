@@ -71,6 +71,11 @@ export const datasetFacade = {
     datasetId: string,
     records: Parameters<DuckdbAPI['batchInsertRecords']>[1]
   ) => getDuckdbApi().batchInsertRecords(datasetId, records),
+  getRecordEvidence: (
+    datasetId: string,
+    rowId: Parameters<DuckdbAPI['getRecordEvidence']>[1],
+    limit?: Parameters<DuckdbAPI['getRecordEvidence']>[2]
+  ) => getDuckdbApi().getRecordEvidence(datasetId, rowId, limit),
   importRecordsFromFile: (datasetId: string, filePath: string) =>
     getDuckdbApi().importRecordsFromFile(datasetId, filePath),
   updateColumnMetadata: (

@@ -4,6 +4,7 @@ import { observationService } from '../observability/observation-service';
 import type { TraceContext } from '../observability/types';
 import type { BrowserInterface, SnapshotOptions } from '../../types/browser-interface';
 import { buildSiteAdapterRepairEvidence } from './repair/repair-evidence';
+import { assertSiteAdapterRepairBundleData } from './repair/repair-bundle-schema';
 import {
   appendInteractorActionTrace,
   appendProcedureTransition,
@@ -217,11 +218,14 @@ export async function runReadOnlySiteAdapterFixture(
           diagnosticCount: diagnostics.length,
         },
       });
+      const repairDiagnostics = diagnostics.length
+        ? diagnostics
+        : verifierResults.flatMap((verification) => verification.diagnostics || []);
       const repairEvidence = buildSiteAdapterRepairEvidence(
         {
           adapterId: adapter.manifest.id,
           fixtureName: fixture.name,
-          selectorDiagnostics: diagnostics,
+          selectorDiagnostics: repairDiagnostics,
           fixture: {
             name: fixture.name,
             input: fixture.input || {},
@@ -243,7 +247,7 @@ export async function runReadOnlySiteAdapterFixture(
         data: {
           adapterId: adapter.manifest.id,
           fixtureName: fixture.name,
-          diagnostics,
+          diagnostics: repairDiagnostics,
           verifierResults,
         },
       });
@@ -254,21 +258,23 @@ export async function runReadOnlySiteAdapterFixture(
         label: `${adapter.manifest.id} ${fixture.name} repair evidence`,
         data: repairEvidence,
       });
+      const repairBundleData = {
+        adapterId: adapter.manifest.id,
+        fixtureName: fixture.name,
+        sideEffectLevel: adapter.manifest.sideEffectLevel,
+        repairEvidence,
+        diagnostics: repairDiagnostics,
+        verifierResults,
+        actionTrace: runState.actionTrace,
+        transitions: runState.transitions,
+      };
+      assertSiteAdapterRepairBundleData(repairBundleData);
       const repairBundleArtifact = await observationService.attachArtifact({
         context: options.context,
         component,
         type: 'site_adapter_repair_bundle',
         label: `${adapter.manifest.id} ${fixture.name} repair bundle`,
-        data: {
-          adapterId: adapter.manifest.id,
-          fixtureName: fixture.name,
-          sideEffectLevel: adapter.manifest.sideEffectLevel,
-          repairEvidence,
-          diagnostics,
-          verifierResults,
-          actionTrace: runState.actionTrace,
-          transitions: runState.transitions,
-        },
+        data: repairBundleData,
       });
       runResult.artifactRefs.push(
         failureArtifact.artifactId,

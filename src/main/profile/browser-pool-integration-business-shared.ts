@@ -1,4 +1,7 @@
 import http from 'node:http';
+import type { NetworkEntry } from '../../core/browser-core/types';
+import type { NetworkFilter } from '../../types/browser-interface';
+import { waitForCondition } from './browser-pool-integration-smoke-shared';
 
 const ORDER_DATA = [
   { id: '1001', title: 'Alpha Lamp', status: 'open', owner: 'Alice' },
@@ -12,6 +15,57 @@ export interface BrowserBusinessCanaryServer {
   detailUrl: (orderId: string) => string;
   apiHits: string[];
   close: () => Promise<void>;
+}
+
+export interface BrowserBusinessCanaryNetworkReader {
+  getNetworkEntries(filter?: NetworkFilter): NetworkEntry[];
+}
+
+function isFilteredOrdersResponse(entry: NetworkEntry, keyword: string, status: string): boolean {
+  try {
+    const url = new URL(entry.url);
+    return (
+      url.pathname === '/api/orders' &&
+      url.searchParams.get('keyword') === keyword &&
+      url.searchParams.get('status') === status &&
+      entry.status === 200
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function waitForFilteredOrdersResponse(
+  browser: BrowserBusinessCanaryNetworkReader,
+  options: {
+    keyword: string;
+    status: string;
+    timeoutMs?: number;
+  }
+): Promise<NetworkEntry> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  let matched: NetworkEntry | null = null;
+  let lastEntries: NetworkEntry[] = [];
+
+  try {
+    await waitForCondition(async () => {
+      lastEntries = browser.getNetworkEntries({ type: 'api' });
+      matched =
+        lastEntries.find((entry) =>
+          isFilteredOrdersResponse(entry, options.keyword, options.status)
+        ) ?? null;
+      return matched !== null;
+    }, timeoutMs, `filtered order API response ${options.keyword}/${options.status}`);
+  } catch (error) {
+    const apiUrls = lastEntries.map((entry) => `${entry.status ?? 'n/a'} ${entry.url}`);
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}; apiEntries=${JSON.stringify(
+        apiUrls
+      )}`
+    );
+  }
+
+  return matched!;
 }
 
 function filterOrders(keyword: string, status: string) {

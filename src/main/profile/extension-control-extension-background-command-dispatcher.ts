@@ -218,11 +218,47 @@ export function renderCommandDispatcher(): string {
         expirationDate: cookie.expirationDate,
       }));
     }
-    case '${REMOTE_BROWSER_COMMAND.cookiesSet}':
-      await setCookie(params.cookie || {}, tab.url || '');
+    case '${REMOTE_BROWSER_COMMAND.cookiesSet}': {
+      const cookie = params.cookie || {};
+      await setCookie(tabId, cookie, tab.url || '');
+      if (!cookie.httpOnly) {
+        await runDomTask(tabId, 'setDocumentCookie', {
+          name: cookie.name,
+          value: cookie.value,
+          path: cookie.path || '/',
+          expirationDate: cookie.expirationDate,
+          secure: !!cookie.secure,
+          sameSite: cookie.sameSite,
+        }).catch(() => undefined);
+      }
+      await flushCookiesToDisk(tabId);
       return true;
+    }
     case '${REMOTE_BROWSER_COMMAND.cookiesClear}':
       await removeAllCookies();
+      return true;
+    case '${REMOTE_BROWSER_COMMAND.storageGetItem}':
+      return runDomTask(tabId, 'storage.getItem', {
+        area: params.area === 'session' ? 'session' : 'local',
+        key: String(params.key || ''),
+      });
+    case '${REMOTE_BROWSER_COMMAND.storageSetItem}':
+      await runDomTask(tabId, 'storage.setItem', {
+        area: params.area === 'session' ? 'session' : 'local',
+        key: String(params.key || ''),
+        value: String(params.value || ''),
+      });
+      return true;
+    case '${REMOTE_BROWSER_COMMAND.storageRemoveItem}':
+      await runDomTask(tabId, 'storage.removeItem', {
+        area: params.area === 'session' ? 'session' : 'local',
+        key: String(params.key || ''),
+      });
+      return true;
+    case '${REMOTE_BROWSER_COMMAND.storageClearArea}':
+      await runDomTask(tabId, 'storage.clearArea', {
+        area: params.area === 'session' ? 'session' : 'local',
+      });
       return true;
     case '${REMOTE_BROWSER_COMMAND.networkStart}':
       await startNetworkCapture(tabId, params.options || {});
@@ -281,6 +317,22 @@ export function renderCommandDispatcher(): string {
       await chrome.windows.update(currentTab.windowId, {
         state: 'minimized',
       });
+      return true;
+    }
+    case '${REMOTE_BROWSER_COMMAND.browserClose}': {
+      await flushCookiesToDisk(tabId);
+      try {
+        await withDebugger(tabId, async () => {
+          await chrome.debugger.sendCommand({ tabId }, 'Browser.close');
+        });
+      } catch {
+        const windows = await chrome.windows.getAll({});
+        await Promise.all(
+          windows
+            .filter((item) => item && typeof item.id === 'number')
+            .map((item) => chrome.windows.remove(item.id).catch(() => undefined))
+        );
+      }
       return true;
     }
     case '${REMOTE_BROWSER_COMMAND.clientStateGet}':
@@ -425,6 +477,26 @@ export function renderCommandDispatcher(): string {
           deltaY: Number(params.deltaY || 0),
         });
       });
+      return true;
+    case '${REMOTE_BROWSER_COMMAND.touchTap}':
+      await dispatchTouchTap(tabId, Number(params.x || 0), Number(params.y || 0), 50);
+      return true;
+    case '${REMOTE_BROWSER_COMMAND.touchLongPress}':
+      await dispatchTouchTap(
+        tabId,
+        Number(params.x || 0),
+        Number(params.y || 0),
+        Number(params.durationMs || 600)
+      );
+      return true;
+    case '${REMOTE_BROWSER_COMMAND.touchDrag}':
+      await dispatchTouchDrag(
+        tabId,
+        Number(params.fromX || 0),
+        Number(params.fromY || 0),
+        Number(params.toX || 0),
+        Number(params.toY || 0)
+      );
       return true;
     case '${REMOTE_BROWSER_COMMAND.windowOpenSetPolicy}':
       globalWindowOpenPolicy = params.policy || null;

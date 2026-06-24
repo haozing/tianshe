@@ -10,6 +10,7 @@ export { createCrossPluginCapabilityCatalog } from './cross-plugin-catalog';
 export { createPluginCapabilityCatalog } from './plugin-catalog';
 export { createSystemCapabilityCatalog } from './system-catalog';
 export { createSessionCapabilityCatalog } from './session-catalog';
+export { createSiteCapabilityCatalog } from './site-capability-catalog';
 export {
   createUnifiedCapabilityCatalog,
   mergeCapabilityCatalogs,

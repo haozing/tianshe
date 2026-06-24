@@ -26,6 +26,22 @@ vi.mock('../BrowserRuntimePanel', () => ({
   BrowserRuntimePanel: () => <div data-testid="browser-runtime-panel">BrowserRuntimePanel</div>,
 }));
 
+vi.mock('../DatasetRecordEvidencePanel', () => ({
+  DatasetRecordEvidencePanel: () => (
+    <div data-testid="dataset-record-evidence-panel">DatasetRecordEvidencePanel</div>
+  ),
+}));
+
+vi.mock('../SiteAdapterLabPanel', () => ({
+  SiteAdapterLabPanel: () => <div data-testid="site-adapter-lab-panel">SiteAdapterLabPanel</div>,
+}));
+
+vi.mock('../SiteAdapterRepairStudioPanel', () => ({
+  SiteAdapterRepairStudioPanel: () => (
+    <div data-testid="site-adapter-repair-studio-panel">SiteAdapterRepairStudioPanel</div>
+  ),
+}));
+
 describe('SettingsPage', () => {
   it('hides cloud snapshot settings in the open edition', () => {
     render(<SettingsPage />);
@@ -41,5 +57,22 @@ describe('SettingsPage', () => {
     fireEvent.click(screen.getByRole('tab', { name: '浏览器运行时' }));
 
     expect(screen.getByTestId('browser-runtime-panel')).toBeInTheDocument();
+
+    expect(screen.queryByRole('tab', { name: 'Data Evidence' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Site Adapter Lab' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Repair Studio' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: '开发者工具' }));
+
+    expect(screen.getByText('v4 站点能力调试与修复')).toBeInTheDocument();
+    expect(screen.getByTestId('dataset-record-evidence-panel')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: '站点适配器调试' }));
+
+    expect(screen.getByTestId('site-adapter-lab-panel')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: '站点规则修复' }));
+
+    expect(screen.getByTestId('site-adapter-repair-studio-panel')).toBeInTheDocument();
   });
 });

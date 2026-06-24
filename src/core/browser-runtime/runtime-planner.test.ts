@@ -72,4 +72,24 @@ describe('browser runtime planner', () => {
     });
     expect(plan.recommendedAction).toContain('Create a new MCP session');
   });
+
+  it('uses known effective runtime descriptors for Cloak experimental capabilities', () => {
+    const plan = createBrowserRuntimePlan({
+      requiredCapabilities: ['download.manage', 'dialog.promptText'],
+      currentRuntimeId: 'electron-webcontents',
+      currentProfileId: 'electron-profile',
+      profiles: [
+        { id: 'electron-profile', runtimeId: 'electron-webcontents' },
+        { id: 'cloak-profile', runtimeId: 'chromium-cloak-playwright' },
+      ],
+    });
+
+    expect(plan.decision).toBe('needs_profile_switch');
+    expect(plan.recommendedRuntimeId).toBe('chromium-cloak-playwright');
+    expect(plan.recommendedProfileId).toBe('cloak-profile');
+    expect(
+      plan.candidateRuntimes.find((candidate) => candidate.runtimeId === 'chromium-cloak-playwright')
+        ?.missingCapabilities
+    ).toEqual([]);
+  });
 });

@@ -13,6 +13,9 @@ describe('redaction utilities', () => {
     expect(redactSensitiveText('Authorization: Bearer abc.def token=secret')).toBe(
       `Authorization: Bearer ${REDACTED_VALUE} token=${REDACTED_VALUE}`
     );
+    expect(redactSensitiveText('open https://alice:secret@example.test/path')).toBe(
+      `open https://${REDACTED_VALUE}:${REDACTED_VALUE}@example.test/path`
+    );
   });
 
   it('redacts absolute filesystem paths in text', () => {

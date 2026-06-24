@@ -180,6 +180,17 @@ export class RuyiFirefoxStorageCookieController {
       return cookie.domain.trim();
     }
 
+    if (typeof cookie.url === 'string' && cookie.url.trim()) {
+      try {
+        const domain = new URL(cookie.url).hostname.trim();
+        if (domain) {
+          return domain;
+        }
+      } catch {
+        // fall through to the current-page fallback below
+      }
+    }
+
     const currentUrl = await this.deps
       .evaluateExpression<string>('window.location.href', timeoutMs)
       .catch(() => '');

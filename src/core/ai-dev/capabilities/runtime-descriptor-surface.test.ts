@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { BrowserRuntimeStatus } from '../../browser-runtime';
+import {
+  getKnownEffectiveRuntimeDescriptor,
+  type BrowserRuntimeStatus,
+} from '../../browser-runtime';
 import { createProfileCapabilityCatalog } from './profile-catalog';
 import { createSystemCapabilityCatalog } from './system-catalog';
 
 describe('runtime descriptor external surfaces', () => {
-  it('system_bootstrap exposes static browser runtime descriptors for pre-acquire planning', async () => {
+  it('system_bootstrap exposes effective browser runtime descriptors for pre-acquire planning', async () => {
     const catalog = createSystemCapabilityCatalog();
     const result = await catalog.system_bootstrap.handler(
       {},
@@ -45,7 +48,7 @@ describe('runtime descriptor external surfaces', () => {
           listBrowserRuntimeStatuses: async (): Promise<BrowserRuntimeStatus[]> => [
             {
               runtimeId: 'chromium-extension-relay',
-              descriptor: {} as BrowserRuntimeStatus['descriptor'],
+              descriptor: getKnownEffectiveRuntimeDescriptor('chromium-extension-relay'),
               source: { type: 'custom-path', executablePath: 'C:/Browsers/chrome.exe' },
               resolvedRuntime: null,
               installed: true,
@@ -108,6 +111,26 @@ describe('runtime descriptor external surfaces', () => {
                 },
               },
             },
+            'chromium-cloak-playwright': {
+              runtimeId: 'chromium-cloak-playwright',
+              capabilities: {
+                'network.responseBody': {
+                  supported: true,
+                  stability: 'experimental',
+                  source: 'runtime',
+                },
+                'download.manage': {
+                  supported: true,
+                  stability: 'experimental',
+                  source: 'runtime',
+                },
+                'dialog.promptText': {
+                  supported: true,
+                  stability: 'experimental',
+                  source: 'runtime',
+                },
+              },
+            },
           },
           statuses: {
             'chromium-extension-relay': {
@@ -129,7 +152,7 @@ describe('runtime descriptor external surfaces', () => {
     });
   });
 
-  it('profile surfaces backfill runtime descriptors from the static runtime registry', async () => {
+  it('profile surfaces backfill runtime descriptors from the effective runtime registry', async () => {
     const catalog = createProfileCapabilityCatalog();
 
     const listResult = await catalog.profile_list.handler(
@@ -151,6 +174,14 @@ describe('runtime descriptor external surfaces', () => {
               runtimeId: 'firefox-bidi',
               status: 'idle',
               partition: 'persist:profile-ruyi',
+              isSystem: false,
+            },
+            {
+              id: 'profile-cloak',
+              name: 'Cloak QA',
+              runtimeId: 'chromium-cloak-playwright',
+              status: 'idle',
+              partition: 'persist:profile-cloak',
               isSystem: false,
             },
           ],
@@ -226,6 +257,22 @@ describe('runtime descriptor external surfaces', () => {
                 supported: true,
                 stability: 'experimental',
                 source: 'static-runtime',
+              }),
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          id: 'profile-cloak',
+          runtimeDescriptor: expect.objectContaining({
+            runtimeId: 'chromium-cloak-playwright',
+            capabilities: expect.objectContaining({
+              'network.responseBody': expect.objectContaining({
+                supported: true,
+                source: 'runtime',
+              }),
+              'download.manage': expect.objectContaining({
+                supported: true,
+                source: 'runtime',
               }),
             }),
           }),

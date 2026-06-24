@@ -259,6 +259,24 @@ describe('prepareRuyiFirefoxLaunch', () => {
     expect(prepared.browserPath).toBe(bundledFirefoxPath);
   });
 
+  it('prefers the client firefox executable before the legacy repo runtime', async () => {
+    const clientFirefoxPath = path.join(tempRoot, 'client', 'firefox', 'firefox.exe');
+    const legacyFirefoxPath = path.join(tempRoot, 'firefox', 'firefox.exe');
+    await fsp.mkdir(path.dirname(clientFirefoxPath), { recursive: true });
+    await fsp.mkdir(path.dirname(legacyFirefoxPath), { recursive: true });
+    await fsp.writeFile(clientFirefoxPath, '', 'utf8');
+    await fsp.writeFile(legacyFirefoxPath, '', 'utf8');
+    Object.defineProperty(process, 'argv', {
+      configurable: true,
+      value: previousArgv,
+    });
+
+    expect(resolveFirefoxExecutablePath()).toBe(clientFirefoxPath);
+
+    const prepared = prepareRuyiFirefoxLaunch(createSession());
+    expect(prepared.browserPath).toBe(clientFirefoxPath);
+  });
+
   it('prefers the packaged firefox runtime when the app is packaged', async () => {
     const packagedFirefoxPath = path.join(tempRoot, 'resources', 'firefox', 'firefox.exe');
     await fsp.mkdir(path.dirname(packagedFirefoxPath), { recursive: true });

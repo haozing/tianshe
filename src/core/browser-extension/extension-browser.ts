@@ -1,4 +1,10 @@
 import {
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
+import path from 'node:path';
+import {
   getPageStructureScript,
   getSnapshotScript,
 } from '../browser-automation/selector-generator';
@@ -60,6 +66,7 @@ import type {
   BrowserDialogState,
   BrowserInterface,
   BrowserScreenshotResult,
+  BrowserStorageArea,
   NativeClickOptions,
   NativeTypeOptions,
   SearchOptions,
@@ -90,6 +97,7 @@ type ExtensionBrowserOptions = {
   closeInternal: () => Promise<void>;
   initialClientState?: ExtensionRelayClientState | null;
   browserProcessId?: number | null;
+  cookieStorePath?: string | null;
   ocrProviderFactory?: OCRProviderFactory;
 };
 
@@ -128,6 +136,8 @@ export class ExtensionBrowser
   private boundTabId: number | null = null;
   private boundWindowId: number | null = null;
   private readonly browserProcessId: number | null;
+  private readonly cookieStorePath: string | null;
+  private pendingCookieRestore = false;
   private readonly ocrProviderFactory?: OCRProviderFactory;
   private currentDialog: BrowserDialogState | null = null;
   private readonly pendingDialogWaits = new Set<PendingDialogWait>();
@@ -143,6 +153,8 @@ export class ExtensionBrowser
       Number.isInteger(options.browserProcessId) && Number(options.browserProcessId) > 0
         ? Number(options.browserProcessId)
         : null;
+    this.cookieStorePath = options.cookieStorePath || null;
+    this.pendingCookieRestore = Boolean(this.cookieStorePath);
     this.ocrProviderFactory = options.ocrProviderFactory;
     this.updateBoundTarget(options.initialClientState || this.transport.getState());
     this.transportUnsubscribe = this.transport.onEvent((event) => {
@@ -280,6 +292,7 @@ export class ExtensionBrowser
         waitUntil: options?.waitUntil ?? 'domcontentloaded',
       },
       operation: async () => {
+        await this.restorePersistedCookiesIfNeeded();
         const nextState = await this.dispatch<ExtensionRelayClientState>('goto', {
           url,
           timeout: options?.timeout,
@@ -291,6 +304,7 @@ export class ExtensionBrowser
             () => undefined
           );
         }
+        await this.restorePersistedCookiesIfNeeded();
       },
     });
   }
@@ -779,20 +793,55 @@ export class ExtensionBrowser
   }
 
   async getCookies(filter?: BrowserCookieFilter): Promise<Cookie[]> {
+    await this.restorePersistedCookiesIfNeeded();
     const cookies = await this.dispatch<Cookie[]>('cookies.getAll');
     return filterBrowserCookies(cookies, filter);
   }
 
   async setCookie(cookie: Cookie): Promise<void> {
     await this.dispatch('cookies.set', { cookie });
+    const persistedCookie = { ...cookie };
+    if (!persistedCookie.url && !persistedCookie.domain) {
+      persistedCookie.url = await this.getCurrentUrl().catch(() => undefined);
+    }
+    this.persistCookie(persistedCookie);
   }
 
   async clearCookies(): Promise<void> {
     await this.dispatch('cookies.clear');
+    this.writePersistedCookies([]);
   }
 
   async getUserAgent(): Promise<string> {
     return this.evaluate<string>('navigator.userAgent');
+  }
+
+  async getStorageItem(area: BrowserStorageArea, key: string): Promise<string | null> {
+    return this.dispatch<string | null>('storage.getItem', { area, key });
+  }
+
+  async setStorageItem(area: BrowserStorageArea, key: string, value: string): Promise<void> {
+    await this.dispatch('storage.setItem', { area, key, value });
+  }
+
+  async removeStorageItem(area: BrowserStorageArea, key: string): Promise<void> {
+    await this.dispatch('storage.removeItem', { area, key });
+  }
+
+  async clearStorageArea(area: BrowserStorageArea): Promise<void> {
+    await this.dispatch('storage.clearArea', { area });
+  }
+
+  async touchTap(x: number, y: number): Promise<void> {
+    await this.dispatch('touch.tap', { x, y });
+  }
+
+  async touchLongPress(x: number, y: number, durationMs?: number): Promise<void> {
+    await this.dispatch('touch.longPress', { x, y, durationMs });
+  }
+
+  async touchDrag(fromX: number, fromY: number, toX: number, toY: number): Promise<void> {
+    await this.dispatch('touch.drag', { fromX, fromY, toX, toY });
   }
 
   private async captureViewportScreenshot(options?: {
@@ -1091,6 +1140,77 @@ export class ExtensionBrowser
     const waiters = Array.from(this.pendingDialogCloseWaits);
     for (const waiter of waiters) {
       waiter.resolve();
+    }
+  }
+
+  private readPersistedCookies(): Cookie[] {
+    if (!this.cookieStorePath) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(readFileSync(this.cookieStorePath, 'utf8'));
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed
+        .filter((cookie): cookie is Cookie => {
+          return (
+            cookie &&
+            typeof cookie === 'object' &&
+            typeof cookie.name === 'string' &&
+            typeof cookie.value === 'string'
+          );
+        })
+        .map((cookie) => ({
+          name: cookie.name,
+          value: cookie.value,
+          url: typeof cookie.url === 'string' ? cookie.url : undefined,
+          domain: typeof cookie.domain === 'string' ? cookie.domain : undefined,
+          path: typeof cookie.path === 'string' ? cookie.path : undefined,
+          secure: typeof cookie.secure === 'boolean' ? cookie.secure : undefined,
+          httpOnly: typeof cookie.httpOnly === 'boolean' ? cookie.httpOnly : undefined,
+          expirationDate:
+            typeof cookie.expirationDate === 'number' && Number.isFinite(cookie.expirationDate)
+              ? cookie.expirationDate
+              : undefined,
+        }));
+    } catch {
+      return [];
+    }
+  }
+
+  private writePersistedCookies(cookies: Cookie[]): void {
+    if (!this.cookieStorePath) {
+      return;
+    }
+    mkdirSync(path.dirname(this.cookieStorePath), { recursive: true });
+    writeFileSync(this.cookieStorePath, `${JSON.stringify(cookies, null, 2)}\n`, 'utf8');
+  }
+
+  private persistCookie(cookie: Cookie): void {
+    if (!this.cookieStorePath) {
+      return;
+    }
+    const current = this.readPersistedCookies();
+    const next = current.filter(
+      (item) =>
+        item.name !== cookie.name ||
+        (item.domain || '') !== (cookie.domain || '') ||
+        (item.path || '/') !== (cookie.path || '/') ||
+        (item.url || '') !== (cookie.url || '')
+    );
+    next.push({ ...cookie });
+    this.writePersistedCookies(next);
+  }
+
+  private async restorePersistedCookiesIfNeeded(): Promise<void> {
+    if (!this.pendingCookieRestore) {
+      return;
+    }
+    const cookies = this.readPersistedCookies();
+    this.pendingCookieRestore = false;
+    for (const cookie of cookies) {
+      await this.dispatch('cookies.set', { cookie }).catch(() => undefined);
     }
   }
 

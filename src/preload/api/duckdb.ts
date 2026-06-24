@@ -281,6 +281,22 @@ export function createDuckDBAPI(ipcRenderer: IpcRenderer) {
     },
 
     /**
+     * 获取数据行来源、运行时 trace 与观测证据
+     */
+    getRecordEvidence: (
+      datasetId: string,
+      rowId: number,
+      limit?: number
+    ): Promise<{
+      success: boolean;
+      evidence?: import('../../main/duckdb/types').DatasetRecordEvidenceBundle;
+      error?: string;
+      code?: string;
+    }> => {
+      return ipcRenderer.invoke('duckdb:get-record-evidence', datasetId, rowId, limit);
+    },
+
+    /**
      * 监听导入进度
      */
     onImportProgress: (

@@ -18,6 +18,10 @@ export {
   createBrowserRuntimeManager,
 } from './runtime-manager';
 export {
+  buildEffectiveRuntimeDescriptorMap,
+  getKnownEffectiveRuntimeDescriptor,
+} from './effective-descriptor';
+export {
   BROWSER_CAPABILITY_CONTRACTS,
   BROWSER_MINIMAL_CORE_METHODS,
   assertBrowserRuntimeDescriptorContract,

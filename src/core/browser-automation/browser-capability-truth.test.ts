@@ -36,6 +36,7 @@ function createIntegratedBrowserFixture() {
     url: vi.fn(() => 'https://example.test'),
     getCurrentUrl: vi.fn().mockResolvedValue('https://example.test'),
     title: vi.fn().mockResolvedValue('Example'),
+    evaluateWithArgs: vi.fn().mockResolvedValue(null),
     goto: vi.fn(),
     back: vi.fn(),
     forward: vi.fn(),
@@ -52,10 +53,19 @@ function createIntegratedBrowserFixture() {
       clearDeviceEmulation: vi.fn().mockResolvedValue(undefined),
       clearGeolocationEmulation: vi.fn().mockResolvedValue(undefined),
     },
+    native: {
+      click: vi.fn().mockResolvedValue(undefined),
+      move: vi.fn().mockResolvedValue(undefined),
+      drag: vi.fn().mockResolvedValue(undefined),
+      type: vi.fn().mockResolvedValue(undefined),
+      keyPress: vi.fn().mockResolvedValue(undefined),
+      scroll: vi.fn().mockResolvedValue(undefined),
+    },
   };
 
   return {
     browser: new IntegratedBrowser(browser as never, {} as never),
+    simpleBrowser: browser,
     webContents,
   };
 }
@@ -147,12 +157,13 @@ describe('browser capability truth', () => {
     expect(hasBrowserNetworkCaptureCapability(integrated)).toBe(true);
     expect(hasBrowserPdfCapability(integrated)).toBe(true);
     expect(hasBrowserTextOcrCapability(integrated)).toBe(true);
+    expect(hasBrowserStorageCapability(integrated)).toBe(true);
     expect(hasBrowserDialogCapability(integrated)).toBe(false);
     assertBrowserPdfCapability(integrated);
     assertBrowserTextOcrCapability(integrated);
 
     expect(hasBrowserInterceptCapability(extension)).toBe(true);
-    expect(hasBrowserStorageCapability(extension)).toBe(false);
+    expect(hasBrowserStorageCapability(extension)).toBe(true);
     expect(hasBrowserStorageCapability(ruyi)).toBe(true);
   });
 
@@ -171,14 +182,52 @@ describe('browser capability truth', () => {
     expect(browser.hasCapability('dialog.promptText')).toBe(false);
     expect(browser.hasCapability('intercept.observe')).toBe(false);
     expect(browser.hasCapability('intercept.control')).toBe(false);
-    expect(browser.hasCapability('input.touch')).toBe(false);
+    expect(browser.hasCapability('input.native')).toBe(true);
+    expect(browser.hasCapability('input.touch')).toBe(true);
     expect(browser.hasCapability('events.runtime')).toBe(false);
-    expect(browser.hasCapability('storage.dom')).toBe(false);
+    expect(browser.hasCapability('storage.dom')).toBe(true);
     expect(browser.hasCapability('emulation.identity')).toBe(true);
     expect(browser.hasCapability('emulation.viewport')).toBe(true);
     expect(typeof browser.setEmulationIdentity).toBe('function');
     expect(typeof browser.setViewportEmulation).toBe('function');
     expect(typeof browser.clearEmulation).toBe('function');
+  });
+
+  it('IntegratedBrowser exposes DOM storage helpers and CDP-backed touch gestures', async () => {
+    const { browser, simpleBrowser } = createIntegratedBrowserFixture();
+
+    simpleBrowser.evaluateWithArgs.mockResolvedValueOnce('stored-value');
+
+    await expect(browser.getStorageItem('local', 'token')).resolves.toBe('stored-value');
+    await browser.setStorageItem('session', 'flash', 'ok');
+    await browser.removeStorageItem('session', 'flash');
+    await browser.clearStorageArea('local');
+    await browser.touchTap(10, 20);
+    await browser.touchLongPress(11, 21, 75);
+    await browser.touchDrag(1, 2, 9, 10);
+
+    expect(simpleBrowser.evaluateWithArgs).toHaveBeenCalledWith(expect.any(Function), 'local', 'token');
+    expect(simpleBrowser.evaluateWithArgs).toHaveBeenCalledWith(
+      expect.any(Function),
+      'session',
+      'flash',
+      'ok'
+    );
+    expect(simpleBrowser.cdp.sendCommand).toHaveBeenCalledWith(
+      'Emulation.setTouchEmulationEnabled',
+      {
+        enabled: true,
+        maxTouchPoints: 1,
+      }
+    );
+    expect(simpleBrowser.cdp.sendCommand).toHaveBeenCalledWith('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ x: 10, y: 20 }],
+    });
+    expect(simpleBrowser.cdp.sendCommand).toHaveBeenCalledWith('Input.dispatchTouchEvent', {
+      type: 'touchEnd',
+      touchPoints: [],
+    });
   });
 
   it('IntegratedBrowser exposes PDF export through Electron printToPDF', async () => {
@@ -254,9 +303,9 @@ describe('browser capability truth', () => {
     expect(browser.hasCapability('intercept.observe')).toBe(true);
     expect(browser.hasCapability('intercept.control')).toBe(true);
     expect(browser.hasCapability('pdf.print')).toBe(false);
-    expect(browser.hasCapability('input.touch')).toBe(false);
+    expect(browser.hasCapability('input.touch')).toBe(true);
     expect(browser.hasCapability('events.runtime')).toBe(false);
-    expect(browser.hasCapability('storage.dom')).toBe(false);
+    expect(browser.hasCapability('storage.dom')).toBe(true);
 
     await browser.startNetworkCapture({
       clearExisting: true,
@@ -332,6 +381,13 @@ describe('browser capability truth', () => {
       hasTouch: true,
     });
     await browser.clearEmulation();
+    await browser.setStorageItem('local', 'token', 'value-1');
+    await browser.getStorageItem('local', 'token');
+    await browser.removeStorageItem('session', 'flash');
+    await browser.clearStorageArea('session');
+    await browser.touchTap(10, 20);
+    await browser.touchLongPress(11, 21, 700);
+    await browser.touchDrag(12, 22, 13, 23);
     await browser.enableRequestInterception({
       patterns: [{ urlPattern: '/api/orders', methods: ['POST'] }],
     });
@@ -386,6 +442,72 @@ describe('browser capability truth', () => {
     expect(relay.dispatchCommand).toHaveBeenCalledWith(
       'emulation.clear',
       {
+        target: { tabId: 11, windowId: 5 },
+      },
+      undefined
+    );
+    expect(relay.dispatchCommand).toHaveBeenCalledWith(
+      'storage.setItem',
+      {
+        area: 'local',
+        key: 'token',
+        value: 'value-1',
+        target: { tabId: 11, windowId: 5 },
+      },
+      undefined
+    );
+    expect(relay.dispatchCommand).toHaveBeenCalledWith(
+      'storage.getItem',
+      {
+        area: 'local',
+        key: 'token',
+        target: { tabId: 11, windowId: 5 },
+      },
+      undefined
+    );
+    expect(relay.dispatchCommand).toHaveBeenCalledWith(
+      'storage.removeItem',
+      {
+        area: 'session',
+        key: 'flash',
+        target: { tabId: 11, windowId: 5 },
+      },
+      undefined
+    );
+    expect(relay.dispatchCommand).toHaveBeenCalledWith(
+      'storage.clearArea',
+      {
+        area: 'session',
+        target: { tabId: 11, windowId: 5 },
+      },
+      undefined
+    );
+    expect(relay.dispatchCommand).toHaveBeenCalledWith(
+      'touch.tap',
+      {
+        x: 10,
+        y: 20,
+        target: { tabId: 11, windowId: 5 },
+      },
+      undefined
+    );
+    expect(relay.dispatchCommand).toHaveBeenCalledWith(
+      'touch.longPress',
+      {
+        x: 11,
+        y: 21,
+        durationMs: 700,
+        target: { tabId: 11, windowId: 5 },
+      },
+      undefined
+    );
+    expect(relay.dispatchCommand).toHaveBeenCalledWith(
+      'touch.drag',
+      {
+        fromX: 12,
+        fromY: 22,
+        toX: 13,
+        toY: 23,
         target: { tabId: 11, windowId: 5 },
       },
       undefined

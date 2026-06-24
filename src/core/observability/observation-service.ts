@@ -12,7 +12,11 @@ import { createRuntimeArtifactId, createRuntimeEventId } from './types';
 import { createChildTraceContext, getCurrentTraceContext, withTraceContext } from './observation-context';
 import { createLogger } from '../logger';
 import { getBrowserFamilyForRuntime } from '../../types/browser-runtime';
-import { REDACTED_VALUE, redactSensitiveText } from '../../utils/redaction';
+import {
+  REDACTED_VALUE,
+  isSensitiveRedactionKey,
+  redactSensitiveText,
+} from '../../utils/redaction';
 
 const logger = createLogger('ObservationService');
 const OBSERVATION_SINK_WRITE_TIMEOUT_MS = 250;
@@ -55,18 +59,7 @@ function summarizeArray(value: unknown[], depth: number): unknown[] {
 }
 
 function isSensitiveObservationKey(key: string): boolean {
-  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
-  return (
-    normalized === 'authorization' ||
-    normalized === 'proxyauthorization' ||
-    normalized === 'cookie' ||
-    normalized === 'setcookie' ||
-    normalized.includes('password') ||
-    normalized.includes('secret') ||
-    normalized.includes('token') ||
-    normalized.includes('apikey') ||
-    normalized.includes('sessionid')
-  );
+  return isSensitiveRedactionKey(key);
 }
 
 function isCookieLikeObject(value: Record<string, unknown>): boolean {

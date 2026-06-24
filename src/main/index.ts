@@ -8,6 +8,7 @@
 
 import { installStdioBrokenPipeGuards } from './bootstrap/stdio-bootstrap';
 import { app, BrowserWindow, Menu, dialog } from 'electron';
+import path from 'node:path';
 import { AIRPA_RUNTIME_CONFIG, isProductionMode } from '../constants/runtime-config';
 import { configureChromiumCommandLine } from './bootstrap/chromium-command-line';
 import { runAppReadyBootstrap } from './bootstrap/app-ready-bootstrap';
@@ -39,6 +40,15 @@ import { UpdateManager } from './updater';
 import { registerUpdaterHandlers } from './ipc-handlers/updater-handler';
 import { SchedulerIPCHandler } from './ipc-handlers/scheduler-handler';
 import { registerObservationHandlers } from './ipc-handlers/observation-handler';
+import {
+  registerSiteAdapterLabHandlers,
+  type SiteAdapterLabBrowserRunnerRequest,
+} from './site-adapter-lab/routes-or-ipc';
+import {
+  createConfiguredSiteAdapterRepairModelProvider,
+  FileRepairStudioModelCredentialStore,
+} from './site-adapter-repair-studio/model-provider-config';
+import { registerSiteAdapterRepairStudioHandlers } from './site-adapter-repair-studio/routes-or-ipc';
 import { HttpApiIPCHandler } from './ipc-handlers/http-api-handler';
 import type { IpcSenderGuard } from './ipc-handlers/utils';
 import { createMainWindowIpcSenderGuard } from './ipc-authorization';
@@ -57,6 +67,8 @@ import {
 import { stopBrowserPool, getBrowserPoolManager } from '../core/browser-pool';
 import { createLogger } from '../core/logger';
 import { fingerprintManager } from '../core/stealth';
+import type { SiteAdapterLabPlaywrightRunnerOptions } from '../core/site-adapter-lab';
+import { runReadOnlySiteAdapterRuntimeCanary } from '../core/site-adapter-runtime';
 
 // HTTP API 配置和类型
 import {
@@ -68,6 +80,8 @@ import {
 import type { RestApiConfig } from '../types/http-api';
 import { resolveTiansheEdition } from '../edition';
 import { redactSensitiveUrl } from '../utils/redaction';
+import type { BrowserRuntimeId } from '../types/browser-runtime';
+import type { SnapshotOptions } from '../types/browser-interface';
 
 const tiansheEdition = resolveTiansheEdition();
 const appRuntime = new AppRuntime();
@@ -75,6 +89,152 @@ const logger = createLogger('MainProcess');
 
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+function getSiteAdapterLabFixtureSnapshotUrl(
+  fixture: SiteAdapterLabBrowserRunnerRequest['fixture']
+): string | undefined {
+  const snapshot = fixture.snapshot as { url?: unknown } | null | undefined;
+  const url = typeof snapshot?.url === 'string' ? snapshot.url.trim() : '';
+  return url || undefined;
+}
+
+function createSiteAdapterLabBrowserRunner(request: SiteAdapterLabBrowserRunnerRequest) {
+  const readiness = appRuntime.browserPoolReadiness.getSnapshot();
+  if (readiness.status !== 'ready') {
+    return {
+      unavailableReason: `Browser pool is not ready for Site Adapter Lab: ${readiness.status}${
+        readiness.error ? ` (${readiness.error})` : ''
+      }`,
+    };
+  }
+
+  const targetUrl = String(request.targetUrl || getSiteAdapterLabFixtureSnapshotUrl(request.fixture) || '').trim();
+  if (!targetUrl) {
+    return {
+      unavailableReason: 'Browser snapshot runner requires a target URL.',
+    };
+  }
+
+  const timeoutMs = Math.max(1, Number(request.timeoutMs) || 30_000);
+  const profileId = String(request.profileId || '').trim() || undefined;
+  const runtimeId = String(request.runtimeId || '').trim() || undefined;
+
+  return {
+    fixtureName: request.fixture.name,
+    input: {
+      ...(request.fixture.input || {}),
+      runner: 'browser-snapshot',
+      targetUrl: redactSensitiveUrl(targetUrl),
+      ...(profileId ? { profileId } : {}),
+      ...(runtimeId ? { runtimeId } : {}),
+    },
+    snapshotOptions: { elementsFilter: 'all' as const },
+    browser: {
+      snapshot: async (snapshotOptions?: SnapshotOptions) => {
+        const handle = await getBrowserPoolManager().acquire(
+          profileId,
+          {
+            strategy: 'any',
+            priority: 'normal',
+            timeout: timeoutMs,
+            ...(runtimeId ? { runtimeId: runtimeId as BrowserRuntimeId } : {}),
+          },
+          'ipc'
+        );
+        try {
+          await handle.browser.goto(targetUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: timeoutMs,
+          });
+          return handle.browser.snapshot(snapshotOptions);
+        } finally {
+          await handle.release().catch((error) => {
+            logger.warn('Failed to release Site Adapter Lab browser runner handle', {
+              browserId: handle.browserId,
+              errorMessage: getErrorMessage(error),
+            });
+          });
+        }
+      },
+    },
+  };
+}
+
+function createSiteAdapterLabPlaywrightRunner(
+  request: SiteAdapterLabBrowserRunnerRequest
+): SiteAdapterLabPlaywrightRunnerOptions {
+  const readiness = appRuntime.browserPoolReadiness.getSnapshot();
+  if (readiness.status !== 'ready') {
+    return {
+      unavailableReason: `Browser pool is not ready for Playwright Lab: ${readiness.status}${
+        readiness.error ? ` (${readiness.error})` : ''
+      }`,
+    };
+  }
+
+  const targetUrl = String(
+    request.targetUrl || getSiteAdapterLabFixtureSnapshotUrl(request.fixture) || ''
+  ).trim();
+  if (!targetUrl) {
+    return {
+      unavailableReason: 'Playwright Lab runner requires a target URL.',
+    };
+  }
+
+  const requestedRuntimeId = String(request.runtimeId || '').trim();
+  const runtimeId = (requestedRuntimeId || 'chromium-cloak-playwright') as BrowserRuntimeId;
+  if (runtimeId !== 'chromium-cloak-playwright') {
+    return {
+      unavailableReason:
+        'Playwright Lab runner requires the chromium-cloak-playwright runtime.',
+    };
+  }
+
+  const timeoutMs = Math.max(1, Number(request.timeoutMs) || 30_000);
+  const profileId = String(request.profileId || '').trim() || undefined;
+  const redactedTargetUrl = redactSensitiveUrl(targetUrl);
+
+  return {
+    run: async ({ adapter, fixture, expected }) => {
+      const handle = await getBrowserPoolManager().acquire(
+        profileId,
+        {
+          strategy: 'any',
+          priority: 'normal',
+          timeout: timeoutMs,
+          runtimeId,
+        },
+        'ipc'
+      );
+      try {
+        await handle.browser.goto(targetUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: timeoutMs,
+        });
+        return await runReadOnlySiteAdapterRuntimeCanary(adapter, {
+          browser: handle.browser,
+          fixtureName: fixture.name,
+          expected,
+          input: {
+            ...(fixture.input || {}),
+            runner: 'playwright-lab',
+            targetUrl: redactedTargetUrl,
+            ...(profileId ? { profileId } : {}),
+            runtimeId,
+          },
+          snapshotOptions: { elementsFilter: 'all' as const },
+        });
+      } finally {
+        await handle.release().catch((error) => {
+          logger.warn('Failed to release Site Adapter Lab Playwright runner handle', {
+            browserId: handle.browserId,
+            errorMessage: getErrorMessage(error),
+          });
+        });
+      }
+    },
+  };
+}
 
 const assertPrimaryRendererSender: IpcSenderGuard = createMainWindowIpcSenderGuard(
   () => appRuntime.mainWindow
@@ -143,6 +303,16 @@ function initializeSchedulerIPC(): void {
  */
 function initializeObservationIPC(): void {
   registerObservationHandlers(appRuntime.requireDuckDBService());
+  registerSiteAdapterLabHandlers({
+    createBrowserRunner: createSiteAdapterLabBrowserRunner,
+    createPlaywrightLabRunner: createSiteAdapterLabPlaywrightRunner,
+  });
+  registerSiteAdapterRepairStudioHandlers({
+    credentialStore: new FileRepairStudioModelCredentialStore(
+      path.join(app.getPath('userData'), 'repair-studio-model-provider.json')
+    ),
+    modelProvider: createConfiguredSiteAdapterRepairModelProvider() || undefined,
+  });
 
   logger.info('Observation IPC handlers registered');
 }

@@ -1,11 +1,38 @@
-export type SiteAdapterSideEffectLevel = 'read-only';
+export type SiteAdapterSideEffectLevel = 'read-only' | 'low' | 'high';
+
+export type SiteAdapterSupportedRunner =
+  | 'fixture'
+  | 'browser-snapshot'
+  | 'browser-evaluate'
+  | 'procedure'
+  | 'playwright-lab';
+
+export type SiteAdapterRiskLevel = 'low' | 'medium' | 'high';
+
+export type SiteAdapterProcedureSideEffectLevel = 'low' | 'high';
+
+export interface SiteAdapterRepairScopeManifest {
+  roots?: string[];
+  allowedSubpaths?: string[];
+  forbiddenFiles?: string[];
+}
 
 export interface SiteAdapterManifest {
   id: string;
   name: string;
   version: string;
   site: string;
+  siteId?: string;
   sideEffectLevel: SiteAdapterSideEffectLevel;
+  capabilities?: string[];
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  requiredScopes?: string[];
+  supportedRunners?: SiteAdapterSupportedRunner[];
+  repairScope?: SiteAdapterRepairScopeManifest;
+  fixtures?: string[];
+  expected?: string[];
+  riskLevel?: SiteAdapterRiskLevel;
   extractors: Array<{
     id: string;
     outputFields: string[];
@@ -13,6 +40,13 @@ export interface SiteAdapterManifest {
   verifiers?: Array<{
     id: string;
     description?: string;
+  }>;
+  procedures?: Array<{
+    id: string;
+    description?: string;
+    sideEffectLevel: SiteAdapterProcedureSideEffectLevel;
+    requiredScopes?: string[];
+    verification?: string;
   }>;
 }
 
@@ -55,6 +89,12 @@ export interface SiteAdapterModule {
   manifest: SiteAdapterManifest;
   extractors: SiteAdapterExtractor[];
   verifiers?: SiteAdapterVerifier[];
+  procedures?: Array<{
+    id: string;
+    adapterId: string;
+    sideEffectLevel: SiteAdapterProcedureSideEffectLevel;
+    steps: unknown[];
+  }>;
 }
 
 export interface SiteAdapterFieldDiagnostic {

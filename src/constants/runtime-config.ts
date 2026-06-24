@@ -8,12 +8,14 @@
 
 export type RuntimeMode = 'development' | 'production' | 'test';
 export type OcrAdapterMode = 'worker' | 'inprocess';
+export type RepairStudioModelProviderKind = 'openai' | 'openai-compatible';
 
 type RuntimeConfigProcessLike = {
   argv?: unknown;
   versions?: Partial<NodeJS.ProcessVersions>;
   type?: unknown;
   resourcesPath?: unknown;
+  env?: NodeJS.ProcessEnv;
 };
 
 const getRuntimeProcess = (): RuntimeConfigProcessLike | null => {
@@ -39,6 +41,7 @@ const withRuntimeArgv = (
     versions: runtimeProcess?.versions,
     type: runtimeProcess?.type,
     resourcesPath: runtimeProcess?.resourcesPath,
+    env: runtimeProcess?.env,
   };
 };
 
@@ -120,6 +123,16 @@ const getCloakBrowserExecutablePathOverride = (
 ): string =>
   readProcessArgValue('--airpa-cloakbrowser-path', runtimeProcess) ||
   readProcessArgValue('--airpa-cloak-browser-path', runtimeProcess);
+const getChromeExecutablePathOverride = (
+  runtimeProcess: RuntimeConfigProcessLike | null,
+  env: NodeJS.ProcessEnv | undefined
+): string =>
+  readConfigString(
+    '--airpa-chrome-path',
+    ['AIRPA_CHROME_PATH', 'TIANSHE_CHROME_PATH'],
+    runtimeProcess,
+    env
+  );
 const getHttpPortOverride = (runtimeProcess: RuntimeConfigProcessLike | null): number | null =>
   readProcessArgInteger('--airpa-http-port', runtimeProcess);
 const getHttpEnabledOverride = (runtimeProcess: RuntimeConfigProcessLike | null): boolean | null =>
@@ -132,6 +145,119 @@ const getAllowNoSandbox = (runtimeProcess: RuntimeConfigProcessLike | null): boo
   readProcessArgBoolean('--tianshe-allow-no-sandbox', runtimeProcess) ??
   readProcessArgBoolean('--airpa-allow-no-sandbox', runtimeProcess) ??
   false;
+
+const readEnvValue = (env: NodeJS.ProcessEnv | undefined, names: readonly string[]): string => {
+  if (!env) {
+    return '';
+  }
+
+  for (const name of names) {
+    const value = env[name];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return '';
+};
+
+const getRuntimeEnv = (
+  explicitEnv: NodeJS.ProcessEnv | undefined,
+  runtimeProcess: RuntimeConfigProcessLike | null
+): NodeJS.ProcessEnv | undefined => explicitEnv || runtimeProcess?.env;
+
+const readConfigString = (
+  flagName: string,
+  envNames: readonly string[],
+  runtimeProcess: RuntimeConfigProcessLike | null,
+  env: NodeJS.ProcessEnv | undefined
+): string => readProcessArgValue(flagName, runtimeProcess) || readEnvValue(env, envNames);
+
+const readConfigInteger = (
+  flagName: string,
+  envNames: readonly string[],
+  runtimeProcess: RuntimeConfigProcessLike | null,
+  env: NodeJS.ProcessEnv | undefined,
+  max: number
+): number | null => {
+  const raw = readConfigString(flagName, envNames, runtimeProcess, env);
+  if (!raw) {
+    return null;
+  }
+
+  const value = Number.parseInt(raw, 10);
+  return Number.isInteger(value) && value > 0 && value <= max ? value : null;
+};
+
+const normalizeRepairStudioModelProvider = (
+  value: string
+): RepairStudioModelProviderKind | null => {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'openai' || normalized === 'openai-compatible') {
+    return normalized;
+  }
+  return null;
+};
+
+export interface RepairStudioModelProviderConfig {
+  provider: RepairStudioModelProviderKind | null;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  timeoutMs: number;
+}
+
+const DEFAULT_REPAIR_STUDIO_OPENAI_BASE_URL = 'https://api.openai.com/v1';
+const DEFAULT_REPAIR_STUDIO_MODEL_TIMEOUT_MS = 60_000;
+
+const getRepairStudioModelProviderConfig = (
+  runtimeProcess: RuntimeConfigProcessLike | null,
+  env: NodeJS.ProcessEnv | undefined
+): RepairStudioModelProviderConfig => {
+  const provider = normalizeRepairStudioModelProvider(
+    readConfigString(
+      '--tianshe-repair-model-provider',
+      ['TIANSHE_REPAIR_MODEL_PROVIDER'],
+      runtimeProcess,
+      env
+    )
+  );
+  const apiKeyEnvNames =
+    provider === 'openai'
+      ? ['TIANSHE_REPAIR_MODEL_API_KEY', 'OPENAI_API_KEY']
+      : ['TIANSHE_REPAIR_MODEL_API_KEY'];
+
+  return {
+    provider,
+    baseUrl:
+      readConfigString(
+        '--tianshe-repair-model-base-url',
+        ['TIANSHE_REPAIR_MODEL_BASE_URL'],
+        runtimeProcess,
+        env
+      ) || (provider === 'openai' ? DEFAULT_REPAIR_STUDIO_OPENAI_BASE_URL : ''),
+    apiKey: readConfigString(
+      '--tianshe-repair-model-api-key',
+      apiKeyEnvNames,
+      runtimeProcess,
+      env
+    ),
+    model: readConfigString(
+      '--tianshe-repair-model',
+      ['TIANSHE_REPAIR_MODEL', 'TIANSHE_REPAIR_MODEL_NAME'],
+      runtimeProcess,
+      env
+    ),
+    timeoutMs:
+      readConfigInteger(
+        '--tianshe-repair-model-timeout-ms',
+        ['TIANSHE_REPAIR_MODEL_TIMEOUT_MS'],
+        runtimeProcess,
+        env,
+        600_000
+      ) ?? DEFAULT_REPAIR_STUDIO_MODEL_TIMEOUT_MS,
+  };
+};
 
 export interface AirpaRuntimeConfig {
   app: {
@@ -147,6 +273,8 @@ export interface AirpaRuntimeConfig {
     asarExtractBaseDirOverride: string;
     firefoxExecutablePathOverride: string;
     cloakBrowserExecutablePathOverride: string;
+    chromeExecutablePathOverride: string;
+    localAppDataDir: string;
   };
   http: {
     port: number;
@@ -193,6 +321,9 @@ export interface AirpaRuntimeConfig {
   };
   logger: {
     env: RuntimeMode;
+  };
+  repairStudio: {
+    modelProvider: RepairStudioModelProviderConfig;
   };
 }
 
@@ -248,11 +379,11 @@ const detectRuntimeMode = (runtimeProcess: RuntimeConfigProcessLike | null): Run
 
 export const createRuntimeConfig = (
   argv?: readonly string[],
-  _env?: NodeJS.ProcessEnv,
+  env?: NodeJS.ProcessEnv,
   runtimeProcess: RuntimeConfigProcessLike | null = getRuntimeProcess()
 ): AirpaRuntimeConfig => {
-  void _env;
   const configProcess = withRuntimeArgv(runtimeProcess, argv);
+  const runtimeEnv = getRuntimeEnv(env, configProcess);
   const runtimeMode = detectRuntimeMode(configProcess);
 
   return {
@@ -269,6 +400,8 @@ export const createRuntimeConfig = (
       asarExtractBaseDirOverride: getAsarExtractBaseDirOverride(configProcess),
       firefoxExecutablePathOverride: getFirefoxExecutablePathOverride(configProcess),
       cloakBrowserExecutablePathOverride: getCloakBrowserExecutablePathOverride(configProcess),
+      chromeExecutablePathOverride: getChromeExecutablePathOverride(configProcess, runtimeEnv),
+      localAppDataDir: readEnvValue(runtimeEnv, ['LOCALAPPDATA']),
     },
     http: {
       port: getHttpPortOverride(configProcess) ?? 39090,
@@ -316,6 +449,9 @@ export const createRuntimeConfig = (
     logger: {
       env: runtimeMode,
     },
+    repairStudio: {
+      modelProvider: getRepairStudioModelProviderConfig(configProcess, runtimeEnv),
+    },
   };
 };
 
@@ -350,5 +486,12 @@ export const resolveCloakBrowserExecutablePathOverride = (
   runtimeConfig: AirpaRuntimeConfig = AIRPA_RUNTIME_CONFIG
 ): string | null => {
   const override = runtimeConfig.paths.cloakBrowserExecutablePathOverride;
+  return override.length > 0 ? override : null;
+};
+
+export const resolveChromeExecutablePathOverride = (
+  runtimeConfig: AirpaRuntimeConfig = AIRPA_RUNTIME_CONFIG
+): string | null => {
+  const override = runtimeConfig.paths.chromeExecutablePathOverride;
   return override.length > 0 ? override : null;
 };

@@ -62,6 +62,7 @@ describe('orchestration capability registry', () => {
         'browser_search',
         'browser_snapshot',
         'browser_wait_for',
+        'books_to_scrape.extract_product',
         'dataset_create_empty',
         'dataset_commit_write_plan',
         'dataset_delete',
@@ -69,6 +70,7 @@ describe('orchestration capability registry', () => {
         'dataset_import_file',
         'dataset_rename',
         'dataset_stage_write_plan',
+        'github.extract_profile_summary',
         'observation_get_failure_bundle',
         'observation_get_trace_timeline',
         'observation_get_trace_summary',
@@ -90,6 +92,7 @@ describe('orchestration capability registry', () => {
         'session_end_current',
         'session_get_current',
         'session_prepare',
+        'site_capability_list',
       ].sort()
     );
   });
@@ -1362,6 +1365,123 @@ describe('orchestration capability registry', () => {
         site: 'example',
         status: 'logged_in',
         verified: true,
+      })
+    );
+  });
+
+  it('treats expired stored login state as a manual handoff condition', async () => {
+    const prepareCurrentSession = vi.fn().mockResolvedValue({
+      sessionId: 'session-login',
+      prepared: true,
+      idempotent: false,
+      profileId: 'profile-1',
+      runtimeId: 'electron-webcontents',
+      visible: true,
+      effectiveScopes: [],
+      browserAcquired: false,
+      phase: 'prepared_unacquired',
+      bindingLocked: false,
+      changed: ['visible'],
+    });
+    const upsertLoginState = vi.fn().mockImplementation(async (params) => ({
+      id: 'login-state-expired',
+      profileId: params.profileId,
+      accountId: null,
+      site: params.site,
+      loginUrl: null,
+      runtimeId: params.runtimeId ?? null,
+      status: params.status,
+      verified: params.verified ?? false,
+      lastCheckedAt: '2026-06-22T00:00:00.000Z',
+      verifiedAt: null,
+      evidenceArtifactId: null,
+      evidence: params.evidence ?? null,
+      reason: params.reason ?? null,
+      createdAt: '2026-06-22T00:00:00.000Z',
+      updatedAt: '2026-06-22T00:00:00.000Z',
+    }));
+    const executor = createOrchestrationExecutor({
+      mcpSessionGateway: {
+        getCurrentSessionId: () => 'session-login',
+        listSessions: async () => [],
+        prepareCurrentSession,
+        closeSession: async () => ({ closed: true }),
+      },
+      profileGateway: {
+        listProfiles: async () => [],
+        getProfile: async () => ({
+          id: 'profile-1',
+          name: '555',
+          runtimeId: 'electron-webcontents',
+          status: 'idle',
+          partition: 'persist:profile-1',
+        }),
+        resolveProfile: async () => null,
+        createProfile: async () => ({
+          id: 'profile-new',
+          name: 'Shop QA',
+          runtimeId: 'electron-webcontents',
+          status: 'idle',
+          partition: 'persist:profile-new',
+          isSystem: false,
+        }),
+        updateProfile: async () => ({
+          id: 'profile-1',
+          name: '555',
+          runtimeId: 'electron-webcontents',
+          status: 'idle',
+          partition: 'persist:profile-1',
+          isSystem: false,
+        }),
+        deleteProfile: async () => undefined,
+      },
+      profileLoginStateGateway: {
+        getLoginState: async () => ({
+          id: 'login-state-expired',
+          profileId: 'profile-1',
+          site: 'example',
+          runtimeId: 'electron-webcontents',
+          status: 'expired',
+          verified: false,
+          reason: 'session cookie expired',
+          lastCheckedAt: '2026-06-22T00:00:00.000Z',
+          verifiedAt: null,
+          createdAt: '2026-06-22T00:00:00.000Z',
+          updatedAt: '2026-06-22T00:00:00.000Z',
+        }),
+        upsertLoginState,
+      },
+    });
+
+    const result = await executor.invokeApi({
+      name: 'profile_ensure_logged_in',
+      arguments: {
+        profileId: 'profile-1',
+        site: 'example',
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.output.structuredContent).toMatchObject({
+      data: {
+        profileId: 'profile-1',
+        status: 'expired',
+        verified: false,
+        manualHandoffRequired: true,
+        loginState: {
+          id: 'login-state-expired',
+          status: 'expired',
+          verified: false,
+        },
+      },
+      recommendedNextTools: ['browser_observe', 'browser_snapshot', 'session_get_current'],
+    });
+    expect(upsertLoginState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: 'profile-1',
+        site: 'example',
+        status: 'expired',
+        verified: false,
       })
     );
   });

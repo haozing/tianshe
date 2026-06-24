@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { createStructuredError, ErrorCode } from '../../../types/error-codes';
 import type {
   OrchestrationCapabilityDefinition,
+  OrchestrationDatasetRecord,
   OrchestrationDatasetProvenanceContext,
   OrchestrationDatasetStagedWritePlan,
   OrchestrationDatasetWriteOperation,
@@ -339,6 +340,35 @@ const readStagedWritePlanArg = (
   return plan as unknown as OrchestrationDatasetStagedWritePlan;
 };
 
+const readDatasetRecordArg = (
+  value: unknown,
+  path: string
+): OrchestrationDatasetRecord => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw createStructuredError(ErrorCode.INVALID_PARAMETER, `${path} must be object`);
+  }
+
+  const record: OrchestrationDatasetRecord = {};
+  for (const [key, fieldValue] of Object.entries(value)) {
+    if (!key.trim()) {
+      throw createStructuredError(ErrorCode.INVALID_PARAMETER, `${path} keys must be non-empty`);
+    }
+    if (
+      fieldValue !== null &&
+      typeof fieldValue !== 'string' &&
+      typeof fieldValue !== 'number' &&
+      typeof fieldValue !== 'boolean'
+    ) {
+      throw createStructuredError(
+        ErrorCode.INVALID_PARAMETER,
+        `${path}.${key} must be string, number, boolean, or null`
+      );
+    }
+    record[key] = fieldValue;
+  }
+  return record;
+};
+
 const readWriteOperationsArg = (
   args: Record<string, unknown>
 ): OrchestrationDatasetWriteOperation[] => {
@@ -359,15 +389,9 @@ const readWriteOperationsArg = (
     }
     const operation = item as Record<string, unknown>;
     if (operation.type === 'insert') {
-      if (!operation.record || typeof operation.record !== 'object' || Array.isArray(operation.record)) {
-        throw createStructuredError(
-          ErrorCode.INVALID_PARAMETER,
-          `operations[${index}].record must be object`
-        );
-      }
       return {
         type: 'insert',
-        record: operation.record as Record<string, unknown>,
+        record: readDatasetRecordArg(operation.record, `operations[${index}].record`),
       };
     }
     if (operation.type === 'update') {
@@ -377,16 +401,10 @@ const readWriteOperationsArg = (
           `operations[${index}].rowId must be integer`
         );
       }
-      if (!operation.updates || typeof operation.updates !== 'object' || Array.isArray(operation.updates)) {
-        throw createStructuredError(
-          ErrorCode.INVALID_PARAMETER,
-          `operations[${index}].updates must be object`
-        );
-      }
       return {
         type: 'update',
         rowId: operation.rowId,
-        updates: operation.updates as Record<string, unknown>,
+        updates: readDatasetRecordArg(operation.updates, `operations[${index}].updates`),
       };
     }
     if (operation.type === 'delete') {

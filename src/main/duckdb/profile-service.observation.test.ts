@@ -210,6 +210,7 @@ describe('ProfileService observation hooks', () => {
     } as never);
     vi.spyOn(service as never, 'purgePartitionData').mockResolvedValue(undefined);
     vi.spyOn(service as never, 'purgeExtensionProfileData').mockResolvedValue(undefined);
+    vi.spyOn(service as never, 'purgeCloakProfileData').mockResolvedValue(undefined);
 
     await service.deleteWithCascade('profile-1');
 

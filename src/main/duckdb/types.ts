@@ -10,6 +10,7 @@ import type {
   TraceTimeline,
   TraceSummary,
 } from '../../core/observability/types';
+import type { DatasetRecordProvenanceEntry } from './dataset-provenance-service';
 
 export interface LogEntry {
   id?: number;
@@ -157,3 +158,50 @@ export type RuntimeObservationTraceSummary = TraceSummary;
 export type RuntimeObservationFailureBundle = FailureBundle;
 export type RuntimeObservationTraceTimeline = TraceTimeline;
 export type RuntimeObservationRecentFailureSummary = RecentFailureSummary;
+
+export interface DatasetRecordEvidenceSource {
+  id: string;
+  runId: string;
+  operation: DatasetRecordProvenanceEntry['operation'];
+  occurredAt: number;
+  traceId?: string | null;
+  adapterId?: string | null;
+  adapterVersion?: string | null;
+  runtimeId?: string | null;
+  sourceUrl?: string | null;
+  profileId?: string | null;
+}
+
+export interface DatasetRecordEvidenceTrace {
+  traceId: string;
+  summary: RuntimeObservationTraceSummary | null;
+  failureBundle: RuntimeObservationFailureBundle | null;
+  timeline: RuntimeObservationTraceTimeline | null;
+  error?: string;
+}
+
+export interface DatasetRecordEvidenceSummaryBucket {
+  key: string;
+  count: number;
+}
+
+export interface DatasetRecordEvidenceSummary {
+  totalProvenanceRecords: number;
+  returnedProvenanceRecords: number;
+  hasMoreProvenance: boolean;
+  operationCounts: DatasetRecordEvidenceSummaryBucket[];
+  adapterCounts: DatasetRecordEvidenceSummaryBucket[];
+  runtimeCounts: DatasetRecordEvidenceSummaryBucket[];
+  traceStatusCounts: DatasetRecordEvidenceSummaryBucket[];
+}
+
+export interface DatasetRecordEvidenceBundle {
+  datasetId: string;
+  rowId: number;
+  limit: number;
+  summary: DatasetRecordEvidenceSummary;
+  provenance: DatasetRecordProvenanceEntry[];
+  sources: DatasetRecordEvidenceSource[];
+  traceIds: string[];
+  traces: DatasetRecordEvidenceTrace[];
+}

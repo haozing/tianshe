@@ -100,10 +100,15 @@ export function resolveFirefoxExecutablePath(): string {
 
   const candidates: string[] = [];
   if (app.isPackaged) {
-    candidates.push(path.join(process.resourcesPath, 'firefox', 'firefox.exe'));
+    candidates.push(
+      path.join(process.resourcesPath, 'client', 'firefox', 'firefox.exe'),
+      path.join(process.resourcesPath, 'firefox', 'firefox.exe')
+    );
   } else {
     candidates.push(
+      path.join(app.getAppPath(), 'client', 'firefox', 'firefox.exe'),
       path.join(app.getAppPath(), 'firefox', 'firefox.exe'),
+      path.join(process.cwd(), 'client', 'firefox', 'firefox.exe'),
       path.join(process.cwd(), 'firefox', 'firefox.exe')
     );
   }

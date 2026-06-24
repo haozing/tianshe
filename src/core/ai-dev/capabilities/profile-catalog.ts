@@ -33,7 +33,7 @@ import {
   inspectProfileResolution,
 } from './profile-resolution-utils';
 import { createStructuredResult } from './result-utils';
-import { getStaticRuntimeDescriptor } from '../../browser-pool/runtime-capability-registry';
+import { buildEffectiveRuntimeDescriptorMap } from '../../browser-runtime';
 
 const PROFILE_CAPABILITY_VERSION = '1.0.0';
 
@@ -66,7 +66,7 @@ const BROWSER_RUNTIME_DESCRIPTOR_SCHEMA = createBrowserRuntimeDescriptorSchema()
 
 const resolveProfileRuntimeDescriptor = (runtimeId: unknown) => {
   const normalized = normalizeRuntimeId(runtimeId);
-  return normalized ? getStaticRuntimeDescriptor(normalized) : null;
+  return normalized ? buildEffectiveRuntimeDescriptorMap()[normalized] : null;
 };
 
 const PROFILE_INFO_SCHEMA = {
@@ -486,22 +486,37 @@ const buildUpdateProfileParams = (args: Record<string, unknown>): UpdateProfileP
   return params;
 };
 
-const normalizeProfile = (profile: OrchestrationProfileInfo): OrchestrationProfileInfo => ({
-  id: asText(profile.id),
-  name: asText(profile.name),
-  runtimeId: asText(profile.runtimeId),
-  status: asText(profile.status),
-  partition: asText(profile.partition) || undefined,
-  isSystem: profile.isSystem === true,
-  totalUses:
-    typeof profile.totalUses === 'number' && Number.isFinite(profile.totalUses)
-      ? profile.totalUses
-      : undefined,
-  lastActiveAt: asText(profile.lastActiveAt) || undefined,
-  updatedAt: asText(profile.updatedAt) || undefined,
-  runtimeDescriptor:
-    profile.runtimeDescriptor ?? resolveProfileRuntimeDescriptor(profile.runtimeId),
-});
+const normalizeProfile = (
+  profile: OrchestrationProfileInfo,
+  runtimeDescriptors = buildEffectiveRuntimeDescriptorMap()
+): OrchestrationProfileInfo => {
+  const runtimeId = normalizeRuntimeId(profile.runtimeId);
+  return {
+    id: asText(profile.id),
+    name: asText(profile.name),
+    runtimeId: asText(profile.runtimeId),
+    status: asText(profile.status),
+    partition: asText(profile.partition) || undefined,
+    isSystem: profile.isSystem === true,
+    totalUses:
+      typeof profile.totalUses === 'number' && Number.isFinite(profile.totalUses)
+        ? profile.totalUses
+        : undefined,
+    lastActiveAt: asText(profile.lastActiveAt) || undefined,
+    updatedAt: asText(profile.updatedAt) || undefined,
+    runtimeDescriptor:
+      profile.runtimeDescriptor ??
+      (runtimeId ? runtimeDescriptors[runtimeId] : null) ??
+      resolveProfileRuntimeDescriptor(profile.runtimeId),
+  };
+};
+
+const listEffectiveRuntimeDescriptors = async (deps: OrchestrationDependencies) =>
+  buildEffectiveRuntimeDescriptorMap(
+    deps.systemGateway?.listBrowserRuntimeStatuses
+      ? await deps.systemGateway.listBrowserRuntimeStatuses().catch(() => [])
+      : []
+  );
 
 const formatProfileLine = (profile: OrchestrationProfileInfo): string => {
   const fields = [
@@ -564,8 +579,11 @@ const profileListHandler: CapabilityHandler<OrchestrationDependencies> = async (
   const status = asText(readStringArg(args, 'status', { required: false })).toLowerCase();
   const includeSystem = readBooleanArg(args, 'includeSystem', true);
   const limit = readOptionalLimitArg(args, 'limit');
+  const runtimeDescriptors = await listEffectiveRuntimeDescriptors(deps);
 
-  const all = (await gateway.listProfiles()).map(normalizeProfile);
+  const all = (await gateway.listProfiles()).map((profile) =>
+    normalizeProfile(profile, runtimeDescriptors)
+  );
   const filtered = all.filter((item) => {
     if (!includeSystem && item.isSystem) return false;
     if (runtimeId && item.runtimeId !== runtimeId) return false;
@@ -608,7 +626,8 @@ const profileGetHandler: CapabilityHandler<OrchestrationDependencies> = async (a
     });
   }
 
-  const normalizedProfile = normalizeProfile(profile);
+  const runtimeDescriptors = await listEffectiveRuntimeDescriptors(deps);
+  const normalizedProfile = normalizeProfile(profile, runtimeDescriptors);
   return createStructuredResult(
     {
       summary: [`Resolved profile ${asText(profileId)}.`, formatProfileLine(normalizedProfile)].join('\n'),

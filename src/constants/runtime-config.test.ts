@@ -102,6 +102,7 @@ describe('runtime-config', () => {
           '--airpa-user-data-dir=/tmp/airpa-user-data',
           '--airpa-asar-extract-base-dir=/tmp/airpa-asar',
           '--airpa-firefox-path=/tmp/firefox-bin',
+          '--airpa-chrome-path=/tmp/chrome-bin',
         ],
         versions: {
           node: '20.0.0',
@@ -121,6 +122,7 @@ describe('runtime-config', () => {
       '/tmp/firefox-bin'
     );
     expect(runtimeConfig.resolveFirefoxExecutablePathOverride()).toBe('/tmp/firefox-bin');
+    expect(runtimeConfig.resolveChromeExecutablePathOverride()).toBe('/tmp/chrome-bin');
   });
 
   it('builds runtime config from explicit argv without reloading the module', async () => {
@@ -148,6 +150,54 @@ describe('runtime-config', () => {
     expect(second.http.port).toBe(49125);
     expect(runtimeConfig.resolveFirefoxExecutablePathOverride(second)).toBe('/tmp/firefox-two');
     expect(runtimeConfig.AIRPA_RUNTIME_CONFIG.http.port).not.toBe(49125);
+  });
+
+  it('reads Repair Studio model provider config from env and argv', async () => {
+    const runtimeConfig = await import('./runtime-config');
+
+    const fromEnv = runtimeConfig.createRuntimeConfig(
+      ['node', 'runtime-config.test.ts'],
+      {
+        TIANSHE_REPAIR_MODEL_PROVIDER: 'openai',
+        TIANSHE_REPAIR_MODEL_API_KEY: 'test-key',
+        TIANSHE_REPAIR_MODEL: 'repair-model',
+      },
+      {
+        argv: ['node', 'runtime-config.test.ts'],
+        versions: { node: '20.0.0' },
+      }
+    );
+    const fromArgv = runtimeConfig.createRuntimeConfig(
+      [
+        'node',
+        'runtime-config.test.ts',
+        '--tianshe-repair-model-provider=openai-compatible',
+        '--tianshe-repair-model-base-url=https://models.example.test/v1',
+        '--tianshe-repair-model-api-key=argv-key',
+        '--tianshe-repair-model=argv-model',
+        '--tianshe-repair-model-timeout-ms=12345',
+      ],
+      {},
+      {
+        argv: ['node', 'runtime-config.test.ts'],
+        versions: { node: '20.0.0' },
+      }
+    );
+
+    expect(fromEnv.repairStudio.modelProvider).toEqual({
+      provider: 'openai',
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: 'test-key',
+      model: 'repair-model',
+      timeoutMs: 60000,
+    });
+    expect(fromArgv.repairStudio.modelProvider).toEqual({
+      provider: 'openai-compatible',
+      baseUrl: 'https://models.example.test/v1',
+      apiKey: 'argv-key',
+      model: 'argv-model',
+      timeoutMs: 12345,
+    });
   });
 
   it('detects packaged worker mode from resourcesPath app.asar', async () => {

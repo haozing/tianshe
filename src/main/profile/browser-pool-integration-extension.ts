@@ -26,6 +26,7 @@ import type { PreparedRuyiLaunch } from './ruyi-launch-config-shared';
 import { prepareRuyiLaunch } from './ruyi-launch-config-shared';
 import { ExtensionControlRelay } from './extension-control-relay';
 import { renderControlExtensionBundle } from './extension-control-extension-bundle';
+import { REMOTE_BROWSER_COMMAND } from './remote-browser-command-protocol';
 
 type ExtensionFactoryOptions = {
   resolveManagedExtensions?: (profileId: string) => Promise<ManagedLaunchExtension[]>;
@@ -170,6 +171,26 @@ async function killChromeProcess(child: ChildProcess): Promise<void> {
   }
 }
 
+async function requestGracefulChromeClose(options: {
+  relay: ExtensionControlRelay;
+  child: ChildProcess;
+  timeoutMs?: number;
+}): Promise<boolean> {
+  const { relay, child } = options;
+  if (!child.pid || child.exitCode !== null || relay.isStopped()) {
+    return true;
+  }
+
+  await relay
+    .dispatchCommand(REMOTE_BROWSER_COMMAND.browserClose, undefined, 5000)
+    .catch(() => undefined);
+
+  return await Promise.race([
+    waitForChildExit(child).then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), options.timeoutMs ?? 10000)),
+  ]);
+}
+
 export function createExtensionBrowserFactory(options?: ExtensionFactoryOptions): BrowserFactory {
   return async (session: SessionConfig) => {
     const strictFingerprintGate = AIRPA_RUNTIME_CONFIG.extension.fingerprintStrict;
@@ -249,7 +270,13 @@ export function createExtensionBrowserFactory(options?: ExtensionFactoryOptions)
         return;
       }
       disposed = true;
-      await killChromeProcess(chromeProcess).catch(() => undefined);
+      const closedGracefully = await requestGracefulChromeClose({
+        relay,
+        child: chromeProcess,
+      }).catch(() => false);
+      if (!closedGracefully) {
+        await killChromeProcess(chromeProcess).catch(() => undefined);
+      }
       await relay.stop().catch(() => undefined);
       await fs.promises.rm(runtimeDir, { recursive: true, force: true }).catch(() => undefined);
     };
@@ -282,6 +309,7 @@ export function createExtensionBrowserFactory(options?: ExtensionFactoryOptions)
         closeInternal: cleanup,
         initialClientState,
         browserProcessId: chromeProcess.pid ?? null,
+        cookieStorePath: path.join(userDataDir, 'airpa-cookie-sidecar.json'),
         ocrProviderFactory: {
           create: async () => getOcrPool(),
         },
@@ -295,7 +323,7 @@ export function createExtensionBrowserFactory(options?: ExtensionFactoryOptions)
           runtimeId: 'chromium-extension-relay',
           source: session.runtimeSourceOverride ?? { type: 'bundled' },
           executablePath: chromePath,
-          userDataDir: runtimeDir,
+          userDataDir,
         },
       };
     } catch (error) {

@@ -6,7 +6,7 @@ import {
 import type { BrowserRuntimeDescriptor } from '../types/browser-interface';
 import { asTrimmedText } from './mcp-http-transport-utils';
 import type { McpSessionInfo, McpSessionViewportHealth } from './mcp-http-types';
-import { getStaticRuntimeDescriptor } from '../core/browser-pool/runtime-capability-registry';
+import { getKnownEffectiveRuntimeDescriptor } from '../core/browser-runtime';
 import { isBrowserRuntimeId } from '../types/profile';
 
 export interface McpSessionSnapshot {
@@ -71,7 +71,7 @@ export const buildMcpSessionSnapshot = (
   const browserAcquired = isMcpBrowserHandleUsable(mcpSession.browser.browserHandle);
   const runtimeDescriptor =
     isBrowserRuntimeId(runtimeId)
-      ? getStaticRuntimeDescriptor(runtimeId)
+      ? getKnownEffectiveRuntimeDescriptor(runtimeId)
       : null;
   const browserRuntimeDescriptor =
     browserAcquired &&

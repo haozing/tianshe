@@ -172,6 +172,10 @@ const AIRPA_DOM_TASK_HANDLER = async (payload) => {
         return true;
       }
 
+      function sanitizeCookiePart(value) {
+        return String(value ?? '').replace(/[;\r\n]/g, '');
+      }
+
       switch (payload.task) {
         case 'queryState':
           return getElementState(payload.input.selector, !!payload.input.scrollIntoView);
@@ -273,6 +277,45 @@ const AIRPA_DOM_TASK_HANDLER = async (payload) => {
         }
         case 'applyWindowOpenPolicy':
           return installWindowOpenPolicy(payload.input.policy || null);
+        case 'setDocumentCookie': {
+          const name = sanitizeCookiePart(payload.input.name).trim();
+          if (!name) {
+            throw new Error('cookie.name is required');
+          }
+          const value = sanitizeCookiePart(payload.input.value);
+          const path = sanitizeCookiePart(payload.input.path || '/');
+          const parts = [name + '=' + value, 'path=' + (path || '/')];
+          if (Number.isFinite(payload.input.expirationDate)) {
+            parts.push('expires=' + new Date(Number(payload.input.expirationDate) * 1000).toUTCString());
+          }
+          if (payload.input.secure) {
+            parts.push('secure');
+          }
+          if (typeof payload.input.sameSite === 'string' && payload.input.sameSite.trim()) {
+            parts.push('SameSite=' + sanitizeCookiePart(payload.input.sameSite.trim()));
+          }
+          document.cookie = parts.join('; ');
+          return document.cookie.includes(name + '=');
+        }
+        case 'storage.getItem': {
+          const storage = payload.input.area === 'session' ? window.sessionStorage : window.localStorage;
+          return storage.getItem(String(payload.input.key || ''));
+        }
+        case 'storage.setItem': {
+          const storage = payload.input.area === 'session' ? window.sessionStorage : window.localStorage;
+          storage.setItem(String(payload.input.key || ''), String(payload.input.value || ''));
+          return true;
+        }
+        case 'storage.removeItem': {
+          const storage = payload.input.area === 'session' ? window.sessionStorage : window.localStorage;
+          storage.removeItem(String(payload.input.key || ''));
+          return true;
+        }
+        case 'storage.clearArea': {
+          const storage = payload.input.area === 'session' ? window.sessionStorage : window.localStorage;
+          storage.clear();
+          return true;
+        }
         default:
           throw new Error('Unsupported DOM task: ' + payload.task);
       }

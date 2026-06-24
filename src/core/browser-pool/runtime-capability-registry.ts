@@ -78,15 +78,15 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'cookies.write': true,
       'cookies.clear': true,
       'cookies.filter': true,
-      'storage.dom': false,
+      'storage.dom': true,
       'userAgent.read': true,
       'snapshot.page': true,
       'screenshot.detailed': true,
       'pdf.print': true,
       'window.showHide': true,
       'window.openPolicy': true,
-      'input.native': false,
-      'input.touch': false,
+      'input.native': true,
+      'input.touch': true,
       'text.dom': true,
       'text.ocr': true,
       'network.capture': true,
@@ -102,12 +102,12 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
     },
     notes: {
       'storage.dom':
-        'Electron storage helpers are not exposed through the unified BrowserStorageCapability yet; use page-level behavior or future runtime probes instead.',
+        'Electron exposes local/session storage helpers through page evaluateWithArgs on the acquired WebContents.',
       'network.responseBody': 'Electron path does not persist response bodies in capture history.',
       'input.native':
-        'Electron currently uses selector/DOM-backed interaction rather than unified OS-level native input.',
+        'Electron exposes native input through the underlying WebContentsView SimpleBrowser native adapter.',
       'input.touch':
-        'Electron touch gestures are not exposed through the unified runtime API.',
+        'Electron touch gestures dispatch CDP Input.dispatchTouchEvent after enabling touch emulation; treat as experimental on real devices.',
       'dialog.basic':
         'Electron runtime does not expose JavaScript dialog interception in the unified browser API.',
       'dialog.promptText':
@@ -125,6 +125,7 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
         'Electron currently does not expose pause/continue request interception control in the unified runtime.',
     },
     stability: {
+      'input.touch': 'experimental',
       'emulation.viewport': 'experimental',
       'emulation.identity': 'experimental',
     },
@@ -142,7 +143,7 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'cookies.write': true,
       'cookies.clear': true,
       'cookies.filter': true,
-      'storage.dom': false,
+      'storage.dom': true,
       'userAgent.read': true,
       'snapshot.page': true,
       'screenshot.detailed': true,
@@ -150,7 +151,7 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'window.showHide': true,
       'window.openPolicy': true,
       'input.native': true,
-      'input.touch': false,
+      'input.touch': true,
       'text.dom': true,
       'text.ocr': true,
       'network.capture': true,
@@ -166,6 +167,8 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'intercept.control': true,
     },
     stability: {
+      'storage.dom': 'experimental',
+      'input.touch': 'experimental',
       'dialog.basic': 'experimental',
       'emulation.viewport': 'experimental',
       'emulation.identity': 'experimental',
@@ -174,11 +177,11 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
     },
     notes: {
       'storage.dom':
-        'Chromium extension relay does not expose local/session storage helpers through the unified runtime API yet.',
+        'Chromium extension relay exposes local/session storage helpers through bound-tab DOM tasks.',
       'pdf.print':
         'Chromium extension relay does not expose a unified print-to-PDF path.',
       'input.touch':
-        'Chromium extension relay does not expose touch gesture dispatch through the unified runtime API.',
+        'Chromium extension relay dispatches touch gestures through the debugger Input.dispatchTouchEvent path; treat as experimental.',
       'dialog.basic':
         'Basic JavaScript dialog handling is exposed through the Chromium extension debugger relay and remains experimental.',
       'dialog.promptText':

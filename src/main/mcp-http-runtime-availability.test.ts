@@ -89,6 +89,42 @@ describe('mcp http runtime availability', () => {
     });
   });
 
+  it('uses effective runtime descriptors before the browser is acquired', () => {
+    const session = createSession({
+      partition: ' profile-1 ',
+      runtimeId: 'chromium-cloak-playwright',
+    });
+
+    expect(buildMcpRuntimeSessionContext(session)).toMatchObject({
+      browserAcquired: false,
+      runtimeDescriptor: {
+        runtimeId: 'chromium-cloak-playwright',
+        capabilities: {
+          'network.responseBody': {
+            supported: true,
+            source: 'runtime',
+            stability: 'experimental',
+          },
+          'download.manage': {
+            supported: true,
+            source: 'runtime',
+            stability: 'experimental',
+          },
+        },
+      },
+      resolvedRuntimeDescriptor: {
+        runtimeId: 'chromium-cloak-playwright',
+        capabilities: {
+          'network.responseBody': {
+            supported: true,
+            source: 'runtime',
+            stability: 'experimental',
+          },
+        },
+      },
+    });
+  });
+
   it('reports missing runtime dependencies as unavailable', () => {
     const capability = createCapability({
       name: 'dataset_query',

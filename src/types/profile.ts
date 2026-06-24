@@ -426,6 +426,7 @@ export const PROFILE_LOGIN_STATE_STATUSES = [
   'captcha',
   'two_factor',
   'blocked',
+  'expired',
   'unknown',
 ] as const;
 

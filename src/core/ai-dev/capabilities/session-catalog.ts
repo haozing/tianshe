@@ -10,11 +10,12 @@ import {
   type BrowserCapabilityName,
 } from '../../../types/browser-interface';
 import {
+  buildEffectiveRuntimeDescriptorMap,
   createBrowserRuntimePlan,
   type BrowserRuntimePlan,
   type RuntimePlannerLoginState,
   type RuntimePlannerProfile,
-} from '../../browser-runtime/runtime-planner';
+} from '../../browser-runtime';
 import type {
   OrchestrationCapabilityDefinition,
   OrchestrationDependencies,
@@ -791,6 +792,13 @@ const listPlannerLoginStates = async (
   return states;
 };
 
+const listPlannerRuntimeDescriptors = async (deps: OrchestrationDependencies) =>
+  buildEffectiveRuntimeDescriptorMap(
+    deps.systemGateway?.listBrowserRuntimeStatuses
+      ? await deps.systemGateway.listBrowserRuntimeStatuses().catch(() => [])
+      : []
+  );
+
 const buildRuntimePlanForSession = async (
   deps: OrchestrationDependencies,
   options: {
@@ -805,6 +813,7 @@ const buildRuntimePlanForSession = async (
 ): Promise<BrowserRuntimePlan> => {
   const profiles = await listPlannerProfiles(deps);
   const loginStates = await listPlannerLoginStates(deps, profiles, options.site);
+  const runtimeDescriptors = await listPlannerRuntimeDescriptors(deps);
   return createBrowserRuntimePlan({
     requiredCapabilities: options.requiredCapabilities,
     preferredProfileId:
@@ -819,6 +828,7 @@ const buildRuntimePlanForSession = async (
     bindingLocked: options.currentSession?.bindingLocked === true,
     profiles,
     loginStates,
+    runtimeDescriptors,
   });
 };
 
