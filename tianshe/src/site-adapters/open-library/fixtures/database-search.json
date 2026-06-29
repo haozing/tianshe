@@ -1,0 +1,78 @@
+{
+  "name": "database-search",
+  "snapshot": {
+    "url": "https://openlibrary.org/search?q=database",
+    "title": "Search results for database | Open Library",
+    "elements": [
+      {
+        "tag": "input",
+        "role": "textbox",
+        "name": "database",
+        "value": "database",
+        "attributes": { "name": "q", "id": "search-input" },
+        "preferredSelector": "input[name=\"q\"]",
+        "selectorCandidates": ["input[name=\"q\"]", "#search-input"]
+      },
+      {
+        "tag": "a",
+        "role": "link",
+        "name": "Database System Concepts",
+        "text": "Database System Concepts",
+        "preferredSelector": ".searchResultItem .booktitle",
+        "selectorCandidates": [".searchResultItem .booktitle", ".booktitle"]
+      },
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "by Abraham Silberschatz",
+        "text": "by Abraham Silberschatz",
+        "preferredSelector": ".searchResultItem .bookauthor",
+        "selectorCandidates": [".searchResultItem .bookauthor", ".bookauthor"]
+      },
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "First published in 1996",
+        "text": "First published in 1996",
+        "preferredSelector": ".searchResultItem .publishedYear",
+        "selectorCandidates": [".searchResultItem .publishedYear", ".publishedYear"]
+      },
+      {
+        "tag": "a",
+        "role": "link",
+        "name": "Readings in Database Systems",
+        "text": "Readings in Database Systems",
+        "preferredSelector": ".searchResultItem .booktitle",
+        "selectorCandidates": [".searchResultItem .booktitle", ".booktitle"]
+      },
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "by Michael Stonebraker",
+        "text": "by Michael Stonebraker",
+        "preferredSelector": ".searchResultItem .bookauthor",
+        "selectorCandidates": [".searchResultItem .bookauthor", ".bookauthor"]
+      },
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "First published in 1988",
+        "text": "First published in 1988",
+        "preferredSelector": ".searchResultItem .publishedYear",
+        "selectorCandidates": [".searchResultItem .publishedYear", ".publishedYear"]
+      },
+      {
+        "tag": "a",
+        "role": "link",
+        "name": "Next",
+        "text": "Next",
+        "attributes": { "rel": "next", "href": "/search?q=database&page=2" },
+        "preferredSelector": "a[rel=\"next\"]",
+        "selectorCandidates": ["a[rel=\"next\"]", ".pagination-next"]
+      }
+    ]
+  },
+  "input": {
+    "runner": "fixture"
+  }
+}

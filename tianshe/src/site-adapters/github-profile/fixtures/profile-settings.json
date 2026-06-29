@@ -1,0 +1,44 @@
+{
+  "name": "profile-settings",
+  "snapshot": {
+    "url": "https://github.com/settings/profile",
+    "title": "Public profile",
+    "elements": [
+      {
+        "tag": "input",
+        "role": "textbox",
+        "name": "Name",
+        "value": "Ada Lovelace",
+        "attributes": { "id": "user_profile_name", "name": "user[profile_name]" },
+        "preferredSelector": "#user_profile_name",
+        "selectorCandidates": ["#user_profile_name", "[name=\"user[profile_name]\"]"]
+      },
+      {
+        "tag": "textarea",
+        "role": "textbox",
+        "name": "Bio",
+        "value": "Analytical engine notes.",
+        "attributes": { "id": "user_profile_bio", "name": "user[profile_bio]" },
+        "preferredSelector": "#user_profile_bio",
+        "selectorCandidates": ["#user_profile_bio", "[name=\"user[profile_bio]\"]"]
+      },
+      {
+        "tag": "input",
+        "role": "textbox",
+        "name": "Company",
+        "value": "Tianshe QA",
+        "attributes": { "id": "user_profile_company", "name": "user[profile_company]" }
+      },
+      {
+        "tag": "input",
+        "role": "textbox",
+        "name": "Website",
+        "value": "https://example.test",
+        "attributes": { "id": "user_profile_blog", "name": "user[profile_blog]" }
+      }
+    ]
+  },
+  "input": {
+    "runner": "fixture"
+  }
+}

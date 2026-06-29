@@ -1,0 +1,155 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { getTiansheEditionPublicInfo, normalizeTiansheEditionName } from './selection';
+
+const IMPORT_PATTERN = /^\s*import(?:[\s\S]*?\sfrom\s+)?['"]([^'"]+)['"]/gm;
+const RUNTIME_IMPORT_PATTERN = /^\s*import\s+(?!type\b)(?:[\s\S]*?\sfrom\s+)?['"]([^'"]+)['"]/gm;
+
+function collectTsFiles(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const entries = readdirSync(dir, { withFileTypes: true });
+  const files: string[] = [];
+
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectTsFiles(fullPath));
+      continue;
+    }
+    if (entry.isFile() && fullPath.endsWith('.ts')) {
+      files.push(fullPath);
+    }
+  }
+
+  return files;
+}
+
+function extractImports(filePath: string): string[] {
+  const fileSource = readFileSync(filePath, 'utf8');
+  return Array.from(fileSource.matchAll(IMPORT_PATTERN)).map((match) =>
+    match[1].replace(/\\/g, '/'),
+  );
+}
+
+function extractRuntimeImports(filePath: string): string[] {
+  const fileSource = readFileSync(filePath, 'utf8');
+  return Array.from(fileSource.matchAll(RUNTIME_IMPORT_PATTERN)).map((match) =>
+    match[1].replace(/\\/g, '/'),
+  );
+}
+
+function source(filePath: string): string {
+  return readFileSync(filePath, 'utf8');
+}
+
+describe('open/cloud edition boundary', () => {
+  it('always resolves public edition input to the open edition', () => {
+    expect(normalizeTiansheEditionName(undefined)).toBe('open');
+    expect(normalizeTiansheEditionName('')).toBe('open');
+    expect(normalizeTiansheEditionName('unexpected')).toBe('open');
+    expect(normalizeTiansheEditionName('cloud')).toBe('open');
+    expect(getTiansheEditionPublicInfo('cloud')).toEqual({
+      name: 'open',
+      capabilities: {
+        cloudAuth: false,
+        cloudSnapshot: false,
+        cloudCatalog: false,
+      },
+    });
+    expect(getTiansheEditionPublicInfo('open')).toEqual({
+      name: 'open',
+      capabilities: {
+        cloudAuth: false,
+        cloudSnapshot: false,
+        cloudCatalog: false,
+      },
+    });
+  });
+
+  it('open edition provider does not import cloud, private, or server implementation modules', () => {
+    const files = collectTsFiles('src/edition/open');
+    const violations: string[] = [];
+
+    for (const file of files) {
+      for (const specifier of extractImports(file)) {
+        if (
+          specifier.includes('/cloud') ||
+          specifier.includes('cloud-') ||
+          specifier.includes('/plugin-market') ||
+          specifier.includes('/browser-extension-cloud') ||
+          specifier.includes('/server') ||
+          specifier.includes('/private')
+        ) {
+          violations.push(`${relative(process.cwd(), file)} -> ${specifier}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it('main entry registers cloud capabilities only through edition providers', () => {
+    const imports = extractImports('src/main/index.ts');
+    const forbidden = new Set([
+      './ipc-handlers/cloud-auth-handler',
+      './ipc-handlers/cloud-sync-handler',
+      './ipc-handlers/browser-extension-cloud-handler',
+      './ipc-handlers/plugin-market-handler',
+      './cloud-sync/context',
+      './plugin-market/service',
+      './browser-extension-cloud/service',
+    ]);
+
+    const mainSource = source('src/main/index.ts');
+    const compositionSource = source('src/main/bootstrap/main-service-composition.ts');
+
+    expect(imports.filter((specifier) => forbidden.has(specifier))).toEqual([]);
+    expect(mainSource).toContain('resolveTiansheEdition');
+    expect(mainSource).toContain('initializeMainServices');
+    expect(compositionSource).toContain('tiansheEdition.cloudSnapshot.registerMainHandlers');
+    expect(compositionSource).toContain('tiansheEdition.cloudCatalog.registerMainHandlers');
+  });
+
+  it('preload always exposes edition info and strips cloud APIs for open edition', () => {
+    const preload = source('src/preload/index.ts');
+    const preloadEdition = source('src/edition/preload.ts');
+
+    expect(preloadEdition).toContain("import { getTiansheEditionPublicInfo } from './selection';");
+    expect(preloadEdition).toContain('resolveTiansheEditionPreloadInfo');
+    expect(preload).toContain("import { resolveTiansheEditionPreloadInfo } from '../edition/preload';");
+    expect(preload).toContain('const tiansheEdition = resolveTiansheEditionPreloadInfo();');
+    expect(preload).not.toContain('process.env');
+    expect(preload).not.toContain("const name: TiansheEditionName = 'open';");
+    expect(preload).toContain('edition: tiansheEdition');
+    expect(preload).toContain("if (tiansheEdition.name === 'open')");
+    expect(preload).toContain('delete exposed.cloudAuth');
+    expect(preload).toContain('delete exposed.cloudSnapshot');
+    expect(preload).toContain('delete exposed.cloudPlugin');
+    expect(preload).toContain('delete exposed.cloudBrowserExtension');
+    expect(preload).toContain('delete extensionPackages.downloadCloudCatalogPackages');
+  });
+
+  it('preload runtime imports stay sandbox-compatible', () => {
+    expect(extractRuntimeImports('src/preload/index.ts')).toEqual([
+      'electron',
+      '../edition/preload',
+      './api/account',
+      './api/browser-runtime',
+      './api/cloud',
+      './api/duckdb',
+      './api/extension-packages',
+      './api/file',
+      './api/folder',
+      './api/js-plugin',
+      './api/profile',
+      './api/query-template',
+      './api/runtime',
+      './api/saved-site',
+      './api/site-adapter-lab',
+      './api/system',
+      './api/tag',
+      './api/view',
+    ]);
+  });
+});

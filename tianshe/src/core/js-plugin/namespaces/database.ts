@@ -1,0 +1,951 @@
+/**
+ * Database Namespace
+ *
+ * 提供数据库操作的命名空间接口
+ * 所有数据库相关的方法都集中在这里
+ */
+
+import type { IDuckDBService, EnhancedColumnSchema } from '../../../types/duckdb';
+import type {
+  DataTableExportOptions,
+  DataTableExportResult,
+  ExportOptions,
+} from '../../../types/dataset-export';
+import { DatabaseError, DatasetNotFoundError } from '../errors';
+import { ParamValidator } from '../validators';
+import { SQLUtils } from '../../query-engine/utils/sql-utils';
+import { assertReadOnlySQL } from '../../../utils/sql-readonly';
+import fs from 'fs-extra';
+import os from 'os';
+import path from 'path';
+import { getUnknownErrorMessage } from '../../../utils/error-message';
+
+export const MAX_PLUGIN_DATABASE_BASE64_IMPORT_BYTES = 500 * 1024 * 1024;
+const BASE64_PAYLOAD_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
+
+type DataTableImportFormat = 'csv' | 'tsv' | 'xlsx' | 'xls';
+
+interface DataTableImportOptions {
+  datasetId: string;
+  format?: DataTableImportFormat;
+  csvText?: string;
+  base64?: string;
+  filename?: string;
+  replace?: boolean;
+  columnMapping?: Record<string, string>;
+  requiredColumns?: string[];
+  chunkSize?: number;
+  encoding?: BufferEncoding;
+  strict?: boolean;
+}
+
+interface DataTableImportResult {
+  total: number;
+  inserted: number;
+  skipped: number;
+  failed: number;
+  cleared: boolean;
+}
+
+export function normalizeDatabaseImportBase64(
+  base64: string,
+  maxBytes = MAX_PLUGIN_DATABASE_BASE64_IMPORT_BYTES
+): { payload: string; decodedBytes: number } {
+  const dataUrlMatch = base64.match(/^data:[^,]*;base64,(.*)$/s);
+  const payload = (dataUrlMatch ? dataUrlMatch[1] : base64).replace(/\s/g, '');
+
+  if (payload.length === 0) {
+    throw new DatabaseError('Base64 content cannot be empty', {
+      operation: 'importRecordsFromBase64',
+    });
+  }
+
+  if (payload.length % 4 !== 0 || !BASE64_PAYLOAD_PATTERN.test(payload)) {
+    throw new DatabaseError('Base64 content is invalid', {
+      operation: 'importRecordsFromBase64',
+    });
+  }
+
+  const padding = payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0;
+  const decodedBytes = (payload.length / 4) * 3 - padding;
+
+  if (decodedBytes > maxBytes) {
+    throw new DatabaseError('Base64 import file is too large', {
+      operation: 'importRecordsFromBase64',
+      size: decodedBytes,
+      maxBytes,
+    });
+  }
+
+  return { payload, decodedBytes };
+}
+
+/**
+ * 数据库命名空间
+ *
+ * 提供数据集的增删改查、Schema 获取、SQL 执行等功能
+ *
+ * @example
+ * // 查询数据
+ * const rows = await helpers.database.query('dataset_123');
+ *
+ * @example
+ * // 插入记录
+ * await helpers.database.insert('dataset_123', {
+ *   '产品名称': '新产品',
+ *   '价格': 99.9
+ * });
+ */
+export class DatabaseNamespace {
+  constructor(
+    private duckdb: IDuckDBService,
+    private pluginId: string
+  ) {}
+
+  /**
+   * 查询数据表
+   *
+   * @param datasetId - 数据集ID
+   * @param sql - 可选的SQL查询（不提供则返回所有记录）
+   * @returns 查询结果数组
+   *
+   * @example
+   * // 查询所有记录
+   * const allProducts = await helpers.database.query('dataset_123');
+   *
+   * @example
+   * // 使用SQL筛选
+   * const products = await helpers.database.query('dataset_123',
+   *   "SELECT * FROM data WHERE 价格 > 100 LIMIT 10"
+   * );
+   */
+  async query(datasetId: string, sql?: string): Promise<any[]> {
+    // 参数验证 - 使用统一验证器
+    ParamValidator.validateDatasetId(datasetId);
+
+    if (sql !== undefined) {
+      ParamValidator.validateString(sql, 'sql', { allowEmpty: true });
+    }
+
+    try {
+      let result;
+      if (sql) {
+        assertReadOnlySQL(sql);
+        // 自定义 SQL 查询
+        result = await this.duckdb.queryDataset(datasetId, sql);
+      } else {
+        // 查询所有记录
+        result = await this.duckdb.queryDataset(datasetId, 'SELECT * FROM data');
+      }
+      return result.rows;
+    } catch (error: unknown) {
+      if (
+        getUnknownErrorMessage(error)?.includes('read-only SQL') ||
+        getUnknownErrorMessage(error)?.includes('Only a single') ||
+        getUnknownErrorMessage(error)?.includes('must not contain')
+      ) {
+        throw error;
+      }
+
+      // 区分错误类型
+      if (
+        getUnknownErrorMessage(error)?.includes('not found') ||
+        getUnknownErrorMessage(error)?.includes('does not exist')
+      ) {
+        throw new DatasetNotFoundError(datasetId);
+      }
+
+      // 包装数据库错误
+      throw new DatabaseError(
+        `Failed to query dataset "${datasetId}"`,
+        {
+          datasetId,
+          sql: sql || 'SELECT * FROM data',
+          operation: 'query',
+          originalError: getUnknownErrorMessage(error),
+        },
+        error
+      );
+    }
+  }
+
+  /**
+   * 插入单条记录
+   *
+   * @param datasetId - 数据集ID
+   * @param record - 记录对象（键为列名）
+   *
+   * @example
+   * // 插入单条记录
+   * await helpers.database.insert('dataset_123', {
+   *   '产品名称': '测试产品',
+   *   '价格': 99.9,
+   *   '状态': '待发布'
+   * });
+   *
+   * @example
+   * // 批量插入请使用 batchInsert()
+   * await helpers.database.batchInsert('dataset_123', [
+   *   { '产品名称': '产品1', '价格': 100 },
+   *   { '产品名称': '产品2', '价格': 200 }
+   * ]);
+   */
+  async insert(datasetId: string, record: Record<string, any>): Promise<void> {
+    // ✅ 使用统一的参数验证工具（减少重复代码）
+    ParamValidator.validateString(datasetId, 'datasetId');
+    ParamValidator.validateObject(record, 'record');
+
+    try {
+      await this.duckdb.insertRecord(datasetId, record);
+    } catch (error: unknown) {
+      if (
+        getUnknownErrorMessage(error)?.includes('not found') ||
+        getUnknownErrorMessage(error)?.includes('does not exist')
+      ) {
+        throw new DatasetNotFoundError(datasetId);
+      }
+
+      throw new DatabaseError(
+        `Failed to insert record into dataset "${datasetId}"`,
+        {
+          datasetId,
+          record,
+          columns: Object.keys(record),
+          operation: 'insert',
+        },
+        error
+      );
+    }
+  }
+
+  /**
+   * 批量插入记录（优化版本）
+   *
+   * @param datasetId - 数据集ID
+   * @param records - 记录数组
+   *
+   * @example
+   * await helpers.database.batchInsert('dataset_123', [
+   *   { '产品名称': '产品1', '价格': 100 },
+   *   { '产品名称': '产品2', '价格': 200 },
+   *   { '产品名称': '产品3', '价格': 300 }
+   * ]);
+   */
+  async batchInsert(datasetId: string, records: Record<string, any>[]): Promise<void> {
+    // 参数验证 - 使用统一验证器
+    ParamValidator.validateDatasetId(datasetId);
+    ParamValidator.validateArray(records, 'records', { allowEmpty: true });
+
+    // 空数组，直接返回
+    if (records.length === 0) {
+      return;
+    }
+
+    try {
+      // ✅ 修复：使用 DuckDB 服务的 batchInsertRecords 方法
+      // 该方法会正确处理数据库 ATTACH，避免 "does not exist" 错误
+      await this.duckdb.batchInsertRecords(datasetId, records);
+    } catch (error: unknown) {
+      if (
+        getUnknownErrorMessage(error)?.includes('not found') ||
+        getUnknownErrorMessage(error)?.includes('does not exist')
+      ) {
+        throw new DatasetNotFoundError(datasetId);
+      }
+
+      throw new DatabaseError(
+        `Failed to batch insert ${records.length} records into dataset "${datasetId}"`,
+        {
+          datasetId,
+          recordCount: records.length,
+          operation: 'batchInsert',
+        },
+        error
+      );
+    }
+  }
+
+  /**
+   * 更新记录
+   *
+   * @param datasetId - 数据集ID
+   * @param updates - 要更新的字段和值（已参数化，安全）
+   * @param where - 已禁用的 legacy WHERE 条件参数
+   *
+   * Raw SQL WHERE strings are disabled for plugin helpers because they are unsafe.
+   * Query rows first, then update specific `_row_id` values with updateById().
+   *
+   * @example
+   * const rows = await helpers.database.executeSQL(
+   *   'SELECT _row_id FROM data WHERE 产品名称 = ?',
+   *   { datasetId: 'dataset_123', params: ['测试产品'] }
+   * );
+   * for (const row of rows) {
+   *   await helpers.database.updateById('dataset_123', row._row_id, {
+   *     '状态': '已发布',
+   *     '更新时间': new Date().toISOString()
+   *   });
+   * }
+   */
+  async update(datasetId: string, updates: Record<string, any>, where: string): Promise<void> {
+    // 参数验证 - 使用统一验证器
+    ParamValidator.validateDatasetId(datasetId);
+    ParamValidator.validateObject(updates, 'updates');
+    ParamValidator.validateString(where, 'where');
+
+    this.rejectRawWhereOperation('update', 'updateById');
+  }
+
+  /**
+   * 更新单行数据（按行ID）
+   *
+   * ✅ 推荐使用此方法而非 update()，因为它使用参数化查询，更安全
+   *
+   * @param datasetId - 数据集ID
+   * @param rowId - 行ID（_row_id）
+   * @param updates - 要更新的字段
+   *
+   * @example
+   * // 更新指定行
+   * await helpers.database.updateById('dataset_123', 5, {
+   *   '状态': '已发布',
+   *   '更新时间': new Date().toISOString()
+   * });
+   *
+   * @example
+   * // 先查询再更新
+   * const rows = await helpers.database.query('dataset_123', 'SELECT * FROM data WHERE 状态 = "草稿"');
+   * for (const row of rows) {
+   *   await helpers.database.updateById('dataset_123', row._row_id, { '状态': '已发布' });
+   * }
+   */
+  async updateById(
+    datasetId: string,
+    rowId: number | string,
+    updates: Record<string, any>
+  ): Promise<void> {
+    // 参数验证 - 使用统一验证器
+    ParamValidator.validateDatasetId(datasetId);
+    ParamValidator.validateNotNullOrUndefined(rowId, 'rowId', 'number | string');
+    ParamValidator.validateObject(updates, 'updates');
+
+    try {
+      await this.duckdb.updateRecord(datasetId, this.normalizeRowId(rowId), updates);
+    } catch (error: unknown) {
+      throw new DatabaseError(
+        `Failed to update row ${rowId} in dataset "${datasetId}"`,
+        {
+          datasetId,
+          rowId,
+          updates,
+          operation: 'updateById',
+        },
+        error
+      );
+    }
+  }
+
+  async claimById(
+    datasetId: string,
+    rowId: number | string,
+    statusField: string,
+    fromStatuses: string[],
+    claimStatus: string
+  ): Promise<boolean> {
+    ParamValidator.validateDatasetId(datasetId);
+    ParamValidator.validateNotNullOrUndefined(rowId, 'rowId', 'number | string');
+    ParamValidator.validateString(statusField, 'statusField');
+    ParamValidator.validateArray(fromStatuses, 'fromStatuses', { allowEmpty: false });
+    ParamValidator.validateString(claimStatus, 'claimStatus');
+
+    if (!/^[\w\u4e00-\u9fa5]+$/.test(statusField)) {
+      throw new DatabaseError(`Invalid status field name: ${statusField}`, {
+        datasetId,
+        rowId,
+        operation: 'claimById',
+      });
+    }
+
+    const tableName = await this.getTableName(datasetId);
+    const statusColumn = SQLUtils.escapeIdentifier(statusField);
+    const placeholders = fromStatuses.map(() => '?').join(', ');
+    const normalizedRowId = this.normalizeRowId(rowId);
+
+    try {
+      const result = await this.duckdb.withDatasetAttached(datasetId, async () => {
+        return await this.duckdb.executeSQLWithParams(
+          `UPDATE ${tableName}
+           SET ${statusColumn} = ?
+           WHERE _row_id = ? AND ${statusColumn} IN (${placeholders})
+           RETURNING _row_id`,
+          [claimStatus, normalizedRowId, ...fromStatuses]
+        );
+      });
+
+      return Array.isArray(result) && result.length > 0;
+    } catch (error: unknown) {
+      throw new DatabaseError(
+        `Failed to claim row ${rowId} in dataset "${datasetId}"`,
+        {
+          datasetId,
+          rowId,
+          statusField,
+          fromStatuses,
+          claimStatus,
+          operation: 'claimById',
+        },
+        error
+      );
+    }
+  }
+
+  /**
+   * 删除记录
+   *
+   * @param datasetId - 数据集ID
+   * @param where - 已禁用的 legacy WHERE 条件参数
+   *
+   * Raw SQL WHERE strings are disabled for plugin helpers because they are unsafe.
+   * Query rows first, then delete specific `_row_id` values with deleteById().
+   *
+   * @example
+   * const rows = await helpers.database.executeSQL(
+   *   'SELECT _row_id FROM data WHERE 状态 = ?',
+   *   { datasetId: 'dataset_123', params: ['已删除'] }
+   * );
+   * for (const row of rows) {
+   *   await helpers.database.deleteById('dataset_123', row._row_id);
+   * }
+   */
+  async delete(datasetId: string, where: string): Promise<void> {
+    // 参数验证 - 使用统一验证器
+    ParamValidator.validateDatasetId(datasetId);
+    ParamValidator.validateString(where, 'where');
+
+    this.rejectRawWhereOperation('delete', 'deleteById');
+  }
+
+  /**
+   * 根据行ID删除单行记录
+   *
+   * ✅ 推荐使用此方法而非 delete()，因为它使用参数化查询，更安全
+   *
+   * @param datasetId - 数据集ID
+   * @param rowId - 行ID（_row_id）
+   *
+   * @example
+   * // 删除指定行
+   * await helpers.database.deleteById('dataset_123', 5);
+   *
+   * @example
+   * // 查询并删除
+   * const rows = await helpers.database.query('dataset_123', 'SELECT * FROM data WHERE 状态 = "已过期"');
+   * for (const row of rows) {
+   *   await helpers.database.deleteById('dataset_123', row._row_id);
+   * }
+   */
+  async deleteById(datasetId: string, rowId: number | string): Promise<void> {
+    // 参数验证 - 使用统一验证器
+    ParamValidator.validateDatasetId(datasetId);
+    ParamValidator.validateNotNullOrUndefined(rowId, 'rowId', 'number | string');
+
+    try {
+      await this.duckdb.hardDeleteRows(datasetId, [this.normalizeRowId(rowId)]);
+    } catch (error: unknown) {
+      if (
+        getUnknownErrorMessage(error)?.includes('not found') ||
+        getUnknownErrorMessage(error)?.includes('does not exist')
+      ) {
+        throw new DatasetNotFoundError(datasetId);
+      }
+
+      throw new DatabaseError(
+        `Failed to delete row ${rowId} from dataset "${datasetId}"`,
+        {
+          datasetId,
+          rowId,
+          operation: 'deleteById',
+        },
+        error
+      );
+    }
+  }
+
+  /**
+   * 获取数据表的 schema
+   *
+   * @param datasetId - 数据集ID
+   * @returns 表结构（列定义数组）
+   *
+   * @example
+   * const schema = await helpers.database.getSchema('dataset_123');
+   * console.log('表有以下列：', schema.map(col => col.name));
+   *
+   * // 查找按钮列
+   * const buttonCols = schema.filter(col => col.fieldType === 'button');
+   */
+  async getSchema(datasetId: string): Promise<EnhancedColumnSchema[]> {
+    // 参数验证 - 使用统一验证器
+    ParamValidator.validateDatasetId(datasetId);
+
+    try {
+      const dataset = await this.duckdb.getDatasetInfo(datasetId);
+      if (!dataset) {
+        throw new DatasetNotFoundError(datasetId);
+      }
+      return dataset.schema || [];
+    } catch (error: unknown) {
+      if (error instanceof DatasetNotFoundError) {
+        throw error;
+      }
+
+      throw new DatabaseError(
+        `Failed to get schema for dataset "${datasetId}"`,
+        {
+          datasetId,
+          operation: 'getSchema',
+        },
+        error
+      );
+    }
+  }
+
+  /**
+   * 获取数据表信息
+   *
+   * @param datasetId - 数据集ID
+   * @returns 数据集完整信息
+   *
+   * @example
+   * const info = await helpers.database.getDatasetInfo('dataset_123');
+   * console.log(`表 "${info.name}" 有 ${info.rowCount} 行记录`);
+   */
+  async getDatasetInfo(datasetId: string): Promise<any> {
+    // 参数验证 - 使用统一验证器
+    ParamValidator.validateDatasetId(datasetId);
+
+    try {
+      const dataset = await this.duckdb.getDatasetInfo(datasetId);
+      if (!dataset) {
+        throw new DatasetNotFoundError(datasetId);
+      }
+      return dataset;
+    } catch (error: unknown) {
+      if (error instanceof DatasetNotFoundError) {
+        throw error;
+      }
+
+      throw new DatabaseError(
+        `Failed to get dataset info for "${datasetId}"`,
+        {
+          datasetId,
+          operation: 'getDatasetInfo',
+        },
+        error
+      );
+    }
+  }
+
+  /**
+   * 列出所有数据表
+   *
+   * @returns 所有数据集列表
+   *
+   * @example
+   * const tables = await helpers.database.listDatasets();
+   * console.log('可用的数据表：', tables.map(t => t.name));
+   */
+  async listDatasets(): Promise<any[]> {
+    try {
+      return await this.duckdb.listDatasets();
+    } catch (error: unknown) {
+      throw new DatabaseError(
+        'Failed to list datasets',
+        {
+          operation: 'listDatasets',
+        },
+        error
+      );
+    }
+  }
+
+  /**
+   * Import records from a local file into an existing dataset.
+   */
+  async importRecordsFromFile(datasetId: string, filePath: string): Promise<DataTableImportResult> {
+    ParamValidator.validateDatasetId(datasetId);
+    ParamValidator.validateString(filePath, 'filePath');
+
+    try {
+      const result = await this.duckdb.importRecordsFromFile(datasetId, filePath);
+      return {
+        total: result.recordsInserted,
+        inserted: result.recordsInserted,
+        skipped: 0,
+        failed: 0,
+        cleared: false,
+      };
+    } catch (error: unknown) {
+      if (
+        getUnknownErrorMessage(error)?.includes('not found') ||
+        getUnknownErrorMessage(error)?.includes('does not exist')
+      ) {
+        throw new DatasetNotFoundError(datasetId);
+      }
+
+      throw new DatabaseError(
+        `Failed to import records into dataset "${datasetId}"`,
+        {
+          datasetId,
+          filePath,
+          operation: 'importRecordsFromFile',
+          originalError: getUnknownErrorMessage(error),
+        },
+        error
+      );
+    }
+  }
+
+  /**
+   * Import records from base64 data by writing a temp file and reusing DuckDB import.
+   */
+  async importRecordsFromBase64(options: DataTableImportOptions): Promise<DataTableImportResult> {
+    ParamValidator.validateObject(options, 'options');
+    ParamValidator.validateDatasetId(options.datasetId);
+    ParamValidator.validateString(options.filename, 'filename');
+    ParamValidator.validateString(options.base64, 'base64');
+
+    if (options.format) {
+      ParamValidator.validateEnum(options.format, 'format', ['csv', 'tsv', 'xlsx', 'xls']);
+    }
+
+    const { payload: normalizedBase64, decodedBytes } = normalizeDatabaseImportBase64(
+      options.base64!
+    );
+    const fallbackExtension = options.format ? `.${options.format}` : '.csv';
+    const tempFilePath = await this.buildTempFilePath(options.filename!, fallbackExtension);
+
+    try {
+      const fileBuffer = Buffer.from(normalizedBase64, 'base64');
+      if (fileBuffer.byteLength !== decodedBytes) {
+        throw new DatabaseError('Base64 content is invalid', {
+          operation: 'importRecordsFromBase64',
+          filename: options.filename,
+        });
+      }
+
+      await fs.writeFile(tempFilePath, fileBuffer);
+      return await this.importRecordsFromFile(options.datasetId, tempFilePath);
+    } finally {
+      try {
+        await fs.remove(tempFilePath);
+      } catch {
+        /* ignore cleanup errors */
+      }
+    }
+  }
+
+  /**
+   * Export dataset records using DuckDB export service.
+   */
+  async exportDataset(options: DataTableExportOptions): Promise<DataTableExportResult> {
+    ParamValidator.validateObject(options, 'options');
+    ParamValidator.validateDatasetId(options.datasetId);
+
+    const format = options.format ?? 'csv';
+    const outputType = options.outputType ?? 'file';
+
+    ParamValidator.validateEnum(format, 'format', ['csv', 'xlsx', 'txt', 'parquet', 'json']);
+    ParamValidator.validateEnum(outputType, 'outputType', ['text', 'base64', 'file']);
+
+    if (outputType === 'text' && !['csv', 'txt', 'json'].includes(format)) {
+      throw new DatabaseError('Text output only supports csv, txt, or json formats', {
+        format,
+        outputType,
+      });
+    }
+
+    const resolvedOutputPath =
+      options.outputPath ??
+      (await this.buildTempFilePath(
+        options.filename || `${options.datasetId}.${format}`,
+        `.${format}`
+      ));
+
+    const exportOptions: ExportOptions = {
+      datasetId: options.datasetId,
+      format,
+      outputPath: resolvedOutputPath,
+      mode: options.mode ?? 'data',
+      includeHeader: options.includeHeader !== false,
+      respectHiddenColumns: options.respectHiddenColumns ?? true,
+      applyFilters: options.applyFilters ?? true,
+      applySort: options.applySort ?? true,
+      applySample: options.applySample ?? false,
+      selectedRowIds: options.selectedRowIds,
+      activeQueryTemplate: options.activeQueryTemplate,
+      postExportAction: 'keep',
+      encoding: options.encoding,
+      delimiter: options.delimiter,
+    };
+
+    const shouldCleanup = outputType !== 'file' && !options.outputPath;
+    let exportedFiles: string[] = [];
+
+    try {
+      const result = await this.duckdb.exportDataset(exportOptions);
+
+      if (!result?.success) {
+        throw new DatabaseError(`Failed to export dataset "${options.datasetId}"`, {
+          datasetId: options.datasetId,
+          format,
+          outputPath: resolvedOutputPath,
+          operation: 'exportDataset',
+          originalError: result?.error,
+        });
+      }
+
+      const files = result.files || [];
+      exportedFiles = files;
+      const filePath = files[0] || resolvedOutputPath;
+      const filename = options.filename || path.basename(filePath);
+
+      if (outputType === 'file') {
+        return {
+          outputType,
+          filename,
+          filePath,
+          totalRows: result.totalRows,
+          files,
+        };
+      }
+
+      if (files.length !== 1) {
+        throw new DatabaseError(
+          'Export produced multiple files; use outputType "file" to retrieve paths',
+          {
+            datasetId: options.datasetId,
+            format,
+            files,
+          }
+        );
+      }
+
+      const fileBuffer = await fs.readFile(filePath);
+      const response: DataTableExportResult = {
+        outputType,
+        filename,
+        totalRows: result.totalRows,
+      };
+
+      if (outputType === 'text') {
+        const encoding = options.encoding === 'gbk' ? 'utf8' : options.encoding || 'utf8';
+        response.text = fileBuffer.toString(encoding);
+      } else {
+        response.base64 = fileBuffer.toString('base64');
+      }
+
+      if (options.outputPath) {
+        response.filePath = filePath;
+        response.files = files;
+      }
+
+      return response;
+    } catch (error: unknown) {
+      if (error instanceof DatabaseError) {
+        throw error;
+      }
+
+      throw new DatabaseError(
+        `Failed to export dataset "${options.datasetId}"`,
+        {
+          datasetId: options.datasetId,
+          format,
+          outputType,
+          operation: 'exportDataset',
+          originalError: getUnknownErrorMessage(error),
+        },
+        error
+      );
+    } finally {
+      if (shouldCleanup) {
+        try {
+          const cleanupTargets = exportedFiles.length > 0 ? exportedFiles : [resolvedOutputPath];
+          for (const target of cleanupTargets) {
+            if (await fs.pathExists(target)) {
+              await fs.remove(target);
+            }
+          }
+        } catch {
+          /* ignore cleanup errors */
+        }
+      }
+    }
+  }
+
+  /**
+   * 执行自定义 SQL
+   *
+   * @param sql - SQL 语句；提供 datasetId 时仅允许只读 SQL，并会把表名 `data` 替换为实际数据集表名
+   * @param options - 选项
+   * @param options.params - SQL 参数（可选）
+   * @param options.datasetId - 数据集ID（可选，提供后会自动 attach 数据集并处理表名）
+   * @returns 查询结果
+   *
+   * @example
+   * // 执行只读复杂查询（推荐：使用 datasetId 自动处理表名）
+   * const result = await helpers.database.executeSQL(`
+   *   SELECT 类别, COUNT(*) as 数量, AVG(价格) as 平均价格
+   *   FROM data
+   *   GROUP BY 类别
+   * `, { datasetId: 'dataset_123' });
+   *
+   * @example
+   * // 写入数据请使用 insert / batchInsert / updateById / deleteById
+   * await helpers.database.insert('dataset_123', {
+   *   '订单ID': 'ORD-001',
+   *   '客户名称': '测试客户',
+   *   '订单金额': 999.99
+   * });
+   *
+   * @example
+   * // 带参数的只读查询
+   * const result = await helpers.database.executeSQL(
+   *   'SELECT * FROM data WHERE 价格 > ? AND 状态 = ?',
+   *   { params: [100, '在售'], datasetId: 'dataset_123' }
+   * );
+   *
+   * @example
+   * // 不使用 datasetId 时需要手动指定完整表名，并自行承担 SQL 权限边界
+   * const result = await helpers.database.executeSQL(
+   *   'SELECT * FROM ds_dataset_123.data'
+   * );
+   */
+  async executeSQL(
+    sql: string,
+    options?: any[] | { params?: any[]; datasetId?: string }
+  ): Promise<any[]> {
+    // 参数验证 - 使用统一验证器
+    ParamValidator.validateString(sql, 'sql');
+
+    // 兼容旧 API：支持直接传递数组作为 params
+    let params: any[] | undefined;
+    let datasetId: string | undefined;
+
+    if (Array.isArray(options)) {
+      // 旧 API: executeSQL(sql, params)
+      params = options;
+    } else if (options && typeof options === 'object') {
+      // 新 API: executeSQL(sql, { params, datasetId })
+      params = options.params;
+      datasetId = options.datasetId;
+    }
+
+    // 验证 params
+    if (params !== undefined) {
+      ParamValidator.validateArray(params, 'params', { allowEmpty: true });
+    }
+
+    // 验证 datasetId
+    if (datasetId !== undefined) {
+      ParamValidator.validateString(datasetId, 'datasetId');
+    }
+
+    try {
+      let finalSql = sql;
+
+      // 如果提供了 datasetId，则限定为只读查询，并通过 attach 保证表可访问
+      if (datasetId) {
+        assertReadOnlySQL(sql);
+
+        finalSql = await this.replaceTableName(sql, datasetId);
+        return await this.duckdb.withDatasetAttached(datasetId, async () => {
+          return await this.duckdb.executeSQLWithParams(finalSql, params || []);
+        });
+      }
+
+      return await this.duckdb.executeSQLWithParams(finalSql, params || []);
+    } catch (error: unknown) {
+      if (
+        getUnknownErrorMessage(error)?.includes('read-only SQL') ||
+        getUnknownErrorMessage(error)?.includes('Only a single') ||
+        getUnknownErrorMessage(error)?.includes('must not contain')
+      ) {
+        throw error;
+      }
+
+      throw new DatabaseError(
+        `Failed to execute SQL`,
+        {
+          sql,
+          params,
+          datasetId,
+          operation: 'executeSQL',
+        },
+        error
+      );
+    }
+  }
+
+  private normalizeRowId(rowId: number | string): number {
+    const normalized = typeof rowId === 'number' ? rowId : Number(String(rowId).trim());
+    if (!Number.isInteger(normalized)) {
+      throw new Error(`Invalid rowId: ${rowId}`);
+    }
+    return normalized;
+  }
+
+  private rejectRawWhereOperation(operation: 'update' | 'delete', byIdMethod: string): never {
+    throw new Error(
+      `helpers.database.${operation}(where) is disabled because raw SQL WHERE strings are unsafe. ` +
+        `Use helpers.database.query() to read _row_id values, then call helpers.database.${byIdMethod}().`
+    );
+  }
+
+  /**
+   * 获取数据集的表名
+   *
+   * @private
+   * @param datasetId - 数据集ID
+   * @returns 表名（统一格式：ds_{datasetId}.data）
+   */
+  private async getTableName(datasetId: string): Promise<string> {
+    const datasetInfo = await this.duckdb.getDatasetInfo(datasetId);
+    if (!datasetInfo) {
+      throw new DatasetNotFoundError(datasetId);
+    }
+
+    // ✅ 修复：所有表都使用统一的表名格式
+    return `${SQLUtils.escapeIdentifier(`ds_${datasetId}`)}.${SQLUtils.escapeIdentifier('data')}`;
+  }
+
+  /**
+   * 替换 SQL 中的表名 'data' 为实际的表名
+   * @private
+   */
+  private async replaceTableName(sql: string, datasetId: string): Promise<string> {
+    // 获取数据集信息
+    const dataset = await this.duckdb.getDatasetInfo(datasetId);
+    if (!dataset) {
+      throw new DatasetNotFoundError(datasetId);
+    }
+
+    // ✅ 修复：所有表都使用统一的表名格式 ds_{datasetId}.data
+    const tableName = `${SQLUtils.escapeIdentifier(`ds_${datasetId}`)}.${SQLUtils.escapeIdentifier('data')}`;
+    return sql.replace(/\b(FROM|INTO|UPDATE|JOIN)\s+data\b/gi, `$1 ${tableName}`);
+  }
+
+  private async buildTempFilePath(filename: string, fallbackExtension: string): Promise<string> {
+    const tempDir = path.join(os.tmpdir(), 'airpa', 'tmp');
+    await fs.ensureDir(tempDir);
+
+    const ext = path.extname(filename);
+    const resolvedExt = ext || fallbackExtension || '.tmp';
+    const normalizedExt = resolvedExt.startsWith('.') ? resolvedExt : `.${resolvedExt}`;
+    const baseName = path.basename(filename, ext) || 'file';
+    const safeBaseName = baseName.replace(/[^\w.-]/g, '_') || 'file';
+    const suffix = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+    return path.join(tempDir, `${safeBaseName}_${suffix}${normalizedExt}`);
+  }
+}

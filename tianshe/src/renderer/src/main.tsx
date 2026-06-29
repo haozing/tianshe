@@ -1,0 +1,20 @@
+/**
+ * React 应用入口
+ */
+
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+import ErrorBoundary from './components/ErrorBoundary';
+import './styles/globals.css';
+import { APP_BRAND } from './brand/appBrand';
+
+document.title = APP_BRAND.windowTitle;
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  </React.StrictMode>
+);

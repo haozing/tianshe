@@ -1,0 +1,35 @@
+<svg width="1600" height="480" viewBox="0 0 1600 480" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1600" height="480" rx="72" fill="transparent"/>
+  <g transform="translate(96 64) scale(0.34375)">
+    <svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="hbgLight" x1="164" y1="118" x2="850" y2="904" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#102433"/>
+          <stop offset="0.52" stop-color="#0B1118"/>
+          <stop offset="1" stop-color="#12151D"/>
+        </linearGradient>
+        <linearGradient id="hmarkLight" x1="248" y1="242" x2="718" y2="790" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#7DD3FC"/>
+          <stop offset="0.46" stop-color="#2DD4BF"/>
+          <stop offset="1" stop-color="#A3E635"/>
+        </linearGradient>
+        <clipPath id="hclipLight"><rect x="48" y="48" width="928" height="928" rx="220"/></clipPath>
+      </defs>
+      <rect width="1024" height="1024" rx="236" fill="#080D12"/>
+      <g clip-path="url(#hclipLight)">
+        <rect x="48" y="48" width="928" height="928" rx="220" fill="url(#hbgLight)"/>
+        <circle cx="268" cy="242" r="440" fill="#2DD4BF" fill-opacity="0.2"/>
+        <circle cx="772" cy="790" r="380" fill="#F8C65B" fill-opacity="0.16"/>
+      </g>
+      <path d="M244.9 260.7C253.3 238.7 274.4 224 298 224H795.7C817.6 224 832.9 245.8 825.5 266.4L791.8 359.8C783.7 382.4 762.2 397.5 738.2 397.5H596V735.5C596 772.9 565.7 803.2 528.3 803.2H471.2C442.2 803.2 418.7 779.7 418.7 750.7V397.5H254.1C224.8 397.5 204.5 368.2 214.9 340.8L244.9 260.7Z" fill="url(#hmarkLight)"/>
+      <path d="M244.9 260.7C253.3 238.7 274.4 224 298 224H795.7C817.6 224 832.9 245.8 825.5 266.4L791.8 359.8C783.7 382.4 762.2 397.5 738.2 397.5H596V735.5C596 772.9 565.7 803.2 528.3 803.2H471.2C442.2 803.2 418.7 779.7 418.7 750.7V397.5H254.1C224.8 397.5 204.5 368.2 214.9 340.8L244.9 260.7Z" stroke="#ECFEFF" stroke-opacity="0.74" stroke-width="12" stroke-linejoin="round"/>
+      <path d="M327 315H698M512 382V672" stroke="#F8FAFC" stroke-opacity="0.58" stroke-width="14" stroke-linecap="round"/>
+      <circle cx="327" cy="315" r="22" fill="#F8FAFC"/>
+      <circle cx="512" cy="315" r="18" fill="#D1FAE5"/>
+      <circle cx="698" cy="315" r="22" fill="#ECFCCB"/>
+      <circle cx="512" cy="672" r="20" fill="#ECFEFF"/>
+    </svg>
+  </g>
+  <text x="512" y="228" fill="#0B1118" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="136" font-weight="800" letter-spacing="0">Tianshe</text>
+  <text x="518" y="304" fill="#475569" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="38" font-weight="600" letter-spacing="3">LOCAL AI AUTOMATION RUNTIME</text>
+</svg>

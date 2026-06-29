@@ -1,0 +1,23 @@
+{
+  "allowedResolvedHosts": ["registry.npmjs.org", "registry.npmmirror.com", "cdn.sheetjs.com"],
+  "allowedGitPackages": {
+    "node_modules/@electron/node-gyp": "git+ssh://git@github.com/electron/node-gyp.git#06b29aafb7708acef8b3669835c8a7857ebc92d2"
+  },
+  "allowedExactResolved": {
+    "node_modules/xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "reviewedCopyleftPackages": [
+    "@img/sharp-libvips-darwin-arm64",
+    "@img/sharp-libvips-darwin-x64",
+    "@img/sharp-libvips-linux-arm",
+    "@img/sharp-libvips-linux-arm64",
+    "@img/sharp-libvips-linux-s390x",
+    "@img/sharp-libvips-linux-x64",
+    "@img/sharp-libvips-linuxmusl-arm64",
+    "@img/sharp-libvips-linuxmusl-x64",
+    "@img/sharp-wasm32",
+    "@img/sharp-win32-ia32",
+    "@img/sharp-win32-x64",
+    "jszip"
+  ]
+}

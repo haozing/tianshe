@@ -1,0 +1,37 @@
+{
+  "name": "ada-lovelace",
+  "snapshot": {
+    "url": "https://en.wikipedia.org/wiki/Ada_Lovelace",
+    "title": "Ada Lovelace - Wikipedia",
+    "elements": [
+      {
+        "tag": "h1",
+        "role": "heading",
+        "name": "Ada Lovelace",
+        "text": "Ada Lovelace",
+        "attributes": { "id": "firstHeading", "class": "firstHeading" },
+        "preferredSelector": "h1.firstHeading",
+        "selectorCandidates": ["#firstHeading", "h1.firstHeading", "h1"]
+      },
+      {
+        "tag": "p",
+        "role": "text",
+        "name": "Augusta Ada King, Countess of Lovelace was an English mathematician and writer.",
+        "text": "Augusta Ada King, Countess of Lovelace was an English mathematician and writer.",
+        "preferredSelector": ".mw-parser-output p",
+        "selectorCandidates": [".mw-parser-output p", "p.lead", "article-summary"]
+      },
+      {
+        "tag": "caption",
+        "role": "text",
+        "name": "Ada Lovelace",
+        "text": "Ada Lovelace",
+        "preferredSelector": ".infobox caption",
+        "selectorCandidates": [".infobox caption", "infobox caption"]
+      }
+    ]
+  },
+  "input": {
+    "runner": "fixture"
+  }
+}

@@ -1,0 +1,151 @@
+import { describe, it, expect } from 'vitest';
+import {
+  getUnknownErrorMessage,
+  handleIPCError,
+  createIPCFailureResponse,
+  createIPCErrorResult,
+  inferErrorCodeFromMessage,
+} from './ipc-utils';
+
+describe('ipc-utils', () => {
+  describe('getUnknownErrorMessage', () => {
+    it('extracts message from Error', () => {
+      expect(getUnknownErrorMessage(new Error('foo'))).toBe('foo');
+    });
+
+    it('returns string as-is', () => {
+      expect(getUnknownErrorMessage('plain string')).toBe('plain string');
+    });
+
+    it('extracts message from object with message property', () => {
+      expect(getUnknownErrorMessage({ message: 'obj msg' })).toBe('obj msg');
+    });
+
+    it('returns fallback for null', () => {
+      expect(getUnknownErrorMessage(null)).toBe('Unknown error occurred');
+    });
+
+    it('returns fallback for undefined', () => {
+      expect(getUnknownErrorMessage(undefined)).toBe('Unknown error occurred');
+    });
+
+    it('returns fallback for number', () => {
+      expect(getUnknownErrorMessage(42)).toBe('Unknown error occurred');
+    });
+
+    it('uses custom fallback', () => {
+      expect(getUnknownErrorMessage(null, 'custom')).toBe('custom');
+    });
+  });
+
+  describe('handleIPCError', () => {
+    it('returns success false with error message', () => {
+      const result = handleIPCError(new Error('something failed'));
+      expect(result).toMatchObject({
+        success: false,
+        error: 'something failed',
+        code: 'OPERATION_FAILED',
+        errorDetails: {
+          code: 'OPERATION_FAILED',
+          message: 'something failed',
+        },
+      });
+    });
+
+    it('redacts sensitive tokens from error message', () => {
+      const result = handleIPCError(new Error('token=secret123 failed'));
+      expect(result.error).toBe('token=[REDACTED] failed');
+      expect(result.errorDetails.message).toBe('token=[REDACTED] failed');
+    });
+
+    it('redacts filesystem paths and SQL from error message', () => {
+      const result = handleIPCError(
+        new Error('Failed at C:\\Users\\alice\\data.duckdb: SELECT * FROM accounts')
+      );
+      expect(result.error).toBe('Failed at [REDACTED_PATH]: [REDACTED_SQL]');
+      expect(result.code).toBe('OPERATION_FAILED');
+    });
+  });
+
+  describe('inferErrorCodeFromMessage', () => {
+    it('maps common legacy error messages to stable codes', () => {
+      expect(inferErrorCodeFromMessage('Profile not found: abc')).toBe('NOT_FOUND');
+      expect(inferErrorCodeFromMessage('Permission denied: delete profile')).toBe(
+        'PERMISSION_DENIED'
+      );
+      expect(inferErrorCodeFromMessage('Browser acquire timeout')).toBe('TIMEOUT');
+      expect(inferErrorCodeFromMessage('Invalid parameter: datasetId')).toBe('INVALID_INPUT');
+      expect(inferErrorCodeFromMessage('平台「抖店」已存在')).toBe('ALREADY_EXISTS');
+      expect(inferErrorCodeFromMessage('Browser is busy: locked')).toBe('RESOURCE_BUSY');
+      expect(inferErrorCodeFromMessage('普通错误消息')).toBe('OPERATION_FAILED');
+    });
+
+    it('uses inferred code for ordinary Error envelopes', () => {
+      const result = handleIPCError(new Error('Profile not found: abc'));
+      expect(result).toMatchObject({
+        success: false,
+        error: 'Profile not found: abc',
+        code: 'NOT_FOUND',
+        errorDetails: {
+          code: 'NOT_FOUND',
+          message: 'Profile not found: abc',
+        },
+      });
+    });
+  });
+
+  describe('createIPCFailureResponse', () => {
+    it('creates a structured response for deliberate business failures', () => {
+      const result = createIPCFailureResponse('templateId is required', 'MISSING_PARAMETER', {
+        context: { field: 'templateId' },
+      });
+
+      expect(result).toMatchObject({
+        success: false,
+        error: 'templateId is required',
+        code: 'MISSING_PARAMETER',
+        errorDetails: {
+          code: 'MISSING_PARAMETER',
+          message: 'templateId is required',
+          context: { field: 'templateId' },
+        },
+      });
+    });
+
+    it('redacts sensitive context and messages', () => {
+      const result = createIPCFailureResponse('token=secret failed', 'OPERATION_FAILED', {
+        context: { filePath: 'C:\\Users\\alice\\secret.txt' },
+      });
+
+      expect(result.error).toBe('token=[REDACTED] failed');
+      expect(result.errorDetails.context).toEqual({ filePath: '[REDACTED_PATH]' });
+    });
+  });
+
+  describe('createIPCErrorResult', () => {
+    it('returns userError and logContext for Error', () => {
+      const error = new Error('password=12345');
+      const result = createIPCErrorResult(error);
+
+      expect(result.success).toBe(false);
+      expect(result.userError).toBe('password=[REDACTED]');
+      expect(result.code).toBe('OPERATION_FAILED');
+      expect(result.errorDetails).toMatchObject({
+        code: 'OPERATION_FAILED',
+        message: 'password=[REDACTED]',
+      });
+      expect(result.logContext).toMatchObject({
+        name: 'Error',
+        message: 'password=12345',
+      });
+      expect(result.logContext.stack).toContain('Error: password=12345');
+    });
+
+    it('returns logContext for non-Error values', () => {
+      const result = createIPCErrorResult('plain error');
+      expect(result.userError).toBe('plain error');
+      expect(result.code).toBe('OPERATION_FAILED');
+      expect(result.logContext).toEqual({ raw: 'plain error' });
+    });
+  });
+});

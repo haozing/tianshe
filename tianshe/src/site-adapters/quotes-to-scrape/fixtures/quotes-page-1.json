@@ -1,0 +1,85 @@
+{
+  "name": "quotes-page-1",
+  "snapshot": {
+    "url": "https://quotes.toscrape.com/page/1/",
+    "title": "Quotes to Scrape",
+    "elements": [
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "The world as we have created it is a process of our thinking.",
+        "text": "The world as we have created it is a process of our thinking.",
+        "preferredSelector": ".quote .text",
+        "selectorCandidates": [".quote .text"]
+      },
+      {
+        "tag": "small",
+        "role": "text",
+        "name": "Albert Einstein",
+        "text": "Albert Einstein",
+        "preferredSelector": ".quote .author",
+        "selectorCandidates": [".quote .author", ".author"]
+      },
+      {
+        "tag": "a",
+        "role": "link",
+        "name": "change",
+        "text": "change",
+        "preferredSelector": ".quote .tag",
+        "selectorCandidates": [".quote .tag", ".tag"]
+      },
+      {
+        "tag": "a",
+        "role": "link",
+        "name": "thinking",
+        "text": "thinking",
+        "preferredSelector": ".quote .tag",
+        "selectorCandidates": [".quote .tag", ".tag"]
+      },
+      {
+        "tag": "span",
+        "role": "text",
+        "name": "It is our choices that show what we truly are.",
+        "text": "It is our choices that show what we truly are.",
+        "preferredSelector": ".quote .text",
+        "selectorCandidates": [".quote .text"]
+      },
+      {
+        "tag": "small",
+        "role": "text",
+        "name": "J.K. Rowling",
+        "text": "J.K. Rowling",
+        "preferredSelector": ".quote .author",
+        "selectorCandidates": [".quote .author", ".author"]
+      },
+      {
+        "tag": "a",
+        "role": "link",
+        "name": "abilities",
+        "text": "abilities",
+        "preferredSelector": ".quote .tag",
+        "selectorCandidates": [".quote .tag", ".tag"]
+      },
+      {
+        "tag": "a",
+        "role": "link",
+        "name": "choices",
+        "text": "choices",
+        "preferredSelector": ".quote .tag",
+        "selectorCandidates": [".quote .tag", ".tag"]
+      },
+      {
+        "tag": "a",
+        "role": "link",
+        "name": "Next",
+        "text": "Next",
+        "attributes": { "href": "/page/2/" },
+        "preferredSelector": "li.next a",
+        "selectorCandidates": ["li.next a", ".next a"]
+      }
+    ]
+  },
+  "input": {
+    "runner": "fixture"
+  }
+}

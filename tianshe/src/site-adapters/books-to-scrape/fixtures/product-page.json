@@ -1,0 +1,71 @@
+{
+  "name": "product-page",
+  "snapshot": {
+    "url": "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
+    "title": "A Light in the Attic | Books to Scrape - Sandbox",
+    "elements": [
+      {
+        "tag": "h1",
+        "role": "heading",
+        "name": "A Light in the Attic",
+        "text": "A Light in the Attic",
+        "preferredSelector": "h1",
+        "selectorCandidates": ["h1"]
+      },
+      {
+        "tag": "p",
+        "role": "text",
+        "name": "£51.77",
+        "text": "£51.77",
+        "attributes": { "class": "price_color" },
+        "preferredSelector": ".price_color",
+        "selectorCandidates": [".price_color"]
+      },
+      {
+        "tag": "p",
+        "role": "text",
+        "name": "In stock (22 available)",
+        "text": "In stock (22 available)",
+        "attributes": { "class": "instock availability" },
+        "preferredSelector": ".availability",
+        "selectorCandidates": [".availability", ".instock.availability"]
+      },
+      {
+        "tag": "p",
+        "role": "img",
+        "name": "Three",
+        "text": "",
+        "attributes": { "class": "star-rating Three" },
+        "preferredSelector": ".star-rating",
+        "selectorCandidates": [".star-rating", ".star-rating.Three"]
+      },
+      {
+        "tag": "th",
+        "role": "cell",
+        "name": "UPC",
+        "text": "UPC"
+      },
+      {
+        "tag": "td",
+        "role": "cell",
+        "name": "a897fe39b1053632",
+        "text": "a897fe39b1053632"
+      },
+      {
+        "tag": "th",
+        "role": "cell",
+        "name": "Product Type",
+        "text": "Product Type"
+      },
+      {
+        "tag": "td",
+        "role": "cell",
+        "name": "Books",
+        "text": "Books"
+      }
+    ]
+  },
+  "input": {
+    "runner": "fixture"
+  }
+}

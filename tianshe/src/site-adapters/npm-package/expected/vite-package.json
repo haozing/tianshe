@@ -1,0 +1,10 @@
+{
+  "packageName": "vite",
+  "description": "Native-ESM powered web dev build tool",
+  "version": "7.2.4",
+  "weeklyDownloadCount": 39281430,
+  "license": "MIT",
+  "repositoryUrl": "https://github.com/vitejs/vite",
+  "sourceUrl": "https://www.npmjs.com/package/vite",
+  "confidence": 1
+}
