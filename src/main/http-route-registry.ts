@@ -12,6 +12,7 @@ import { registerHealthRoute } from './http-system-routes';
 import type { StructuredError } from '../types/error-codes';
 import type { SessionCountsSnapshot } from './http-runtime-state';
 import type { InvokeTaskContext, RuntimeMetricsPayload } from './http-session-manager';
+import type { OrchestrationCapabilityRegistry } from '../core/ai-dev/orchestration';
 
 interface LoggerLike {
   info(message: string, ...args: unknown[]): void;
@@ -24,6 +25,7 @@ interface HttpServerRouteContext {
   restApiConfig?: RestApiConfig;
   dependencies?: RestApiDependencies;
   logger: LoggerLike;
+  capabilityRegistry?: OrchestrationCapabilityRegistry;
 }
 
 interface HttpSessionRouteContext {
@@ -123,6 +125,7 @@ export const registerHttpRoutes = (options: RegisterHttpRoutesOptions): void => 
         },
         restApiConfig: options.server.restApiConfig,
         dependencies: options.server.dependencies,
+        capabilityRegistry: options.server.capabilityRegistry,
       },
       authContext: {
         parseScopesHeader: options.auth.parseScopesHeader,
@@ -149,6 +152,7 @@ export const registerHttpRoutes = (options: RegisterHttpRoutesOptions): void => 
     app: options.server.app,
     restApiConfig: options.server.restApiConfig,
     dependencies: options.server.dependencies,
+    capabilityRegistry: options.server.capabilityRegistry,
     browserPoolAvailable: options.browser.browserPoolAvailable,
     orchestrationSessions: options.sessions.orchestrationSessions,
     parseScopesHeader: options.auth.parseScopesHeader,

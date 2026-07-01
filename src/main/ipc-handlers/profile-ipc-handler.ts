@@ -36,8 +36,16 @@ import {
 import {
   acquireProfileLiveSessionLease,
   attachProfileLiveSessionLease,
-  takeoverProfileLiveSessionLease,
+  requestProfileLiveSessionHandoff,
+  completeProfileLiveSessionHandoff,
+  approveProfileLiveSessionHandoff,
+  pauseProfileLiveSessionHandoff,
+  cancelProfileLiveSessionHandoff,
+  getProfileLiveSessionHandoff,
+  listProfileLiveSessionHandoffs,
+  type ProfileLiveSessionHandoffRequest,
 } from '../../core/browser-pool/profile-live-session-lease';
+import { resourceCoordinator, type ResourceHandoffEvent } from '../../core/resource-coordinator';
 import { fingerprintManager } from '../../core/stealth';
 import { createIPCFailureResponse } from '../ipc-utils';
 import { createIpcHandler, handleIPCError, IpcError, type IpcSenderGuard } from './utils';
@@ -46,6 +54,107 @@ import type { WebContentsViewManager } from '../webcontentsview-manager';
 import type { WindowManager } from '../window-manager';
 
 const logger = createLogger('ProfileIPCHandler');
+
+interface ProfileManualHandoffView {
+  id: string;
+  profileId: string | null;
+  keys: string[];
+  status: ProfileLiveSessionHandoffRequest['status'];
+  requester: {
+    source: ProfileLiveSessionHandoffRequest['requesterSource'];
+    metadata: ProfileLiveSessionHandoffRequest['requesterMetadata'];
+  };
+  currentOwner: {
+    source: ProfileLiveSessionHandoffRequest['ownerSource'];
+    metadata: ProfileLiveSessionHandoffRequest['ownerMetadata'];
+    acquiredAt: number | null;
+  };
+  reason: string | null;
+  message: string | null;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number | null;
+  approvedAt: number | null;
+  pausedAt: number | null;
+  completedAt: number | null;
+  canceledAt: number | null;
+  expiredAt: number | null;
+  statusReason: string | null;
+}
+
+const PROFILE_RESOURCE_PREFIX = 'profile:';
+const handoffEventForwardingWindowManagers = new WeakSet<WindowManager>();
+
+function profileIdFromHandoff(request: ProfileLiveSessionHandoffRequest): string | null {
+  const key = request.keys.find((candidate) => candidate.startsWith(PROFILE_RESOURCE_PREFIX));
+  return key ? key.slice(PROFILE_RESOURCE_PREFIX.length) || null : null;
+}
+
+function toManualHandoffView(
+  request: ProfileLiveSessionHandoffRequest
+): ProfileManualHandoffView {
+  return {
+    id: request.id,
+    profileId: profileIdFromHandoff(request),
+    keys: [...request.keys],
+    status: request.status,
+    requester: {
+      source: request.requesterSource,
+      metadata: request.requesterMetadata,
+    },
+    currentOwner: {
+      source: request.ownerSource,
+      metadata: request.ownerMetadata,
+      acquiredAt: request.ownerAcquiredAt,
+    },
+    reason: request.reason,
+    message: request.message,
+    createdAt: request.createdAt,
+    updatedAt: request.updatedAt,
+    expiresAt: request.expiresAt,
+    approvedAt: request.approvedAt,
+    pausedAt: request.pausedAt,
+    completedAt: request.completedAt,
+    canceledAt: request.canceledAt,
+    expiredAt: request.expiredAt,
+    statusReason: request.statusReason,
+  };
+}
+
+function isProfileHandoffRequest(
+  request: ProfileLiveSessionHandoffRequest
+): request is ProfileLiveSessionHandoffRequest {
+  return request.keys.some((key) => key.startsWith(PROFILE_RESOURCE_PREFIX));
+}
+
+function sendProfileHandoffEvent(
+  windowManager: WindowManager,
+  event: ResourceHandoffEvent
+): void {
+  if (!isProfileHandoffRequest(event.request)) {
+    return;
+  }
+
+  const payload = {
+    type: event.type,
+    handoff: toManualHandoffView(event.request),
+  };
+  const mainWindow = windowManager.getMainWindowV3?.();
+  mainWindow?.webContents.send('profile:handoff-changed', payload);
+  if (event.type === 'handoff:requested') {
+    mainWindow?.webContents.send('profile:handoff-requested', payload);
+  }
+}
+
+function ensureProfileHandoffEventForwarding(windowManager: WindowManager): void {
+  if (handoffEventForwardingWindowManagers.has(windowManager)) {
+    return;
+  }
+  handoffEventForwardingWindowManagers.add(windowManager);
+  resourceCoordinator.onHandoffEvent((event) => {
+    sendProfileHandoffEvent(windowManager, event);
+  });
+}
 
 // 用于持久化浏览器池配置的 electron-store 实例
 const poolConfigStore = new Store<{ browserPoolConfig?: Partial<BrowserPoolConfig> }>({
@@ -122,6 +231,7 @@ export function registerProfileHandlers(
   const assertSender = (event: IpcMainInvokeEvent, channel: string): void => {
     options.senderGuard?.(event, channel);
   };
+  ensureProfileHandoffEventForwarding(windowManager);
 
   // =====================================================
   // Profile CRUD (使用工厂函数减少重复代码)
@@ -387,12 +497,44 @@ export function registerProfileHandlers(
           profileId,
           launchOptions?.runtimeId
         );
-        const profileLease = agentHeldBrowser
-          ? await takeoverProfileLiveSessionLease(profileId, { source: 'ipc' })
-          : await acquireProfileLiveSessionLease(profileId, {
-              source: 'ipc',
-              timeoutMs: launchOptions?.timeout || 30000,
-            });
+        let profileLease;
+        if (agentHeldBrowser) {
+          const handoffRequest = await requestProfileLiveSessionHandoff(profileId, {
+            source: 'ipc',
+            requesterMetadata: {
+              controllerKind: 'human',
+              interruptibility: 'non_interruptible',
+              description: 'human profile pool launch',
+            },
+            reason: 'human_requested_agent_profile_handoff',
+            autoApproveIfCurrentOwnerInterruptible: true,
+          });
+          if (
+            !handoffRequest ||
+            (handoffRequest.status !== 'approved' && handoffRequest.status !== 'paused')
+          ) {
+            throw new Error('Profile handoff request requires approval before human takeover');
+          }
+          profileLease = await completeProfileLiveSessionHandoff(handoffRequest.id, {
+            actorToken: handoffRequest.requesterToken,
+            source: 'ipc',
+            ownerMetadata: {
+              controllerKind: 'human',
+              interruptibility: 'non_interruptible',
+              description: 'human profile pool launch',
+            },
+          });
+        } else {
+          profileLease = await acquireProfileLiveSessionLease(profileId, {
+            source: 'ipc',
+            ownerMetadata: {
+              controllerKind: 'human',
+              interruptibility: 'non_interruptible',
+              description: 'human profile pool launch',
+            },
+            timeoutMs: launchOptions?.timeout || 30000,
+          });
+        }
         const releaseLease = async (): Promise<void> => {
           await profileLease?.release().catch(() => undefined);
         };
@@ -553,6 +695,153 @@ export function registerProfileHandlers(
    * - 非 Electron 路径会调用运行时的 show/bringToFront
    * - 如果该 view 已经在弹窗中打开，则只聚焦已有弹窗
    */
+  ipcRouteRegistry.register({
+    channel: 'profile:handoff-list',
+    kind: 'handle',
+    permission: 'trusted-renderer',
+    schema: {
+      description: 'List profile live-session handoff requests for trusted UI.',
+      args: [{ name: 'profileId', type: 'string', required: false }],
+      result: { success: 'boolean', data: 'object[]?', error: 'string?' },
+    },
+    handler: async (event, profileId?: string) => {
+      try {
+        assertSender(event, 'profile:handoff-list');
+        const requests = await listProfileLiveSessionHandoffs(profileId);
+        return { success: true, data: requests.map(toManualHandoffView) };
+      } catch (error) {
+        logProfileIpcError('profile:handoff-list', error);
+        return handleIPCError(error, 'Failed to list profile handoff requests');
+      }
+    },
+  });
+
+  ipcRouteRegistry.register({
+    channel: 'profile:handoff-get',
+    kind: 'handle',
+    permission: 'trusted-renderer',
+    schema: {
+      description: 'Get one profile live-session handoff request for trusted UI.',
+      args: [{ name: 'handoffRequestId', type: 'string', required: true }],
+      result: { success: 'boolean', data: 'object|null?', error: 'string?' },
+    },
+    handler: async (event, handoffRequestId: string) => {
+      try {
+        assertSender(event, 'profile:handoff-get');
+        const request = await getProfileLiveSessionHandoff(handoffRequestId);
+        return { success: true, data: request ? toManualHandoffView(request) : null };
+      } catch (error) {
+        logProfileIpcError('profile:handoff-get', error);
+        return handleIPCError(error, 'Failed to get profile handoff request');
+      }
+    },
+  });
+
+  ipcRouteRegistry.register({
+    channel: 'profile:handoff-approve',
+    kind: 'handle',
+    permission: 'trusted-renderer',
+    schema: {
+      description: 'Approve a pending profile live-session handoff request.',
+      args: [
+        { name: 'handoffRequestId', type: 'string', required: true },
+        { name: 'options', type: 'object', required: false },
+      ],
+      result: { success: 'boolean', data: 'object?', error: 'string?' },
+    },
+    handler: async (event, handoffRequestId: string, approveOptions?: { reason?: string }) => {
+      try {
+        assertSender(event, 'profile:handoff-approve');
+        const request = await getProfileLiveSessionHandoff(handoffRequestId);
+        if (!request) {
+          return createIPCFailureResponse(
+            `Profile handoff request not found: ${handoffRequestId}`,
+            'NOT_FOUND',
+            { context: { handoffRequestId } }
+          );
+        }
+        const approved = await approveProfileLiveSessionHandoff(handoffRequestId, {
+          hostAuthorized: true,
+          reason: approveOptions?.reason || 'approved_by_trusted_renderer',
+        });
+        return { success: true, data: toManualHandoffView(approved) };
+      } catch (error) {
+        logProfileIpcError('profile:handoff-approve', error);
+        return handleIPCError(error, 'Failed to approve profile handoff request');
+      }
+    },
+  });
+
+  ipcRouteRegistry.register({
+    channel: 'profile:handoff-pause',
+    kind: 'handle',
+    permission: 'trusted-renderer',
+    schema: {
+      description: 'Approve and pause the current owner for a profile live-session handoff.',
+      args: [
+        { name: 'handoffRequestId', type: 'string', required: true },
+        { name: 'options', type: 'object', required: false },
+      ],
+      result: { success: 'boolean', data: 'object?', error: 'string?' },
+    },
+    handler: async (event, handoffRequestId: string, pauseOptions?: { reason?: string }) => {
+      try {
+        assertSender(event, 'profile:handoff-pause');
+        const request = await getProfileLiveSessionHandoff(handoffRequestId);
+        if (!request) {
+          return createIPCFailureResponse(
+            `Profile handoff request not found: ${handoffRequestId}`,
+            'NOT_FOUND',
+            { context: { handoffRequestId } }
+          );
+        }
+        const paused = await pauseProfileLiveSessionHandoff(handoffRequestId, {
+          hostAuthorized: true,
+          reason: pauseOptions?.reason || 'paused_by_trusted_renderer',
+        });
+        return { success: true, data: toManualHandoffView(paused) };
+      } catch (error) {
+        logProfileIpcError('profile:handoff-pause', error);
+        return handleIPCError(error, 'Failed to pause profile handoff request');
+      }
+    },
+  });
+
+  ipcRouteRegistry.register({
+    channel: 'profile:handoff-cancel',
+    kind: 'handle',
+    permission: 'trusted-renderer',
+    schema: {
+      description: 'Cancel a profile live-session handoff request.',
+      args: [
+        { name: 'handoffRequestId', type: 'string', required: true },
+        { name: 'options', type: 'object', required: false },
+      ],
+      result: { success: 'boolean', data: 'object?', error: 'string?' },
+    },
+    handler: async (event, handoffRequestId: string, cancelOptions?: { reason?: string }) => {
+      try {
+        assertSender(event, 'profile:handoff-cancel');
+        const request = await getProfileLiveSessionHandoff(handoffRequestId);
+        if (!request) {
+          return createIPCFailureResponse(
+            `Profile handoff request not found: ${handoffRequestId}`,
+            'NOT_FOUND',
+            { context: { handoffRequestId } }
+          );
+        }
+        const canceled = await cancelProfileLiveSessionHandoff(handoffRequestId, {
+          hostAuthorized: true,
+          reason: cancelOptions?.reason || 'canceled_by_trusted_renderer',
+        });
+        return { success: true, data: toManualHandoffView(canceled) };
+      } catch (error) {
+        logProfileIpcError('profile:handoff-cancel', error);
+        return handleIPCError(error, 'Failed to cancel profile handoff request');
+      }
+    },
+  });
+
   ipcRouteRegistry.register({
     channel: 'profile:pool-show-browser',
     kind: 'handle',

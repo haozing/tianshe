@@ -138,6 +138,71 @@ describe('dataset provenance and staged write plans', () => {
     });
   });
 
+  it('persists artifact refs in provenance metadata without retaining local paths', async () => {
+    await provenanceService.ensureDatasetSidecarTables(datasetId);
+
+    const run = await provenanceService.recordRun(
+      {
+        runId: 'run-artifact-ref',
+        datasetId,
+        operation: 'staged_write',
+        status: 'completed',
+        traceId: 'trace-artifact-ref',
+        runtimeId: 'electron-webcontents',
+        rowCount: 1,
+        metadata: {
+          artifactRefs: ['artifact-file-1'],
+          filePath: path.join(tempDir, 'secret', 'evidence.har'),
+          nested: {
+            storagePath: path.join(tempDir, 'secret', 'nested.png'),
+          },
+        },
+      },
+      { datasetSidecar: datasetId }
+    );
+    expect(run.metadata).toMatchObject({
+      artifactRefs: ['artifact-file-1'],
+      filePath: '[redacted-path]',
+      nested: {
+        storagePath: '[redacted-path]',
+      },
+    });
+
+    await provenanceService.recordRows(
+      [
+        {
+          id: 'row-artifact-ref',
+          datasetId,
+          rowId: 1,
+          runId: run.runId,
+          operation: 'insert',
+          traceId: 'trace-artifact-ref',
+          metadata: {
+            artifactRefs: ['artifact-file-1'],
+            storagePath: path.join(tempDir, 'secret', 'row.txt'),
+          },
+          after: {
+            name: 'Evidence row',
+            status: 'ok',
+          },
+        },
+      ],
+      { datasetSidecar: datasetId }
+    );
+
+    const storedRun = await provenanceService.getDatasetRun(datasetId, run.runId);
+    const provenance = await provenanceService.listRecordProvenance(datasetId, 1);
+    expect(storedRun?.metadata).toMatchObject({
+      artifactRefs: ['artifact-file-1'],
+      filePath: '[redacted-path]',
+    });
+    expect(provenance[0]?.metadata).toMatchObject({
+      artifactRefs: ['artifact-file-1'],
+      storagePath: '[redacted-path]',
+    });
+    expect(JSON.stringify({ storedRun, provenance })).not.toContain(tempDir);
+  });
+
   it('rolls back rows and provenance together when a staged commit fails', async () => {
     const plan = await mutationService.createStagedWritePlan(datasetId, [
       { type: 'insert', record: { name: 'Valid row', status: 'ok' } },

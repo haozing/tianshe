@@ -409,27 +409,34 @@ describe('DatabaseNamespace', () => {
 
   // ========== executeSQL ==========
   describe('executeSQL', () => {
-    it('应该执行自定义 SQL', async () => {
+    it('缺少 datasetId 时应该拒绝自定义 SQL', async () => {
       mockDuckDB.executeSQLWithParams.mockResolvedValue([{ count: 10 }]);
 
-      const result = await database.executeSQL('SELECT COUNT(*) as count FROM ds_test.data');
+      await expect(
+        database.executeSQL('SELECT COUNT(*) as count FROM ds_test.data')
+      ).rejects.toMatchObject({
+        name: 'DatabaseError',
+        details: expect.objectContaining({
+          operation: 'executeSQL',
+          access: 'dataset-scoped-readonly',
+        }),
+      });
 
-      expect(mockDuckDB.executeSQLWithParams).toHaveBeenCalledWith(
-        'SELECT COUNT(*) as count FROM ds_test.data',
-        []
-      );
-      expect(result).toEqual([{ count: 10 }]);
+      expect(mockDuckDB.executeSQLWithParams).not.toHaveBeenCalled();
     });
 
-    it('应该支持参数化查询（旧 API）', async () => {
+    it('旧 API 参数化查询也必须提供 datasetId', async () => {
       mockDuckDB.executeSQLWithParams.mockResolvedValue([{ id: 1 }]);
 
-      await database.executeSQL('SELECT * FROM data WHERE id = ?', [1]);
+      await expect(database.executeSQL('SELECT * FROM data WHERE id = ?', [1])).rejects.toMatchObject({
+        name: 'DatabaseError',
+        details: expect.objectContaining({
+          operation: 'executeSQL',
+          access: 'dataset-scoped-readonly',
+        }),
+      });
 
-      expect(mockDuckDB.executeSQLWithParams).toHaveBeenCalledWith(
-        'SELECT * FROM data WHERE id = ?',
-        [1]
-      );
+      expect(mockDuckDB.executeSQLWithParams).not.toHaveBeenCalled();
     });
 
     it('应该支持新 API 格式', async () => {

@@ -20,11 +20,18 @@ function isFailureEvent(event: RuntimeEvent): boolean {
 }
 
 function toArtifactRef(artifact: RuntimeArtifact): RuntimeArtifactRef {
+  const payload = artifact.payload
+    ? artifact.payload.kind === 'file'
+      ? artifact.payload
+      : { kind: 'inline' as const }
+    : undefined;
+
   return {
     artifactId: artifact.artifactId,
     type: artifact.type,
     ...(artifact.label ? { label: artifact.label } : {}),
     timestamp: artifact.timestamp,
+    ...(payload ? { payload } : {}),
   };
 }
 
@@ -159,6 +166,9 @@ export class ObservationQueryService {
         : {}),
       ...(selectLatestArtifact(artifacts, 'error_context')
         ? { errorContext: selectLatestArtifact(artifacts, 'error_context') }
+        : {}),
+      ...(selectLatestArtifact(artifacts, 'download')
+        ? { download: selectLatestArtifact(artifacts, 'download') }
         : {}),
       ...(selectLatestArtifact(artifacts, 'site_adapter_result')
         ? { siteAdapterResult: selectLatestArtifact(artifacts, 'site_adapter_result') }

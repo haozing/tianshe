@@ -132,6 +132,7 @@ describe('RuyiFirefoxDownloadController', () => {
         navigationId: 'nav-1',
         state: 'in_progress',
         path: undefined,
+        artifactRef: undefined,
         source: 'native',
       },
       {
@@ -149,6 +150,7 @@ describe('RuyiFirefoxDownloadController', () => {
         navigationId: 'nav-1',
         state: 'completed',
         path: path.join(targetDir, 'report.csv'),
+        artifactRef: undefined,
         source: 'native',
       },
       {
@@ -204,6 +206,7 @@ describe('RuyiFirefoxDownloadController', () => {
         navigationId: undefined,
         state: 'in_progress',
         path: path.join(targetDir, 'fallback.csv'),
+        artifactRef: undefined,
         source: 'filesystem',
       },
       {
@@ -220,6 +223,7 @@ describe('RuyiFirefoxDownloadController', () => {
         navigationId: undefined,
         state: 'completed',
         path: path.join(targetDir, 'fallback.csv'),
+        artifactRef: undefined,
         source: 'filesystem',
       },
       {

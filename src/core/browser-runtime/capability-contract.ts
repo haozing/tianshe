@@ -278,6 +278,25 @@ export const BROWSER_CAPABILITY_CONTRACTS: Record<
     degradedModes: ['metadata-only network capture'],
     toolRequirements: ['browser_network_entries'],
   },
+  'network.sessionRequest': {
+    name: 'network.sessionRequest',
+    requiredMethods: ['sessionRequest'],
+    semanticChecks: [
+      semanticCheck(
+        'network.sessionRequest.contract',
+        'semantic-smoke',
+        'Performs a browser-session request without exposing Cookie, Authorization, Set-Cookie, or storage secrets.',
+        'src/core/browser-runtime/profile-session-gateway.test.ts'
+      ),
+      semanticCheck(
+        'network.sessionRequest.runtime-spike',
+        'runtime-canary',
+        'Electron WebContents and Chromium extension relay pass the same ProfileSessionGateway request contract.',
+        'src/core/browser-runtime/profile-session-gateway.test.ts'
+      ),
+    ],
+    degradedModes: ['same-origin browser fetch/CORS semantics'],
+  },
   'console.capture': {
     name: 'console.capture',
     requiredMethods: [

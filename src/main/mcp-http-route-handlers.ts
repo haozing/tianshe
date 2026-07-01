@@ -23,6 +23,7 @@ import {
 } from './mcp-http-types';
 
 const logger = createLogger('MCP-HTTP');
+const MCP_SCOPE_BOOTSTRAP_SCOPES = ['session.write'] as const;
 
 const UNSUPPORTED_MCP_TRANSPORT_INPUTS = [
   'x-airpa-tool-profile',
@@ -141,6 +142,12 @@ const createPendingTerminationOptions = (options: RegisterMcpRouteHandlersOption
   cleanupSession: options.sessionLifecycle.cleanupSession,
 });
 
+const getInitialMcpAuthScopes = (options: RegisterMcpRouteHandlersOptions): string[] => {
+  const config = options.routeContext.restApiConfig;
+  const enforceScopes = config?.agentHandMode === true || (config?.enforceOrchestrationScopes ?? true);
+  return enforceScopes ? [...MCP_SCOPE_BOOTSTRAP_SCOPES] : [];
+};
+
 const handleExistingSessionRequest = async (
   options: RegisterMcpRouteHandlersOptions,
   req: Request,
@@ -192,7 +199,7 @@ const handleInitializeRequest = async (
     lastActivity: Date.now(),
     maxQueueSize: HTTP_SERVER_DEFAULTS.MCP_MAX_QUEUE_SIZE,
     visible: false,
-    authScopes: [],
+    authScopes: getInitialMcpAuthScopes(options),
   });
 
   try {

@@ -22,6 +22,7 @@ export interface RuntimePlannerProfile {
   id: string;
   name?: string;
   runtimeId?: string;
+  loginStateRevision?: number;
   status?: string;
   isSystem?: boolean;
 }
@@ -31,6 +32,9 @@ export interface RuntimePlannerLoginState {
   site: string;
   status: string;
   verified?: boolean;
+  runtimeIdSnapshot?: string | null;
+  runtimeId?: string | null;
+  profileRevision?: number | null;
   verifiedAt?: string | null;
   reason?: string | null;
 }
@@ -109,6 +113,26 @@ const matchesSite = (state: RuntimePlannerLoginState, site: string | undefined):
 const isHealthyLogin = (state: RuntimePlannerLoginState | undefined): boolean =>
   state?.verified === true && state.status === 'logged_in';
 
+const isHealthyLoginForProfileCandidate = (
+  state: RuntimePlannerLoginState | undefined,
+  profile: RuntimePlannerProfile,
+  runtimeId: BrowserRuntimeId | undefined
+): boolean => {
+  if (!isHealthyLogin(state)) return false;
+  const stateRuntimeId = state?.runtimeIdSnapshot || state?.runtimeId || undefined;
+  if (stateRuntimeId && runtimeId && stateRuntimeId !== runtimeId) return false;
+  if (
+    typeof state?.profileRevision === 'number' &&
+    Number.isFinite(state.profileRevision) &&
+    typeof profile.loginStateRevision === 'number' &&
+    Number.isFinite(profile.loginStateRevision) &&
+    Math.trunc(state.profileRevision) !== Math.trunc(profile.loginStateRevision)
+  ) {
+    return false;
+  }
+  return true;
+};
+
 export function createBrowserRuntimePlan(input: RuntimePlannerInput): BrowserRuntimePlan {
   const requiredCapabilities = normalizeCapabilityNames(input.requiredCapabilities);
   const descriptors = getRuntimeDescriptors(input.runtimeDescriptors);
@@ -156,14 +180,16 @@ export function createBrowserRuntimePlan(input: RuntimePlannerInput): BrowserRun
       ...(runtimeId ? { runtimeId } : {}),
       supported,
       ...(loginState ? { loginStatus: loginState.status } : {}),
-      ...(loginState ? { loginVerified: loginState.verified === true } : {}),
+      ...(loginState
+        ? { loginVerified: isHealthyLoginForProfileCandidate(loginState, profile, runtimeId) }
+        : {}),
       reasons: [
         ...(!runtimeId ? ['profile runtime is unknown'] : []),
         ...(runtimeId && !supportedRuntimeIds.has(runtimeId)
           ? [`profile runtime ${runtimeId} does not satisfy required capabilities`]
           : []),
         ...(input.site && !loginState ? [`no login state recorded for ${input.site}`] : []),
-        ...(input.site && loginState && !isHealthyLogin(loginState)
+        ...(input.site && loginState && !isHealthyLoginForProfileCandidate(loginState, profile, runtimeId)
           ? [`login state is ${loginState.status}`]
           : []),
       ],
@@ -254,7 +280,11 @@ export function createBrowserRuntimePlan(input: RuntimePlannerInput): BrowserRun
     : compatibleLoggedInProfile || candidateProfiles.find((profile) => profile.supported);
   const compatibleRuntime = candidateRuntimes.find((runtime) => runtime.supported);
 
-  if (input.site && compatibleProfile && compatibleProfile.loginStatus !== 'logged_in') {
+  if (
+    input.site &&
+    compatibleProfile &&
+    (compatibleProfile.loginStatus !== 'logged_in' || compatibleProfile.loginVerified !== true)
+  ) {
     return {
       decision: 'needs_manual_login',
       recommendedRuntimeId: compatibleProfile.runtimeId || compatibleRuntime?.runtimeId,
@@ -315,9 +345,13 @@ function isHealthyLoginForProfile(
   if (!profileId) {
     return false;
   }
-  return isHealthyLogin(
+  const profile = (input.profiles || []).find((item) => item.id === profileId);
+  const runtimeId = normalizeRuntimeId(profile?.runtimeId);
+  return isHealthyLoginForProfileCandidate(
     (input.loginStates || []).find(
       (state) => state.profileId === profileId && matchesSite(state, input.site)
-    )
+    ),
+    profile || { id: profileId },
+    runtimeId
   );
 }

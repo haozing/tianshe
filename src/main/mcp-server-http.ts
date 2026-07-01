@@ -31,7 +31,8 @@ import { createHttpRuntimeState, getSessionCounts } from './http-runtime-state';
 import { createHttpSessionBridge } from './http-session-bridge';
 import { createHttpServerComposition } from './http-server-composition';
 import {
-  listOrchestrationCapabilities,
+  createOrchestrationCapabilityRegistry,
+  type OrchestrationCapabilityRegistry,
 } from '../core/ai-dev/orchestration';
 
 /**
@@ -70,6 +71,7 @@ export class AirpaHttpMcpServer {
   private restApiConfig?: RestApiConfig;
   private getBrowserPoolManager?: () => BrowserPoolManager;
   private getBrowserPoolReadiness?: () => BrowserPoolReadinessSnapshot;
+  private capabilityRegistry: OrchestrationCapabilityRegistry;
   private runtimeMetrics = this.runtimeState.runtimeMetrics;
   private sessionBridge = createHttpSessionBridge({
     transports: this.runtimeState.transports,
@@ -95,6 +97,9 @@ export class AirpaHttpMcpServer {
     this.restApiConfig = restApiConfig;
     this.getBrowserPoolManager = getBrowserPoolManager;
     this.getBrowserPoolReadiness = getBrowserPoolReadiness;
+    this.capabilityRegistry = createOrchestrationCapabilityRegistry({
+      additionalProviders: dependencies?.capabilityProviders || [],
+    });
 
     this.app = createHttpServerComposition({
       serverName: this.config.name,
@@ -106,6 +111,7 @@ export class AirpaHttpMcpServer {
       sessionBridge: this.sessionBridge,
       getBrowserPoolManager: this.getBrowserPoolManager,
       getBrowserPoolReadiness: this.getBrowserPoolReadiness,
+      capabilityRegistry: this.capabilityRegistry,
       normalizeStructuredError: toStructuredError,
       mapErrorStatus: (code, fallback) => mapErrorStatus(code, fallback),
       mapStructuredErrorStatus: (error, fallback) => mapStructuredErrorStatus(error, fallback),
@@ -133,7 +139,7 @@ export class AirpaHttpMcpServer {
         port: this.config.port,
         bindAddress: HTTP_SERVER_DEFAULTS.BIND_ADDRESS,
         mcpEnabled: this.restApiConfig?.enableMcp ?? false,
-        availableToolsCount: listOrchestrationCapabilities().length,
+        availableToolsCount: this.capabilityRegistry.listCapabilities().length,
         sessionSupportEnabled: Boolean(this.getBrowserPoolManager),
         sessionTimeoutMs: HTTP_SERVER_DEFAULTS.SESSION_TIMEOUT,
         sessionCleanupIntervalMs: HTTP_SERVER_DEFAULTS.SESSION_CLEANUP_INTERVAL,

@@ -33,11 +33,13 @@ export type {
 
   // 配置相关
   PluginConfiguration,
+  PluginStateManifest,
   ConfigurationProperty,
   PluginPermissions,
 
   // UI 扩展相关
   PluginContributions,
+  PluginSiteAdapterContribution,
   ToolbarButtonContribution,
   AppliesTo,
 
@@ -70,6 +72,7 @@ export type {
   ModelConfig,
   ModelInfo,
 } from '../../../types/js-plugin';
+export type { PluginHelpers } from '../helpers';
 
 // ============================================
 // 跨插件调用类型
@@ -133,6 +136,7 @@ export interface PluginContextInterface {
   readonly manifest: import('../../../types/js-plugin').JSPluginManifest;
   readonly plugin: import('../../../types/js-plugin').PluginInfo;
   readonly dataTables: import('../../../types/js-plugin').DataTableInfo[];
+  readonly helpers: import('../helpers').PluginHelpers;
 
   registerCommand(
     commandId: string,
@@ -146,10 +150,10 @@ export interface PluginContextInterface {
   setData(key: string, value: unknown): Promise<void>;
   getData(key: string): Promise<unknown>;
   deleteData(key: string): Promise<void>;
-  dispose(): void;
+  dispose(): Promise<void>;
 
   // 跨插件 API
-  exposeAPI(name: string, handler: (...args: unknown[]) => Promise<unknown>): void;
+  exposeAPI(apis: import('../../../types/js-plugin').ExposedAPIMap): void;
   getExposedAPI(name: string): ((...args: unknown[]) => Promise<unknown>) | undefined;
   getAllExposedAPIs(): Map<string, (...args: unknown[]) => Promise<unknown>>;
 }

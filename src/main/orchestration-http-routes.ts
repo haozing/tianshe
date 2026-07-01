@@ -7,8 +7,12 @@ import { showBrowserView, hideBrowserView } from '../core/browser-pool';
 import type { BrowserHandle } from '../core/browser-pool';
 import {
   createOrchestrationExecutor,
+  createCapabilityConfirmationGrant,
   hashOrchestrationInvokePayload,
-  listOrchestrationCapabilities,
+  isCapabilityConfirmationGrant,
+  requiresCapabilityConfirmation,
+  defaultOrchestrationCapabilityRegistry,
+  type OrchestrationCapabilityRegistry,
   type OrchestrationExecutor,
   type OrchestrationIdempotencyEntry,
 } from '../core/ai-dev/orchestration';
@@ -24,6 +28,20 @@ const orchestrationInvokeRequestSchema = z.object({
   sessionId: z.string().trim().min(1, 'sessionId is required'),
   name: z.string().trim().min(1, 'name is required'),
   arguments: z.record(z.string(), z.unknown()).optional().default({}),
+  confirmationGrant: z.unknown().optional(),
+});
+
+const orchestrationConfirmationGrantRequestSchema = z.object({
+  sessionId: z.string().trim().min(1, 'sessionId is required'),
+  name: z.string().trim().min(1, 'name is required'),
+  arguments: z.record(z.string(), z.unknown()).optional().default({}),
+  source: z.enum(['plugin-ui', 'workflow-ui', 'agent-ui']).default('agent-ui'),
+  grantId: z.string().trim().min(1).optional(),
+  invocationId: z.string().trim().min(1).optional(),
+  principal: z.string().trim().min(1).optional(),
+  expiresAt: z.string().trim().min(1).optional(),
+  idempotencyKey: z.string().trim().min(1).optional(),
+  previewRef: z.string().trim().min(1).optional(),
 });
 
 const orchestrationSessionCreateRequestSchema = z.object({
@@ -55,6 +73,22 @@ const createIdempotencyRunningError = (
         capability,
         idempotencyKey,
         reason: 'idempotency_request_running',
+      },
+    }
+  );
+
+const createIdempotencyConflictError = (
+  capability: string,
+  idempotencyKey: string
+): StructuredError =>
+  createStructuredError(
+    ErrorCode.REQUEST_FAILED,
+    'Idempotency-Key already used with a different request payload',
+    {
+      context: {
+        capability,
+        idempotencyKey,
+        reason: 'idempotency_conflict',
       },
     }
   );
@@ -103,6 +137,7 @@ interface RegisterOrchestrationRoutesOptions {
   app: Application;
   restApiConfig?: RestApiConfig;
   dependencies?: RestApiDependencies;
+  capabilityRegistry?: OrchestrationCapabilityRegistry;
   browserPoolAvailable: boolean;
   orchestrationSessions: Map<string, OrchestrationSessionInfo>;
   parseScopesHeader: (value: unknown) => string[];
@@ -131,6 +166,7 @@ interface RegisterOrchestrationRoutesOptions {
 export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutesOptions): void => {
   const prefix = HTTP_SERVER_DEFAULTS.ORCHESTRATION_API_V1_PREFIX;
   const idempotencyPersistence = options.dependencies?.idempotencyPersistence;
+  const capabilityRegistry = options.capabilityRegistry || defaultOrchestrationCapabilityRegistry;
 
   const registerGet = (pathSuffix: string, handler: (req: Request, res: Response) => Promise<void>) => {
     options.app.get(
@@ -186,11 +222,112 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
   };
 
   registerGet('/capabilities', async (_req, res) => {
-    sendSuccess(res, listOrchestrationCapabilities());
+    sendSuccess(res, capabilityRegistry.listCapabilities());
   });
 
   registerGet('/metrics', async (_req, res) => {
     sendSuccess(res, options.buildRuntimeMetricsPayload());
+  });
+
+  registerPost('/confirmation-grants', async (req, res) => {
+    const parsed = orchestrationConfirmationGrantRequestSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return sendStructuredError(
+        res,
+        createStructuredError(
+          ErrorCode.INVALID_PARAMETER,
+          'Invalid confirmation grant request',
+          {
+            details: formatZodIssues(parsed.error),
+            suggestion: 'Provide sessionId, capability name, and the exact arguments to confirm.',
+          }
+        ),
+        400
+      );
+    }
+
+    const {
+      sessionId,
+      name,
+      arguments: args,
+      source,
+      grantId,
+      invocationId,
+      principal,
+      expiresAt,
+      idempotencyKey,
+      previewRef,
+    } = parsed.data;
+    const session = options.orchestrationSessions.get(sessionId);
+    if (!session) {
+      return sendStructuredError(
+        res,
+        createStructuredError(ErrorCode.NOT_FOUND, 'Session not found', {
+          context: { sessionId },
+        }),
+        404
+      );
+    }
+
+    session.executor.refreshGeneration();
+    const definition = capabilityRegistry.getSnapshot().definitionsByName[name];
+    if (!definition) {
+      return sendStructuredError(
+        res,
+        createStructuredError(ErrorCode.NOT_FOUND, `Capability not found: ${name}`, {
+          context: { capability: name },
+        }),
+        404
+      );
+    }
+
+    if (!requiresCapabilityConfirmation(definition, args)) {
+      return sendStructuredError(
+        res,
+        createStructuredError(
+          ErrorCode.INVALID_PARAMETER,
+          `Capability ${name} does not require confirmation for the provided arguments`,
+          {
+            context: { capability: name },
+            suggestion: 'Invoke the capability without a confirmation grant.',
+          }
+        ),
+        400
+      );
+    }
+
+    const scopesHeaderPresent = req.headers['x-airpa-scopes'] !== undefined;
+    if (scopesHeaderPresent) {
+      session.authScopes = options.parseScopesHeader(req.headers['x-airpa-scopes']);
+    }
+    const scopes = [...(session.authScopes || [])];
+    const grant = createCapabilityConfirmationGrant({
+      definition,
+      arguments: args,
+      grantId: grantId || randomUUID(),
+      invocationId: invocationId || randomUUID(),
+      principal: principal || 'http',
+      source,
+      sessionId,
+      scopes,
+      ...(expiresAt ? { expiresAt } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(previewRef ? { previewRef } : {}),
+    });
+
+    sendSuccess(
+      res,
+      {
+        sessionId,
+        capability: name,
+        confirmationGrant: grant,
+      },
+      undefined,
+      {
+        sessionId,
+        capability: name,
+      }
+    );
   });
 
   registerPost('/sessions', async (req, res) => {
@@ -278,8 +415,8 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
         enforceScopes:
           options.restApiConfig?.agentHandMode === true
             ? true
-            : options.restApiConfig?.enforceOrchestrationScopes ?? false,
-      });
+            : options.restApiConfig?.enforceOrchestrationScopes ?? true,
+      }, { registry: capabilityRegistry });
       options.orchestrationSessions.set(sessionId, {
         browserHandle,
         executor,
@@ -439,6 +576,9 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
       );
     }
     const { sessionId, name, arguments: args } = parsed.data;
+    const confirmationGrant = isCapabilityConfirmationGrant(parsed.data.confirmationGrant)
+      ? parsed.data.confirmationGrant
+      : undefined;
 
     const session = options.orchestrationSessions.get(sessionId);
     if (!session) {
@@ -457,10 +597,11 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
     const idempotencyNamespace = idempotencyKey
       ? resolveIdempotencyNamespace(req, sessionId)
       : undefined;
+    const requestHash = idempotencyKey ? hashOrchestrationInvokePayload(name, args) : '';
     if (idempotencyKey && idempotencyNamespace && idempotencyPersistence) {
       const reservationEntry: OrchestrationIdempotencyEntry = {
         state: 'running',
-        requestHash: hashOrchestrationInvokePayload(name, args),
+        requestHash,
         capability: name,
         createdAt: Date.now(),
         meta: {
@@ -476,7 +617,7 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
         : {
             status: 'exists' as const,
             entry: await idempotencyPersistence.get(idempotencyNamespace, idempotencyKey),
-          };
+      };
       const persisted = reservation.entry;
       if (persisted) {
         if (reservation.status === 'exists' && persisted.state === 'running') {
@@ -488,6 +629,14 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
           });
         }
         if (reservation.status === 'exists') {
+          if (persisted.capability !== name || persisted.requestHash !== requestHash) {
+            const structured = createIdempotencyConflictError(name, idempotencyKey);
+            return sendStructuredError(res, structured, options.mapStructuredErrorStatus(structured), {
+              sessionId,
+              capability: name,
+              idempotencyKey,
+            });
+          }
           session.idempotencyCache.set(idempotencyKey, persisted);
         }
       }
@@ -507,28 +656,34 @@ export const registerOrchestrationRoutes = (options: RegisterOrchestrationRoutes
     let apiResult: Awaited<ReturnType<OrchestrationExecutor['invokeApi']>>;
     try {
       apiResult = await options.enqueueOrchestrationInvoke(sessionId, session, (_context) =>
-        session.executor.invokeApi(
-          {
-            name,
-            arguments: args,
-            auth: {
-              scopes,
-              source: 'http',
+        {
+          session.executor.refreshGeneration();
+          return session.executor.invokeApi(
+            {
+              name,
+              arguments: args,
+              auth: {
+                scopes,
+                source: 'http',
+                principal: 'http',
+                sessionId,
+                ...(confirmationGrant ? { confirmationGrant } : {}),
+              },
             },
-          },
-          {
-            traceId: requestTraceId,
-            signal: _context.signal,
-            ...(idempotencyKey
-              ? {
-                  idempotency: {
-                    key: idempotencyKey,
-                    store: session.idempotencyCache,
-                  },
-                }
-              : {}),
-          }
-        )
+            {
+              traceId: requestTraceId,
+              signal: _context.signal,
+              ...(idempotencyKey
+                ? {
+                    idempotency: {
+                      key: idempotencyKey,
+                      store: session.idempotencyCache,
+                    },
+                  }
+                : {}),
+            }
+          );
+        }
       );
     } catch (error) {
       const structured = options.normalizeStructuredError(error);

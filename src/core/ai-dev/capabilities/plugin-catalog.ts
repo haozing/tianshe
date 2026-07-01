@@ -12,7 +12,6 @@ import { createStructuredResult } from './result-utils';
 import {
   buildCapabilityAnnotations,
   type CapabilityMetadata,
-  createArrayItemsSchema,
   createStructuredEnvelopeSchema,
   toCapabilityTitle,
 } from './catalog-utils';
@@ -251,24 +250,6 @@ const readOptionalLimitArg = (args: Record<string, unknown>, key: string): numbe
     );
   }
   return raw;
-};
-
-const readRequiredConfirmationArg = (args: Record<string, unknown>, key: string): true => {
-  const raw = args[key];
-  if (raw !== true) {
-    throw createStructuredError(
-      ErrorCode.INVALID_PARAMETER,
-      `Parameter ${key} must be true for this high-risk plugin operation`,
-      {
-        suggestion: `Re-issue the call with ${key}: true only after you have verified the plugin source and intended side effects.`,
-        context: {
-          parameter: key,
-          expected: true,
-        },
-      }
-    );
-  }
-  return true;
 };
 
 const isAbsoluteLocalPath = (value: string): boolean =>
@@ -625,7 +606,6 @@ const pluginGetRuntimeStatusHandler: CapabilityHandler<OrchestrationDependencies
 
 const pluginInstallHandler: CapabilityHandler<OrchestrationDependencies> = async (args, deps) => {
   const gateway = ensurePluginGateway(deps);
-  readRequiredConfirmationArg(args, 'confirmRisk');
 
   const sourceType = readStringArg(args, 'sourceType', { required: true }) || '';
   if (sourceType !== 'local_path' && sourceType !== 'cloud_code') {
@@ -857,13 +837,12 @@ const PLUGIN_CAPABILITIES: Array<{
       inputSchema: {
         type: 'object',
         additionalProperties: false,
-        required: ['sourceType', 'confirmRisk'],
+        required: ['sourceType'],
         properties: {
           sourceType: { type: 'string', enum: ['local_path', 'cloud_code'] },
           sourcePath: { type: 'string', minLength: 1 },
           devMode: { type: 'boolean' },
           cloudPluginCode: { type: 'string', minLength: 1 },
-          confirmRisk: { type: 'boolean' },
         },
       },
       outputSchema: PLUGIN_INSTALL_OUTPUT_SCHEMA,
@@ -883,7 +862,6 @@ const PLUGIN_CAPABILITIES: Array<{
               sourceType: 'local_path',
               sourcePath: 'D:\\plugins\\example-plugin',
               devMode: true,
-              confirmRisk: true,
             },
           },
         ],

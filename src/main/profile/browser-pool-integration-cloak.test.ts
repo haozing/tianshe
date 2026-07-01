@@ -97,11 +97,17 @@ function createMockPage() {
         return [];
       }
       const previousWindow = (globalThis as any).window;
+      const previousLocalStorage = (globalThis as any).localStorage;
+      const previousSessionStorage = (globalThis as any).sessionStorage;
       (globalThis as any).window = { localStorage, sessionStorage };
+      (globalThis as any).localStorage = localStorage;
+      (globalThis as any).sessionStorage = sessionStorage;
       try {
         return await fn(...args);
       } finally {
         (globalThis as any).window = previousWindow;
+        (globalThis as any).localStorage = previousLocalStorage;
+        (globalThis as any).sessionStorage = previousSessionStorage;
       }
     }),
     screenshot: vi.fn(async () => Buffer.from('screenshot')),

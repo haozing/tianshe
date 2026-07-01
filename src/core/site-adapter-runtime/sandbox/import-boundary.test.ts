@@ -46,7 +46,13 @@ describe('site adapter import boundary', () => {
     );
 
     expect(checkSiteAdapterImportBoundary({ adapterRoot: root })).toEqual([
-      expect.objectContaining({ moduleName: 'node:fs', reason: 'node_builtin' }),
+      expect.objectContaining({
+        relativeFilePath: 'bad.ts',
+        moduleName: 'node:fs',
+        importChain: ['bad.ts', 'node:fs'],
+        reason: 'node_builtin',
+        recommendation: expect.stringContaining('framework-owned capability'),
+      }),
       expect.objectContaining({ moduleName: 'electron', reason: 'electron' }),
       expect.objectContaining({ moduleName: 'playwright-core', reason: 'playwright' }),
       expect.objectContaining({ moduleName: '@duckdb/node-api', reason: 'duckdb' }),
@@ -73,6 +79,42 @@ describe('site adapter import boundary', () => {
         expect.objectContaining({ moduleName: 'electron', reason: 'electron' }),
         expect.objectContaining({ moduleName: 'playwright-core', reason: 'playwright' }),
         expect.objectContaining({ moduleName: '@duckdb/node-api', reason: 'duckdb' }),
+      ])
+    );
+  });
+
+  it('rejects framework core and external sensitive imports without blocking local filenames', () => {
+    const root = createTempAdapterRoot();
+    fs.writeFileSync(
+      path.join(root, 'bad.ts'),
+      [
+        "import { getSecret } from '../../src/core/secrets';",
+        "import { createOrchestrationExecutor } from '../../src/core/ai-dev/orchestration';",
+        "import { loadSecrets } from '@vendor/secrets-client';",
+        "import { openDataset } from '@vendor/dataset-client';",
+        "import { writeArtifact } from '@vendor/artifact-store';",
+        "import { queryDataset } from './dataset-access';",
+        "import { createArtifact } from './runtime-artifact';",
+      ].join('\n')
+    );
+
+    const violations = checkSiteAdapterImportBoundary({ adapterRoot: root });
+    expect(violations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ moduleName: '../../src/core/secrets', reason: 'framework_core' }),
+        expect.objectContaining({
+          moduleName: '../../src/core/ai-dev/orchestration',
+          reason: 'framework_core',
+        }),
+        expect.objectContaining({ moduleName: '@vendor/secrets-client', reason: 'secrets' }),
+        expect.objectContaining({ moduleName: '@vendor/dataset-client', reason: 'dataset' }),
+        expect.objectContaining({ moduleName: '@vendor/artifact-store', reason: 'artifact' }),
+      ])
+    );
+    expect(violations).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ moduleName: './dataset-access' }),
+        expect.objectContaining({ moduleName: './runtime-artifact' }),
       ])
     );
   });

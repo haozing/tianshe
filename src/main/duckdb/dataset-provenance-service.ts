@@ -72,6 +72,56 @@ function toJson(value: Record<string, unknown> | null | undefined): string | nul
   return value ? JSON.stringify(value) : null;
 }
 
+function looksLikeLocalPath(value: string): boolean {
+  return (
+    /^[a-zA-Z]:[\\/]/.test(value) ||
+    value.startsWith('\\\\') ||
+    value.startsWith('/') ||
+    value.includes('\\') ||
+    value.includes('../') ||
+    value.includes('..\\')
+  );
+}
+
+function isPathMetadataKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return (
+    normalized === 'path' ||
+    normalized.endsWith('path') ||
+    normalized.endsWith('_path') ||
+    normalized.endsWith('filepath') ||
+    normalized === 'storagepath'
+  );
+}
+
+export function sanitizeDatasetProvenanceMetadata(
+  metadata: Record<string, unknown> | null | undefined
+): Record<string, unknown> | null {
+  if (!metadata) {
+    return null;
+  }
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (key === 'artifactRefs') {
+      sanitized.artifactRefs = Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        : [];
+      continue;
+    }
+    if (typeof value === 'string' && isPathMetadataKey(key) && looksLikeLocalPath(value)) {
+      sanitized[key] = '[redacted-path]';
+      continue;
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      sanitized[key] = sanitizeDatasetProvenanceMetadata(value as Record<string, unknown>);
+      continue;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
+}
+
 function parseJson(value: unknown): Record<string, unknown> | null {
   if (typeof value !== 'string' || !value.trim()) {
     return null;
@@ -233,7 +283,7 @@ export class DatasetProvenanceService {
       adapterVersion: params.adapterVersion ?? null,
       runtimeId: params.runtimeId ?? null,
       sourceUrl: params.sourceUrl ?? null,
-      metadata: params.metadata ?? null,
+      metadata: sanitizeDatasetProvenanceMetadata(params.metadata),
       error: params.error ?? null,
     };
 
@@ -283,7 +333,7 @@ export class DatasetProvenanceService {
       adapterVersion: param.adapterVersion ?? null,
       runtimeId: param.runtimeId ?? null,
       sourceUrl: param.sourceUrl ?? null,
-      metadata: param.metadata ?? null,
+      metadata: sanitizeDatasetProvenanceMetadata(param.metadata),
       before: param.before ?? null,
       after: param.after ?? null,
     }));

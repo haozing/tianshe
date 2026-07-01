@@ -11,6 +11,7 @@ import { createLogger } from '../../core/logger';
 import {
   getDuckDBDataDir,
   getImportsDir,
+  getRuntimeArtifactsDir,
   getTempDir,
   ensureDirectories,
   getFileSize,
@@ -20,7 +21,14 @@ import { getUnknownErrorMessage } from '../ipc-utils';
 const logger = createLogger('DuckDBUtils');
 
 // 🔽 数据路径工具已下沉到 src/utils/data-paths.ts
-export { getDuckDBDataDir, getImportsDir, getTempDir, ensureDirectories, getFileSize };
+export {
+  getDuckDBDataDir,
+  getImportsDir,
+  getRuntimeArtifactsDir,
+  getTempDir,
+  ensureDirectories,
+  getFileSize,
+};
 
 /**
  * SQL 字符串字面量转义（单引号）

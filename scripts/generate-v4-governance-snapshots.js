@@ -8,10 +8,11 @@ const ROOT = path.resolve(__dirname, '..');
 const OUTPUT_PATH = path.join(ROOT, 'docs', 'generated', 'v4-governance-snapshot.json');
 
 const entrySource = `
-  import { createUnifiedCapabilityCatalog } from './src/core/ai-dev/capabilities/unified-catalog';
+  import path from 'node:path';
+  import { createOrchestrationCapabilityRegistry } from './src/core/ai-dev/orchestration';
   import { createBrowserRuntimeCapabilityMatrix } from './src/core/browser-runtime/capability-contract';
   import { buildEffectiveRuntimeDescriptorMap } from './src/core/browser-runtime/effective-descriptor';
-  import { officialSiteAdapters } from './src/site-adapters';
+  import { siteAdapterRegistry } from './src/site-adapters';
   import { BROWSER_CAPABILITY_NAMES } from './src/types/browser-interface';
   import {
     DEFAULT_SITE_ADAPTER_REPAIR_DENIED_ROOTS,
@@ -60,9 +61,10 @@ const entrySource = `
   }
 
   export function createSnapshot(root) {
-    const catalog = createUnifiedCapabilityCatalog();
-    const capabilities = Object.values(catalog).map((capability) => capability.definition);
-    const officialAdapters = officialSiteAdapters;
+    const registry = createOrchestrationCapabilityRegistry({ view: 'all' });
+    const capabilities = registry.listCapabilities();
+    const registeredAdapters = siteAdapterRegistry.listRegisteredAdapters();
+    const adapterModules = registeredAdapters.map((entry) => entry.module);
     const publicCapabilities = capabilities.filter(
       (capability) => capability.assistantSurface?.publicMcp === true
     );
@@ -72,6 +74,8 @@ const entrySource = `
         sideEffectLevel: capability.sideEffectLevel || null,
         requiredScopes: sorted(capability.requiredScopes || []),
         inputFields: inputFields(capability),
+        destructiveHint: capability.annotations?.destructiveHint === true,
+        confirmationPolicy: capability.confirmationPolicy || null,
         surfaceTier: capability.assistantSurface?.surfaceTier || null,
       }))
       .sort((left, right) => left.name.localeCompare(right.name));
@@ -114,19 +118,24 @@ const entrySource = `
         capabilityMatrix: runtimeCapabilityMatrix,
         maturitySummary: summarizeRuntimeMaturity(runtimeCapabilityMatrix),
       },
-      officialSiteAdapters: {
-        total: officialAdapters.length,
-        adapters: officialAdapters.map((adapter) => ({
-          id: adapter.manifest.id,
-          siteId: adapter.manifest.siteId || null,
-          capabilities: sorted(adapter.manifest.capabilities || []),
-          procedures: (adapter.manifest.procedures || []).map((procedure) => ({
+      siteAdapterRegistry: {
+        total: registeredAdapters.length,
+        generation: siteAdapterRegistry.getGeneration(),
+        adapters: registeredAdapters.map((entry) => ({
+          id: entry.module.manifest.id,
+          source: entry.source,
+          pluginId: entry.pluginId || null,
+          trusted: entry.trusted,
+          packageRoot: path.relative(root, entry.packageRoot).split(path.sep).join('/') || '.',
+          siteId: entry.module.manifest.siteId || null,
+          capabilities: sorted(entry.module.manifest.capabilities || []),
+          procedures: (entry.module.manifest.procedures || []).map((procedure) => ({
             id: procedure.id,
             sideEffectLevel: procedure.sideEffectLevel,
             requiredScopes: [...(procedure.requiredScopes || [])],
             verification: procedure.verification || null,
             implemented: Boolean(
-              (adapter.procedures || []).some((runtimeProcedure) => runtimeProcedure.id === procedure.id)
+              (entry.module.procedures || []).some((runtimeProcedure) => runtimeProcedure.id === procedure.id)
             ),
           })),
         })),
@@ -139,7 +148,7 @@ const entrySource = `
           candidatePath,
           decision: evaluateSiteAdapterRepairPath(candidatePath, { workspaceRoot: root }),
         })),
-        officialAdapterMatrix: createSiteAdapterRepairScopeMatrix(officialAdapters, {
+        siteAdapterRegistryMatrix: createSiteAdapterRepairScopeMatrix(adapterModules, {
           workspaceRoot: root,
         }),
       },

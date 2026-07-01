@@ -3,11 +3,13 @@ import type {
   IWindowManager,
 } from '../../browser-pool/ports';
 import type { IProfileService } from '../../../types/service-interfaces';
+import type { JSPluginManifest } from '../../../types/js-plugin';
 import type { BrowserHandle, ReleaseOptions } from '../../browser-pool/types';
 import type { InternalDevToolsOpener } from './window';
 import type {
   LaunchOptions,
   LaunchPopupOptions,
+  PluginBrowserHandle,
   PopupBrowserHandle,
   WithLeaseOptions,
   WithLeaseRunContext,
@@ -34,7 +36,7 @@ const DEFAULT_RESOURCE_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
 const logger = createLogger('ProfileLaunchNamespace');
 
 interface ManagedProfileLease {
-  handle: BrowserHandle;
+  handle: PluginBrowserHandle;
   refCount: number;
   renewTimer: NodeJS.Timeout | null;
   released: boolean;
@@ -42,8 +44,11 @@ interface ManagedProfileLease {
   renew: (extensionMs?: number) => Promise<void>;
 }
 
+type RawPopupBrowserHandle = BrowserHandle & Pick<PopupBrowserHandle, 'popupId' | 'closePopup'>;
+
 export interface ProfileLaunchNamespaceDeps {
   pluginId: string;
+  manifest?: JSPluginManifest;
   profileService: IProfileService;
   viewManager: IWebContentsViewManager;
   windowManager: IWindowManager;
@@ -180,6 +185,12 @@ export class ProfileLaunchNamespace {
       {
         ownerToken: currentContext?.ownerToken,
         ownerSource: currentContext?.ownerSource || 'plugin',
+        ownerMetadata: currentContext?.ownerMetadata || {
+          controllerKind: 'plugin',
+          pluginId: this.deps.pluginId,
+          interruptibility: 'checkpoint',
+          description: 'plugin profile helper',
+        },
         timeoutMs: resourceWaitTimeoutMs,
         signal: options?.signal,
       },
@@ -187,10 +198,17 @@ export class ProfileLaunchNamespace {
     );
   }
 
-  async launch(profileId: string, options?: LaunchOptions): Promise<BrowserHandle> {
+  async launch(profileId: string, options?: LaunchOptions): Promise<PluginBrowserHandle> {
     const poolManager = getBrowserPoolManager();
     const profileLease = await acquireProfileLiveSessionLease(profileId, {
+      ownerToken: resourceCoordinator.getCurrentContext()?.ownerToken,
       source: 'plugin',
+      ownerMetadata: {
+        controllerKind: 'plugin',
+        pluginId: this.deps.pluginId,
+        interruptibility: 'checkpoint',
+        description: 'plugin profile launch',
+      },
       timeoutMs: options?.timeout || 30000,
       signal: options?.signal,
     });
@@ -265,7 +283,7 @@ export class ProfileLaunchNamespace {
         browserId: handle.browserId,
       });
 
-      return this.wrapBrowserHandle(handle);
+      return this.wrapBrowserHandle(handle, profileId);
     } catch (error) {
       await handle.release({ destroy: true }).catch(() => undefined);
       await profileLease?.release().catch(() => undefined);
@@ -315,7 +333,14 @@ export class ProfileLaunchNamespace {
     let reusedHandle: BrowserHandle | null = null;
     try {
       reusedLease = await acquireProfileLiveSessionLease(profileId, {
+        ownerToken: resourceCoordinator.getCurrentContext()?.ownerToken,
         source: 'plugin',
+        ownerMetadata: {
+          controllerKind: 'plugin',
+          pluginId: this.deps.pluginId,
+          interruptibility: 'checkpoint',
+          description: 'plugin popup profile launch',
+        },
         timeoutMs: options?.timeout || 30000,
         signal: options?.signal,
       });
@@ -380,7 +405,8 @@ export class ProfileLaunchNamespace {
                 },
               },
               reusedLease
-            )
+            ),
+            profileId
           );
         }
         throw new Error(`Browser ${reusedHandle.browserId} has no associated viewId`);
@@ -435,7 +461,8 @@ export class ProfileLaunchNamespace {
             },
           },
           reusedLease
-        )
+        ),
+        profileId
       );
     } catch (error) {
       await reusedHandle?.release({ destroy: true }).catch(() => undefined);
@@ -612,18 +639,30 @@ export class ProfileLaunchNamespace {
     return handle;
   }
 
-  private wrapBrowserHandle(handle: BrowserHandle): BrowserHandle {
+  private wrapBrowserHandle(handle: BrowserHandle, profileId: string): PluginBrowserHandle {
+    const allowedOrigins = this.deps.manifest?.security?.sessionRequestAllowedOrigins;
     return {
       ...handle,
-      browser: createPluginBrowserFacade(handle.browser),
+      browser: createPluginBrowserFacade(handle.browser, {
+        sessionRequest: {
+          profileId,
+          pluginId: this.deps.pluginId,
+          intent: 'read',
+          ...(allowedOrigins?.length ? { allowedOrigins } : {}),
+        },
+        nativeInput: {
+          pluginId: this.deps.pluginId,
+          trustModel: this.deps.manifest?.trustModel ?? null,
+        },
+      }),
       release: handle.release.bind(handle),
       renew: handle.renew.bind(handle),
     };
   }
 
-  private wrapPopupBrowserHandle(handle: PopupBrowserHandle): PopupBrowserHandle {
+  private wrapPopupBrowserHandle(handle: RawPopupBrowserHandle, profileId: string): PopupBrowserHandle {
     return {
-      ...this.wrapBrowserHandle(handle),
+      ...this.wrapBrowserHandle(handle, profileId),
       popupId: handle.popupId,
       closePopup: handle.closePopup.bind(handle),
     };

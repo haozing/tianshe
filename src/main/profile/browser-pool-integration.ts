@@ -20,6 +20,10 @@ import { mergeFingerprintConfig } from '../../constants/fingerprint-defaults';
 import type { ProxyConfig as ProfileProxyConfig } from '../../types/profile';
 import { clearProxyCredentials, setProxyCredentials } from './browser-launcher';
 import { getStaticRuntimeDescriptor } from '../../core/browser-pool/runtime-capability-registry';
+import type {
+  BrowserDownloadArtifactContext,
+  BrowserDownloadArtifactSink,
+} from '../../core/browser-automation/download-artifact-sink';
 
 const logger = createLogger('BrowserPoolIntegration');
 
@@ -65,7 +69,10 @@ async function applyProxyToSession(
  */
 export function createBrowserFactory(
   viewManager: WebContentsViewManager,
-  windowManager: WindowManager
+  windowManager: WindowManager,
+  options: {
+    downloadArtifactSink?: BrowserDownloadArtifactSink;
+  } = {}
 ): BrowserFactory {
   return async (session: SessionConfig) => {
     const viewId = `pool:${session.id}:${Date.now()}`;
@@ -117,6 +124,13 @@ export function createBrowserFactory(
       ocrProviderFactory: {
         create: async () => getOcrPool(),
       },
+      downloadArtifactSink: options.downloadArtifactSink,
+      downloadArtifactContext: {
+        sessionId: session.id,
+        profileId: session.id,
+        browserRuntimeId: 'electron-webcontents',
+        browserId: viewId,
+      } satisfies BrowserDownloadArtifactContext,
     });
 
     logger.info('Browser created for pool session', {

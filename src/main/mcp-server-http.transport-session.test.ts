@@ -951,6 +951,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
       arguments: {
         query: '555',
         runtimeId: 'electron-webcontents',
+        scopes: ['session.read', 'browser.read'],
       },
     });
     expect(prepareResult.structuredContent).toMatchObject({
@@ -1016,6 +1017,12 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
   it('MCP browser_observe can take over a plugin-held profile when takeover support is available', async () => {
     const pluginLease = await resourceCoordinator.acquire(buildProfileResourceKey('profile-1'), {
       ownerToken: 'plugin-holder',
+      ownerSource: 'plugin',
+      ownerMetadata: {
+        controllerKind: 'plugin',
+        pluginId: 'doudian-business-center-clue-sync',
+        interruptibility: 'checkpoint',
+      },
     });
     const browser = createMockBrowser({
       snapshot: vi.fn().mockResolvedValue({
@@ -1113,6 +1120,7 @@ describe('AirpaHttpMcpServer MCP transport session lifecycle', () => {
         arguments: {
           query: '555',
           runtimeId: 'electron-webcontents',
+          scopes: ['browser.write'],
         },
       });
 

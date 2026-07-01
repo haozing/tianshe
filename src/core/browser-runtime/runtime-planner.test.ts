@@ -13,12 +13,15 @@ describe('browser runtime planner', () => {
           id: 'profile-1',
           name: 'Shop Profile',
           runtimeId: 'chromium-extension-relay',
+          loginStateRevision: 1,
         },
       ],
       loginStates: [
         {
           profileId: 'profile-1',
           site: 'example.com',
+          runtimeIdSnapshot: 'chromium-extension-relay',
+          profileRevision: 1,
           status: 'logged_in',
           verified: true,
         },
@@ -29,6 +32,67 @@ describe('browser runtime planner', () => {
       decision: 'ready',
       recommendedRuntimeId: 'chromium-extension-relay',
       recommendedProfileId: 'profile-1',
+    });
+  });
+
+  it('requires manual login when stored login revision is stale', () => {
+    const plan = createBrowserRuntimePlan({
+      requiredCapabilities: ['snapshot.page'],
+      currentRuntimeId: 'chromium-extension-relay',
+      currentProfileId: 'profile-1',
+      site: 'example.com',
+      profiles: [
+        {
+          id: 'profile-1',
+          runtimeId: 'chromium-extension-relay',
+          loginStateRevision: 2,
+        },
+      ],
+      loginStates: [
+        {
+          profileId: 'profile-1',
+          site: 'example.com',
+          runtimeIdSnapshot: 'chromium-extension-relay',
+          profileRevision: 1,
+          status: 'logged_in',
+          verified: true,
+        },
+      ],
+    });
+
+    expect(plan.decision).toBe('needs_manual_login');
+    expect(plan.recommendedProfileId).toBe('profile-1');
+  });
+
+  it('requires manual login when stored login runtime snapshot differs from the profile runtime', () => {
+    const plan = createBrowserRuntimePlan({
+      requiredCapabilities: ['snapshot.page'],
+      currentRuntimeId: 'chromium-extension-relay',
+      currentProfileId: 'profile-1',
+      site: 'example.com',
+      profiles: [
+        {
+          id: 'profile-1',
+          runtimeId: 'chromium-extension-relay',
+          loginStateRevision: 1,
+        },
+      ],
+      loginStates: [
+        {
+          profileId: 'profile-1',
+          site: 'example.com',
+          runtimeIdSnapshot: 'electron-webcontents',
+          profileRevision: 1,
+          status: 'logged_in',
+          verified: true,
+        },
+      ],
+    });
+
+    expect(plan.decision).toBe('needs_manual_login');
+    expect(plan.candidateProfiles[0]).toMatchObject({
+      profileId: 'profile-1',
+      loginVerified: false,
     });
   });
 

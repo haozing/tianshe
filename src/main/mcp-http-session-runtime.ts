@@ -37,6 +37,15 @@ const normalizeScopes = (scopes: readonly string[] | undefined): string[] =>
     )
   );
 
+const preserveSessionManagementScopes = (
+  currentScopes: readonly string[] | undefined,
+  requestedScopes: readonly string[] | undefined
+): string[] =>
+  normalizeScopes([
+    ...(requestedScopes || []),
+    ...normalizeScopes(currentScopes).filter((scope) => scope === 'session.write'),
+  ]);
+
 const scopesEqual = (
   left: readonly string[] | undefined,
   right: readonly string[] | undefined
@@ -569,7 +578,9 @@ export const createMcpSessionGateway = (
       : undefined;
     const requestedVisible = prepareOptions.visible;
     const requestedScopes =
-      prepareOptions.scopes !== undefined ? normalizeScopes(prepareOptions.scopes) : undefined;
+      prepareOptions.scopes !== undefined
+        ? preserveSessionManagementScopes(mcpSession.auth.authScopes, prepareOptions.scopes)
+        : undefined;
     const currentState = buildMcpSessionStateSnapshot({
       sessionId,
       profileId: currentProfileId,

@@ -184,6 +184,62 @@ describe('ProfileService observation hooks', () => {
     });
   });
 
+  it('increments login state revision and expires login health for runtime-affecting profile updates', async () => {
+    const fingerprint = getDefaultFingerprint('electron-webcontents');
+    vi.spyOn(service, 'get')
+      .mockResolvedValueOnce({
+        id: 'profile-1',
+        name: 'Shop QA',
+        runtimeId: 'electron-webcontents',
+        groupId: null,
+        partition: 'persist:profile-1',
+        proxy: null,
+        fingerprint,
+        notes: null,
+        tags: [],
+        color: null,
+        status: 'idle',
+        totalUses: 0,
+        quota: 1,
+        idleTimeoutMs: 300000,
+        lockTimeoutMs: 300000,
+        loginStateRevision: 0,
+        isSystem: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as never)
+      .mockResolvedValueOnce({
+        id: 'profile-1',
+        name: 'Shop QA',
+        runtimeId: 'electron-webcontents',
+        groupId: null,
+        partition: 'persist:profile-1',
+        proxy: { type: 'http', host: 'proxy.test', port: 8080 },
+        fingerprint,
+        notes: null,
+        tags: [],
+        color: null,
+        status: 'idle',
+        totalUses: 0,
+        quota: 1,
+        idleTimeoutMs: 300000,
+        lockTimeoutMs: 300000,
+        loginStateRevision: 1,
+        isSystem: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as never);
+
+    await service.update('profile-1', {
+      proxy: { type: 'http', host: 'proxy.test', port: 8080 },
+    });
+
+    const preparedSql = conn.prepare.mock.calls.map(([sql]: [string]) => sql).join('\n');
+    expect(preparedSql).toContain('login_state_revision = COALESCE(login_state_revision, 0) + 1');
+    expect(preparedSql).toContain('UPDATE profile_login_states');
+    expect(preparedSql).toContain("SET status = 'expired'");
+  });
+
   it('records profile.lifecycle.delete events when deleting a profile', async () => {
     const sink = new MemoryObservationSink();
     setObservationSink(sink);

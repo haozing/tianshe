@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { loadOfficialFixture, runSiteAdapterLabFixtureFromInput } from './routes-or-ipc';
 import { runReadOnlySiteAdapterFixture } from '../../core/site-adapter-runtime';
-import { officialSiteAdapters } from '../../site-adapters';
+import { siteAdapterRegistry } from '../../site-adapters';
 import fixture from '../../site-adapters/books-to-scrape/fixtures/product-page.json';
 import expected from '../../site-adapters/books-to-scrape/expected/product-page.json';
 
@@ -17,7 +17,7 @@ vi.mock('electron', () => ({
 
 describe('site adapter lab IPC runner wiring', () => {
   it('loads every fixture declared by official site adapter manifests', async () => {
-    const declaredFixtures = officialSiteAdapters.flatMap((adapter) =>
+    const declaredFixtures = siteAdapterRegistry.listAdapters().flatMap((adapter) =>
       (adapter.manifest.fixtures || []).map((fixtureName) => ({
         adapterId: adapter.manifest.id,
         fixtureName,
@@ -167,5 +167,67 @@ describe('site adapter lab IPC runner wiring', () => {
         playwrightLab: { status: 'passed', ok: true },
       },
     });
+  });
+
+  it('surfaces provider quarantine diagnostics in the Lab adapter list payload', async () => {
+    vi.resetModules();
+    vi.doMock('../../site-adapters', () => ({
+      siteAdapterRegistry: {
+        listRegisteredAdapters: () => [
+          {
+            module: {
+              manifest: {
+                id: 'plugin-shop',
+                name: 'Plugin Shop',
+                version: '1.0.0',
+                fixtures: [],
+                expected: [],
+                extractors: [],
+                verifiers: [],
+                capabilities: [],
+              },
+            },
+            source: 'plugin',
+            pluginId: 'plugin-good',
+            trusted: true,
+            packageRoot: 'D:/plugins/good',
+            generation: 7,
+          },
+        ],
+        listProviderErrors: () => [
+          {
+            providerId: 'trusted-plugin-site-adapters',
+            pluginId: 'plugin-bad',
+            message: 'Plugin plugin-bad site adapters require trustModel: first_party',
+          },
+        ],
+        getGeneration: () => 7,
+      },
+    }));
+    const { listSiteAdapterLabAdapters } = await import('./routes-or-ipc');
+
+    expect(listSiteAdapterLabAdapters()).toEqual({
+      adapters: [
+        expect.objectContaining({
+          manifest: expect.objectContaining({ id: 'plugin-shop' }),
+          source: 'plugin',
+          pluginId: 'plugin-good',
+          trusted: true,
+          packageRoot: 'D:/plugins/good',
+          generation: 7,
+        }),
+      ],
+      providerErrors: [
+        expect.objectContaining({
+          providerId: 'trusted-plugin-site-adapters',
+          pluginId: 'plugin-bad',
+          stage: 'provider_refresh',
+          quarantined: true,
+          suggestion: expect.stringContaining('reload the plugin'),
+        }),
+      ],
+      generation: 7,
+    });
+    vi.doUnmock('../../site-adapters');
   });
 });

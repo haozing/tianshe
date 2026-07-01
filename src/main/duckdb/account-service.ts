@@ -42,6 +42,15 @@ interface AccountMutationOptions {
   allowSharedMutation?: boolean;
 }
 
+const ACCOUNT_LOGIN_STATE_INVALIDATION_FIELDS = new Set<keyof UpdateAccountParams>([
+  'profileId',
+  'platformId',
+  'shopId',
+  'shopName',
+  'password',
+  'loginUrl',
+]);
+
 /**
  * 账号服务
  */
@@ -114,6 +123,36 @@ export class AccountService {
 
   async runInTransaction<T>(work: () => Promise<T>): Promise<T> {
     return runInDuckDbTransaction(this.conn, work);
+  }
+
+  private shouldInvalidateLoginState(params: UpdateAccountParams): boolean {
+    return Object.keys(params).some((key) =>
+      ACCOUNT_LOGIN_STATE_INVALIDATION_FIELDS.has(key as keyof UpdateAccountParams)
+    );
+  }
+
+  private async deleteLoginStatesByAccount(accountId: string): Promise<void> {
+    try {
+      await runPrepared(this.conn, `DELETE FROM profile_login_states WHERE account_id = ?`, [
+        accountId,
+      ]);
+    } catch (error) {
+      if (!String((error as { message?: unknown })?.message || error).includes('profile_login_states')) {
+        throw error;
+      }
+    }
+  }
+
+  private async deleteLoginStatesByProfile(profileId: string): Promise<void> {
+    try {
+      await runPrepared(this.conn, `DELETE FROM profile_login_states WHERE profile_id = ?`, [
+        profileId,
+      ]);
+    } catch (error) {
+      if (!String((error as { message?: unknown })?.message || error).includes('profile_login_states')) {
+        throw error;
+      }
+    }
   }
 
   private encryptPassword(password?: string | null): string | null {
@@ -749,6 +788,9 @@ export class AccountService {
     const { sql, values } = builder.build('accounts', 'id', id)!;
 
     await runPrepared(this.conn, sql, values);
+    if (this.shouldInvalidateLoginState(params)) {
+      await this.deleteLoginStatesByAccount(id);
+    }
 
     logger.info('Updated account', { accountId: id });
 
@@ -760,7 +802,10 @@ export class AccountService {
    */
   async delete(id: string, options?: AccountMutationOptions): Promise<void> {
     await this.assertMutableAccount(id, options);
-    await runPrepared(this.conn, `DELETE FROM accounts WHERE id = ?`, [id]);
+    await this.runInTransaction(async () => {
+      await this.deleteLoginStatesByAccount(id);
+      await runPrepared(this.conn, `DELETE FROM accounts WHERE id = ?`, [id]);
+    });
 
     logger.info('Deleted account', { accountId: id });
   }
@@ -769,7 +814,10 @@ export class AccountService {
    * 删除某个 Profile 的所有账号
    */
   async deleteByProfile(profileId: string): Promise<void> {
-    await runPrepared(this.conn, `DELETE FROM accounts WHERE profile_id = ?`, [profileId]);
+    await this.runInTransaction(async () => {
+      await this.deleteLoginStatesByProfile(profileId);
+      await runPrepared(this.conn, `DELETE FROM accounts WHERE profile_id = ?`, [profileId]);
+    });
 
     logger.info('Deleted all accounts for profile', { profileId });
   }

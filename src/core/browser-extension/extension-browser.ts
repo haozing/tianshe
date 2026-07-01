@@ -66,6 +66,8 @@ import type {
   BrowserDialogState,
   BrowserInterface,
   BrowserScreenshotResult,
+  BrowserSessionRequestOptions,
+  BrowserSessionRequestResponse,
   BrowserStorageArea,
   NativeClickOptions,
   NativeTypeOptions,
@@ -89,6 +91,7 @@ import {
 } from '../browser-pool/runtime-capability-registry';
 import { sendWindowsDialogKeys } from '../../utils/platform/windows-dialog';
 import { waitForCapturedResponse } from '../browser-automation/response-wait-runtime';
+import { runBrowserSessionRequest } from '../browser-automation/session-request-runtime';
 
 type WaitForSelectorState = 'attached' | 'visible' | 'hidden';
 
@@ -675,6 +678,12 @@ export class ExtensionBrowser
       functionSource: pageFunction.toString(),
       args,
     });
+  }
+
+  async sessionRequest(
+    options: BrowserSessionRequestOptions
+  ): Promise<BrowserSessionRequestResponse> {
+    return runBrowserSessionRequest(this.evaluateWithArgs.bind(this), options);
   }
 
   async screenshotDetailed(options?: ScreenshotOptions): Promise<BrowserScreenshotResult> {

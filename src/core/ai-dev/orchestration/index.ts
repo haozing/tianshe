@@ -1,6 +1,10 @@
 export type {
   OrchestrationCapabilitySpec,
   OrchestrationCapabilityDeprecation,
+  OrchestrationCapabilityConfirmationCondition,
+  OrchestrationCapabilityConfirmationPolicy,
+  CapabilityConfirmationGrant,
+  CapabilityConfirmationGrantSource,
   OrchestrationAssistantWorkflowStage,
   OrchestrationAssistantGuidance,
   OrchestrationAssistantGuidanceExample,
@@ -13,6 +17,8 @@ export type {
   OrchestrationToolAnnotations,
   OrchestrationInvokeAttempt,
   OrchestrationScopeDecision,
+  OrchestrationConfirmationDecision,
+  OrchestrationConfirmationDecisionStatus,
   OrchestrationIdempotencyDecision,
   OrchestrationIdempotencyDecisionStatus,
   OrchestrationInvokeMeta,
@@ -43,9 +49,14 @@ export type {
 } from './types';
 
 export {
+  createOrchestrationCapabilityRegistry,
   createOrchestrationExecutor,
+  defaultOrchestrationCapabilityRegistry,
   hashOrchestrationInvokePayload,
   listOrchestrationCapabilities,
+  OrchestrationCapabilityRegistry,
+  type OrchestrationCapabilityRegistrySnapshot,
+  type OrchestrationCapabilityRegistryView,
 } from './capability-registry';
 export {
   listCanonicalAssistantFlowCapabilities,
@@ -79,3 +90,20 @@ export {
   type McpSessionStateInput,
   type McpSessionStateSnapshot,
 } from './mcp-session-state-machine';
+export {
+  __resetCapabilityConfirmationGrantsForTests,
+  createCapabilityConfirmationGrant,
+  createCapabilityPolicyHash,
+  hashCapabilityArguments,
+  isCapabilityConfirmationGrant,
+  requiresCapabilityConfirmation,
+} from './confirmation';
+export {
+  CapabilityRunManager,
+  hashCapabilityRunInput,
+  type CapabilityRunContext,
+  type CapabilityRunResult,
+  type DurableCapabilityDefinition,
+  type DurableCapabilityHandler,
+  type DurableCapabilityRunMode,
+} from './durable-capability-run';

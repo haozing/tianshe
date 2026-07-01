@@ -11,7 +11,8 @@ import type {
   OrchestrationProfileGateway,
   OrchestrationSystemGateway,
 } from '../core/ai-dev/orchestration/types';
-import type { BrowserRuntimeManager } from '../core/browser-runtime';
+import type { CapabilityProvider } from '../core/ai-dev/capabilities';
+import type { BrowserRuntimeManager, ProfileSessionGateway } from '../core/browser-runtime';
 
 export interface OrchestrationIdempotencyPersistenceStore {
   get(namespace: string, key: string): Promise<OrchestrationIdempotencyEntry | null>;
@@ -41,8 +42,10 @@ export interface RestApiDependencies {
   pluginGateway?: OrchestrationPluginGateway;
   profileGateway?: OrchestrationProfileGateway;
   profileLoginStateGateway?: OrchestrationProfileLoginStateGateway;
+  profileSessionGateway?: ProfileSessionGateway;
   observationGateway?: OrchestrationObservationGateway;
   idempotencyPersistence?: OrchestrationIdempotencyPersistenceStore;
+  capabilityProviders?: CapabilityProvider[];
 }
 
 /**
@@ -63,6 +66,7 @@ export interface RestApiConfig {
   mcpAllowedOrigins?: string[];
   /**
    * 是否强制执行 orchestration requiredScopes 校验
+   * @default true
    */
   enforceOrchestrationScopes?: boolean;
   /**

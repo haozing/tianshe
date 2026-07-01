@@ -64,7 +64,7 @@ function buildStatusSummary() {
     statusLine('governance.status', governance.status),
     statusLine('publicCapabilities', governance.publicCapabilityTotal),
     statusLine('siteCapabilities', (governance.siteCapabilities || []).length),
-    statusLine('officialSiteAdapters', snapshot.data.officialSiteAdapters?.total),
+    statusLine('siteAdapterRegistry', snapshot.data.siteAdapterRegistry?.total),
     statusLine('realCanary.status', gates.realCanary?.status),
     statusLine('siteAdapterCanary.status', gates.siteAdapterCanary?.status),
     statusLine('adapterRelease.status', gates.adapterRelease?.status),

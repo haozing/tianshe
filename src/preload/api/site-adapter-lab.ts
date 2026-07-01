@@ -6,10 +6,32 @@ import type {
   SiteAdapterSelectorWorkbenchResult,
 } from '../../core/site-adapter-lab';
 import type { PageSnapshot } from '../../types/browser-interface';
-import type { SiteAdapterFixture, SiteAdapterManifest } from '../../core/site-adapter-runtime';
+import type {
+  SiteAdapterFixture,
+  SiteAdapterManifest,
+  SiteAdapterProviderError,
+  SiteAdapterRegistrationSource,
+} from '../../core/site-adapter-runtime';
 
 export interface SiteAdapterLabAdapterListItem {
   manifest: SiteAdapterManifest;
+  source: SiteAdapterRegistrationSource;
+  pluginId?: string;
+  trusted: boolean;
+  packageRoot: string;
+  generation: number;
+}
+
+export interface SiteAdapterLabProviderDiagnostic extends SiteAdapterProviderError {
+  stage: 'provider_refresh';
+  quarantined: true;
+  suggestion: string;
+}
+
+export interface SiteAdapterLabAdapterListResult {
+  adapters: SiteAdapterLabAdapterListItem[];
+  providerErrors: SiteAdapterLabProviderDiagnostic[];
+  generation: number;
 }
 
 export interface SiteAdapterLabLoadFixtureResult {
@@ -21,7 +43,7 @@ export function createSiteAdapterLabAPI(ipcRenderer: IpcRenderer) {
   return {
     listAdapters(): Promise<{
       success: boolean;
-      data?: SiteAdapterLabAdapterListItem[];
+      data?: SiteAdapterLabAdapterListResult;
       error?: string;
     }> {
       return ipcRenderer.invoke('site-adapter-lab:list-adapters');

@@ -786,10 +786,10 @@ export class DatabaseNamespace {
   /**
    * 执行自定义 SQL
    *
-   * @param sql - SQL 语句；提供 datasetId 时仅允许只读 SQL，并会把表名 `data` 替换为实际数据集表名
+   * @param sql - 只读 SQL；必须提供 datasetId，并会把表名 `data` 替换为实际数据集表名
    * @param options - 选项
    * @param options.params - SQL 参数（可选）
-   * @param options.datasetId - 数据集ID（可选，提供后会自动 attach 数据集并处理表名）
+   * @param options.datasetId - 数据集ID（必需，提供后会自动 attach 数据集并处理表名）
    * @returns 查询结果
    *
    * @example
@@ -816,10 +816,7 @@ export class DatabaseNamespace {
    * );
    *
    * @example
-   * // 不使用 datasetId 时需要手动指定完整表名，并自行承担 SQL 权限边界
-   * const result = await helpers.database.executeSQL(
-   *   'SELECT * FROM ds_dataset_123.data'
-   * );
+   * // 不允许不带 datasetId 直连主库；插件状态请使用 helpers.state / helpers.storage。
    */
   async executeSQL(
     sql: string,
@@ -846,25 +843,27 @@ export class DatabaseNamespace {
       ParamValidator.validateArray(params, 'params', { allowEmpty: true });
     }
 
-    // 验证 datasetId
-    if (datasetId !== undefined) {
-      ParamValidator.validateString(datasetId, 'datasetId');
+    if (!datasetId) {
+      throw new DatabaseError(
+        'helpers.database.executeSQL requires options.datasetId and cannot access the host database directly',
+        {
+          sql,
+          params,
+          operation: 'executeSQL',
+          access: 'dataset-scoped-readonly',
+        }
+      );
     }
 
+    ParamValidator.validateDatasetId(datasetId);
+
     try {
-      let finalSql = sql;
+      assertReadOnlySQL(sql);
 
-      // 如果提供了 datasetId，则限定为只读查询，并通过 attach 保证表可访问
-      if (datasetId) {
-        assertReadOnlySQL(sql);
-
-        finalSql = await this.replaceTableName(sql, datasetId);
-        return await this.duckdb.withDatasetAttached(datasetId, async () => {
-          return await this.duckdb.executeSQLWithParams(finalSql, params || []);
-        });
-      }
-
-      return await this.duckdb.executeSQLWithParams(finalSql, params || []);
+      const finalSql = await this.replaceTableName(sql, datasetId);
+      return await this.duckdb.withDatasetAttached(datasetId, async () => {
+        return await this.duckdb.executeSQLWithParams(finalSql, params || []);
+      });
     } catch (error: unknown) {
       if (
         getUnknownErrorMessage(error)?.includes('read-only SQL') ||

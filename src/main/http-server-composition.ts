@@ -4,8 +4,9 @@ import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js
 import type { RestApiConfig, RestApiDependencies } from '../types/http-api';
 import type { BrowserPoolManager } from '../core/browser-pool';
 import {
+  createOrchestrationCapabilityRegistry,
   listCanonicalPublicCapabilityNames,
-  listOrchestrationCapabilities,
+  type OrchestrationCapabilityRegistry,
 } from '../core/ai-dev/orchestration';
 import { acquireBrowserFromPool } from './http-browser-pool-adapter';
 import { registerTokenAuthMiddleware } from './http-auth-middleware';
@@ -32,6 +33,7 @@ import type { PluginRegistry } from '../core/js-plugin/registry';
 import type { CloudRuntimePluginProvider } from '../edition/types';
 import type { BrowserRuntimeManager } from '../core/browser-runtime';
 import type { BrowserPoolReadinessSnapshot } from './browser-pool-readiness';
+import { createPluginCapabilityProvider } from '../core/js-plugin/capability-provider';
 
 interface LoggerLike {
   info(message: string, ...args: unknown[]): void;
@@ -49,6 +51,7 @@ interface CreateHttpServerCompositionOptions {
   sessionBridge: HttpSessionBridge;
   getBrowserPoolManager?: () => BrowserPoolManager;
   getBrowserPoolReadiness?: () => BrowserPoolReadinessSnapshot;
+  capabilityRegistry?: OrchestrationCapabilityRegistry;
   normalizeStructuredError: (error: unknown) => StructuredError;
   mapErrorStatus: (code: string, fallback?: number) => number;
   mapStructuredErrorStatus: (error: StructuredError, fallback?: number) => number;
@@ -69,6 +72,13 @@ export const createHttpServerComposition = (
   });
   const mcpConfigured = options.restApiConfig?.enableMcp ?? false;
   const mcpEndpointEnabled = mcpConfigured;
+  const capabilityRegistry =
+    options.capabilityRegistry ||
+    (options.dependencies?.capabilityProviders?.length
+      ? createOrchestrationCapabilityRegistry({
+          additionalProviders: options.dependencies.capabilityProviders,
+        })
+      : createOrchestrationCapabilityRegistry());
   const systemGateway = options.dependencies?.systemGateway ?? {
     getHealth: async () =>
       buildHealthPayload({
@@ -87,7 +97,7 @@ export const createHttpServerComposition = (
         getRuntimeMetrics: () => options.sessionBridge.buildRuntimeMetricsPayload(),
       }),
     listPublicCapabilities: async () =>
-      listCanonicalPublicCapabilityNames(listOrchestrationCapabilities()),
+      listCanonicalPublicCapabilityNames(capabilityRegistry.listCapabilities()),
   };
   const effectiveDependencies: RestApiDependencies = {
     ...(options.dependencies || {}),
@@ -123,6 +133,7 @@ export const createHttpServerComposition = (
       restApiConfig: options.restApiConfig,
       dependencies: effectiveDependencies,
       logger: options.logger,
+      capabilityRegistry,
     },
     sessions: {
       transports: options.runtimeState.transports,
@@ -216,6 +227,7 @@ export function buildRestApiDependencies(
     id?: unknown;
     name?: unknown;
     runtimeId?: unknown;
+    loginStateRevision?: unknown;
     status?: unknown;
     partition?: unknown;
     isSystem?: unknown;
@@ -226,6 +238,9 @@ export function buildRestApiDependencies(
     id: String(profile.id || ''),
     name: String(profile.name || ''),
     runtimeId: String(profile.runtimeId || ''),
+    loginStateRevision: Number.isFinite(profile.loginStateRevision)
+      ? Number(profile.loginStateRevision)
+      : 0,
     status: String(profile.status || ''),
     partition: String(profile.partition || ''),
     isSystem: profile.isSystem === true,
@@ -346,6 +361,20 @@ export function buildRestApiDependencies(
 
   const profileService = duckdbService.getProfileService();
   const profileLoginStateService = duckdbService.getProfileLoginStateService();
+  const toOrchestrationLoginState = (state: Awaited<ReturnType<typeof profileLoginStateService.getLoginState>>) =>
+    state
+      ? {
+          ...state,
+          runtimeIdSnapshot: state.runtimeIdSnapshot ?? state.runtimeId ?? null,
+          runtimeId: state.runtimeId ?? null,
+          profileRevision: state.profileRevision,
+          verifiedBy: state.verifiedBy ?? null,
+          lastCheckedAt: state.lastCheckedAt.toISOString(),
+          verifiedAt: state.verifiedAt ? state.verifiedAt.toISOString() : null,
+          createdAt: state.createdAt.toISOString(),
+          updatedAt: state.updatedAt.toISOString(),
+        }
+      : null;
   const hasProfileRuntimeMutation = (params: UpdateProfileParams) =>
     params.fingerprint !== undefined ||
     params.runtimeId !== undefined ||
@@ -571,27 +600,14 @@ export function buildRestApiDependencies(
     profileLoginStateGateway: {
       getLoginState: async (query) => {
         const state = await profileLoginStateService.getLoginState(query);
-        return state
-          ? {
-              ...state,
-              runtimeId: state.runtimeId ?? null,
-              lastCheckedAt: state.lastCheckedAt.toISOString(),
-              verifiedAt: state.verifiedAt ? state.verifiedAt.toISOString() : null,
-              createdAt: state.createdAt.toISOString(),
-              updatedAt: state.updatedAt.toISOString(),
-            }
-          : null;
+        return toOrchestrationLoginState(state);
       },
       upsertLoginState: async (params) => {
-        const state = await profileLoginStateService.upsertLoginState(params);
-        return {
-          ...state,
-          runtimeId: state.runtimeId ?? null,
-          lastCheckedAt: state.lastCheckedAt.toISOString(),
-          verifiedAt: state.verifiedAt ? state.verifiedAt.toISOString() : null,
-          createdAt: state.createdAt.toISOString(),
-          updatedAt: state.updatedAt.toISOString(),
-        };
+        const state = await profileLoginStateService.upsertLoginState({
+          ...params,
+          verifiedBy: params.verifiedBy ?? 'capability',
+        });
+        return toOrchestrationLoginState(state)!;
       },
     },
     observationGateway: {
@@ -606,6 +622,7 @@ export function buildRestApiDependencies(
           idempotencyPersistence: createDuckDbOrchestrationIdempotencyPersistence(duckdbService),
         }
       : {}),
+    capabilityProviders: [createPluginCapabilityProvider(runtime.getPluginRegistry())],
   };
 
   return dependencies;

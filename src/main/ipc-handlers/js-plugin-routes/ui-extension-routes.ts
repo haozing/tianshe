@@ -5,6 +5,7 @@ import { createIPCFailureResponse, handleIPCError } from '../../ipc-utils';
 import type { JSPluginManager } from '../../../core/js-plugin/manager';
 import type { ButtonExecutor } from '../../../core/js-plugin/button-executor';
 import { logPluginRouteInfo, logPluginRouteWarning } from './plugin-route-logger';
+import type { WebContentsViewManager } from '../../webcontentsview-manager';
 
 type PluginRouteHandler<T extends any[]> = (
   event: IpcMainInvokeEvent,
@@ -16,6 +17,7 @@ export interface JSPluginUIExtensionRouteDeps {
   duckdb: DuckDBService;
   buttonExecutor: ButtonExecutor;
   ensurePluginLoaded: (pluginId: string) => Promise<void>;
+  viewManager?: WebContentsViewManager;
 }
 
 export function registerJSPluginUIExtensionRoutes(deps: JSPluginUIExtensionRouteDeps): void {
@@ -27,6 +29,7 @@ export function registerJSPluginUIExtensionRoutes(deps: JSPluginUIExtensionRoute
   registerRenderCustomPage(deps);
   registerHandlePageMessage(deps);
   registerCallPluginAPI(deps);
+  registerCallBoundPluginAPI(deps);
 }
 
 function withPluginLoaded<T extends any[]>(
@@ -324,7 +327,10 @@ function registerHandlePageMessage({
     handler: withPluginLoaded(
       ensurePluginLoaded,
       async (_event, message: any) => {
-        const result = await pluginManager.handlePageMessage(message);
+        const result = await pluginManager.handlePageMessage({
+          ...message,
+          pluginId: String(message?.pluginId || ''),
+        });
         return { result };
       },
       (message: any) => message.pluginId
@@ -347,5 +353,38 @@ function registerCallPluginAPI({
         return { result };
       }
     ),
+  });
+}
+
+function resolveBoundPluginPageCaller(
+  event: IpcMainInvokeEvent,
+  viewManager?: WebContentsViewManager
+): { pluginId: string; viewId: string } {
+  const caller = viewManager?.getPluginPageCallerByWebContentsId(event.sender.id);
+  if (!caller) {
+    throw new Error('Plugin API route is only available to a bound plugin page view');
+  }
+  return caller;
+}
+
+function registerCallBoundPluginAPI({
+  pluginManager,
+  ensurePluginLoaded,
+  viewManager,
+}: JSPluginUIExtensionRouteDeps): void {
+  ipcRouteRegistry.register({
+    channel: 'js-plugin:call-api-bound',
+    kind: 'handle',
+    permission: 'trusted-renderer',
+    handler: async (event: IpcMainInvokeEvent, apiName: string, args: any[]) => {
+      try {
+        const caller = resolveBoundPluginPageCaller(event, viewManager);
+        await ensurePluginLoaded(caller.pluginId);
+        const result = await pluginManager.callPluginAPI(caller.pluginId, apiName, args);
+        return { success: true, result };
+      } catch (error: unknown) {
+        return handleIPCError(error);
+      }
+    },
   });
 }

@@ -81,10 +81,50 @@ const RUNTIME_ARTIFACT_REF_SCHEMA = {
     artifactId: { type: 'string' },
     type: {
       type: 'string',
-      enum: ['snapshot', 'console_tail', 'network_summary', 'screenshot', 'error_context'],
+      enum: [
+        'snapshot',
+        'console_tail',
+        'network_summary',
+        'screenshot',
+        'error_context',
+        'download',
+        'site_adapter_result',
+        'site_adapter_failure',
+        'site_adapter_repair_evidence',
+        'site_adapter_repair_bundle',
+        'interactor_action_trace',
+        'procedure_state_transition',
+      ],
     },
     label: { type: 'string' },
     timestamp: { type: 'number' },
+    payload: {
+      oneOf: [
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['kind'],
+          properties: {
+            kind: { type: 'string', enum: ['inline'] },
+          },
+        },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['kind', 'storageKey', 'filename', 'sizeBytes', 'sha256'],
+          properties: {
+            kind: { type: 'string', enum: ['file'] },
+            storageKey: { type: 'string' },
+            contentAddress: { type: 'string' },
+            filename: { type: 'string' },
+            mimeType: { type: 'string' },
+            sizeBytes: { type: 'number' },
+            sha256: { type: 'string' },
+            retentionPolicy: { type: 'string' },
+          },
+        },
+      ],
+    },
   },
 } as const;
 
@@ -143,6 +183,17 @@ const FAILURE_BUNDLE_OUTPUT_SCHEMA = createStructuredEnvelopeSchema({
     consoleTail: createOpaqueOutputSchema('Console tail artifact payload'),
     networkSummary: createOpaqueOutputSchema('Network summary artifact payload'),
     errorContext: createOpaqueOutputSchema('Non-browser error context artifact payload'),
+    download: createOpaqueOutputSchema('Download artifact payload'),
+    siteAdapterResult: createOpaqueOutputSchema('Site adapter result artifact payload'),
+    siteAdapterFailure: createOpaqueOutputSchema('Site adapter failure artifact payload'),
+    siteAdapterRepairEvidence: createOpaqueOutputSchema(
+      'Site adapter repair evidence artifact payload'
+    ),
+    siteAdapterRepairBundle: createOpaqueOutputSchema('Site adapter repair bundle artifact payload'),
+    interactorActionTrace: createOpaqueOutputSchema('Interactor action trace artifact payload'),
+    procedureStateTransition: createOpaqueOutputSchema(
+      'Procedure state transition artifact payload'
+    ),
   },
 });
 

@@ -161,6 +161,13 @@ export const BROWSER_PROFILE_SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingStep('browser_profiles', 'fingerprint_source', 'JSON'),
     ],
   },
+  {
+    id: 'browser-profiles-003-login-state-revision',
+    description: 'Add profile login health invalidation revision',
+    up: [
+      addColumnIfMissingStep('browser_profiles', 'login_state_revision', 'INTEGER DEFAULT 0'),
+    ],
+  },
 ];
 
 export const BROWSER_PROFILE_SCHEMA_BACKFILLS: string[] = [
@@ -188,6 +195,11 @@ export const BROWSER_PROFILE_SCHEMA_BACKFILLS: string[] = [
     UPDATE browser_profiles
     SET is_system = FALSE
     WHERE is_system IS NULL
+  `,
+  `
+    UPDATE browser_profiles
+    SET login_state_revision = 0
+    WHERE login_state_revision IS NULL
   `,
 ];
 

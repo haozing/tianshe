@@ -202,4 +202,45 @@ describe('AccountService reference validation', () => {
     );
     expect(updateCalls).toHaveLength(0);
   });
+
+  it('deletes account-scoped login health after account binding changes', async () => {
+    const statements: StatementMock[] = [];
+    conn.prepare.mockImplementation((sql: string) => {
+      const stmt = createStatement(sql);
+      statements.push(stmt);
+      return stmt;
+    });
+
+    const service = new AccountService(conn as never);
+    vi.spyOn(service as never, 'assertMutableAccount' as never).mockResolvedValue({
+      id: 'acc-1',
+      profileId: 'profile-1',
+      platformId: 'site-1',
+      name: 'demo-account',
+      loginUrl: 'https://account.example/login',
+      tags: [],
+      createdAt: new Date('2026-02-17T00:00:00.000Z'),
+      updatedAt: new Date('2026-02-17T00:00:00.000Z'),
+    } as never);
+    vi.spyOn(service, 'get').mockResolvedValue({
+      id: 'acc-1',
+      profileId: 'profile-1',
+      platformId: 'site-1',
+      name: 'demo-account',
+      loginUrl: 'https://account.example/new-login',
+      tags: [],
+      createdAt: new Date('2026-02-17T00:00:00.000Z'),
+      updatedAt: new Date('2026-02-17T00:00:00.000Z'),
+    } as never);
+
+    await service.update('acc-1', {
+      loginUrl: 'https://account.example/new-login',
+    });
+
+    const deleteLoginStateStmt = statements.find((stmt) =>
+      stmt.sql.includes('DELETE FROM profile_login_states WHERE account_id = ?')
+    );
+    expect(deleteLoginStateStmt).toBeDefined();
+    expect(deleteLoginStateStmt?.bind).toHaveBeenCalledWith(['acc-1']);
+  });
 });

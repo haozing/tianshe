@@ -82,6 +82,7 @@ describe('HTTP API auth contract', () => {
     const normalized = normalizeHttpApiConfig({ enabled: true, enableAuth: 'yes' as never });
 
     expect(normalized.enableAuth).toBe(DEFAULT_HTTP_API_CONFIG.enableAuth);
+    expect(normalized.enforceOrchestrationScopes).toBe(true);
     expect(describeHttpApiAuthContract(normalized).mode).toBe('no-auth');
   });
 

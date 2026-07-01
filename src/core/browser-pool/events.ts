@@ -63,6 +63,8 @@ export interface BrowserHandoffRequestedEvent {
     pluginId?: string | null;
     requestId?: string | null;
   };
+  handoffRequestId?: string | null;
+  status?: 'requested' | 'approved' | 'paused' | 'completed' | 'canceled' | 'expired';
   policy: 'human_priority';
   manualRequired: true;
   requestedAt: number;

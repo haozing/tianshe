@@ -1,6 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { BrowserDownloadEntry } from '../../types/browser-interface';
+import type {
+  BrowserDownloadArtifactContext,
+  BrowserDownloadArtifactSink,
+} from './download-artifact-sink';
 
 type DownloadBehavior = {
   policy: 'allow' | 'deny';
@@ -20,6 +24,8 @@ type TrackedDownload = BrowserDownloadEntry & {
   partialPath?: string;
   createdAt: number;
   updatedAt: number;
+  artifactPromise?: Promise<void>;
+  artifactError?: string;
   lastObservedFinalSize?: number;
   stableFinalObservationCount?: number;
   lastFinalSizeChangedAt?: number;
@@ -44,6 +50,11 @@ export type DownloadTrackerChange = {
   previousState: BrowserDownloadEntry['state'] | null;
   source: DownloadTrackerChangeSource;
 };
+
+export interface BrowserDownloadTrackerOptions {
+  artifactSink?: BrowserDownloadArtifactSink;
+  artifactContext?: BrowserDownloadArtifactContext;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -140,6 +151,8 @@ function cloneDownloadEntry(entry: BrowserDownloadEntry): BrowserDownloadEntry {
     updatedAt: _updatedAt,
     sourcePath: _sourcePath,
     partialPath: _partialPath,
+    artifactPromise: _artifactPromise,
+    artifactError: _artifactError,
     lastObservedFinalSize: _lastObservedFinalSize,
     stableFinalObservationCount: _stableFinalObservationCount,
     lastFinalSizeChangedAt: _lastFinalSizeChangedAt,
@@ -157,6 +170,7 @@ function getEntryStateSignature(entry: TrackedDownload): string {
     partialPath: entry.partialPath ?? null,
     contextId: entry.contextId ?? null,
     navigationId: entry.navigationId ?? null,
+    artifactId: entry.artifactRef?.artifactId ?? null,
     state: entry.state,
     bytesReceived: entry.bytesReceived ?? null,
     totalBytes: entry.totalBytes ?? null,
@@ -174,7 +188,10 @@ export class BrowserDownloadTracker {
   private readonly entries: TrackedDownload[] = [];
   private readonly listeners = new Set<(change: DownloadTrackerChange) => void>();
 
-  constructor(private readonly downloadDir: string) {}
+  constructor(
+    private readonly downloadDir: string,
+    private readonly options: BrowserDownloadTrackerOptions = {}
+  ) {}
 
   onChange(listener: (change: DownloadTrackerChange) => void): () => void {
     this.listeners.add(listener);
@@ -347,6 +364,7 @@ export class BrowserDownloadTracker {
     entry.lastObservedFinalSize = entry.totalBytes;
     entry.stableFinalObservationCount = 2;
     entry.lastFinalSizeChangedAt = Date.now() - FINAL_FILE_STABILITY_MS;
+    await this.ensureDownloadArtifact(entry);
 
     this.emitChangeIfNeeded(entry, previousSignature, previousState, 'lifecycle', isNewEntry);
     return cloneDownloadEntry(entry);
@@ -427,6 +445,7 @@ export class BrowserDownloadTracker {
               entry.totalBytes = Number(finalStat.size);
             }
           }
+          await this.ensureDownloadArtifact(entry);
         } else {
           entry.state = 'in_progress';
           entry.totalBytes = undefined;
@@ -617,6 +636,42 @@ export class BrowserDownloadTracker {
     await moveFile(entry.path, targetPath);
     entry.path = targetPath;
     entry.sourcePath = targetPath;
+  }
+
+  private async ensureDownloadArtifact(entry: TrackedDownload): Promise<void> {
+    const artifactSink = this.options.artifactSink;
+    if (!artifactSink || entry.state !== 'completed' || !entry.path || entry.artifactRef) {
+      return;
+    }
+    if (entry.artifactPromise) {
+      await entry.artifactPromise;
+      return;
+    }
+
+    const sourcePath = entry.path;
+    entry.artifactPromise = artifactSink
+      .createDownloadArtifact({
+        ...this.options.artifactContext,
+        sourcePath,
+        filename: entry.suggestedFilename || path.basename(sourcePath),
+        url: entry.url,
+        contextId: entry.contextId,
+        navigationId: entry.navigationId,
+        downloadId: entry.id,
+      })
+      .then((artifactRef) => {
+        entry.artifactRef = artifactRef;
+        entry.artifactError = undefined;
+      })
+      .catch((error) => {
+        entry.artifactError = error instanceof Error ? error.message : String(error);
+        throw error;
+      })
+      .finally(() => {
+        entry.artifactPromise = undefined;
+      });
+
+    await entry.artifactPromise;
   }
 
   private async scanObservedDownloads(): Promise<ObservedDownloadFile[]> {

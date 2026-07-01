@@ -210,7 +210,10 @@ describe('helpers behavior contract', () => {
       code: 'DATABASE_ERROR',
       details: expect.objectContaining({
         operation: 'executeSQL',
+        access: 'dataset-scoped-readonly',
+        sqlRedacted: true,
       }),
     });
+    expect(executeSQLWithParams).not.toHaveBeenCalled();
   });
 });

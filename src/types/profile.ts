@@ -344,6 +344,7 @@ export interface BrowserProfile {
   quota: number; // Fixed to 1 in the single-instance runtime model.
   idleTimeoutMs: number;
   lockTimeoutMs: number;
+  loginStateRevision: number;
 
   isSystem: boolean;
   createdAt: Date;
@@ -432,15 +433,26 @@ export const PROFILE_LOGIN_STATE_STATUSES = [
 
 export type ProfileLoginStateStatus = (typeof PROFILE_LOGIN_STATE_STATUSES)[number];
 
+export const PROFILE_LOGIN_STATE_VERIFIED_BY = [
+  'profile_service',
+  'capability',
+  'trusted_site_adapter_verifier',
+] as const;
+
+export type ProfileLoginStateVerifiedBy = (typeof PROFILE_LOGIN_STATE_VERIFIED_BY)[number];
+
 export interface ProfileLoginState {
   id: string;
   profileId: string;
   accountId?: string | null;
   site: string;
   loginUrl?: string | null;
+  runtimeIdSnapshot?: BrowserRuntimeId | null;
   runtimeId?: BrowserRuntimeId | null;
+  profileRevision: number;
   status: ProfileLoginStateStatus;
   verified: boolean;
+  verifiedBy?: ProfileLoginStateVerifiedBy | null;
   lastCheckedAt: Date;
   verifiedAt?: Date | null;
   evidenceArtifactId?: string | null;
@@ -455,9 +467,12 @@ export interface UpsertProfileLoginStateParams {
   accountId?: string | null;
   site: string;
   loginUrl?: string | null;
+  runtimeIdSnapshot?: BrowserRuntimeId | null;
   runtimeId?: BrowserRuntimeId | null;
+  profileRevision?: number;
   status: ProfileLoginStateStatus;
   verified?: boolean;
+  verifiedBy?: ProfileLoginStateVerifiedBy | null;
   lastCheckedAt?: Date;
   verifiedAt?: Date | null;
   evidenceArtifactId?: string | null;

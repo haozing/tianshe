@@ -2,6 +2,7 @@ import type { IpcRenderer } from 'electron';
 import type {
   FailureBundle,
   RecentFailureSummary,
+  RuntimeArtifact,
   TraceSummary,
   TraceTimeline,
 } from '../../core/observability/types';
@@ -81,6 +82,61 @@ export function createSystemAPI(ipcRenderer: IpcRenderer) {
         error?: string;
       }> => {
         return ipcRenderer.invoke('observation:search-recent-failures', limit);
+      },
+
+      getArtifact: (
+        artifactId: string
+      ): Promise<{
+        success: boolean;
+        data?: RuntimeArtifact | null;
+        error?: string;
+      }> => {
+        return ipcRenderer.invoke('observation:get-artifact', artifactId);
+      },
+
+      openArtifactFile: (
+        artifactId: string
+      ): Promise<{
+        success: boolean;
+        data?: { success: true };
+        error?: string;
+      }> => {
+        return ipcRenderer.invoke('observation:open-artifact-file', artifactId);
+      },
+
+      revealArtifactFile: (
+        artifactId: string
+      ): Promise<{
+        success: boolean;
+        data?: { success: true };
+        error?: string;
+      }> => {
+        return ipcRenderer.invoke('observation:reveal-artifact-file', artifactId);
+      },
+
+      saveArtifactFileAs: (
+        artifactId: string
+      ): Promise<{
+        success: boolean;
+        data?: {
+          success: true;
+          canceled: boolean;
+          bytesWritten?: number;
+          sha256?: string;
+        };
+        error?: string;
+      }> => {
+        return ipcRenderer.invoke('observation:save-artifact-file-as', artifactId);
+      },
+
+      deleteArtifactFile: (
+        artifactId: string
+      ): Promise<{
+        success: boolean;
+        data?: { success: true; deleted: boolean };
+        error?: string;
+      }> => {
+        return ipcRenderer.invoke('observation:delete-artifact-file', artifactId);
       },
     },
 

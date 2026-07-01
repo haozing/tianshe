@@ -599,10 +599,17 @@ export class UIExtensionManager {
     page: any,
     datasetId?: string
   ): string {
+    const encodedPluginId = JSON.stringify(pluginId);
+    const encodedPageId = JSON.stringify(pageId);
+    const encodedDatasetId = datasetId ? JSON.stringify(datasetId) : 'null';
     const script = `
       <script>
         (function() {
           'use strict';
+
+          const pluginId = ${encodedPluginId};
+          const pageId = ${encodedPageId};
+          const datasetId = ${encodedDatasetId};
 
           const pageLogger = {
             info: (...args) => {
@@ -634,8 +641,8 @@ export class UIExtensionManager {
               // 发送消息
               window.parent.postMessage({
                 type: 'plugin-page-message',
-                pluginId: '${pluginId}',
-                pageId: '${pageId}',
+                pluginId,
+                pageId,
                 messageId,
                 command,
                 params
@@ -672,7 +679,7 @@ export class UIExtensionManager {
           // ===== 插件 API 对象 =====
           window.pluginAPI = {
             // 当前数据集 ID
-            datasetId: ${datasetId ? `'${datasetId}'` : 'null'},
+            datasetId,
 
             // ===== 通用方法 =====
             executeCommand: (commandId, params) => {
@@ -702,7 +709,7 @@ export class UIExtensionManager {
 
           // ===== 页面加载完成后初始化插件 API =====
           window.addEventListener('DOMContentLoaded', async () => {
-            pageLogger.info('[Plugin Page] Initializing plugin API for: ${pluginId}');
+            pageLogger.info('[Plugin Page] Initializing plugin API for:', pluginId);
 
             try {
               // 1. 获取插件暴露的 API 列表
@@ -710,23 +717,23 @@ export class UIExtensionManager {
               pageLogger.info('[Plugin Page] Available APIs:', apiList);
 
               // 2. 为插件创建命名空间
-              window.pluginAPI['${pluginId}'] = {};
+              window.pluginAPI[pluginId] = {};
 
               // 3. 动态创建 API 方法包装器
               for (const apiName of apiList) {
-                window.pluginAPI['${pluginId}'][apiName] = function(...args) {
+                window.pluginAPI[pluginId][apiName] = function(...args) {
                   return sendMessage('callAPI', { apiName, args });
                 };
               }
 
               pageLogger.info('[OK] [Plugin Page] Plugin API initialized successfully');
-              pageLogger.info('[Plugin Page] API namespace:', window.pluginAPI['${pluginId}']);
+              pageLogger.info('[Plugin Page] API namespace:', window.pluginAPI[pluginId]);
 
               // 4. 通知父窗口页面已准备就绪
               window.parent.postMessage({
                 type: 'plugin-page-ready',
-                pluginId: '${pluginId}',
-                pageId: '${pageId}'
+                pluginId,
+                pageId
               }, '*');
 
             } catch (error) {

@@ -13,6 +13,10 @@ import {
   MCP_PROTOCOL_COMPATIBILITY_MODE,
   MCP_PROTOCOL_UNIFIED_VERSION,
 } from '../constants/mcp-protocol';
+import {
+  createCapabilityConfirmationGrant,
+  listOrchestrationCapabilities,
+} from '../core/ai-dev/orchestration';
 import { MCP_PUBLIC_TOOL_NAMES } from './mcp-catalog-metadata';
 import { ErrorCode } from '../types/error-codes';
 import type { RestApiConfig, RestApiDependencies } from '../types/http-api';
@@ -283,6 +287,42 @@ function pickSessionSnapshot(value: any) {
   };
 }
 
+async function prepareMcpScopes(client: Client, scopes: string[]): Promise<string> {
+  const result = await client.callTool({
+    name: 'session_prepare',
+    arguments: { scopes },
+  });
+  const sessionId = String((result.structuredContent as any)?.data?.sessionId || '');
+  expect(result.isError).not.toBe(true);
+  expect(sessionId).toBeTruthy();
+  return sessionId;
+}
+
+function createMcpConfirmationGrant(
+  capabilityName: string,
+  args: Record<string, unknown>,
+  sessionId: string,
+  scopes: string[],
+  grantId = `grant-${capabilityName}`
+) {
+  const definition = listOrchestrationCapabilities().find(
+    (capability) => capability.name === capabilityName
+  );
+  if (!definition) {
+    throw new Error(`Missing capability definition: ${capabilityName}`);
+  }
+  return createCapabilityConfirmationGrant({
+    definition,
+    arguments: args,
+    grantId,
+    invocationId: `invoke-${capabilityName}`,
+    principal: 'mcp',
+    source: 'agent-ui',
+    sessionId,
+    scopes,
+  });
+}
+
 describe('AirpaHttpMcpServer MCP browser binding', () => {
   const originalBindAddress = HTTP_SERVER_DEFAULTS.BIND_ADDRESS;
   let server: AirpaHttpMcpServer | undefined;
@@ -469,17 +509,20 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
         effectiveRuntime: 'electron-webcontents',
         effectiveRuntimeSource: 'requested',
         visible: true,
-        effectiveScopes: ['browser.read'],
+        effectiveScopes: ['browser.read', 'session.write'],
         browserAcquired: false,
         changed: ['profile', 'runtimeId', 'visible', 'scopes'],
       },
     });
     expect(acquire).not.toHaveBeenCalled();
 
-    const invokeResult = await mcpClient.callTool({ name: 'browser_observe', arguments: {} });
+    const invokeResult = await mcpClient.callTool({
+      name: 'browser_snapshot',
+      arguments: { elementsFilter: 'all' },
+    });
     expect(invokeResult.structuredContent).toMatchObject({
       data: {
-        currentUrl: 'https://example.com',
+        url: 'https://example.com',
       },
     });
     expect(acquire).toHaveBeenCalledWith(
@@ -505,7 +548,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
         effectiveRuntime: 'electron-webcontents',
         effectiveRuntimeSource: 'sticky_session',
         browserAcquired: true,
-        effectiveScopes: ['browser.read', 'browser.write'],
+        effectiveScopes: ['browser.read', 'browser.write', 'session.write'],
         changed: ['scopes'],
       },
     });
@@ -530,6 +573,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
       },
     });
 
+    await prepareMcpScopes(mcpClient, ['browser.read', 'browser.write', 'session.read']);
     const currentSession = await mcpClient.callTool({
       name: 'session_get_current',
       arguments: {},
@@ -537,7 +581,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     expect(currentSession.structuredContent).toMatchObject({
       data: {
         session: expect.objectContaining({
-          effectiveScopes: ['browser.read', 'browser.write'],
+          effectiveScopes: ['browser.read', 'browser.write', 'session.read', 'session.write'],
           visible: true,
         }),
       },
@@ -614,6 +658,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     });
     mcpTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
     await mcpClient.connect(mcpTransport);
+    await prepareMcpScopes(mcpClient, ['browser.read', 'dataset.write', 'session.read']);
 
     const result = await mcpClient.callTool({
       name: 'books_to_scrape.extract_product',
@@ -647,6 +692,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
       'mcp'
     );
 
+    await prepareMcpScopes(mcpClient, ['browser.read', 'dataset.write', 'session.read']);
     const currentSession = await mcpClient.callTool({
       name: 'session_get_current',
       arguments: {},
@@ -672,6 +718,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     });
     mcpTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
     await mcpClient.connect(mcpTransport);
+    await prepareMcpScopes(mcpClient, ['session.read']);
 
     const currentResult = await mcpClient.callTool({ name: 'session_get_current', arguments: {} });
     expect(currentResult.structuredContent).toMatchObject({
@@ -702,6 +749,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     });
     mcpTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
     await mcpClient.connect(mcpTransport);
+    await prepareMcpScopes(mcpClient, ['session.read']);
 
     const currentResult = await mcpClient.callTool({ name: 'session_get_current', arguments: {} });
     const currentSession = pickSessionSnapshot(
@@ -796,6 +844,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     });
     mcpTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
     await mcpClient.connect(mcpTransport);
+    await prepareMcpScopes(mcpClient, ['system.read', 'profile.read']);
 
     const bootstrapResult = await mcpClient.callTool({ name: 'system_bootstrap', arguments: {} });
     expect(bootstrapResult.structuredContent).toMatchObject({
@@ -912,7 +961,14 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
       snapshot: vi.fn().mockResolvedValue({
         url: 'https://example.com/observe',
         title: 'Observe',
-        elements: [{ role: 'button', name: 'Continue', preferredSelector: 'button.continue' }],
+        elements: [
+          {
+            tag: 'button',
+            role: 'button',
+            name: 'Continue',
+            preferredSelector: 'button.continue',
+          },
+        ],
       }),
       getCurrentUrl: vi.fn().mockResolvedValue('https://example.com/observe'),
     });
@@ -924,6 +980,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     });
     mcpTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
     await mcpClient.connect(mcpTransport);
+    await prepareMcpScopes(mcpClient, ['browser.write']);
 
     const result = await mcpClient.callTool({
       name: 'browser_observe',
@@ -976,6 +1033,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     });
     mcpTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
     await mcpClient.connect(mcpTransport);
+    await prepareMcpScopes(mcpClient, ['browser.write']);
 
     const inspectResult = await mcpClient.callTool({
       name: 'browser_observe',
@@ -999,7 +1057,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
       },
     });
     expect(invalidResult.isError).toBe(true);
-    expect((invalidResult.structuredContent as any)?.error?.code).toBe(ErrorCode.INVALID_PARAMETER);
+    expect((invalidResult.structuredContent as any)?.error?.code).toBe(ErrorCode.VALIDATION_ERROR);
   });
 
   it('MCP session_end_current closes the active session and invalidates the transport after flush', async () => {
@@ -1011,6 +1069,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     });
     mcpTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
     await mcpClient.connect(mcpTransport);
+    await prepareMcpScopes(mcpClient, ['session.read', 'session.write']);
 
     const currentResult = await mcpClient.callTool({ name: 'session_get_current', arguments: {} });
     const currentSessionId = String(
@@ -1020,7 +1079,15 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
 
     const endResult = await mcpClient.callTool({
       name: 'session_end_current',
-      arguments: {},
+      arguments: {
+        _confirmationGrant: createMcpConfirmationGrant(
+          'session_end_current',
+          {},
+          currentSessionId,
+          ['session.write'],
+          'grant-session-end-current-flush'
+        ),
+      },
     });
     expect(endResult.structuredContent).toMatchObject({
       data: {
@@ -1083,6 +1150,7 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
     });
     mcpTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
     await mcpClient.connect(mcpTransport);
+    await prepareMcpScopes(mcpClient, ['session.read', 'session.write']);
 
     const currentResult = await mcpClient.callTool({ name: 'session_get_current', arguments: {} });
     const currentSessionId = String(
@@ -1092,7 +1160,15 @@ describe('AirpaHttpMcpServer MCP browser binding', () => {
 
     const closeResult = await mcpClient.callTool({
       name: 'session_end_current',
-      arguments: {},
+      arguments: {
+        _confirmationGrant: createMcpConfirmationGrant(
+          'session_end_current',
+          {},
+          currentSessionId,
+          ['session.write'],
+          'grant-session-end-current-close'
+        ),
+      },
     });
     expect(closeResult.structuredContent).toMatchObject({
       data: {

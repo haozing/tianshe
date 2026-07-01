@@ -237,6 +237,7 @@ export class RuyiFirefoxDownloadController {
         navigationId: entry.navigationId,
         state: 'in_progress',
         path: entry.path,
+        artifactRef: entry.artifactRef,
         source,
       },
       options
@@ -264,6 +265,7 @@ export class RuyiFirefoxDownloadController {
         navigationId: entry.navigationId,
         state: 'completed',
         path: entry.path ?? null,
+        artifactRef: entry.artifactRef,
         source,
       },
       options

@@ -370,6 +370,26 @@ export class WebContentsViewManager {
     return info;
   }
 
+  getPluginPageCallerByWebContentsId(
+    webContentsId: number
+  ): { pluginId: string; viewId: string } | null {
+    for (const [viewId, viewInfo] of this.pool.entries()) {
+      if (viewInfo.metadata?.source !== 'plugin') continue;
+      if (!viewId.startsWith('plugin-page:')) continue;
+      if (viewInfo.view.webContents.id !== webContentsId) continue;
+
+      const pluginId =
+        viewInfo.metadata.pluginId ?? this.pluginPageController.getCurrentPluginForView(viewId);
+      if (!pluginId) {
+        return null;
+      }
+
+      return { pluginId, viewId };
+    }
+
+    return null;
+  }
+
   /**
    * 列出所有已注册的 View（包括未激活的）
    */

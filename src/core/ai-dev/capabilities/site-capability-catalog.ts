@@ -1,6 +1,6 @@
 import { createStructuredError, ErrorCode } from '../../../types/error-codes';
 import type { BrowserInterface, BrowserRuntimeDescriptor } from '../../../types/browser-interface';
-import { officialSiteAdapters } from '../../../site-adapters';
+import { siteAdapterRegistry } from '../../../site-adapters';
 import { booksToScrapeAdapter } from '../../../site-adapters/books-to-scrape/adapter';
 import { createSaveSearchDraftProcedure } from '../../../site-adapters/books-to-scrape/procedures/save-search-draft';
 import { githubProfileAdapter } from '../../../site-adapters/github-profile/adapter';
@@ -52,6 +52,10 @@ const CUSTOM_SITE_CAPABILITY_NAMES = new Set([
   GITHUB_PREPARE_ISSUE_DRAFT_CAPABILITY,
   GITHUB_CREATE_ISSUE_CAPABILITY,
 ]);
+
+function listSiteAdapterModules(): SiteAdapterModule[] {
+  return siteAdapterRegistry.listAdapters();
+}
 
 const SITE_READ_METADATA = {
   idempotent: true,
@@ -264,10 +268,6 @@ const PRODUCT_INPUT_SCHEMA: Record<string, unknown> = {
     commitDatasetWrite: {
       type: 'boolean',
       description: 'Commit the staged dataset write immediately after explicit confirmation.',
-    },
-    confirmRisk: {
-      type: 'boolean',
-      description: 'Required when commitDatasetWrite=true.',
     },
     profileId: {
       type: 'string',
@@ -544,7 +544,7 @@ const GITHUB_PREPARE_ISSUE_DRAFT_INPUT_SCHEMA: Record<string, unknown> = {
 const GITHUB_CREATE_ISSUE_INPUT_SCHEMA: Record<string, unknown> = {
   type: 'object',
   additionalProperties: false,
-  required: ['profileId', 'owner', 'repo', 'title', 'body', 'confirmRisk'],
+  required: ['profileId', 'owner', 'repo', 'title', 'body'],
   properties: {
     profileId: { type: 'string', minLength: 1 },
     owner: {
@@ -572,10 +572,6 @@ const GITHUB_CREATE_ISSUE_INPUT_SCHEMA: Record<string, unknown> = {
       minLength: 1,
       maxLength: 8000,
       description: 'Issue body to submit.',
-    },
-    confirmRisk: {
-      type: 'boolean',
-      description: 'Must be true because this creates a remote GitHub issue.',
     },
     runtimeId: { type: 'string', minLength: 1 },
     visible: { type: 'boolean' },
@@ -893,7 +889,7 @@ function createSiteCapabilityDiscoveryRecords(): Array<Record<string, unknown>> 
     ...createGitHubCapabilityCatalog(),
     ...createGenericOfficialSiteCapabilityCatalog(),
   };
-  const adapters = officialSiteAdapters;
+  const adapters = listSiteAdapterModules();
 
   return adapters.flatMap((adapter) =>
     (adapter.manifest.capabilities || []).map((capabilityName) => {
@@ -1383,15 +1379,6 @@ async function writeDatasetIfRequested(
       plan,
     };
   }
-  if (readBooleanArg(args, 'confirmRisk') !== true) {
-    throw createStructuredError(
-      ErrorCode.INVALID_PARAMETER,
-      'confirmRisk=true is required when commitDatasetWrite=true',
-      {
-        context: { datasetId, planId: plan.planId },
-      }
-    );
-  }
   if (!deps.datasetGateway.commitWritePlan) {
     throw createStructuredError(
       ErrorCode.OPERATION_FAILED,
@@ -1740,6 +1727,7 @@ async function ensureGitHubLoginOrHandoff(
       ...(runtimeId ? { runtimeId: runtimeId as never } : {}),
       status: nextStatus,
       verified: false,
+      verifiedBy: 'capability',
       evidence: {
         manualHandoffRequired: true,
         loginHealth,
@@ -1817,6 +1805,7 @@ async function updateGitHubVerifiedLoginState(
     ...(input.runtimeId ? { runtimeId: input.runtimeId as never } : {}),
     status: 'logged_in',
     verified: true,
+    verifiedBy: 'trusted_site_adapter_verifier',
     verifiedAt: new Date(),
     evidence: {
       verifier: 'github-profile-settings',
@@ -2051,27 +2040,12 @@ const githubCreateIssueHandler: CapabilityHandler<OrchestrationDependencies> = a
   const repo = readGitHubPathArg(args, 'repo');
   const title = readStringArg(args, 'title');
   const body = readStringArg(args, 'body');
-  const confirmRisk = readBooleanArg(args, 'confirmRisk') === true;
   if (!title) {
     throw createStructuredError(ErrorCode.MISSING_PARAMETER, 'Parameter title is required');
   }
   if (!body) {
     throw createStructuredError(ErrorCode.MISSING_PARAMETER, 'Parameter body is required');
   }
-  if (!confirmRisk) {
-    throw createStructuredError(
-      ErrorCode.INVALID_PARAMETER,
-      'confirmRisk=true is required before creating a GitHub issue',
-      {
-        context: {
-          capability: GITHUB_CREATE_ISSUE_CAPABILITY,
-          sideEffectLevel: 'high',
-          requiredConfirmation: 'confirmRisk',
-        },
-      }
-    );
-  }
-
   const login = await ensureGitHubLoginOrHandoff(args, deps, {
     capabilityName: GITHUB_CREATE_ISSUE_CAPABILITY,
     handoffPurpose: 'GitHub issue creation',
@@ -2097,7 +2071,7 @@ const githubCreateIssueHandler: CapabilityHandler<OrchestrationDependencies> = a
     procedureId: procedure.id,
     browser,
     options: {
-      confirmRisk,
+      confirmationGranted: true,
       signal: context.signal,
     },
   });
@@ -2168,6 +2142,15 @@ function createBooksToScrapeCapabilityCatalog(): CapabilityCatalog {
           'Extract product details from a Books to Scrape product page using the official Books to Scrape site adapter.',
         inputSchema: PRODUCT_INPUT_SCHEMA,
         outputSchema: PRODUCT_OUTPUT_SCHEMA,
+        confirmationPolicy: {
+          requiredWhen: [
+            {
+              argument: 'commitDatasetWrite',
+              equals: true,
+              reason: 'commits a staged dataset write during extraction',
+            },
+          ],
+        },
         annotations: buildCapabilityAnnotations(SITE_READ_METADATA, {
           openWorldHint: false,
         }),
@@ -2416,7 +2399,6 @@ function createGitHubCapabilityCatalog(): CapabilityCatalog {
                 repo: 'repo',
                 title: 'Bug: unexpected state',
                 body: 'Steps to reproduce...',
-                confirmRisk: true,
               },
             },
           ],
@@ -2436,7 +2418,7 @@ function createGitHubCapabilityCatalog(): CapabilityCatalog {
 function createGenericOfficialSiteCapabilityCatalog(): CapabilityCatalog {
   return Object.assign(
     {},
-    ...officialSiteAdapters.flatMap((adapter) =>
+    ...listSiteAdapterModules().flatMap((adapter) =>
       (adapter.manifest.capabilities || [])
         .filter((capabilityName) => !CUSTOM_SITE_CAPABILITY_NAMES.has(capabilityName))
         .map((capabilityName) => {
@@ -2490,7 +2472,7 @@ function createGenericOfficialSiteCapabilityCatalog(): CapabilityCatalog {
 }
 
 function getOfficialSiteCapabilityNames(): string[] {
-  return officialSiteAdapters.flatMap((adapter) => adapter.manifest.capabilities || []);
+  return listSiteAdapterModules().flatMap((adapter) => adapter.manifest.capabilities || []);
 }
 
 function createSiteCapabilityDiscoveryCatalog(): CapabilityCatalog {

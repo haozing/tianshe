@@ -24,7 +24,10 @@ import {
   formatInterval,
 } from './cron-parser';
 import { createLogger } from '../../core/logger';
-import { resourceCoordinator } from '../../core/resource-coordinator';
+import {
+  resourceCoordinator,
+  type ResourceLeaseContext,
+} from '../../core/resource-coordinator';
 
 const logger = createLogger('SchedulerService');
 const DEFAULT_RESOURCE_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -754,32 +757,37 @@ export class SchedulerService extends EventEmitter implements ISchedulerService 
     let runningExecution: TaskExecution = execution;
     let lastError: Error | null = null;
     let attempt = 0;
-    let resourceContext:
-      | {
-          ownerToken: string;
-          heldKeys: Set<string>;
-          profileLeases: Map<string, unknown>;
-        }
-      | null = null;
+    let resourceContext: ResourceLeaseContext | null = null;
 
     let resourceLease = null;
 
     try {
+      const handlerKey = `${task.pluginId}:${task.handlerId}`;
       if (resourceKeys.length > 0) {
         resourceLease = await resourceCoordinator.acquire(resourceKeys, {
           ownerToken: executionId,
+          ownerSource: 'internal',
+          ownerMetadata: {
+            controllerKind: 'system',
+            pluginId: task.pluginId,
+            capability: handlerKey,
+            traceId: executionId,
+            interruptibility: 'checkpoint',
+            description: 'scheduled task execution',
+          },
           timeoutMs: resourceWaitTimeoutMs,
           signal: controller.signal,
         });
         resourceContext = {
           ownerToken: resourceLease.ownerToken,
+          ownerSource: resourceLease.ownerSource,
+          ownerMetadata: resourceLease.ownerMetadata,
           heldKeys: new Set(resourceLease.keys),
           profileLeases: new Map(),
         };
       }
 
       // 重试循环
-      const handlerKey = `${task.pluginId}:${task.handlerId}`;
       const handlerInfo = this.handlers.get(handlerKey);
       if (!handlerInfo) {
         throw new Error(`Handler not found: ${handlerKey}`);

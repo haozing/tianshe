@@ -6,6 +6,12 @@
 
 import type { FieldType, ColumnMetadata } from './duckdb';
 import type { PluginHelpers } from '../core/js-plugin/helpers';
+import type {
+  OrchestrationAssistantSurface,
+  OrchestrationCapabilityConfirmationPolicy,
+  OrchestrationCapabilityRequirement,
+  OrchestrationToolAnnotations,
+} from '../core/ai-dev/orchestration/types';
 
 /**
  * 数据表列定义
@@ -65,12 +71,17 @@ export interface JSPluginManifest {
   parameters?: PluginParameters;
   /** 🆕 UI 扩展点 */
   contributes?: PluginContributions;
+  /** 本地受信插件贡献的编排 Capability。handler 必须在 activate 后绑定到 exposed API 或 command。 */
+  capabilities?: PluginCapabilityContribution[];
   /** 🆕 插件配置项（可在 UI 中配置）*/
   configuration?: PluginConfiguration;
   /** 插件权限声明（可选但推荐） */
   permissions?: PluginPermissions;
   /** 插件信任模型；open 版本只允许运行 first_party 插件 */
   trustModel?: 'first_party';
+  security?: SecurityConfig;
+  /** 插件状态存储声明；简单 KV 不需要声明，关系状态需显式开启。 */
+  state?: PluginStateManifest;
   runtime?: PluginRuntimePolicy;
   /** 🆕 跨插件调用配置（用于插件互调和 MCP/HTTP 调用） */
   crossPlugin?: CrossPluginConfig;
@@ -142,6 +153,15 @@ export interface JSPluginModule {
    * }
    */
   commands?: Record<string, CommandHandler>;
+
+  /** Trusted plugin Site Adapter modules declared by contributes.siteAdapters. */
+  siteAdapters?: import('../core/site-adapter-runtime').SiteAdapterModule[];
+}
+
+export interface PluginStateManifest {
+  /** 启用 helpers.state 的 migration/transaction 关系状态 API。 */
+  rows?: boolean;
+  relational?: boolean;
 }
 
 /**
@@ -324,6 +344,8 @@ export interface PluginContext {
   readonly plugin: PluginInfo;
   /** ✅ 插件创建的数据表列表 */
   readonly dataTables: DataTableInfo[];
+  /** 插件辅助工具命名空间 */
+  readonly helpers: PluginHelpers;
 
   registerCommand(commandId: string, handler: CommandHandler): void;
   getCommand(commandId: string): CommandHandler | undefined;
@@ -337,7 +359,41 @@ export interface PluginContext {
   setData(key: string, value: any): Promise<void>;
   getData(key: string): Promise<any>;
   deleteData(key: string): Promise<void>;
+  exposeAPI(apis: ExposedAPIMap): void;
+  getExposedAPI(name: string): APIFunction | undefined;
+  getAllExposedAPIs(): Map<string, APIFunction>;
   dispose(): void;
+}
+
+export interface PluginCapabilityContribution {
+  name: string;
+  version: string;
+  description: string;
+  title?: string;
+  inputSchema?: Record<string, unknown>;
+  /** JSON Schema for the raw handler return value. The host wraps it in structuredContent.data. */
+  outputSchema: Record<string, unknown>;
+  requires?: OrchestrationCapabilityRequirement[];
+  annotations?: OrchestrationToolAnnotations;
+  sideEffectLevel?: 'none' | 'low' | 'high';
+  estimatedLatencyMs?: number;
+  idempotent?: boolean;
+  retryPolicy?: {
+    retryable: boolean;
+    maxAttempts: number;
+  };
+  requiredScopes: string[];
+  assistantSurface?: OrchestrationAssistantSurface;
+  confirmationPolicy?: OrchestrationCapabilityConfirmationPolicy;
+  handler:
+    | {
+        kind: 'api';
+        name: string;
+      }
+    | {
+        kind: 'command';
+        name: string;
+      };
 }
 
 /**
@@ -391,6 +447,15 @@ export interface PluginContributions {
   customPages?: CustomPageContribution[];
   /** ✨ Activity Bar 视图定义 */
   activityBarView?: ActivityBarViewContribution;
+  /** Trusted local plugin contributed Site Adapter Pack entries. */
+  siteAdapters?: PluginSiteAdapterContribution[];
+}
+
+export interface PluginSiteAdapterContribution {
+  /** Site Adapter module entry, relative to plugin package root. */
+  entry: string;
+  /** Optional adapter id hint used for diagnostics; runtime manifest id remains authoritative. */
+  adapterId?: string;
 }
 
 /**
@@ -728,6 +793,8 @@ export interface SecurityConfig {
   csp?: string;
   /** 远程页面允许的域名白名单 */
   allowedDomains?: string[];
+  /** Extra origins allowed for helpers.profile.launch().browser.sessionRequest; current page origin is always allowed. */
+  sessionRequestAllowedOrigins?: string[];
 }
 
 /**

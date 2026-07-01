@@ -28,6 +28,7 @@ const NAMESPACE_CLASS_MAP: Record<string, { file: string; className: string }> =
   network: { file: 'src/core/js-plugin/namespaces/network.ts', className: 'NetworkNamespace' },
   ui: { file: 'src/core/js-plugin/namespaces/ui.ts', className: 'UINamespace' },
   storage: { file: 'src/core/js-plugin/namespaces/storage.ts', className: 'StorageNamespace' },
+  state: { file: 'src/core/js-plugin/namespaces/state.ts', className: 'StateNamespace' },
   utils: { file: 'src/core/js-plugin/namespaces/utils/index.ts', className: 'UtilsNamespace' },
   window: { file: 'src/core/js-plugin/namespaces/window.ts', className: 'WindowNamespace' },
   ffi: { file: 'src/core/js-plugin/namespaces/ffi.ts', className: 'FFINamespace' },

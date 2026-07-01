@@ -110,7 +110,7 @@ export interface SiteAdapterProcedureDefinition {
 }
 
 export interface SiteAdapterProcedureRunOptions {
-  confirmRisk?: boolean;
+  confirmationGranted?: boolean;
   signal?: AbortSignal;
   resumeFromState?: SiteAdapterRunState;
 }
@@ -175,8 +175,8 @@ function assertProcedurePolicy(procedure: SiteAdapterProcedureDefinition, option
   if (!hasVerification) {
     throw new Error(`Procedure ${procedure.id} must include at least one verification step`);
   }
-  if (procedure.sideEffectLevel === 'high' && options.confirmRisk !== true) {
-    throw new Error(`Procedure ${procedure.id} requires confirmRisk=true`);
+  if (procedure.sideEffectLevel === 'high' && options.confirmationGranted !== true) {
+    throw new Error(`Procedure ${procedure.id} requires confirmationGranted=true`);
   }
 }
 

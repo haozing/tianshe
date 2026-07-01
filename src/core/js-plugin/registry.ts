@@ -6,7 +6,7 @@
  */
 
 import { TypedEventEmitter } from '../typed-event-emitter';
-import type { CommandHandler, JSPluginManifest } from '../../types/js-plugin';
+import type { CommandHandler, JSPluginManifest, JSPluginModule } from '../../types/js-plugin';
 import type { PluginHelpers } from './helpers';
 import { getPermissionChecker, type CrossPluginConfig } from './permissions';
 import { createLogger } from '../logger';
@@ -25,6 +25,8 @@ const logger = createLogger('PluginRegistry');
 export interface PluginRegisteredEvent {
   pluginId: string;
   manifest: JSPluginManifest;
+  packageRoot?: string;
+  module?: JSPluginModule;
 }
 
 /**
@@ -117,8 +119,15 @@ export interface PluginRegistration {
   /** 插件 manifest */
   manifest: JSPluginManifest;
   /** 插件 helpers 引用（用于执行命令） */
+  packageRoot?: string;
+  module?: JSPluginModule;
   helpers?: PluginHelpers;
   runtimePolicy?: JSPluginManifest['runtime'];
+}
+
+export interface RegisterPluginOptions {
+  packageRoot?: string;
+  module?: JSPluginModule;
 }
 
 /**
@@ -237,7 +246,12 @@ export class PluginRegistry extends TypedEventEmitter<PluginRegistryEvents> {
   /**
    * 注册插件
    */
-  registerPlugin(pluginId: string, manifest: JSPluginManifest, helpers?: PluginHelpers): void {
+  registerPlugin(
+    pluginId: string,
+    manifest: JSPluginManifest,
+    helpers?: PluginHelpers,
+    options: RegisterPluginOptions = {}
+  ): void {
     const existing = this.registry.get(pluginId);
     if (existing) {
       logger.warn(`Plugin ${pluginId} already registered, updating...`);
@@ -251,6 +265,8 @@ export class PluginRegistry extends TypedEventEmitter<PluginRegistryEvents> {
       permissions: this.extractPermissions(manifest),
       crossPluginConfig: this.extractCrossPluginConfig(manifest),
       manifest,
+      packageRoot: options.packageRoot,
+      module: options.module,
       helpers,
       runtimePolicy: manifest.runtime,
     };
@@ -258,7 +274,12 @@ export class PluginRegistry extends TypedEventEmitter<PluginRegistryEvents> {
     this.registry.set(pluginId, registration);
     logger.info(`Plugin registered: ${pluginId} v${manifest.version}`);
 
-    this.emit('plugin:registered', { pluginId, manifest });
+    this.emit('plugin:registered', {
+      pluginId,
+      manifest,
+      packageRoot: options.packageRoot,
+      module: options.module,
+    });
   }
 
   /**
@@ -732,6 +753,13 @@ export class PluginRegistry extends TypedEventEmitter<PluginRegistryEvents> {
    */
   getPluginInfo(pluginId: string): PluginRegistration | undefined {
     return this.registry.get(pluginId);
+  }
+
+  /**
+   * 列出完整注册信息快照（供受信 provider 适配层生成 Capability view）。
+   */
+  listRegistrations(): PluginRegistration[] {
+    return Array.from(this.registry.values());
   }
 
   /**

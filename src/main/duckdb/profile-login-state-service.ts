@@ -2,9 +2,11 @@ import type { DuckDBConnection } from '@duckdb/node-api';
 import { v4 as uuidv4 } from 'uuid';
 import {
   PROFILE_LOGIN_STATE_STATUSES,
+  PROFILE_LOGIN_STATE_VERIFIED_BY,
   type BrowserRuntimeId,
   type ProfileLoginState,
   type ProfileLoginStateStatus,
+  type ProfileLoginStateVerifiedBy,
   type UpsertProfileLoginStateParams,
   isBrowserRuntimeId,
 } from '../../types/profile';
@@ -13,6 +15,7 @@ import { allPrepared, runPrepared } from './statement-executor';
 import { parseRows } from './utils';
 
 const LOGIN_STATE_STATUSES = new Set<string>(PROFILE_LOGIN_STATE_STATUSES);
+const VERIFIED_BY_VALUES = new Set<string>(PROFILE_LOGIN_STATE_VERIFIED_BY);
 
 const asOptionalText = (value: unknown): string | null => {
   const normalized = String(value ?? '').trim();
@@ -42,6 +45,20 @@ const normalizeRuntimeId = (value: unknown): BrowserRuntimeId | null => {
     throw new Error(`Unsupported profile login runtime: ${normalized}`);
   }
   return normalized;
+};
+
+const normalizeVerifiedBy = (value: unknown): ProfileLoginStateVerifiedBy | null => {
+  const normalized = asOptionalText(value);
+  if (!normalized) return null;
+  if (VERIFIED_BY_VALUES.has(normalized)) {
+    return normalized as ProfileLoginStateVerifiedBy;
+  }
+  throw new Error(`Unsupported profile login state verifier: ${normalized}`);
+};
+
+const normalizeRevision = (value: unknown): number => {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : 0;
 };
 
 const toDate = (value: unknown): Date => {
@@ -74,8 +91,10 @@ interface ProfileLoginStateRow {
   site: unknown;
   login_url: unknown;
   runtime_id: unknown;
+  profile_revision: unknown;
   status: unknown;
   verified: unknown;
+  verified_by: unknown;
   last_checked_at: unknown;
   verified_at: unknown;
   evidence_artifact_id: unknown;
@@ -97,8 +116,10 @@ export class ProfileLoginStateService {
         site                 VARCHAR NOT NULL,
         login_url            VARCHAR,
         runtime_id           VARCHAR,
+        profile_revision     INTEGER DEFAULT 0,
         status               VARCHAR NOT NULL,
         verified             BOOLEAN DEFAULT FALSE,
+        verified_by          VARCHAR,
         last_checked_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         verified_at          TIMESTAMP,
         evidence_artifact_id VARCHAR,
@@ -114,9 +135,101 @@ export class ProfileLoginStateService {
       ON profile_login_states(profile_id, site)
     `);
     await this.conn.run(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_profile_login_states_unique_key
+      ON profile_login_states(profile_id, site, COALESCE(account_id, ''))
+    `);
+    await this.conn.run(`
       CREATE INDEX IF NOT EXISTS idx_profile_login_states_status
       ON profile_login_states(status)
     `);
+    await this.ensureLatestSchema();
+  }
+
+  private async ensureLatestSchema(): Promise<void> {
+    await this.conn.run(`
+      ALTER TABLE profile_login_states ADD COLUMN IF NOT EXISTS profile_revision INTEGER DEFAULT 0
+    `);
+    await this.conn.run(`
+      ALTER TABLE profile_login_states ADD COLUMN IF NOT EXISTS verified_by VARCHAR
+    `);
+    await this.conn.run(`
+      UPDATE profile_login_states
+      SET profile_revision = 0
+      WHERE profile_revision IS NULL
+    `);
+  }
+
+  private async getProfileSnapshot(profileId: string): Promise<{
+    runtimeId: BrowserRuntimeId | null;
+    revision: number;
+  } | null | undefined> {
+    try {
+      const result = await allPrepared(
+        this.conn,
+        `
+        SELECT runtime_id, login_state_revision
+        FROM browser_profiles
+        WHERE id = ?
+        LIMIT 1
+      `,
+        [profileId]
+      );
+      const rows = parseRows<{ runtime_id: unknown; login_state_revision: unknown }>(result);
+      if (!rows[0]) return null;
+      return {
+        runtimeId: normalizeRuntimeId(rows[0].runtime_id),
+        revision: normalizeRevision(rows[0].login_state_revision),
+      };
+    } catch (error) {
+      if (String((error as { message?: unknown })?.message || error).includes('browser_profiles')) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async resolveWriteSnapshot(params: {
+    profileId: string;
+    runtimeId?: BrowserRuntimeId | null;
+    runtimeIdSnapshot?: BrowserRuntimeId | null;
+    profileRevision?: number;
+  }): Promise<{ runtimeId: BrowserRuntimeId | null; revision: number }> {
+    const profileSnapshot = await this.getProfileSnapshot(params.profileId);
+    const runtimeId =
+      normalizeRuntimeId(params.runtimeIdSnapshot ?? params.runtimeId) ||
+      profileSnapshot?.runtimeId ||
+      null;
+    const revision =
+      params.profileRevision !== undefined
+        ? normalizeRevision(params.profileRevision)
+        : profileSnapshot?.revision ?? 0;
+    return { runtimeId, revision };
+  }
+
+  private isStaleForProfile(
+    state: ProfileLoginState,
+    profileSnapshot: { runtimeId: BrowserRuntimeId | null; revision: number } | null | undefined
+  ): boolean {
+    if (profileSnapshot === undefined) return false;
+    if (!profileSnapshot) return true;
+    const stateRuntimeId = state.runtimeIdSnapshot ?? state.runtimeId ?? null;
+    if (stateRuntimeId && profileSnapshot.runtimeId && stateRuntimeId !== profileSnapshot.runtimeId) {
+      return true;
+    }
+    return state.profileRevision !== profileSnapshot.revision;
+  }
+
+  private markExpired(state: ProfileLoginState, reason: string): ProfileLoginState {
+    if (state.status === 'expired' && state.verified === false && state.reason === reason) {
+      return state;
+    }
+    return {
+      ...state,
+      status: 'expired',
+      verified: false,
+      verifiedAt: null,
+      reason,
+    };
   }
 
   async getLoginState(query: {
@@ -142,7 +255,19 @@ export class ProfileLoginStateService {
       [profileId, site, site, accountId, accountId]
     );
     const rows = parseRows<ProfileLoginStateRow>(result);
-    return rows[0] ? this.mapRow(rows[0]) : null;
+    if (!rows[0]) return null;
+
+    const state = this.mapRow(rows[0]);
+    const profileSnapshot = await this.getProfileSnapshot(profileId);
+    if (!this.isStaleForProfile(state, profileSnapshot)) {
+      return state;
+    }
+
+    const reason = profileSnapshot
+      ? 'profile login state expired after profile runtime or revision changed'
+      : 'profile login state expired because profile no longer exists';
+    await this.expireById(state.id, reason);
+    return this.markExpired(state, reason);
   }
 
   async upsertLoginState(params: UpsertProfileLoginStateParams): Promise<ProfileLoginState> {
@@ -150,7 +275,10 @@ export class ProfileLoginStateService {
     const site = assertRequiredText(params.site, 'site');
     const accountId = asOptionalText(params.accountId);
     const status = normalizeStatus(params.status);
-    const runtimeId = normalizeRuntimeId(params.runtimeId);
+    const snapshot = await this.resolveWriteSnapshot(params);
+    const runtimeId = snapshot.runtimeId;
+    const profileRevision = snapshot.revision;
+    const verifiedBy = normalizeVerifiedBy(params.verifiedBy);
     const verified = params.verified ?? status === 'logged_in';
     const now = new Date();
     const lastCheckedAt = params.lastCheckedAt ?? now;
@@ -165,8 +293,10 @@ export class ProfileLoginStateService {
         UPDATE profile_login_states
         SET login_url = ?,
             runtime_id = ?,
+            profile_revision = ?,
             status = ?,
             verified = ?,
+            verified_by = ?,
             last_checked_at = ?,
             verified_at = ?,
             evidence_artifact_id = ?,
@@ -178,8 +308,10 @@ export class ProfileLoginStateService {
         [
           asOptionalText(params.loginUrl),
           runtimeId,
+          profileRevision,
           status,
           verified,
+          verifiedBy,
           lastCheckedAt.toISOString(),
           verifiedAt ? verifiedAt.toISOString() : null,
           asOptionalText(params.evidenceArtifactId),
@@ -196,10 +328,10 @@ export class ProfileLoginStateService {
       this.conn,
       `
       INSERT INTO profile_login_states (
-        id, profile_id, account_id, site, login_url, runtime_id, status, verified,
+        id, profile_id, account_id, site, login_url, runtime_id, profile_revision, status, verified, verified_by,
         last_checked_at, verified_at, evidence_artifact_id, evidence, reason,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `,
       [
         id,
@@ -208,8 +340,10 @@ export class ProfileLoginStateService {
         site,
         asOptionalText(params.loginUrl),
         runtimeId,
+        profileRevision,
         status,
         verified,
+        verifiedBy,
         lastCheckedAt.toISOString(),
         verifiedAt ? verifiedAt.toISOString() : null,
         asOptionalText(params.evidenceArtifactId),
@@ -219,6 +353,54 @@ export class ProfileLoginStateService {
     );
 
     return (await this.getById(id)) as ProfileLoginState;
+  }
+
+  async expireByProfile(profileId: string, reason: string): Promise<number> {
+    const normalizedProfileId = assertRequiredText(profileId, 'profileId');
+    const existing = await allPrepared(
+      this.conn,
+      `SELECT id FROM profile_login_states WHERE profile_id = ? AND verified = TRUE`,
+      [normalizedProfileId]
+    );
+    const rows = parseRows(existing);
+    await runPrepared(
+      this.conn,
+      `
+      UPDATE profile_login_states
+      SET status = 'expired',
+          verified = FALSE,
+          verified_at = NULL,
+          reason = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE profile_id = ?
+    `,
+      [assertRequiredText(reason, 'reason'), normalizedProfileId]
+    );
+    return rows.length;
+  }
+
+  async expireByAccount(accountId: string, reason: string): Promise<number> {
+    const normalizedAccountId = assertRequiredText(accountId, 'accountId');
+    const existing = await allPrepared(
+      this.conn,
+      `SELECT id FROM profile_login_states WHERE account_id = ? AND verified = TRUE`,
+      [normalizedAccountId]
+    );
+    const rows = parseRows(existing);
+    await runPrepared(
+      this.conn,
+      `
+      UPDATE profile_login_states
+      SET status = 'expired',
+          verified = FALSE,
+          verified_at = NULL,
+          reason = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE account_id = ?
+    `,
+      [assertRequiredText(reason, 'reason'), normalizedAccountId]
+    );
+    return rows.length;
   }
 
   async deleteByProfile(profileId: string): Promise<number> {
@@ -233,6 +415,36 @@ export class ProfileLoginStateService {
       normalizedProfileId,
     ]);
     return rows.length;
+  }
+
+  async deleteByAccount(accountId: string): Promise<number> {
+    const normalizedAccountId = assertRequiredText(accountId, 'accountId');
+    const existing = await allPrepared(
+      this.conn,
+      `SELECT id FROM profile_login_states WHERE account_id = ?`,
+      [normalizedAccountId]
+    );
+    const rows = parseRows(existing);
+    await runPrepared(this.conn, `DELETE FROM profile_login_states WHERE account_id = ?`, [
+      normalizedAccountId,
+    ]);
+    return rows.length;
+  }
+
+  private async expireById(id: string, reason: string): Promise<void> {
+    await runPrepared(
+      this.conn,
+      `
+      UPDATE profile_login_states
+      SET status = 'expired',
+          verified = FALSE,
+          verified_at = NULL,
+          reason = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `,
+      [assertRequiredText(reason, 'reason'), id]
+    );
   }
 
   private async getById(id: string): Promise<ProfileLoginState | null> {
@@ -258,9 +470,12 @@ export class ProfileLoginStateService {
       accountId: asOptionalText(row.account_id),
       site: String(row.site),
       loginUrl: asOptionalText(row.login_url),
+      runtimeIdSnapshot: runtimeId,
       runtimeId,
+      profileRevision: normalizeRevision(row.profile_revision),
       status: normalizeStatus(row.status),
       verified: row.verified === true,
+      verifiedBy: normalizeVerifiedBy(row.verified_by),
       lastCheckedAt: toDate(row.last_checked_at),
       verifiedAt: row.verified_at ? toDate(row.verified_at) : null,
       evidenceArtifactId: asOptionalText(row.evidence_artifact_id),

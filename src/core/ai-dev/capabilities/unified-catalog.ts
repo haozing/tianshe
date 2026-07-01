@@ -9,12 +9,28 @@ import { createSystemCapabilityCatalog } from './system-catalog';
 import { createSessionCapabilityCatalog } from './session-catalog';
 import { createSiteCapabilityCatalog } from './site-capability-catalog';
 import { withAssistantGuidance } from './assistant-guidance';
+import { siteAdapterRegistry } from '../../../site-adapters';
 
 export type CapabilityCatalog = Record<string, RegisteredCapability>;
 
 export type CapabilityCatalogFactory = () => CapabilityCatalog;
 
-const CAPABILITY_CATALOG_FACTORIES: readonly CapabilityCatalogFactory[] = [
+export interface CapabilityProvider {
+  id: string;
+  listCapabilities(): CapabilityCatalog;
+  subscribe?(listener: () => void): () => void;
+  listErrors?(): readonly CapabilityProviderError[];
+}
+
+export interface CapabilityProviderError {
+  providerId: string;
+  pluginId?: string;
+  capabilityName?: string;
+  message: string;
+  reasonCode?: string;
+}
+
+export const BUILT_IN_CAPABILITY_CATALOG_FACTORIES: readonly CapabilityCatalogFactory[] = [
   createBrowserCapabilityCatalog,
   createDatasetCapabilityCatalog,
   createCrossPluginCapabilityCatalog,
@@ -151,10 +167,10 @@ function validateCapabilityMetadata(key: string, capability: RegisteredCapabilit
       fail('assistantSurface.surfaceTier must be "canonical", "advanced", or "legacy" when provided');
     }
 
-    for (const key of ['gettingStartedOrder', 'sessionReuseOrder', 'pageDebugOrder'] as const) {
-      const value = assistantSurface[key];
+    for (const surfaceOrderKey of ['gettingStartedOrder', 'sessionReuseOrder', 'pageDebugOrder'] as const) {
+      const value = assistantSurface[surfaceOrderKey];
       if (value !== undefined && (!Number.isFinite(value) || value < 1)) {
-        fail(`assistantSurface.${key} must be a positive number when provided`);
+        fail(`assistantSurface.${surfaceOrderKey} must be a positive number when provided`);
       }
     }
   }
@@ -207,7 +223,25 @@ export function mergeCapabilityCatalogs(catalogs: CapabilityCatalog[]): Capabili
 }
 
 export function createUnifiedCapabilityCatalog(
-  factories: readonly CapabilityCatalogFactory[] = CAPABILITY_CATALOG_FACTORIES
+  factories: readonly CapabilityCatalogFactory[] = BUILT_IN_CAPABILITY_CATALOG_FACTORIES
 ): CapabilityCatalog {
   return mergeCapabilityCatalogs(factories.map((factory) => factory()));
+}
+
+export function createBuiltInCapabilityProvider(
+  factories: readonly CapabilityCatalogFactory[] = BUILT_IN_CAPABILITY_CATALOG_FACTORIES
+): CapabilityProvider {
+  return {
+    id: 'built-in',
+    listCapabilities: () => createUnifiedCapabilityCatalog(factories),
+    subscribe(listener: () => void): () => void {
+      return siteAdapterRegistry.subscribe(listener);
+    },
+  };
+}
+
+export function createUnifiedCapabilityCatalogFromProviders(
+  providers: readonly CapabilityProvider[]
+): CapabilityCatalog {
+  return mergeCapabilityCatalogs(providers.map((provider) => provider.listCapabilities()));
 }

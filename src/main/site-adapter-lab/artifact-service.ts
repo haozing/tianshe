@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assertSiteAdapterRepairPath, type SiteAdapterFixture } from '../../core/site-adapter-runtime';
-import { getOfficialSiteAdapter } from '../../site-adapters';
+import { siteAdapterRegistry } from '../../site-adapters';
 
 export interface SaveSiteAdapterExpectedInput {
   adapterId: string;
@@ -31,10 +31,14 @@ export function resolveOfficialExpectedRelativePath(
   adapterId: string,
   fixtureName: string
 ): string {
-  const adapter = getOfficialSiteAdapter(adapterId);
-  if (!adapter) {
+  const registration = siteAdapterRegistry.getRegisteredAdapter(adapterId);
+  if (!registration) {
     throw new Error(`Site adapter not found: ${adapterId}`);
   }
+  if (registration.source !== 'built-in') {
+    throw new Error(`Expected fixture save is only supported for built-in site adapters: ${adapterId}`);
+  }
+  const adapter = registration.module;
   if (!adapter.manifest.expected?.includes(fixtureName)) {
     throw new Error(`Expected fixture is not declared by ${adapterId}: ${fixtureName}`);
   }

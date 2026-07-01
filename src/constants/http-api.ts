@@ -24,7 +24,7 @@ export interface HttpApiConfig {
   callbackUrl?: string;
   /** MCP 服务开关（独立于 HTTP，供 Claude Code 等 AI 工具使用）*/
   enableMcp?: boolean;
-  /** 是否强制执行 orchestration requiredScopes 校验 */
+  /** 是否强制执行 orchestration requiredScopes 校验（默认 true；false 仅作内部兼容） */
   enforceOrchestrationScopes: boolean;
   /** agent-hand 安全默认模式：开启后强制 Token 鉴权与 orchestration scope 校验 */
   agentHandMode: boolean;
@@ -60,7 +60,7 @@ export const DEFAULT_HTTP_API_CONFIG: HttpApiConfig = {
   token: '',
   callbackUrl: '',
   enableMcp: false,
-  enforceOrchestrationScopes: false,
+  enforceOrchestrationScopes: true,
   agentHandMode: false,
   orchestrationIdempotencyStore: 'memory',
   enableDevMode: false,

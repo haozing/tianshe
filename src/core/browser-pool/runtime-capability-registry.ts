@@ -90,6 +90,7 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'text.dom': true,
       'text.ocr': true,
       'network.capture': true,
+      'network.sessionRequest': true,
       'console.capture': true,
       'download.manage': true,
       'dialog.basic': false,
@@ -104,6 +105,8 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'storage.dom':
         'Electron exposes local/session storage helpers through page evaluateWithArgs on the acquired WebContents.',
       'network.responseBody': 'Electron path does not persist response bodies in capture history.',
+      'network.sessionRequest':
+        'Electron WebContents performs Profile-bound same-origin fetch through the active page context without returning Cookie, Authorization, Set-Cookie, or browser storage secrets.',
       'input.native':
         'Electron exposes native input through the underlying WebContentsView SimpleBrowser native adapter.',
       'input.touch':
@@ -126,6 +129,7 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
     },
     stability: {
       'input.touch': 'experimental',
+      'network.sessionRequest': 'experimental',
       'emulation.viewport': 'experimental',
       'emulation.identity': 'experimental',
     },
@@ -156,6 +160,7 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'text.ocr': true,
       'network.capture': true,
       'network.responseBody': true,
+      'network.sessionRequest': true,
       'console.capture': true,
       'dialog.basic': true,
       'dialog.promptText': false,
@@ -169,6 +174,7 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
     stability: {
       'storage.dom': 'experimental',
       'input.touch': 'experimental',
+      'network.sessionRequest': 'experimental',
       'dialog.basic': 'experimental',
       'emulation.viewport': 'experimental',
       'emulation.identity': 'experimental',
@@ -188,6 +194,8 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
         'Real JavaScript prompt handling through the Chromium extension debugger route is currently too unreliable to expose as a supported unified capability.',
       'download.manage':
         'Chromium extension relay download lifecycle management is not wired into the unified browser API yet.',
+      'network.sessionRequest':
+        'Chromium extension relay performs Profile-bound same-origin fetch through the bound tab MAIN world without returning Cookie, Authorization, Set-Cookie, or browser storage secrets.',
       'events.runtime':
         'Chromium extension relay does not yet publish normalized runtime event subscriptions through BrowserEventCapability.',
       'emulation.viewport':
@@ -224,6 +232,7 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'text.dom': true,
       'text.ocr': true,
       'network.capture': true,
+      'network.sessionRequest': false,
       'console.capture': true,
       'window.openPolicy': true,
       'download.manage': true,
@@ -258,6 +267,8 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
         'DOM storage helpers are currently surfaced only on the Firefox BiDi runtime.',
       'network.responseBody':
         'Firefox BiDi runtime currently tracks response metadata only, not response bodies.',
+      'network.sessionRequest':
+        'Firefox BiDi runtime has not passed the Profile-bound sessionRequest contract spike yet.',
       'download.manage':
         'Download tracking is currently exposed through the Firefox BiDi runtime with filesystem-backed completion tracking and best-effort cancellation.',
       'pdf.print':
@@ -304,6 +315,7 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
       'text.ocr': false,
       'network.capture': true,
       'network.responseBody': false,
+      'network.sessionRequest': false,
       'console.capture': true,
       'download.manage': false,
       'dialog.basic': false,
@@ -346,6 +358,8 @@ export const STATIC_BROWSER_RUNTIME_DESCRIPTORS: Record<
         'Cloak Playwright does not bundle an OCR-backed text recognition path.',
       'network.responseBody':
         'Cloak Playwright network capture currently exposes metadata only in the unified runtime descriptor.',
+      'network.sessionRequest':
+        'Cloak Playwright does not expose the Profile-bound sessionRequest contract on the production unified runtime surface yet.',
       'download.manage':
         'Cloak Playwright download lifecycle management is not exposed through the unified runtime API yet.',
       'dialog.basic':

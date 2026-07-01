@@ -50,6 +50,7 @@ export function mapProfileRowToProfile(row: any): BrowserProfile {
     quota: Number(row.quota) || 1,
     idleTimeoutMs: Number(row.idle_timeout_ms) || DEFAULT_BROWSER_POOL_CONFIG.defaultIdleTimeoutMs,
     lockTimeoutMs: Number(row.lock_timeout_ms) || DEFAULT_BROWSER_POOL_CONFIG.defaultLockTimeoutMs,
+    loginStateRevision: Number(row.login_state_revision) || 0,
     isSystem: row.is_system === true || row.is_system === 1,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),

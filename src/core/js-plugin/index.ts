@@ -43,6 +43,7 @@ export { DataTableManager } from './data-table-manager';
 // ============================================
 export { PluginRegistry } from './registry';
 export { PermissionChecker } from './permissions';
+export { createPluginSiteAdapterProvider } from './site-adapter-provider';
 
 // ============================================
 // 辅助工具

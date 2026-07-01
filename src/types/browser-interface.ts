@@ -103,6 +103,7 @@ export const BROWSER_CAPABILITY_NAMES = [
   'text.ocr',
   'network.capture',
   'network.responseBody',
+  'network.sessionRequest',
   'console.capture',
   'download.manage',
   'dialog.basic',
@@ -242,6 +243,46 @@ export interface BrowserNetworkCaptureCapability {
   waitForResponse(urlPattern: string, timeout?: number): Promise<NetworkEntry>;
 }
 
+export type BrowserSessionRequestMethod =
+  | 'GET'
+  | 'POST'
+  | 'PUT'
+  | 'PATCH'
+  | 'DELETE'
+  | 'HEAD'
+  | 'OPTIONS';
+
+export type BrowserSessionRequestRedirect = 'follow' | 'error' | 'manual';
+
+export interface BrowserSessionRequestOptions {
+  url: string;
+  method?: BrowserSessionRequestMethod;
+  headers?: Record<string, string>;
+  body?: string | null;
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+  redirect?: BrowserSessionRequestRedirect;
+  signal?: AbortSignal;
+}
+
+export interface BrowserSessionRequestResponse {
+  url: string;
+  status: number;
+  statusText: string;
+  ok: boolean;
+  redirected: boolean;
+  headers: Record<string, string>;
+  bodyEncoding: 'empty' | 'text' | 'base64';
+  bodyText?: string;
+  bodyBase64?: string;
+  mimeType?: string | null;
+  byteLength: number;
+}
+
+export interface BrowserSessionRequestCapability {
+  sessionRequest(options: BrowserSessionRequestOptions): Promise<BrowserSessionRequestResponse>;
+}
+
 export interface BrowserConsoleCaptureCapability {
   startConsoleCapture(options?: { level?: ConsoleMessage['level'] | 'all' }): void;
   stopConsoleCapture(): void;
@@ -309,11 +350,28 @@ export interface BrowserDownloadEntry {
   url?: string;
   suggestedFilename?: string;
   path?: string;
+  artifactRef?: BrowserDownloadArtifactRef;
   contextId?: string;
   navigationId?: string;
   state: 'in_progress' | 'completed' | 'canceled' | 'interrupted';
   bytesReceived?: number;
   totalBytes?: number;
+}
+
+export interface BrowserDownloadArtifactFilePayload {
+  kind: 'file';
+  filename: string;
+  mimeType?: string;
+  sizeBytes: number;
+  sha256: string;
+  contentAddress?: string;
+}
+
+export interface BrowserDownloadArtifactRef {
+  artifactId: string;
+  type: 'download';
+  label?: string;
+  payload?: BrowserDownloadArtifactFilePayload;
 }
 
 export interface BrowserDownloadCapability {
@@ -395,6 +453,7 @@ export interface BrowserDownloadStartedRuntimeEventPayload {
   navigationId?: string;
   state: 'in_progress';
   path?: string;
+  artifactRef?: BrowserDownloadArtifactRef;
   source: BrowserDownloadRuntimeEventSource;
 }
 
@@ -405,6 +464,7 @@ export interface BrowserDownloadCompletedRuntimeEventPayload {
   navigationId?: string;
   state: 'completed';
   path?: string | null;
+  artifactRef?: BrowserDownloadArtifactRef;
   source: BrowserDownloadRuntimeEventSource;
 }
 
@@ -648,6 +708,7 @@ export type BrowserCapabilitySurface =
 
 export type BrowserOptionalCapabilitySet =
   Partial<BrowserNetworkCaptureCapability> &
+  Partial<BrowserSessionRequestCapability> &
   Partial<BrowserConsoleCaptureCapability> &
   Partial<BrowserWindowOpenPolicyCapability> &
   Partial<BrowserStorageCapability> &
@@ -703,6 +764,10 @@ const BROWSER_NETWORK_CAPTURE_METHODS = [
   'clearNetworkEntries',
   'waitForResponse',
 ] as const satisfies readonly BrowserCapabilityMethodName<BrowserNetworkCaptureCapability>[];
+
+const BROWSER_SESSION_REQUEST_METHODS = [
+  'sessionRequest',
+] as const satisfies readonly BrowserCapabilityMethodName<BrowserSessionRequestCapability>[];
 
 const BROWSER_CONSOLE_CAPTURE_METHODS = [
   'startConsoleCapture',
@@ -777,6 +842,15 @@ export function hasBrowserNetworkCaptureCapability(
   );
 }
 
+export function hasBrowserSessionRequestCapability(
+  browser: unknown
+): browser is BrowserSessionRequestCapability {
+  return hasBrowserCapabilityMethods<BrowserSessionRequestCapability>(
+    browser,
+    BROWSER_SESSION_REQUEST_METHODS
+  );
+}
+
 export function hasBrowserConsoleCaptureCapability(
   browser: unknown
 ): browser is BrowserConsoleCaptureCapability {
@@ -834,6 +908,16 @@ export function assertBrowserNetworkCaptureCapability(
     browser,
     BROWSER_NETWORK_CAPTURE_METHODS,
     'network capture capability'
+  );
+}
+
+export function assertBrowserSessionRequestCapability(
+  browser: unknown
+): asserts browser is BrowserSessionRequestCapability {
+  assertBrowserCapabilityMethods<BrowserSessionRequestCapability>(
+    browser,
+    BROWSER_SESSION_REQUEST_METHODS,
+    'network session request capability'
   );
 }
 

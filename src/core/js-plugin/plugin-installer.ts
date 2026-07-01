@@ -36,7 +36,13 @@ export interface PluginTableCreationResult {
 export interface PluginTableCleanupFailure {
   datasetId?: string;
   tableName?: string;
-  stage: 'delete_table' | 'delete_folder' | 'orphan_tables' | 'orphan_folder';
+  stage:
+    | 'delete_table'
+    | 'delete_folder'
+    | 'delete_state'
+    | 'orphan_tables'
+    | 'orphan_folder'
+    | 'orphan_state';
   error: string;
 }
 
@@ -60,6 +66,37 @@ export class PluginInstaller {
   constructor(private duckdb: IDuckDBService) {}
 
   // ========== 数据表管理 ==========
+
+  private async cleanupPluginStateNamespace(
+    pluginId: string,
+    operation: 'delete' | 'orphan',
+    stage: 'delete_state' | 'orphan_state'
+  ): Promise<void> {
+    const statements = [
+      `DELETE FROM plugin_data WHERE plugin_id = ?`,
+      `DELETE FROM plugin_configurations WHERE plugin_id = ?`,
+      `DELETE FROM plugin_secure_data WHERE plugin_id = ?`,
+      `DELETE FROM plugin_relational_state WHERE plugin_id = ?`,
+      `DELETE FROM plugin_state_migrations WHERE plugin_id = ?`,
+    ];
+
+    try {
+      logger.info(`  [DELETE] Clearing plugin state namespace...`);
+      for (const sql of statements) {
+        await this.duckdb.executeWithParams(sql, [pluginId]);
+      }
+      logger.info(`  [OK] Plugin state namespace cleared`);
+    } catch (error: unknown) {
+      const message = getUnknownErrorMessage(error);
+      logger.error(`  [ERROR] Failed to clear plugin state namespace:`, message);
+      throw new PluginTableCleanupError(
+        `Failed to clear plugin state namespace for ${pluginId}`,
+        pluginId,
+        operation,
+        [{ stage, error: message }]
+      );
+    }
+  }
 
   /**
    * 创建插件定义的数据表
@@ -564,6 +601,8 @@ export class PluginInstaller {
         [{ stage: 'delete_folder', error: message }]
       );
     }
+
+    await this.cleanupPluginStateNamespace(pluginId, 'delete', 'delete_state');
   }
 
   /**
@@ -624,6 +663,8 @@ export class PluginInstaller {
     }
 
     logger.info(`  [OK] Converted plugin folder to regular folder`);
+
+    await this.cleanupPluginStateNamespace(pluginId, 'orphan', 'orphan_state');
 
     for (const table of tables) {
       logger.info(`    - ${table.name} (${table.id})`);

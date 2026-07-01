@@ -13,6 +13,7 @@ import { setSchedulerService } from '../../core/js-plugin/namespaces/scheduler';
 import { setOcrPoolConfig } from '../../core/system-automation/ocr';
 import type { TiansheEdition } from '../../edition';
 import { DownloadManager } from '../download';
+import { createDuckDBDownloadArtifactSink } from '../download-artifact-sink';
 import { DuckDBService } from '../duckdb/service';
 import type { IpcSenderGuard } from '../ipc-handlers/utils';
 import * as datasetFolderHandlerModule from '../ipc-handlers/dataset-folder-handler';
@@ -344,8 +345,9 @@ function configureViewLifecycle(
 
 function configureDownloadAndProxyRuntime(
   options: MainServiceCompositionOptions,
-  { downloadManager }: WindowServices
+  { duckdbService, downloadManager }: MainRouteServices
 ): void {
+  downloadManager.setArtifactSink(createDuckDBDownloadArtifactSink(duckdbService));
   downloadManager.setupPartition('default');
   downloadManager.setupPartition('persist:default');
 
@@ -357,13 +359,16 @@ function initializeBrowserPoolRuntime(
   { duckdbService, extensionPackages, store, viewManager, windowManager }: BrowserPoolRuntimeServices
 ): void {
   const { appRuntime } = options;
-  const electronBrowserFactory = createBrowserFactory(viewManager, windowManager);
+  const downloadArtifactSink = createDuckDBDownloadArtifactSink(duckdbService);
+  const electronBrowserFactory = createBrowserFactory(viewManager, windowManager, {
+    downloadArtifactSink,
+  });
   const extensionBrowserFactory = createExtensionBrowserFactory({
     resolveManagedExtensions: (profileId: string) =>
       extensionPackages.resolveLaunchExtensions(profileId),
   });
-  const ruyiBrowserFactory = createRuyiBrowserFactory();
-  const cloakBrowserFactory = createCloakBrowserFactory();
+  const ruyiBrowserFactory = createRuyiBrowserFactory({ downloadArtifactSink });
+  const cloakBrowserFactory = createCloakBrowserFactory({ downloadArtifactSink });
   const runtimeRegistry = createBrowserRuntimeRegistry();
   for (const provider of createDefaultBrowserRuntimeProviders({
     electronBrowserFactory,
@@ -445,7 +450,7 @@ export async function initializeMainServices(
 
     createPluginRuntime(options, runtimeServices);
     configureViewLifecycle(runtimeServices);
-    configureDownloadAndProxyRuntime(options, windowServices);
+    configureDownloadAndProxyRuntime(options, runtimeServices);
     initializeBrowserPoolRuntime(options, runtimeServices);
     registerBrowserRuntimeIpcRoutes(options);
 

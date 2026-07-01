@@ -165,7 +165,7 @@ describe('SiteAdapterRunner', () => {
         procedureId: 'dangerous',
         browser: createProcedureBrowser(),
       })
-    ).rejects.toThrow('confirmRisk=true');
+    ).rejects.toThrow('confirmationGranted=true');
 
     await expect(
       SiteAdapterRunner.run({
@@ -173,7 +173,7 @@ describe('SiteAdapterRunner', () => {
         adapter: highRiskAdapter,
         procedureId: 'dangerous',
         browser: createProcedureBrowser(),
-        options: { confirmRisk: true },
+        options: { confirmationGranted: true },
       })
     ).resolves.toMatchObject({
       runner: 'procedure',

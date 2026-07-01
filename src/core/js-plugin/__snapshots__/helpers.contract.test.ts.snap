@@ -22,6 +22,7 @@ exports[`PluginHelpers contract snapshot > helpers public surface is stable 1`] 
     "raw",
     "savedSite",
     "scheduler",
+    "state",
     "storage",
     "taskQueue",
     "ui",
@@ -834,7 +835,7 @@ exports[`PluginHelpers contract snapshot > helpers public surface is stable 1`] 
       {
         "name": "launch",
         "requiredParams": 1,
-        "returnType": "Promise<BrowserHandle>",
+        "returnType": "Promise<PluginBrowserHandle>",
       },
       {
         "name": "launchPopup",
@@ -970,6 +971,53 @@ exports[`PluginHelpers contract snapshot > helpers public surface is stable 1`] 
         "name": "trigger",
         "requiredParams": 1,
         "returnType": "Promise<ExecutionInfo>",
+      },
+    ],
+    "state": [
+      {
+        "name": "clear",
+        "requiredParams": 0,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "delete",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "execute",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "get",
+        "requiredParams": 1,
+        "returnType": "Promise<T | null>",
+      },
+      {
+        "name": "list",
+        "requiredParams": 0,
+        "returnType": "Promise<Record<string, unknown>>",
+      },
+      {
+        "name": "migrate",
+        "requiredParams": 1,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "query",
+        "requiredParams": 1,
+        "returnType": "Promise<T[]>",
+      },
+      {
+        "name": "set",
+        "requiredParams": 2,
+        "returnType": "Promise<void>",
+      },
+      {
+        "name": "transaction",
+        "requiredParams": 1,
+        "returnType": "Promise<T>",
       },
     ],
     "storage": [

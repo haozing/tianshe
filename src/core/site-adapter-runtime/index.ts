@@ -50,6 +50,13 @@ export {
   type SiteAdapterRunnerRunResult,
 } from './runner';
 export {
+  SiteAdapterRegistry,
+  createSiteAdapterRegistry,
+  type SiteAdapterProvider,
+  type SiteAdapterProviderEntry,
+  type SiteAdapterProviderError,
+} from './site-adapter-registry';
+export {
   appendInteractorActionTrace,
   appendProcedureTransition,
   createSiteAdapterRunState,
@@ -100,6 +107,8 @@ export type {
   SiteAdapterFixtureRunResult,
   SiteAdapterManifest,
   SiteAdapterModule,
+  RegisteredSiteAdapter,
+  SiteAdapterRegistrationSource,
   SiteAdapterSideEffectLevel,
   SiteAdapterVerifier,
   SiteAdapterVerifierContext,

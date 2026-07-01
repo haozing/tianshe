@@ -302,6 +302,33 @@ describe('PluginInstaller', () => {
       );
     });
 
+    it('应该在删除插件表流程中清理插件状态 namespace', async () => {
+      mockDuckDB.executeSQLWithParams.mockResolvedValue([]);
+
+      await installer.deletePluginTables('test-plugin');
+
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM plugin_data'),
+        ['test-plugin']
+      );
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM plugin_configurations'),
+        ['test-plugin']
+      );
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM plugin_secure_data'),
+        ['test-plugin']
+      );
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM plugin_relational_state'),
+        ['test-plugin']
+      );
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM plugin_state_migrations'),
+        ['test-plugin']
+      );
+    });
+
     it('单表删除失败时应该抛出结构化错误并保留插件文件夹 metadata', async () => {
       mockDuckDB.executeSQLWithParams.mockResolvedValue([
         { id: 'table-1', name: 'Table 1' },
@@ -349,6 +376,25 @@ describe('PluginInstaller', () => {
         ],
       } satisfies Partial<PluginTableCleanupError>);
     });
+
+    it('插件状态清理失败时应该抛出结构化错误', async () => {
+      mockDuckDB.executeSQLWithParams.mockResolvedValue([]);
+      mockDuckDB.executeWithParams
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('state cleanup failed'));
+
+      await expect(installer.deletePluginTables('test-plugin')).rejects.toMatchObject({
+        name: 'PluginTableCleanupError',
+        pluginId: 'test-plugin',
+        operation: 'delete',
+        failures: [
+          expect.objectContaining({
+            stage: 'delete_state',
+            error: 'state cleanup failed',
+          }),
+        ],
+      } satisfies Partial<PluginTableCleanupError>);
+    });
   });
 
   // ========== orphanPluginTables ==========
@@ -381,6 +427,35 @@ describe('PluginInstaller', () => {
 
       expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
         expect.stringContaining('UPDATE dataset_folders SET plugin_id = NULL'),
+        ['test-plugin']
+      );
+    });
+
+    it('应该在孤立插件表流程中清理插件状态 namespace', async () => {
+      mockDuckDB.executeSQLWithParams.mockResolvedValue([
+        { id: 'table-1', name: 'Table 1', folder_id: 'folder-1' },
+      ]);
+
+      await installer.orphanPluginTables('test-plugin');
+
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM plugin_data'),
+        ['test-plugin']
+      );
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM plugin_configurations'),
+        ['test-plugin']
+      );
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM plugin_secure_data'),
+        ['test-plugin']
+      );
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM plugin_relational_state'),
+        ['test-plugin']
+      );
+      expect(mockDuckDB.executeWithParams).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM plugin_state_migrations'),
         ['test-plugin']
       );
     });
@@ -420,6 +495,28 @@ describe('PluginInstaller', () => {
           expect.objectContaining({
             stage: 'orphan_folder',
             error: 'folder update failed',
+          }),
+        ],
+      } satisfies Partial<PluginTableCleanupError>);
+    });
+
+    it('插件状态清理失败时应该抛出结构化错误', async () => {
+      mockDuckDB.executeSQLWithParams.mockResolvedValue([
+        { id: 'table-1', name: 'Table 1', folder_id: 'folder-1' },
+      ]);
+      mockDuckDB.executeWithParams
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('state cleanup failed'));
+
+      await expect(installer.orphanPluginTables('test-plugin')).rejects.toMatchObject({
+        name: 'PluginTableCleanupError',
+        pluginId: 'test-plugin',
+        operation: 'orphan',
+        failures: [
+          expect.objectContaining({
+            stage: 'orphan_state',
+            error: 'state cleanup failed',
           }),
         ],
       } satisfies Partial<PluginTableCleanupError>);

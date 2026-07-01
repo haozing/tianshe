@@ -72,11 +72,16 @@ describe('ProfileService.deleteWithCascade', () => {
     const deleteProfileStmt = preparedStatements.find((stmt) =>
       stmt.sql.includes('DELETE FROM browser_profiles')
     );
+    const deleteLoginStateStmt = preparedStatements.find((stmt) =>
+      stmt.sql.includes('DELETE FROM profile_login_states')
+    );
 
     expect(markAccountStmt).toBeDefined();
+    expect(deleteLoginStateStmt).toBeDefined();
     expect(deleteProfileStmt).toBeDefined();
 
     expect(markAccountStmt?.bind).toHaveBeenCalledWith([UNBOUND_PROFILE_ID, 'profile-1']);
+    expect(deleteLoginStateStmt?.bind).toHaveBeenCalledWith(['profile-1']);
     expect(deleteProfileStmt?.bind).toHaveBeenCalledWith(['profile-1']);
     expect((service as never).purgeCloakProfileData).toHaveBeenCalledWith('profile-1');
   });

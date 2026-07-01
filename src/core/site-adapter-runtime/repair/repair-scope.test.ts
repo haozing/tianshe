@@ -6,7 +6,7 @@ import {
   createSiteAdapterRepairScopeOptionsFromManifest,
   evaluateSiteAdapterRepairPath,
 } from './repair-scope';
-import { officialSiteAdapters } from '../../../site-adapters';
+import { siteAdapterRegistry } from '../../../site-adapters';
 import type { SiteAdapterManifest } from '../types';
 
 const workspaceRoot = path.resolve('D:/workspace/tianshe-client-open');
@@ -159,11 +159,12 @@ describe('site adapter repair scope', () => {
   });
 
   it('generates an allow and deny repair scope matrix for every official adapter', () => {
-    const matrix = createSiteAdapterRepairScopeMatrix(officialSiteAdapters, { workspaceRoot });
+    const adapters = siteAdapterRegistry.listAdapters();
+    const matrix = createSiteAdapterRepairScopeMatrix(adapters, { workspaceRoot });
 
     expect(matrix.ok).toBe(true);
     expect(matrix.rows.map((row) => row.adapterId).sort()).toEqual(
-      officialSiteAdapters.map((adapter) => adapter.manifest.id).sort()
+      adapters.map((adapter) => adapter.manifest.id).sort()
     );
     expect(matrix.rows.length).toBeGreaterThanOrEqual(6);
     for (const row of matrix.rows) {

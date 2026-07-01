@@ -133,12 +133,38 @@ describe('ObservationQueryService', () => {
         label: 'query failure context',
       },
       {
+        artifactId: 'artifact-download',
+        timestamp: 204,
+        traceId: 'trace-2',
+        type: 'download',
+        component: 'download',
+        label: 'download.csv',
+        payload: {
+          kind: 'file',
+          storageKey: 'bb/artifact-download/download.csv',
+          filename: 'download.csv',
+          mimeType: 'text/csv',
+          sizeBytes: 12,
+          sha256: 'd'.repeat(64),
+          retentionPolicy: 'download',
+        },
+      },
+      {
         artifactId: 'artifact-site-repair',
         timestamp: 205,
         traceId: 'trace-2',
         type: 'site_adapter_repair_evidence',
         component: 'site-adapter-runtime',
         label: 'site adapter repair evidence',
+        payload: {
+          kind: 'file',
+          storageKey: 'aa/artifact-site-repair/evidence.zip',
+          filename: 'evidence.zip',
+          mimeType: 'application/zip',
+          sizeBytes: 2048,
+          sha256: 'c'.repeat(64),
+          retentionPolicy: '7d',
+        },
       },
     ];
 
@@ -170,12 +196,31 @@ describe('ObservationQueryService', () => {
       errorContext: {
         artifactId: 'artifact-context',
       },
+      download: {
+        artifactId: 'artifact-download',
+      },
       siteAdapterRepairEvidence: {
         artifactId: 'artifact-site-repair',
+        payload: {
+          kind: 'file',
+          storageKey: 'aa/artifact-site-repair/evidence.zip',
+        },
       },
     });
     expect(bundle.recentEvents).toHaveLength(2);
-    expect(bundle.artifactRefs).toHaveLength(5);
+    expect(bundle.artifactRefs).toHaveLength(6);
+    expect(bundle.artifactRefs).toContainEqual(
+      expect.objectContaining({
+        artifactId: 'artifact-site-repair',
+        payload: expect.objectContaining({
+          kind: 'file',
+          storageKey: 'aa/artifact-site-repair/evidence.zip',
+          filename: 'evidence.zip',
+          sha256: 'c'.repeat(64),
+        }),
+      })
+    );
+    expect(JSON.stringify(bundle.artifactRefs)).not.toContain('C:\\');
   });
 
   it('builds trace timelines and recent failure summaries', async () => {

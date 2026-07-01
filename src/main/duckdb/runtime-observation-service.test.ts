@@ -96,6 +96,7 @@ describe('RuntimeObservationService', () => {
                 'dataset_id',
                 'browser_id',
                 'attrs',
+                'payload',
                 'data',
               ],
               getRows: () => [
@@ -118,6 +119,7 @@ describe('RuntimeObservationService', () => {
                   null,
                   null,
                   'view-1',
+                  null,
                   null,
                   '{"url":"https://example.com"}',
                 ],
@@ -164,6 +166,9 @@ describe('RuntimeObservationService', () => {
     );
     expect(mockConnection.run).toHaveBeenCalledWith(
       'ALTER TABLE runtime_artifacts ADD COLUMN IF NOT EXISTS browser_runtime_id VARCHAR'
+    );
+    expect(mockConnection.run).toHaveBeenCalledWith(
+      'ALTER TABLE runtime_artifacts ADD COLUMN IF NOT EXISTS payload JSON'
     );
   });
 
@@ -311,6 +316,7 @@ describe('RuntimeObservationService', () => {
               'dataset_id',
               'browser_id',
               'attrs',
+              'payload',
               'data',
             ],
             getRows: () => [
@@ -334,6 +340,7 @@ describe('RuntimeObservationService', () => {
                 null,
                 null,
                 null,
+                '{"kind":"file","storageKey":"aa/artifact-corrupt/file.png","filename":"file.png","sizeBytes":10,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
                 '{bad data',
               ],
             ],
@@ -379,6 +386,14 @@ describe('RuntimeObservationService', () => {
       type: 'network_summary',
       component: 'browser',
       label: 'network summary',
+      payload: {
+        kind: 'file',
+        storageKey: 'aa/artifact-write-1/network.har',
+        filename: 'network.har',
+        mimeType: 'application/json',
+        sizeBytes: 12,
+        sha256: 'b'.repeat(64),
+      },
       data: {
         total: 1,
       },
@@ -389,6 +404,35 @@ describe('RuntimeObservationService', () => {
     expect(mockConnection.prepare).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO runtime_artifacts')
     );
+    const insertStatement = mockConnection.prepare.mock.results.at(-1)?.value;
+    expect(insertStatement?.bind).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        JSON.stringify({
+          kind: 'file',
+          storageKey: 'aa/artifact-write-1/network.har',
+          filename: 'network.har',
+          mimeType: 'application/json',
+          sizeBytes: 12,
+          sha256: 'b'.repeat(64),
+        }),
+      ])
+    );
+  });
+
+  it('queries a single runtime artifact by id from the unified artifact table', async () => {
+    const artifact = await service.getArtifactById(' artifact-1 ');
+
+    expect(artifact).toEqual(
+      expect.objectContaining({
+        artifactId: 'artifact-1',
+        traceId: 'trace-1',
+        type: 'snapshot',
+        label: 'failure snapshot',
+      })
+    );
+    expect(mockConnection.prepare).toHaveBeenCalledWith(
+      'SELECT * FROM runtime_artifacts WHERE id = ? LIMIT 1'
+    );
   });
 
   it('cleans runtime observations older than retention cutoff', async () => {
@@ -398,8 +442,18 @@ describe('RuntimeObservationService', () => {
         bind: vi.fn(),
         run: vi.fn().mockResolvedValue(undefined),
         runAndReadAll: vi.fn().mockResolvedValue({
-          columnNames: () => ['count'],
-          getRows: () => [[query.includes('runtime_artifacts') ? 3 : 2]],
+          columnNames: () =>
+            query.includes('SELECT * FROM runtime_artifacts')
+              ? ['id', 'trace_id', 'timestamp', 'seq', 'type', 'component']
+              : ['count'],
+          getRows: () =>
+            query.includes('SELECT * FROM runtime_artifacts')
+              ? [
+                  ['artifact-expired-1', 'trace-1', 1, 1, 'download', 'download'],
+                  ['artifact-expired-2', 'trace-1', 1, 2, 'download', 'download'],
+                  ['artifact-expired-3', 'trace-1', 1, 3, 'download', 'download'],
+                ]
+              : [[2]],
         }),
         destroySync: vi.fn(),
       };
@@ -419,14 +473,143 @@ describe('RuntimeObservationService', () => {
     });
     expect(statements.map((item) => item.query)).toEqual(
       expect.arrayContaining([
-        'SELECT COUNT(*) AS count FROM runtime_artifacts WHERE timestamp < ?',
+        'SELECT * FROM runtime_artifacts WHERE timestamp < ?',
         'SELECT COUNT(*) AS count FROM runtime_events WHERE timestamp < ?',
-        'DELETE FROM runtime_artifacts WHERE timestamp < ?',
+        'DELETE FROM runtime_artifacts WHERE id IN (?, ?, ?)',
         'DELETE FROM runtime_events WHERE timestamp < ?',
       ])
     );
-    for (const { statement } of statements) {
+    for (const { query, statement } of statements.filter((item) => item.query.includes('timestamp < ?'))) {
       expect(statement.bind).toHaveBeenCalledWith([1_699_827_200_000]);
     }
+  });
+
+  it('deletes file-backed payloads during retention cleanup before deleting rows', async () => {
+    const deletedPayloads: unknown[] = [];
+    service = new RuntimeObservationService(mockConnection, {
+      artifactFileStore: {
+        deleteFilePayload: vi.fn(async (payload) => {
+          deletedPayloads.push(payload);
+          return true;
+        }),
+      },
+    });
+    mockConnection.prepare.mockImplementation((query: string) => {
+      if (query === 'SELECT * FROM runtime_artifacts WHERE timestamp < ?') {
+        return {
+          bind: vi.fn(),
+          run: vi.fn().mockResolvedValue(undefined),
+          runAndReadAll: vi.fn().mockResolvedValue({
+            columnNames: () => [
+              'id',
+              'trace_id',
+              'timestamp',
+              'seq',
+              'type',
+              'component',
+              'payload',
+            ],
+            getRows: () => [
+              [
+                'artifact-expired',
+                'trace-expired',
+                1_699_000_000_000,
+                1_699_000_000_000_000,
+                'screenshot',
+                'browser',
+                '{"kind":"file","storageKey":"aa/artifact-expired/file.png","filename":"file.png","sizeBytes":10,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
+              ],
+            ],
+          }),
+          destroySync: vi.fn(),
+        };
+      }
+
+      return {
+        bind: vi.fn(),
+        run: vi.fn().mockResolvedValue(undefined),
+        runAndReadAll: vi.fn().mockResolvedValue({
+          columnNames: () => ['count'],
+          getRows: () => [[query.includes('runtime_artifacts') ? 1 : 0]],
+        }),
+        destroySync: vi.fn(),
+      };
+    });
+
+    await service.cleanupRetention({
+      daysToKeep: 2,
+      now: 1_700_000_000_000,
+    });
+
+    expect(deletedPayloads).toEqual([
+      expect.objectContaining({
+        kind: 'file',
+        storageKey: 'aa/artifact-expired/file.png',
+      }),
+    ]);
+  });
+
+  it('retains artifact rows when file deletion fails during retention cleanup', async () => {
+    const deleteFilePayload = vi.fn(async () => {
+      throw new Error('locked file');
+    });
+    service = new RuntimeObservationService(mockConnection, {
+      artifactFileStore: {
+        deleteFilePayload,
+      },
+    });
+    const statements: any[] = [];
+    mockConnection.prepare.mockImplementation((query: string) => {
+      const statement = {
+        bind: vi.fn(),
+        run: vi.fn().mockResolvedValue(undefined),
+        runAndReadAll: vi.fn().mockResolvedValue({
+          columnNames: () =>
+            query === 'SELECT * FROM runtime_artifacts WHERE timestamp < ?'
+              ? [
+                  'id',
+                  'trace_id',
+                  'timestamp',
+                  'seq',
+                  'type',
+                  'component',
+                  'payload',
+                ]
+              : ['count'],
+          getRows: () =>
+            query === 'SELECT * FROM runtime_artifacts WHERE timestamp < ?'
+              ? [
+                  [
+                    'artifact-retained',
+                    'trace-retained',
+                    1_699_000_000_000,
+                    1_699_000_000_000_000,
+                    'download',
+                    'download',
+                    '{"kind":"file","storageKey":"aa/artifact-retained/file.png","filename":"file.png","sizeBytes":10,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
+                  ],
+                ]
+              : [[0]],
+        }),
+        destroySync: vi.fn(),
+      };
+      statements.push({ query, statement });
+      return statement;
+    });
+
+    const result = await service.cleanupRetention({
+      daysToKeep: 2,
+      now: 1_700_000_000_000,
+    });
+
+    expect(result).toMatchObject({
+      artifactsDeleted: 0,
+      artifactFilesDeleted: 0,
+      artifactRowsRetained: 1,
+    });
+    expect(deleteFilePayload).toHaveBeenCalled();
+    expect(statements.map((item) => item.query)).not.toContain(
+      'DELETE FROM runtime_artifacts WHERE id IN (?)'
+    );
   });
 });

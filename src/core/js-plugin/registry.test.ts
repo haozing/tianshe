@@ -15,6 +15,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PluginRegistry, getPluginRegistry } from './registry';
 import type { JSPluginManifest } from '../../types/js-plugin';
 import { RegistryErrorCode } from '../../types/error-codes';
+import { createPluginCapabilityProvider } from './capability-provider';
+import {
+  createOrchestrationCapabilityRegistry,
+  createOrchestrationExecutor,
+} from '../ai-dev/orchestration';
 
 // Mock logger
 vi.mock('../logger', () => ({
@@ -519,6 +524,315 @@ describe('PluginRegistry', () => {
       expect(result.success).toBe(false);
       expect(result.error?.code).toBe('PLUGIN_NOT_FOUND');
       expect(result.error?.message).toContain('not found');
+    });
+  });
+
+  describe('Capability provider', () => {
+    it('wraps trusted plugin API contributions as non-public capabilities by default', async () => {
+      registry.registerPlugin(
+        'plugin-1',
+        createTestManifest('plugin-1', {
+          trustModel: 'first_party',
+          capabilities: [
+            {
+              name: 'summarize',
+              version: '1.0.0',
+              description: 'Summarize from a trusted plugin',
+              inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  text: { type: 'string' },
+                },
+                required: ['text'],
+              },
+              outputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['summary'],
+                properties: {
+                  summary: { type: 'string' },
+                },
+              },
+              requiredScopes: ['plugin.plugin-1.invoke'],
+              idempotent: true,
+              retryPolicy: { retryable: false, maxAttempts: 1 },
+              handler: { kind: 'api', name: 'summarize' },
+            },
+          ],
+        })
+      );
+      const handler = vi.fn().mockResolvedValue({ summary: 'ok' });
+      registry.registerAPI('plugin-1', 'summarize', { handler });
+
+      const provider = createPluginCapabilityProvider(registry);
+      const publicRegistry = createOrchestrationCapabilityRegistry({
+        providers: [provider],
+      });
+      const fullRegistry = createOrchestrationCapabilityRegistry({
+        providers: [provider],
+        view: 'all',
+      });
+
+      expect(publicRegistry.listCapabilities()).toEqual([]);
+      expect(fullRegistry.listCapabilities().map((capability) => capability.name)).toEqual([
+        'plugin.plugin-1.summarize',
+      ]);
+      expect(fullRegistry.listCapabilities()[0].outputSchema).toMatchObject({
+        properties: {
+          data: {
+            required: ['summary'],
+          },
+        },
+      });
+
+      const executor = createOrchestrationExecutor(
+        { enforceScopes: false },
+        { registry: fullRegistry }
+      );
+      expect(executor.hasCapability('plugin.plugin-1.summarize')).toBe(true);
+      const result = await executor.invokeApi({
+        name: 'plugin.plugin-1.summarize',
+        arguments: { text: 'hello' },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.output.structuredContent).toMatchObject({
+        ok: true,
+        data: { summary: 'ok' },
+      });
+      expect(handler).toHaveBeenCalledWith({ text: 'hello' });
+    });
+
+    it('quarantines plugin capability contributions without first-party trust', () => {
+      for (const trustModel of [undefined, 'third_party' as 'first_party']) {
+        PluginRegistry.resetInstance();
+        registry = getPluginRegistry();
+        registry.registerPlugin(
+          'plugin-1',
+          createTestManifest('plugin-1', {
+            trustModel,
+            capabilities: [
+              {
+                name: 'untrusted',
+                version: '1.0.0',
+                description: 'Untrusted capability must not enter registry',
+                outputSchema: {
+                  type: 'object',
+                  additionalProperties: true,
+                },
+                requiredScopes: ['plugin.plugin-1.invoke'],
+                retryPolicy: { retryable: false, maxAttempts: 1 },
+                assistantSurface: { publicMcp: true },
+                handler: { kind: 'api', name: 'untrusted' },
+              },
+            ],
+          })
+        );
+        registry.registerAPI('plugin-1', 'untrusted', {
+          handler: vi.fn().mockResolvedValue('nope'),
+        });
+
+        const provider = createPluginCapabilityProvider(registry);
+        const registryView = createOrchestrationCapabilityRegistry({
+          providers: [provider],
+          view: 'all',
+        });
+
+        expect(registryView.listCapabilities()).toEqual([]);
+      }
+    });
+
+    it('never trusts plugin-declared publicMcp on first-party capability contributions', () => {
+      registry.registerPlugin(
+        'plugin-1',
+        createTestManifest('plugin-1', {
+          trustModel: 'first_party',
+          capabilities: [
+            {
+              name: 'private-even-if-declared-public',
+              version: '1.0.0',
+              description: 'Manifest requested public MCP exposure',
+              outputSchema: {
+                type: 'object',
+                additionalProperties: true,
+              },
+              requiredScopes: ['plugin.plugin-1.invoke'],
+              retryPolicy: { retryable: false, maxAttempts: 1 },
+              assistantSurface: { publicMcp: true },
+              handler: { kind: 'api', name: 'handler' },
+            },
+          ],
+        })
+      );
+      registry.registerAPI('plugin-1', 'handler', {
+        handler: vi.fn().mockResolvedValue('ok'),
+      });
+
+      const provider = createPluginCapabilityProvider(registry);
+      const publicRegistry = createOrchestrationCapabilityRegistry({
+        providers: [provider],
+      });
+      const fullRegistry = createOrchestrationCapabilityRegistry({
+        providers: [provider],
+        view: 'all',
+      });
+
+      expect(publicRegistry.listCapabilities()).toEqual([]);
+      expect(fullRegistry.listCapabilities()[0]).toMatchObject({
+        name: 'plugin.plugin-1.private-even-if-declared-public',
+        assistantSurface: {
+          publicMcp: false,
+        },
+      });
+    });
+
+    it('quarantines plugin capability contributions when manifest handler is not activated', () => {
+      registry.registerPlugin(
+        'plugin-1',
+        createTestManifest('plugin-1', {
+          trustModel: 'first_party',
+          capabilities: [
+            {
+              name: 'missing',
+              version: '1.0.0',
+              description: 'Missing handler capability',
+              outputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['ok', 'data'],
+                properties: {
+                  ok: { type: 'boolean' },
+                  data: {},
+                },
+              },
+              requiredScopes: ['plugin.plugin-1.invoke'],
+              retryPolicy: { retryable: false, maxAttempts: 1 },
+              handler: { kind: 'api', name: 'missingApi' },
+            },
+            {
+              name: 'healthy',
+              version: '1.0.0',
+              description: 'Healthy handler capability',
+              outputSchema: {
+                type: 'object',
+                additionalProperties: true,
+              },
+              requiredScopes: ['plugin.plugin-1.invoke'],
+              retryPolicy: { retryable: false, maxAttempts: 1 },
+              handler: { kind: 'api', name: 'healthyApi' },
+            },
+          ],
+        })
+      );
+      registry.registerAPI('plugin-1', 'healthyApi', {
+        handler: vi.fn().mockResolvedValue('ok'),
+      });
+
+      const provider = createPluginCapabilityProvider(registry);
+      const registryView = createOrchestrationCapabilityRegistry({
+        providers: [provider],
+        view: 'all',
+      });
+
+      expect(registryView.listCapabilities().map((capability) => capability.name)).toEqual([
+        'plugin.plugin-1.healthy',
+      ]);
+      expect(provider.listErrors?.()).toEqual([
+        expect.objectContaining({
+          providerId: 'trusted-plugin',
+          pluginId: 'plugin-1',
+          capabilityName: 'missing',
+          reasonCode: 'plugin_capability_handler_missing',
+          message: expect.stringContaining('has no activated api handler'),
+        }),
+      ]);
+    });
+
+    it('notifies registry views when plugin capability handlers are registered or unregistered', () => {
+      registry.registerPlugin(
+        'plugin-1',
+        createTestManifest('plugin-1', {
+          trustModel: 'first_party',
+          capabilities: [
+            {
+              name: 'ping',
+              version: '1.0.0',
+              description: 'Ping capability',
+              outputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['ok', 'data'],
+                properties: {
+                  ok: { type: 'boolean' },
+                  data: {},
+                },
+              },
+              requiredScopes: ['plugin.plugin-1.invoke'],
+              retryPolicy: { retryable: false, maxAttempts: 1 },
+              handler: { kind: 'api', name: 'ping' },
+            },
+          ],
+        })
+      );
+      const provider = createPluginCapabilityProvider(registry);
+      registry.registerAPI('plugin-1', 'ping', {
+        handler: vi.fn().mockResolvedValue('pong'),
+      });
+      const registryView = createOrchestrationCapabilityRegistry({
+        providers: [provider],
+        view: 'all',
+      });
+      expect(registryView.listCapabilities().map((capability) => capability.name)).toEqual([
+        'plugin.plugin-1.ping',
+      ]);
+
+      registry.unregisterPlugin('plugin-1');
+      expect(registryView.listCapabilities()).toEqual([]);
+    });
+
+    it('notifies registry views when plugin capability manifests are registered again', () => {
+      const provider = createPluginCapabilityProvider(registry);
+      const registryView = createOrchestrationCapabilityRegistry({
+        providers: [provider],
+        view: 'all',
+      });
+
+      registry.registerPlugin(
+        'plugin-1',
+        createTestManifest('plugin-1', {
+          trustModel: 'first_party',
+          capabilities: [],
+        })
+      );
+      registry.registerAPI('plugin-1', 'manifestAdded', {
+        handler: vi.fn().mockResolvedValue('ok'),
+      });
+      expect(registryView.listCapabilities()).toEqual([]);
+
+      registry.registerPlugin(
+        'plugin-1',
+        createTestManifest('plugin-1', {
+          trustModel: 'first_party',
+          capabilities: [
+            {
+              name: 'manifest-added',
+              version: '1.0.0',
+              description: 'Added by manifest refresh',
+              outputSchema: {
+                type: 'string',
+              },
+              requiredScopes: ['plugin.plugin-1.invoke'],
+              retryPolicy: { retryable: false, maxAttempts: 1 },
+              handler: { kind: 'api', name: 'manifestAdded' },
+            },
+          ],
+        })
+      );
+
+      expect(registryView.listCapabilities().map((capability) => capability.name)).toEqual([
+        'plugin.plugin-1.manifest-added',
+      ]);
     });
   });
 

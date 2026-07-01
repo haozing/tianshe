@@ -9,8 +9,13 @@ import type { ViewRegistration, WebContentsViewInfo } from './webcontentsview-ma
 
 const logger = createLogger('WebContentsViewPluginPageController');
 
-const SHARED_PLUGIN_PAGE_VIEW_ID = 'plugin-page:shared';
-const SHARED_PLUGIN_PAGE_PARTITION = 'persist:plugin-page-shared';
+function buildPluginPageViewId(pluginId: string, activityBarViewId: string): string {
+  return `plugin-page:${pluginId}:${activityBarViewId}`;
+}
+
+function buildPluginPagePartition(pluginId: string): string {
+  return `persist:plugin-page:${pluginId}`;
+}
 
 export interface WebContentsViewPluginPageControllerDeps {
   registry: Map<string, ViewRegistration>;
@@ -27,7 +32,6 @@ export class WebContentsViewPluginPageController {
   private pluginPageViewLoads = new Map<string, Promise<void>>();
   private pluginPageViewContributions = new Map<string, ActivityBarViewContribution>();
   private pluginPageViewCurrentPluginByView = new Map<string, string>();
-  private sharedPluginPageViewLoadQueue: Promise<void> = Promise.resolve();
   private pluginManager?: JSPluginManager;
 
   constructor(private deps: WebContentsViewPluginPageControllerDeps) {}
@@ -50,13 +54,11 @@ export class WebContentsViewPluginPageController {
     this.pluginPageViewLoads.clear();
     this.pluginPageViewContributions.clear();
     this.pluginPageViewCurrentPluginByView.clear();
-    this.sharedPluginPageViewLoadQueue = Promise.resolve();
   }
   private parsePluginPageViewId(
     viewId: string
   ): { pluginId: string; activityBarViewId: string } | null {
     if (!viewId.startsWith('plugin-page:')) return null;
-    if (viewId === SHARED_PLUGIN_PAGE_VIEW_ID) return null;
     const rest = viewId.slice('plugin-page:'.length);
     const firstSep = rest.indexOf(':');
     if (firstSep <= 0) return null;
@@ -88,19 +90,6 @@ export class WebContentsViewPluginPageController {
       throw new Error('pluginId is required');
     }
 
-    if (viewId === SHARED_PLUGIN_PAGE_VIEW_ID) {
-      const task = this.sharedPluginPageViewLoadQueue.then(() =>
-        this.loadPluginPageIntoView({
-          viewId,
-          pluginId: normalizedPluginId,
-          forceReload: true,
-        })
-      );
-      this.sharedPluginPageViewLoadQueue = task.catch(() => undefined);
-      await task;
-      return;
-    }
-
     await this.loadPluginPageIntoView({
       viewId,
       pluginId: normalizedPluginId,
@@ -109,23 +98,26 @@ export class WebContentsViewPluginPageController {
   }
 
   private buildPluginPageInjectionScript(pluginId: string, apiList: string[]): string {
+    const encodedPluginId = JSON.stringify(pluginId);
+    const encodedApiList = JSON.stringify(apiList);
     return `
       (function() {
+        const pluginId = ${encodedPluginId};
+        const apiList = ${encodedApiList};
+
         // 确保 pluginAPI 对象存在
         if (!window.pluginAPI) {
           window.pluginAPI = { datasetId: null };
         }
 
         // 为插件创建命名空间
-        window.pluginAPI['${pluginId}'] = {};
+        window.pluginAPI[pluginId] = {};
 
         // 动态创建 API 方法包装器
-        const apiList = ${JSON.stringify(apiList)};
         for (const apiName of apiList) {
-          window.pluginAPI['${pluginId}'][apiName] = async function(...args) {
+          window.pluginAPI[pluginId][apiName] = async function(...args) {
             // 通过 electronAPI 调用插件 API
-            // ✅ 展开 args 数组，因为 callPluginAPI 期望可变参数
-            const response = await window.electronAPI.jsPlugin.callPluginAPI('${pluginId}', apiName, ...args);
+            const response = await window.electronAPI.jsPlugin.callPluginAPI(apiName, ...args);
             // ✅ 解包 IPC 响应：{ success: true, result: {...} } -> {...}
             if (response.success) {
               return response.result;
@@ -137,7 +129,7 @@ export class WebContentsViewPluginPageController {
 
         // 触发自定义事件，通知页面 API 已就绪
         window.dispatchEvent(new CustomEvent('pluginAPIReady', {
-          detail: { pluginId: '${pluginId}', apiList }
+          detail: { pluginId, apiList }
         }));
       })();
     `;
@@ -188,7 +180,13 @@ export class WebContentsViewPluginPageController {
       if (!viewInfo.metadata) {
         viewInfo.metadata = {};
       }
+      if (viewInfo.metadata.pluginId && viewInfo.metadata.pluginId !== pluginId) {
+        throw new Error(
+          `Plugin page view ${viewId} is bound to ${viewInfo.metadata.pluginId}, not ${pluginId}`
+        );
+      }
       viewInfo.metadata.pluginId = pluginId;
+      viewInfo.metadata.source = 'plugin';
       viewInfo.metadata.label = viewConfig.title;
       viewInfo.metadata.icon = viewConfig.icon;
       viewInfo.metadata.order = viewConfig.order;
@@ -286,25 +284,6 @@ export class WebContentsViewPluginPageController {
     return viewId;
   }
 
-  private ensureSharedPluginPageViewRegistered(): string {
-    if (this.deps.registry.has(SHARED_PLUGIN_PAGE_VIEW_ID)) {
-      return SHARED_PLUGIN_PAGE_VIEW_ID;
-    }
-
-    this.deps.registerView({
-      id: SHARED_PLUGIN_PAGE_VIEW_ID,
-      partition: SHARED_PLUGIN_PAGE_PARTITION,
-      metadata: {
-        label: 'Plugin Shared View',
-        temporary: false,
-        source: 'plugin',
-        stealth: { enabled: false },
-      },
-    });
-
-    return SHARED_PLUGIN_PAGE_VIEW_ID;
-  }
-
   /**
    * ✨ 注册插件页面视图（仅注册，不创建实际 WebContents）
    *
@@ -312,7 +291,28 @@ export class WebContentsViewPluginPageController {
    */
   registerPluginPageView(pluginId: string, viewConfig: ActivityBarViewContribution): string {
     this.pluginPageViewContributions.set(pluginId, viewConfig);
-    return this.ensureSharedPluginPageViewRegistered();
+    const viewId = buildPluginPageViewId(pluginId, viewConfig.id);
+    const registration: ViewRegistration = {
+      id: viewId,
+      partition: buildPluginPagePartition(pluginId),
+      metadata: {
+        label: viewConfig.title,
+        icon: viewConfig.icon,
+        order: viewConfig.order,
+        pluginId,
+        temporary: false,
+        source: 'plugin',
+        stealth: { enabled: false },
+      },
+    };
+
+    if (this.deps.registry.has(viewId)) {
+      this.deps.registry.set(viewId, registration);
+    } else {
+      this.deps.registerView(registration);
+    }
+
+    return viewId;
   }
 
   /**
@@ -325,18 +325,13 @@ export class WebContentsViewPluginPageController {
     const activeViewIds = Array.from(this.deps.pool.keys());
     const registeredViewIds = Array.from(this.deps.registry.keys());
 
-    const hasSharedPage =
-      this.pluginPageViewContributions.has(pluginId) &&
-      (activeViewIds.includes(SHARED_PLUGIN_PAGE_VIEW_ID) ||
-        registeredViewIds.includes(SHARED_PLUGIN_PAGE_VIEW_ID));
-    const legacyPagePrefix = `plugin-page:${pluginId}:`;
+    const pagePrefix = `plugin-page:${pluginId}:`;
     const tempPrefix = `plugin-temp:${pluginId}:`;
 
-    const pageViewId = hasSharedPage
-      ? SHARED_PLUGIN_PAGE_VIEW_ID
-      : (activeViewIds.find((id) => id.startsWith(legacyPagePrefix)) ??
-        registeredViewIds.find((id) => id.startsWith(legacyPagePrefix)) ??
-        null);
+    const pageViewId =
+      activeViewIds.find((id) => id.startsWith(pagePrefix)) ??
+      registeredViewIds.find((id) => id.startsWith(pagePrefix)) ??
+      null;
 
     const tempViewIds = Array.from(
       new Set([
@@ -358,7 +353,6 @@ export class WebContentsViewPluginPageController {
     this.pluginPageViewContributions.delete(pluginId);
 
     const viewsToCleanup = Array.from(this.deps.pool.keys()).filter((id) => {
-      if (id === SHARED_PLUGIN_PAGE_VIEW_ID) return false;
       return id.includes(`:${pluginId}:`);
     });
 
@@ -368,7 +362,6 @@ export class WebContentsViewPluginPageController {
 
     // 同时清理注册表
     const registeredViewsToDelete = Array.from(this.deps.registry.keys()).filter((id) => {
-      if (id === SHARED_PLUGIN_PAGE_VIEW_ID) return false;
       return id.includes(`:${pluginId}:`);
     });
 
@@ -376,23 +369,8 @@ export class WebContentsViewPluginPageController {
       this.deps.registry.delete(viewId);
     }
 
-    if (this.pluginPageViewContributions.size === 0) {
-      this.pluginPageViewCurrentPluginByView.delete(SHARED_PLUGIN_PAGE_VIEW_ID);
-      if (this.deps.pool.has(SHARED_PLUGIN_PAGE_VIEW_ID)) {
-        await this.deps.closeView(SHARED_PLUGIN_PAGE_VIEW_ID);
-      }
-      this.deps.registry.delete(SHARED_PLUGIN_PAGE_VIEW_ID);
-    } else if (
-      this.pluginPageViewCurrentPluginByView.get(SHARED_PLUGIN_PAGE_VIEW_ID) === pluginId
-    ) {
-      const sharedViewInfo = this.deps.pool.get(SHARED_PLUGIN_PAGE_VIEW_ID);
-      if (sharedViewInfo?.attachedTo === 'main') {
-        this.deps.detachView(SHARED_PLUGIN_PAGE_VIEW_ID);
-      }
-      this.pluginPageViewCurrentPluginByView.delete(SHARED_PLUGIN_PAGE_VIEW_ID);
-      if (this.deps.getActivePluginId() === pluginId) {
-        this.deps.setActivePluginId(null);
-      }
+    if (this.deps.getActivePluginId() === pluginId) {
+      this.deps.setActivePluginId(null);
     }
 
     logger.info('Cleaned up plugin page views', {

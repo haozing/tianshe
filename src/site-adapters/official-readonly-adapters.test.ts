@@ -4,7 +4,7 @@ import {
   runReadOnlySiteAdapterFixture,
   SITE_ADAPTER_REQUIRED_QUALITY_FIELDS,
 } from '../core/site-adapter-runtime';
-import { officialSiteAdapters } from './index';
+import { siteAdapterRegistry } from './index';
 import quotesFixture from './quotes-to-scrape/fixtures/quotes-page-1.json';
 import quotesExpected from './quotes-to-scrape/expected/quotes-page-1.json';
 import hackerNewsFixture from './hacker-news/fixtures/front-page.json';
@@ -51,7 +51,8 @@ const cases = [
 
 describe('additional official read-only site adapters', () => {
   it('registers at least seven official adapters for discovery and Lab selection', () => {
-    expect(officialSiteAdapters.map((adapter) => adapter.manifest.id)).toEqual(
+    const adapters = siteAdapterRegistry.listAdapters();
+    expect(adapters.map((adapter) => adapter.manifest.id)).toEqual(
       expect.arrayContaining([
         'books-to-scrape',
         'github-profile',
@@ -62,11 +63,11 @@ describe('additional official read-only site adapters', () => {
         'npm-package',
       ])
     );
-    expect(officialSiteAdapters.length).toBeGreaterThanOrEqual(7);
+    expect(adapters.length).toBeGreaterThanOrEqual(7);
   });
 
   it('declares the shared site adapter quality fields in every official extractor manifest', () => {
-    for (const adapter of officialSiteAdapters) {
+    for (const adapter of siteAdapterRegistry.listAdapters()) {
       for (const extractor of adapter.manifest.extractors) {
         expect(extractor.outputFields, `${adapter.manifest.id}/${extractor.id}`).toEqual(
           expect.arrayContaining([...SITE_ADAPTER_REQUIRED_QUALITY_FIELDS])
@@ -76,7 +77,7 @@ describe('additional official read-only site adapters', () => {
   });
 
   it.each(cases)('runs %s fixture through the official runner', async ({ adapterId, fixture, expected, requiredField }) => {
-    const adapter = officialSiteAdapters.find((item) => item.manifest.id === adapterId);
+    const adapter = siteAdapterRegistry.getAdapter(adapterId);
     expect(adapter).toBeDefined();
 
     const result = await runReadOnlySiteAdapterFixture(adapter!, {

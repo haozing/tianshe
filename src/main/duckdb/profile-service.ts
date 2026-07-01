@@ -52,6 +52,17 @@ const ALLOWED_PROXY_TYPES: Array<Exclude<ProxyConfig['type'], 'none'>> = [
   'socks5',
 ];
 const logger = createLogger('ProfileService');
+const PROFILE_LOGIN_STATE_INVALIDATION_FIELDS = new Set<keyof UpdateProfileParams>([
+  'runtimeId',
+  'runtimeSourceOverride',
+  'proxy',
+  'fingerprint',
+  'fingerprintCore',
+  'fingerprintSource',
+  'quota',
+  'idleTimeoutMs',
+  'lockTimeoutMs',
+]);
 
 /**
  * Profile 闁哄牆绉存慨?
@@ -143,6 +154,46 @@ export class ProfileService {
         ? Math.trunc(rawValue)
         : DEFAULT_BROWSER_PROFILE.quota;
     return Math.min(BROWSER_POOL_LIMITS.maxTotalBrowsers.max, Math.max(1, parsed));
+  }
+
+  private shouldInvalidateLoginState(params: UpdateProfileParams): boolean {
+    return Object.keys(params).some((key) =>
+      PROFILE_LOGIN_STATE_INVALIDATION_FIELDS.has(key as keyof UpdateProfileParams)
+    );
+  }
+
+  private async expireProfileLoginStates(profileId: string, reason: string): Promise<void> {
+    try {
+      await runPrepared(
+        this.conn,
+        `
+        UPDATE profile_login_states
+        SET status = 'expired',
+            verified = FALSE,
+            verified_at = NULL,
+            reason = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE profile_id = ?
+      `,
+        [reason, profileId]
+      );
+    } catch (error) {
+      if (!String((error as { message?: unknown })?.message || error).includes('profile_login_states')) {
+        throw error;
+      }
+    }
+  }
+
+  private async deleteProfileLoginStates(profileId: string): Promise<void> {
+    try {
+      await runPrepared(this.conn, `DELETE FROM profile_login_states WHERE profile_id = ?`, [
+        profileId,
+      ]);
+    } catch (error) {
+      if (!String((error as { message?: unknown })?.message || error).includes('profile_login_states')) {
+        throw error;
+      }
+    }
   }
 
   private normalizeIdleTimeoutMs(rawValue: number | undefined): number {
@@ -242,9 +293,9 @@ export class ProfileService {
           `
           INSERT INTO browser_profiles (
             id, name, runtime_id, runtime_source_override, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
-            notes, tags, color, status, quota, idle_timeout_ms, lock_timeout_ms, is_system,
+            notes, tags, color, status, quota, idle_timeout_ms, lock_timeout_ms, login_state_revision, is_system,
             created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, 0, FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         `,
           [
             id,
@@ -315,7 +366,7 @@ export class ProfileService {
       SELECT
         id, name, runtime_id, runtime_source_override, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
         notes, tags, color, status, last_error, last_active_at,
-        total_uses, quota, idle_timeout_ms, lock_timeout_ms, is_system,
+        total_uses, quota, idle_timeout_ms, lock_timeout_ms, login_state_revision, is_system,
         created_at, updated_at
       FROM browser_profiles
       WHERE id = ?
@@ -343,7 +394,7 @@ export class ProfileService {
       SELECT
         id, name, runtime_id, runtime_source_override, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
         notes, tags, color, status, last_error, last_active_at,
-        total_uses, quota, idle_timeout_ms, lock_timeout_ms, is_system,
+        total_uses, quota, idle_timeout_ms, lock_timeout_ms, login_state_revision, is_system,
         created_at, updated_at
       FROM browser_profiles
       WHERE 1=1
@@ -593,6 +644,11 @@ export class ProfileService {
           return existingProfile;
         }
 
+        const shouldInvalidateLoginState = this.shouldInvalidateLoginState(params);
+        if (shouldInvalidateLoginState) {
+          fields.push('login_state_revision = COALESCE(login_state_revision, 0) + 1');
+        }
+
         fields.push('updated_at = CURRENT_TIMESTAMP');
         values.push(id);
 
@@ -601,6 +657,13 @@ export class ProfileService {
           `UPDATE browser_profiles SET ${fields.join(', ')} WHERE id = ?`,
           values
         );
+
+        if (shouldInvalidateLoginState) {
+          await this.expireProfileLoginStates(
+            id,
+            'profile login health invalidated by profile runtime settings update'
+          );
+        }
 
         if (shouldClearExtensionBindings) {
           await runPrepared(
@@ -667,15 +730,18 @@ export class ProfileService {
     }
 
     // 闁告帞濞€濞?Profile
-    await runPrepared(
-      this.conn,
-      `
-      DELETE FROM profile_extensions WHERE profile_id = ?
-    `,
-      [id]
-    );
+    await runInDuckDbTransaction(this.conn, async () => {
+      await runPrepared(
+        this.conn,
+        `
+        DELETE FROM profile_extensions WHERE profile_id = ?
+      `,
+        [id]
+      );
 
-    await runPrepared(this.conn, `DELETE FROM browser_profiles WHERE id = ?`, [id]);
+      await this.deleteProfileLoginStates(id);
+      await runPrepared(this.conn, `DELETE FROM browser_profiles WHERE id = ?`, [id]);
+    });
 
     // 闁告帞濞€濞?Profile 闂侇偅鑹鹃悥鍫曞箛韫囨挻鍤勯柣顐熷亾闁活潿鍔嶉崺娑氭暜鐏炵偓绠块柛姘湰濡炲倿宕氶悩缁樼彑闁哄牜鍓欏﹢瀛樺濮樺磭妯堥柡浣哄瀹?
     await this.purgePartitionData(profile.partition);
@@ -742,6 +808,7 @@ export class ProfileService {
               [id]
             );
 
+            await this.deleteProfileLoginStates(id);
             await runPrepared(this.conn, `DELETE FROM browser_profiles WHERE id = ?`, [id]);
           });
           logger.info('Deleted profile and marked linked accounts as unbound', {

@@ -11,6 +11,8 @@ import path from 'path';
 import fs from 'fs-extra';
 import { EventEmitter } from 'events';
 import { createLogger } from '../core/logger';
+import type { BrowserDownloadArtifactRef } from '../types/browser-interface';
+import type { BrowserDownloadArtifactSink } from '../core/browser-automation/download-artifact-sink';
 
 const logger = createLogger('DownloadManager');
 
@@ -25,14 +27,21 @@ export interface DownloadInfo {
   receivedBytes: number;
   startTime: number;
   endTime?: number;
+  artifactRef?: BrowserDownloadArtifactRef;
+  artifactError?: string;
 }
 
 export class DownloadManager extends EventEmitter {
   private downloads = new Map<string, DownloadInfo>();
   private downloadDirs = new Map<string, string>();
+  private artifactSink: BrowserDownloadArtifactSink | null = null;
 
   constructor() {
     super();
+  }
+
+  setArtifactSink(artifactSink: BrowserDownloadArtifactSink | null): void {
+    this.artifactSink = artifactSink;
   }
 
   /**
@@ -101,13 +110,21 @@ export class DownloadManager extends EventEmitter {
     });
 
     // 监听下载完成
-    item.once('done', (event, state) => {
+    item.once('done', (_event, state) => {
       info.endTime = Date.now();
 
       if (state === 'completed') {
-        info.state = 'completed';
-        logger.info('Download completed', { partition, downloadId, filename });
-        this.emit('download:completed', info);
+        void this.finalizeCompletedDownload(info, item).catch((error) => {
+          info.state = 'interrupted';
+          info.artifactError = error instanceof Error ? error.message : String(error);
+          logger.error('Download artifact finalization failed', {
+            partition,
+            downloadId,
+            filename,
+            errorMessage: info.artifactError,
+          });
+          this.emit('download:interrupted', info);
+        });
       } else if (state === 'cancelled') {
         info.state = 'cancelled';
         logger.warn('Download cancelled', { partition, downloadId, filename });
@@ -121,6 +138,27 @@ export class DownloadManager extends EventEmitter {
 
     this.emit('download:started', info);
     logger.info('Download started', { partition, downloadId, filename });
+  }
+
+  private async finalizeCompletedDownload(info: DownloadInfo, item: DownloadItem): Promise<void> {
+    info.receivedBytes = item.getReceivedBytes();
+    info.totalBytes = item.getTotalBytes();
+    if (this.artifactSink) {
+      info.artifactRef = await this.artifactSink.createDownloadArtifact({
+        sourcePath: info.savePath,
+        filename: info.filename,
+        url: info.url,
+        downloadId: info.id,
+      });
+    }
+    info.state = 'completed';
+    logger.info('Download completed', {
+      partition: info.partition,
+      downloadId: info.id,
+      filename: info.filename,
+      artifactId: info.artifactRef?.artifactId,
+    });
+    this.emit('download:completed', info);
   }
 
   /**

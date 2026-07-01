@@ -280,6 +280,7 @@ describe('DuckDBService facade contract', () => {
         'getExtensionPackagesService',
         'getSyncOutboxService',
         'getSyncMetadataService',
+        'getRuntimeObservationService',
         'getConnection',
       ])
     );

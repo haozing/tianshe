@@ -50,9 +50,11 @@ import type {
   IWebContentsViewManager,
   IWindowManager,
 } from '../../browser-pool/ports';
+import type { JSPluginManifest } from '../../../types/js-plugin';
 import type { InternalDevToolsOpener } from './window';
 import type { BrowserRuntimeDescriptor } from '../../../types/browser-interface';
 import type { BrowserHandle, ReleaseOptions } from '../../browser-pool/types';
+import type { PluginBrowserFacade } from './profile-browser-facade';
 import { BROWSER_RUNTIME_IDS, DEFAULT_BROWSER_RUNTIME_ID } from '../../../types/profile';
 import { getStaticRuntimeDescriptor } from '../../browser-pool/runtime-capability-registry';
 import { ProfileCrudNamespace } from './profile-crud-namespace';
@@ -126,10 +128,14 @@ export interface LaunchPopupOptions {
   onClose?: () => void;
 }
 
+export interface PluginBrowserHandle extends Omit<BrowserHandle, 'browser'> {
+  browser: PluginBrowserFacade;
+}
+
 /**
  * 弹窗浏览器句柄（扩展 BrowserHandle）
  */
-export interface PopupBrowserHandle extends BrowserHandle {
+export interface PopupBrowserHandle extends PluginBrowserHandle {
   /** 弹窗 ID；Extension 外部窗口路径下格式为 external:<browserId> */
   popupId: string;
   /** 关闭弹窗；Extension 外部窗口路径下等价于隐藏窗口 */
@@ -137,7 +143,7 @@ export interface PopupBrowserHandle extends BrowserHandle {
 }
 
 export interface WithLeaseRunContext {
-  browser: BrowserHandle['browser'];
+  browser: PluginBrowserFacade;
   browserId: string;
   sessionId: string;
   runtimeId: BrowserRuntimeId;
@@ -165,6 +171,7 @@ export class ProfileNamespace {
     private groupService: IProfileGroupService,
     private viewManager: IWebContentsViewManager,
     private windowManager: IWindowManager,
+    private manifest?: JSPluginManifest,
     private getPluginConfig?: (key: string) => Promise<any>,
     private devToolsOpener?: InternalDevToolsOpener
   ) {
@@ -175,6 +182,7 @@ export class ProfileNamespace {
     });
     this.launchNamespace = new ProfileLaunchNamespace({
       pluginId,
+      manifest,
       profileService,
       viewManager,
       windowManager,
@@ -447,7 +455,7 @@ export class ProfileNamespace {
    * // 全部释放
    * await Promise.all(handles.map(h => h.release()));
    */
-  async launch(profileId: string, options?: LaunchOptions): Promise<BrowserHandle> {
+  async launch(profileId: string, options?: LaunchOptions): Promise<PluginBrowserHandle> {
     return this.launchNamespace.launch(profileId, options);
   }
 

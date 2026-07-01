@@ -22,6 +22,41 @@ export interface BrowserPoolConfig {
   healthCheckIntervalMs: number;
 }
 
+export type ProfileManualHandoffStatus =
+  | 'requested'
+  | 'approved'
+  | 'paused'
+  | 'completed'
+  | 'canceled'
+  | 'expired';
+
+export interface ProfileManualHandoffView {
+  id: string;
+  profileId: string | null;
+  keys: string[];
+  status: ProfileManualHandoffStatus;
+  requester: {
+    source: string | null;
+    metadata: Record<string, unknown> | null;
+  };
+  currentOwner: {
+    source: string | null;
+    metadata: Record<string, unknown> | null;
+    acquiredAt: number | null;
+  };
+  reason: string | null;
+  message: string | null;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number | null;
+  approvedAt: number | null;
+  pausedAt: number | null;
+  completedAt: number | null;
+  canceledAt: number | null;
+  expiredAt: number | null;
+  statusReason: string | null;
+}
+
 export function createProfileAPI(ipcRenderer: IpcRenderer) {
   return {
     profile: {
@@ -176,6 +211,59 @@ export function createProfileAPI(ipcRenderer: IpcRenderer) {
         error?: string;
       }> => {
         return ipcRenderer.invoke('profile:pool-list-browsers');
+      },
+
+      handoffList: (
+        profileId?: string
+      ): Promise<{
+        success: boolean;
+        data?: ProfileManualHandoffView[];
+        error?: string;
+      }> => {
+        return ipcRenderer.invoke('profile:handoff-list', profileId);
+      },
+
+      handoffGet: (
+        handoffRequestId: string
+      ): Promise<{
+        success: boolean;
+        data?: ProfileManualHandoffView | null;
+        error?: string;
+      }> => {
+        return ipcRenderer.invoke('profile:handoff-get', handoffRequestId);
+      },
+
+      handoffApprove: (
+        handoffRequestId: string,
+        options?: { reason?: string }
+      ): Promise<{
+        success: boolean;
+        data?: ProfileManualHandoffView;
+        error?: string;
+      }> => {
+        return ipcRenderer.invoke('profile:handoff-approve', handoffRequestId, options);
+      },
+
+      handoffPause: (
+        handoffRequestId: string,
+        options?: { reason?: string }
+      ): Promise<{
+        success: boolean;
+        data?: ProfileManualHandoffView;
+        error?: string;
+      }> => {
+        return ipcRenderer.invoke('profile:handoff-pause', handoffRequestId, options);
+      },
+
+      handoffCancel: (
+        handoffRequestId: string,
+        options?: { reason?: string }
+      ): Promise<{
+        success: boolean;
+        data?: ProfileManualHandoffView;
+        error?: string;
+      }> => {
+        return ipcRenderer.invoke('profile:handoff-cancel', handoffRequestId, options);
       },
 
       poolShowBrowser: (

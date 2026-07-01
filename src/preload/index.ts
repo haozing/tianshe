@@ -46,6 +46,8 @@ const allowedPreloadEventChannels = [
   'js-plugin:state-changed',
   'plugin:view-created',
   'plugin:view-closed',
+  'profile:handoff-changed',
+  'profile:handoff-requested',
   'updater:available',
   'updater:checking',
   'updater:download-progress',

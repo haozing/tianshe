@@ -9,7 +9,7 @@
 - `url`：必填，必须是 `https://books.toscrape.com` 商品页。
 - `datasetId`：可选，提供后生成 dataset staged write plan。
 - `commitDatasetWrite`：可选，显式请求立即提交 staged write。
-- `confirmRisk`：当 `commitDatasetWrite=true` 时必填为 `true`。
+- `commitDatasetWrite=true` 时必须通过 executor confirmation grant 授权，不再使用公开 `confirmRisk` 参数。
 - `profileId` / `runtimeId` / `visible`：可选，传入后通过 `session_prepare` 语义准备当前会话。
 
 ## 输出

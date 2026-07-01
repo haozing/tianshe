@@ -23,11 +23,13 @@ const createLogger = () => ({
 
 describe('http-browser-pool-adapter', () => {
   beforeEach(async () => {
+    vi.restoreAllMocks();
     await resourceCoordinator.clear();
   });
 
   afterEach(async () => {
     await resourceCoordinator.clear();
+    vi.restoreAllMocks();
   });
 
   it('serializes same-profile acquires until the previous handle is released', async () => {
@@ -207,6 +209,11 @@ describe('http-browser-pool-adapter', () => {
     const heldLease = await resourceCoordinator.acquire(buildProfileResourceKey('profile-1'), {
       ownerToken: 'holder-1',
       ownerSource: 'plugin',
+      ownerMetadata: {
+        controllerKind: 'plugin',
+        pluginId: 'doudian-business-center-clue-sync',
+        interruptibility: 'checkpoint',
+      },
     });
     const poolManager = {
       acquire: vi.fn(),
@@ -292,24 +299,39 @@ describe('http-browser-pool-adapter', () => {
       ]),
     } as unknown as BrowserPoolManager;
     const runtimeMetrics = createRuntimeMetrics();
-
-    const handle = await acquireBrowserFromPool({
-      getBrowserPoolManager: () => poolManager,
-      runtimeMetrics,
-      logger: createLogger(),
-      profileId: 'profile-1',
-      runtimeId: 'electron-webcontents',
-      source: 'mcp',
-      timeoutMs: 25,
+    const handoffEvents: string[] = [];
+    const unsubscribe = resourceCoordinator.onHandoffEvent((event) => {
+      handoffEvents.push(`${event.type}:${event.request.status}`);
     });
 
-    expect(handle.browserId).toBe('browser-held');
+    let handle: BrowserHandle | null = null;
+    try {
+      handle = await acquireBrowserFromPool({
+        getBrowserPoolManager: () => poolManager,
+        runtimeMetrics,
+        logger: createLogger(),
+        profileId: 'profile-1',
+        runtimeId: 'electron-webcontents',
+        source: 'mcp',
+        timeoutMs: 25,
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(handle?.browserId).toBe('browser-held');
     expect((poolManager as any).takeoverLockedBrowser).toHaveBeenCalledWith(
       'profile-1',
       expect.objectContaining({ strategy: 'any', timeout: 25, runtimeId: 'electron-webcontents' }),
       'mcp'
     );
     expect(poolManager.acquire).not.toHaveBeenCalled();
+    expect(handoffEvents).toEqual([
+      'handoff:requested:requested',
+      'handoff:approved:approved',
+      'handoff:paused:paused',
+      'handoff:completed:completed',
+    ]);
 
     let contenderResolved = false;
     const contenderPromise = resourceCoordinator
@@ -323,12 +345,59 @@ describe('http-browser-pool-adapter', () => {
     await Promise.resolve();
     expect(contenderResolved).toBe(false);
 
-    await handle.release();
+    await handle!.release();
     expect(takeoverRelease).toHaveBeenCalledTimes(1);
 
     const contenderLease = await contenderPromise;
     expect(contenderResolved).toBe(true);
     await contenderLease.release();
+  });
+
+  it('releases the completed handoff lease when locked browser takeover throws', async () => {
+    const heldLease = await resourceCoordinator.acquire(buildProfileResourceKey('profile-1'), {
+      ownerToken: 'holder-1',
+      ownerSource: 'plugin',
+      ownerMetadata: { interruptibility: 'interruptible' },
+    });
+    const takeoverError = new Error('takeover failed');
+    const poolManager = {
+      acquire: vi.fn(),
+      takeoverLockedBrowser: vi.fn().mockRejectedValue(takeoverError),
+      listBrowsers: vi.fn().mockReturnValue([
+        {
+          id: 'browser-held',
+          sessionId: 'profile-1',
+          runtimeId: 'electron-webcontents',
+          status: 'locked',
+          viewId: 'view-1',
+          lockedBy: {
+            source: 'plugin',
+            pluginId: 'doudian-business-center-clue-sync',
+            requestId: 'req-1',
+          },
+        },
+      ]),
+    } as unknown as BrowserPoolManager;
+    const runtimeMetrics = createRuntimeMetrics();
+
+    await expect(
+      acquireBrowserFromPool({
+        getBrowserPoolManager: () => poolManager,
+        runtimeMetrics,
+        logger: createLogger(),
+        profileId: 'profile-1',
+        runtimeId: 'electron-webcontents',
+        source: 'mcp',
+        timeoutMs: 25,
+      })
+    ).rejects.toThrow('takeover failed');
+
+    const contenderLease = await resourceCoordinator.acquire(buildProfileResourceKey('profile-1'), {
+      ownerToken: 'owner-2',
+      timeoutMs: 25,
+    });
+    await contenderLease.release();
+    await heldLease.release();
   });
 
   it('requires manual handoff instead of silently taking over an ipc-held browser', async () => {
@@ -409,6 +478,11 @@ describe('http-browser-pool-adapter', () => {
     const heldLease = await resourceCoordinator.acquire(buildProfileResourceKey('profile-1'), {
       ownerToken: 'holder-1',
       ownerSource: 'plugin',
+      ownerMetadata: {
+        controllerKind: 'plugin',
+        pluginId: 'doudian-business-center-clue-sync',
+        interruptibility: 'checkpoint',
+      },
     });
     const acquiredHandle = {
       browserId: 'browser-fresh',
@@ -419,23 +493,38 @@ describe('http-browser-pool-adapter', () => {
       listBrowsers: vi.fn().mockReturnValue([]),
     } as unknown as BrowserPoolManager;
     const runtimeMetrics = createRuntimeMetrics();
-
-    const handle = await acquireBrowserFromPool({
-      getBrowserPoolManager: () => poolManager,
-      runtimeMetrics,
-      logger: createLogger(),
-      profileId: 'profile-1',
-      runtimeId: 'electron-webcontents',
-      source: 'mcp',
-      timeoutMs: 25,
+    const handoffEvents: string[] = [];
+    const unsubscribe = resourceCoordinator.onHandoffEvent((event) => {
+      handoffEvents.push(`${event.type}:${event.request.status}`);
     });
 
-    expect(handle.browserId).toBe('browser-fresh');
+    let handle: BrowserHandle | null = null;
+    try {
+      handle = await acquireBrowserFromPool({
+        getBrowserPoolManager: () => poolManager,
+        runtimeMetrics,
+        logger: createLogger(),
+        profileId: 'profile-1',
+        runtimeId: 'electron-webcontents',
+        source: 'mcp',
+        timeoutMs: 25,
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(handle?.browserId).toBe('browser-fresh');
     expect(poolManager.acquire).toHaveBeenCalledWith(
       'profile-1',
       expect.objectContaining({ strategy: 'any', timeout: 25, runtimeId: 'electron-webcontents' }),
       'mcp'
     );
+    expect(handoffEvents).toEqual([
+      'handoff:requested:requested',
+      'handoff:approved:approved',
+      'handoff:paused:paused',
+      'handoff:completed:completed',
+    ]);
 
     let contenderResolved = false;
     const contenderPromise = resourceCoordinator
@@ -449,7 +538,7 @@ describe('http-browser-pool-adapter', () => {
     await Promise.resolve();
     expect(contenderResolved).toBe(false);
 
-    await handle.release();
+    await handle!.release();
     const contenderLease = await contenderPromise;
     expect(contenderResolved).toBe(true);
     await contenderLease.release();

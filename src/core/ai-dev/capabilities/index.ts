@@ -12,10 +12,15 @@ export { createSystemCapabilityCatalog } from './system-catalog';
 export { createSessionCapabilityCatalog } from './session-catalog';
 export { createSiteCapabilityCatalog } from './site-capability-catalog';
 export {
+  createBuiltInCapabilityProvider,
   createUnifiedCapabilityCatalog,
+  createUnifiedCapabilityCatalogFromProviders,
   mergeCapabilityCatalogs,
+  BUILT_IN_CAPABILITY_CATALOG_FACTORIES,
   type CapabilityCatalog,
   type CapabilityCatalogFactory,
+  type CapabilityProvider,
+  type CapabilityProviderError,
 } from './unified-catalog';
 export {
   executeBrowserObserveSearchActFastPath,

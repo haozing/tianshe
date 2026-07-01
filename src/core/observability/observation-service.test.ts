@@ -197,6 +197,56 @@ describe('ObservationService', () => {
     expect(serialized).toContain('visible-value');
   });
 
+  it('records file-backed artifact payloads without exposing managed file paths', async () => {
+    const sink = new MemoryObservationSink();
+    setObservationSink(sink);
+
+    await observationService.attachArtifact({
+      context: createRootTraceContext({
+        traceId: 'trace-file-artifact',
+        capability: 'browser.screenshot',
+        pluginId: 'plugin-1',
+        profileId: 'profile-1',
+        datasetId: 'dataset-1',
+      }),
+      component: 'browser',
+      type: 'screenshot',
+      label: 'failure screenshot',
+      payload: {
+        kind: 'file',
+        storageKey: 'ab/artifact-1/evidence.png',
+        filename: 'evidence.png',
+        mimeType: 'image/png',
+        sizeBytes: 1234,
+        sha256: 'a'.repeat(64),
+        retentionPolicy: '7d',
+      },
+      attrs: {
+        localPath: 'C:\\Users\\alice\\secret\\evidence.png',
+      },
+    });
+
+    expect(sink.artifacts).toEqual([
+      expect.objectContaining({
+        traceId: 'trace-file-artifact',
+        capability: 'browser.screenshot',
+        pluginId: 'plugin-1',
+        profileId: 'profile-1',
+        datasetId: 'dataset-1',
+        payload: {
+          kind: 'file',
+          storageKey: 'ab/artifact-1/evidence.png',
+          filename: 'evidence.png',
+          mimeType: 'image/png',
+          sizeBytes: 1234,
+          sha256: 'a'.repeat(64),
+          retentionPolicy: '7d',
+        },
+      }),
+    ]);
+    expect(JSON.stringify(sink.artifacts[0].payload)).not.toContain('C:\\Users');
+  });
+
   it('applies a golden redaction gate to failure, repair, browser, and profile artifacts', async () => {
     const sink = new MemoryObservationSink();
     setObservationSink(sink);

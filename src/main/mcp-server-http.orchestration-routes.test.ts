@@ -3,21 +3,40 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { BrowserHandle, BrowserPoolManager } from '../core/browser-pool';
-import { buildProfileResourceKey, resourceCoordinator } from '../core/resource-coordinator';
 import { HTTP_SERVER_DEFAULTS } from '../constants/http-api';
 import {
   MCP_PROTOCOL_ALLOWED_VERSIONS,
   MCP_PROTOCOL_COMPATIBILITY_MODE,
   MCP_PROTOCOL_UNIFIED_VERSION,
 } from '../constants/mcp-protocol';
-import { MCP_PUBLIC_TOOL_NAMES } from './mcp-catalog-metadata';
+import {
+  createCapabilityConfirmationGrant,
+  listOrchestrationCapabilities,
+} from '../core/ai-dev/orchestration';
+import type { RegisteredCapability } from '../core/ai-dev/capabilities';
 import { ErrorCode } from '../types/error-codes';
 import type { RestApiConfig, RestApiDependencies } from '../types/http-api';
 import type { BrowserInterface } from '../types/browser-interface';
 import { AirpaHttpMcpServer } from './mcp-server-http';
+
+const ORCHESTRATION_TEST_SCOPES = [
+  'browser.read',
+  'browser.write',
+  'dataset.read',
+  'dataset.write',
+  'observation.read',
+  'plugin.read',
+  'plugin.write',
+  'profile.read',
+  'profile.write',
+  'session.read',
+  'session.write',
+  'system.read',
+  'plugin.execute',
+].join(',');
+
+type TestCapabilityProvider = NonNullable<RestApiDependencies['capabilityProviders']>[number];
 
 const FETCH_FORBIDDEN_PORTS = new Set([
   1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,
@@ -72,21 +91,6 @@ function createMockHandle(browser: BrowserInterface): {
   return { handle, release };
 }
 
-async function waitForAssertion(assertion: () => void, timeoutMs = 1500): Promise<void> {
-  const start = Date.now();
-  let lastError: unknown;
-  while (Date.now() - start <= timeoutMs) {
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-  }
-  throw lastError ?? new Error('waitForAssertion timeout');
-}
-
 async function postJson(
   baseUrl: string,
   path: string,
@@ -105,6 +109,55 @@ async function postJson(
   return { status: response.status, json };
 }
 
+const withOrchestrationScopes = (headers: Record<string, string> = {}): Record<string, string> => ({
+  'x-airpa-scopes': ORCHESTRATION_TEST_SCOPES,
+  ...headers,
+});
+
+const postOrchestrationInvoke = (
+  baseUrl: string,
+  body?: unknown,
+  headers?: Record<string, string>
+): Promise<{ status: number; json: any }> =>
+  postJson(baseUrl, '/api/v1/orchestration/invoke', body, withOrchestrationScopes(headers));
+
+const postConfirmationGrant = (
+  baseUrl: string,
+  body?: unknown,
+  headers?: Record<string, string>
+): Promise<{ status: number; json: any }> =>
+  postJson(
+    baseUrl,
+    '/api/v1/orchestration/confirmation-grants',
+    body,
+    withOrchestrationScopes(headers)
+  );
+
+const createHttpConfirmationGrant = (
+  capabilityName: string,
+  args: Record<string, unknown>,
+  sessionId: string,
+  options: { grantId?: string; scopes?: string[] } = {}
+) => {
+  const definition = listOrchestrationCapabilities().find(
+    (capability) => capability.name === capabilityName
+  );
+  if (!definition) {
+    throw new Error(`Missing capability definition: ${capabilityName}`);
+  }
+  const scopes = options.scopes || ORCHESTRATION_TEST_SCOPES.split(',');
+  return createCapabilityConfirmationGrant({
+    definition,
+    arguments: args,
+    grantId: options.grantId || `grant-${capabilityName}`,
+    invocationId: `invoke-${capabilityName}`,
+    principal: 'http',
+    source: 'agent-ui',
+    sessionId,
+    scopes,
+  });
+};
+
 async function getJson(
   baseUrl: string,
   path: string,
@@ -115,92 +168,6 @@ async function getJson(
   });
   const json = await response.json();
   return { status: response.status, json };
-}
-
-async function deleteJson(
-  baseUrl: string,
-  path: string,
-  headers?: Record<string, string>
-): Promise<{ status: number; json: any }> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: 'DELETE',
-    headers: headers || {},
-  });
-  const json = await response.json();
-  return { status: response.status, json };
-}
-
-async function initializeMcpSession(
-  baseUrl: string,
-  headers?: Record<string, string>
-): Promise<{ status: number; json: any; sessionId: string }> {
-  const response = await fetch(`${baseUrl}/mcp`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json',
-      'mcp-protocol-version': MCP_PROTOCOL_UNIFIED_VERSION,
-      ...(headers || {}),
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: {
-        protocolVersion: MCP_PROTOCOL_UNIFIED_VERSION,
-        capabilities: {},
-        clientInfo: { name: 'test-mcp-init', version: '1.0.0' },
-      },
-    }),
-  });
-
-  const json = await response.json();
-  return {
-    status: response.status,
-    json,
-    sessionId: String(response.headers.get('mcp-session-id') || ''),
-  };
-}
-
-async function callMcpToolRaw(
-  baseUrl: string,
-  sessionId: string,
-  name: string,
-  args: Record<string, unknown>,
-  headers?: Record<string, string>
-): Promise<{ status: number; json: any }> {
-  return postJson(
-    baseUrl,
-    '/mcp',
-    {
-      jsonrpc: '2.0',
-      id: 2,
-      method: 'tools/call',
-      params: {
-        name,
-        arguments: args,
-      },
-    },
-    {
-      accept: 'application/json',
-      'mcp-protocol-version': MCP_PROTOCOL_UNIFIED_VERSION,
-      'mcp-session-id': sessionId,
-      ...(headers || {}),
-    }
-  );
-}
-
-function pickRuntimeFingerprint(value: any) {
-  return {
-    processStartTime: value?.processStartTime ?? null,
-    mainDistUpdatedAt: value?.mainDistUpdatedAt ?? null,
-    rendererDistUpdatedAt: value?.rendererDistUpdatedAt ?? null,
-    mainBuildStamp: value?.mainBuildStamp ?? null,
-    mcpRuntimeFreshness: value?.mcpRuntimeFreshness ?? null,
-    buildFreshness: value?.buildFreshness ?? null,
-    gitCommit: value?.gitCommit ?? null,
-    mcpSdk: value?.mcpSdk ?? null,
-  };
 }
 
 function expectRuntimeFingerprintLike(value: any): void {
@@ -250,47 +217,11 @@ function expectRuntimeFingerprintLike(value: any): void {
   ).toBe(true);
 }
 
-function expectInitializeInstructionsLike(value: any): void {
-  expect(typeof value?.instructions).toBe('string');
-  expect(String(value.instructions)).toContain('system_bootstrap');
-  expect(String(value.instructions)).toContain('session_prepare');
-  expect(String(value.instructions)).toContain('browser_observe');
-  expect(String(value.instructions)).toContain('browser_act');
-  expect(String(value.instructions)).toContain('session_end_current');
-  expect(String(value.instructions)).not.toContain('toolProfile=full');
-  expect(String(value.instructions)).not.toContain('browser_act waitFor');
-}
-
-function pickSessionSnapshot(value: any) {
-  return {
-    sessionId: value?.sessionId ?? null,
-    profileId: value?.profileId ?? null,
-    runtimeId: value?.runtimeId ?? null,
-    visible: value?.visible ?? false,
-    browserAcquired: value?.browserAcquired ?? false,
-    browserAcquireInProgress: value?.browserAcquireInProgress ?? false,
-    effectiveScopes: Array.isArray(value?.effectiveScopes) ? value.effectiveScopes : [],
-    closing: value?.closing ?? false,
-    terminateAfterResponse: value?.terminateAfterResponse ?? false,
-    hostWindowId: value?.hostWindowId ?? null,
-    viewportHealth: value?.viewportHealth ?? 'unknown',
-    viewportHealthReason: value?.viewportHealthReason ?? null,
-    interactionReady: value?.interactionReady ?? false,
-    offscreenDetected: value?.offscreenDetected ?? false,
-    runtimeDescriptor: value?.runtimeDescriptor ?? null,
-    browserRuntimeDescriptor: value?.browserRuntimeDescriptor ?? null,
-    resolvedRuntimeDescriptor: value?.resolvedRuntimeDescriptor ?? null,
-  };
-}
-
 describe('AirpaHttpMcpServer orchestration REST routes', () => {
   const originalBindAddress = HTTP_SERVER_DEFAULTS.BIND_ADDRESS;
   let server: AirpaHttpMcpServer | undefined;
-  let mcpClient: Client | undefined;
-  let mcpTransport: StreamableHTTPClientTransport | undefined;
   let baseUrl = '';
   let acquire: ReturnType<typeof vi.fn> | undefined;
-  let release: ReturnType<typeof vi.fn> | undefined;
 
   async function startServer(
     browser: BrowserInterface,
@@ -306,7 +237,6 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     (HTTP_SERVER_DEFAULTS as { BIND_ADDRESS: string }).BIND_ADDRESS = '127.0.0.1';
 
     const handleResult = createMockHandle(browser);
-    release = handleResult.release;
     acquire = options.acquireImplementation
       ? vi.fn().mockImplementation(() => options.acquireImplementation!(handleResult.handle))
       : vi.fn().mockResolvedValue(handleResult.handle);
@@ -350,22 +280,13 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
   }
 
   afterEach(async () => {
-    if (mcpClient) {
-      await mcpClient.close();
-    }
-    if (mcpTransport) {
-      await mcpTransport.close();
-    }
     if (server) {
       await server.stop();
     }
     (HTTP_SERVER_DEFAULTS as { BIND_ADDRESS: string }).BIND_ADDRESS = originalBindAddress;
-    mcpClient = undefined;
-    mcpTransport = undefined;
     server = undefined;
     baseUrl = '';
     acquire = undefined;
-    release = undefined;
     vi.clearAllMocks();
   });
 
@@ -384,6 +305,53 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(names).toContain('plugin_reload');
     expect(names).toContain('dataset_create_empty');
     expect(names).not.toContain('browser_get_url');
+  });
+
+  it('includes dependency-provided capabilities in the server-owned registry', async () => {
+    const provider: TestCapabilityProvider = {
+      id: 'test-provider',
+      listCapabilities: () => ({
+        provider_echo: {
+          definition: {
+            name: 'provider_echo',
+            version: '1.0.0',
+            description: 'Provider echo test capability',
+            inputSchema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {},
+            },
+            outputSchema: {
+              type: 'object',
+              additionalProperties: true,
+            },
+            assistantSurface: { publicMcp: true },
+            requiredScopes: ['test.scope'],
+            requires: [],
+            idempotent: true,
+            retryPolicy: { retryable: false, maxAttempts: 1 },
+            sideEffectLevel: 'none',
+          },
+          handler: async () => ({
+            content: [{ type: 'text', text: 'ok' }],
+            structuredContent: { ok: true },
+          }),
+        },
+      }),
+    };
+
+    await startServer(createMockBrowser(), {
+      dependencies: {
+        capabilityProviders: [provider],
+      },
+    });
+
+    const response = await getJson(baseUrl, '/api/v1/orchestration/capabilities');
+    expect(response.status).toBe(200);
+
+    const names = response.json.data.map((item: { name: string }) => item.name);
+    expect(names).toContain('browser_snapshot');
+    expect(names).toContain('provider_echo');
   });
 
   it('invokes dataset and cross-plugin capabilities through HTTP orchestration', async () => {
@@ -417,7 +385,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(createResponse.status).toBe(200);
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const datasetInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const datasetInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'dataset_list',
       arguments: {},
@@ -427,7 +395,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(datasetInvoke.json.code).toBe(ErrorCode.NOT_FOUND);
     expect(listDatasets).not.toHaveBeenCalled();
 
-    const crossPluginInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const crossPluginInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'cross_plugin_call_api',
       arguments: {
@@ -485,7 +453,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(createResponse.status).toBe(200);
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const invoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const invoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'observation_get_trace_summary',
       arguments: {
@@ -529,9 +497,8 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(createResponse.status).toBe(200);
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const invoke = await postJson(
+    const invoke = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId,
         name: 'system_get_health',
@@ -656,7 +623,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(createResponse.status).toBe(200);
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const listInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const listInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'plugin_list',
       arguments: {
@@ -685,7 +652,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
       recommendedNextTools: ['plugin_get_runtime_status', 'cross_plugin_list_apis'],
     });
 
-    const runtimeInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const runtimeInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'plugin_get_runtime_status',
       arguments: {
@@ -745,7 +712,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(createResponse.status).toBe(200);
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const reloadInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const reloadInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'plugin_reload',
       arguments: {
@@ -763,13 +730,20 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
       recommendedNextTools: ['plugin_get_runtime_status', 'observation_get_trace_summary'],
     });
 
-    const uninstallInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const uninstallArgs = {
+      pluginId: 'plugin-a',
+      deleteTables: false,
+    };
+    const uninstallInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'plugin_uninstall',
-      arguments: {
-        pluginId: 'plugin-a',
-        deleteTables: false,
-      },
+      arguments: uninstallArgs,
+      confirmationGrant: createHttpConfirmationGrant(
+        'plugin_uninstall',
+        uninstallArgs,
+        sessionId,
+        { grantId: 'grant-plugin-uninstall' }
+      ),
     });
 
     expect(uninstallInvoke.status).toBe(200);
@@ -819,14 +793,15 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(createResponse.status).toBe(200);
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const installInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const installArgs = {
+      sourceType: 'cloud_code',
+      cloudPluginCode: 'plugin_a',
+    };
+    const installInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'plugin_install',
-      arguments: {
-        sourceType: 'cloud_code',
-        cloudPluginCode: 'plugin_a',
-        confirmRisk: true,
-      },
+      arguments: installArgs,
+      confirmationGrant: createHttpConfirmationGrant('plugin_install', installArgs, sessionId),
     });
 
     expect(installInvoke.status).toBe(200);
@@ -843,6 +818,186 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
       sourceType: 'cloud_code',
       cloudPluginCode: 'plugin_a',
     });
+  });
+
+  it('issues host-signed confirmation grants and rejects tampering or replay', async () => {
+    const installPlugin = vi.fn().mockResolvedValue({
+      pluginId: 'plugin-a',
+      operation: 'installed',
+      sourceType: 'cloud_code',
+    });
+
+    await startServer(createMockBrowser(), {
+      dependencies: {
+        pluginGateway: {
+          listPlugins: vi.fn().mockResolvedValue([]),
+          getPlugin: vi.fn().mockResolvedValue(null),
+          listRuntimeStatuses: vi.fn().mockResolvedValue([]),
+          getRuntimeStatus: vi.fn().mockResolvedValue(null),
+          installPlugin,
+          reloadPlugin: vi.fn().mockResolvedValue(undefined),
+          uninstallPlugin: vi.fn().mockResolvedValue(undefined),
+        },
+      },
+    });
+
+    const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
+    expect(createResponse.status).toBe(200);
+    const sessionId = createResponse.json.data.sessionId as string;
+    const installArgs = {
+      sourceType: 'cloud_code',
+      cloudPluginCode: 'plugin_a',
+    };
+
+    const grantResponse = await postConfirmationGrant(baseUrl, {
+      sessionId,
+      name: 'plugin_install',
+      arguments: installArgs,
+      source: 'agent-ui',
+      previewRef: 'preview-1',
+    });
+    expect(grantResponse.status).toBe(200);
+    expect(grantResponse.json.data.confirmationGrant).toMatchObject({
+      issuer: 'host-local',
+      capability: 'plugin_install',
+      principal: 'http',
+      sessionId,
+      source: 'agent-ui',
+      previewRef: 'preview-1',
+      signatureVersion: 1,
+      signature: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+
+    const tamperedGrant = {
+      ...grantResponse.json.data.confirmationGrant,
+      capability: 'profile_delete',
+    };
+    const tamperedInvoke = await postOrchestrationInvoke(baseUrl, {
+      sessionId,
+      name: 'plugin_install',
+      arguments: installArgs,
+      confirmationGrant: tamperedGrant,
+    });
+    expect(tamperedInvoke.status).toBe(403);
+    expect(tamperedInvoke.json.context.reason).toBe('invalid_grant_signature');
+
+    const firstInvoke = await postOrchestrationInvoke(baseUrl, {
+      sessionId,
+      name: 'plugin_install',
+      arguments: installArgs,
+      confirmationGrant: grantResponse.json.data.confirmationGrant,
+    });
+    expect(firstInvoke.status).toBe(200);
+    expect(firstInvoke.json.success).toBe(true);
+
+    const replayInvoke = await postOrchestrationInvoke(baseUrl, {
+      sessionId,
+      name: 'plugin_install',
+      arguments: installArgs,
+      confirmationGrant: grantResponse.json.data.confirmationGrant,
+    });
+    expect(replayInvoke.status).toBe(403);
+    expect(replayInvoke.json.context.reason).toBe('grant_already_consumed');
+    expect(installPlugin).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not issue confirmation grants for capabilities that do not require them', async () => {
+    await startServer(createMockBrowser());
+
+    const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
+    expect(createResponse.status).toBe(200);
+    const sessionId = createResponse.json.data.sessionId as string;
+
+    const grantResponse = await postConfirmationGrant(baseUrl, {
+      sessionId,
+      name: 'plugin_reload',
+      arguments: {
+        pluginId: 'plugin-a',
+      },
+    });
+
+    expect(grantResponse.status).toBe(400);
+    expect(grantResponse.json.error).toContain('does not require confirmation');
+  });
+
+  it('refreshes long-lived HTTP session executors before confirmed high-risk invokes', async () => {
+    const handler = vi.fn().mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      structuredContent: { ok: true },
+    });
+    let dynamicCatalog: Record<string, RegisteredCapability> = {
+      http_dynamic_high_risk: {
+        definition: {
+          name: 'http_dynamic_high_risk',
+          version: '1.0.0',
+          description: 'Dynamic high-risk HTTP capability',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {},
+          },
+          outputSchema: {
+            type: 'object',
+            additionalProperties: true,
+          },
+          assistantSurface: { publicMcp: true },
+          requiredScopes: ['plugin.write'],
+          requires: [],
+          idempotent: false,
+          retryPolicy: { retryable: false, maxAttempts: 1 },
+          sideEffectLevel: 'high',
+        },
+        handler,
+      },
+    };
+    const listeners = new Set<() => void>();
+    const provider: TestCapabilityProvider = {
+      id: 'dynamic-http-provider',
+      listCapabilities: () => dynamicCatalog,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+
+    await startServer(createMockBrowser(), {
+      dependencies: {
+        capabilityProviders: [provider],
+      },
+    });
+
+    const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
+    expect(createResponse.status).toBe(200);
+    const sessionId = createResponse.json.data.sessionId as string;
+
+    dynamicCatalog = {
+      http_dynamic_high_risk: {
+        ...dynamicCatalog.http_dynamic_high_risk,
+        definition: {
+          ...dynamicCatalog.http_dynamic_high_risk.definition,
+          description: 'Dynamic high-risk HTTP capability after provider refresh',
+        },
+      },
+    };
+    for (const listener of listeners) listener();
+
+    const grantResponse = await postConfirmationGrant(baseUrl, {
+      sessionId,
+      name: 'http_dynamic_high_risk',
+      arguments: {},
+    });
+    expect(grantResponse.status).toBe(200);
+    expect(grantResponse.json.success).toBe(true);
+
+    const invoke = await postOrchestrationInvoke(baseUrl, {
+      sessionId,
+      name: 'http_dynamic_high_risk',
+      arguments: {},
+      confirmationGrant: grantResponse.json.data.confirmationGrant,
+    });
+    expect(invoke.status).toBe(200);
+    expect(invoke.json.success).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it('dataset low-risk write capabilities can be invoked through the orchestration control plane', async () => {
@@ -873,7 +1028,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(createResponse.status).toBe(200);
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const createInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const createInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'dataset_create_empty',
       arguments: {
@@ -893,7 +1048,7 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
       recommendedNextTools: ['system_bootstrap', 'observation_get_trace_summary'],
     });
 
-    const renameInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const renameInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'dataset_rename',
       arguments: {
@@ -912,12 +1067,19 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
       },
     });
 
-    const deleteInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const deleteDatasetArgs = {
+      datasetId: 'dataset-new',
+    };
+    const deleteInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'dataset_delete',
-      arguments: {
-        datasetId: 'dataset-new',
-      },
+      arguments: deleteDatasetArgs,
+      confirmationGrant: createHttpConfirmationGrant(
+        'dataset_delete',
+        deleteDatasetArgs,
+        sessionId,
+        { grantId: 'grant-dataset-delete' }
+      ),
     });
 
     expect(deleteInvoke.status).toBe(200);
@@ -957,14 +1119,19 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(createResponse.status).toBe(200);
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const importInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const importArgs = {
+      filePath,
+      datasetName: 'Orders',
+    };
+    const importInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'dataset_import_file',
-      arguments: {
-        filePath,
-        datasetName: 'Orders',
-        confirmRisk: true,
-      },
+      arguments: importArgs,
+      confirmationGrant: createHttpConfirmationGrant(
+        'dataset_import_file',
+        importArgs,
+        sessionId
+      ),
     });
 
     expect(importInvoke.status).toBe(200);
@@ -1017,14 +1184,20 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
     expect(createResponse.status).toBe(200);
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const createInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const profileCreateArgs = {
+      name: 'Shop QA',
+      runtimeId: 'chromium-extension-relay',
+    };
+    const createInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'profile_create',
-      arguments: {
-        name: 'Shop QA',
-        runtimeId: 'chromium-extension-relay',
-        confirmRisk: true,
-      },
+      arguments: profileCreateArgs,
+      confirmationGrant: createHttpConfirmationGrant(
+        'profile_create',
+        profileCreateArgs,
+        sessionId,
+        { grantId: 'grant-profile-create' }
+      ),
     });
     expect(createInvoke.status).toBe(200);
     expect(createInvoke.json.success).toBe(true);
@@ -1036,15 +1209,21 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
       recommendedNextTools: ['session_prepare', 'system_bootstrap'],
     });
 
-    const updateInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const profileUpdateArgs = {
+      profileId: 'profile-new',
+      runtimeId: 'electron-webcontents',
+      allowRuntimeReset: true,
+    };
+    const updateInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'profile_update',
-      arguments: {
-        profileId: 'profile-new',
-        runtimeId: 'electron-webcontents',
-        allowRuntimeReset: true,
-        confirmRisk: true,
-      },
+      arguments: profileUpdateArgs,
+      confirmationGrant: createHttpConfirmationGrant(
+        'profile_update',
+        profileUpdateArgs,
+        sessionId,
+        { grantId: 'grant-profile-update' }
+      ),
     });
     expect(updateInvoke.status).toBe(200);
     expect(updateInvoke.json.success).toBe(true);
@@ -1056,13 +1235,19 @@ describe('AirpaHttpMcpServer orchestration REST routes', () => {
       },
     });
 
-    const deleteInvoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const profileDeleteArgs = {
+      profileId: 'profile-new',
+    };
+    const deleteInvoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'profile_delete',
-      arguments: {
-        profileId: 'profile-new',
-        confirmDelete: true,
-      },
+      arguments: profileDeleteArgs,
+      confirmationGrant: createHttpConfirmationGrant(
+        'profile_delete',
+        profileDeleteArgs,
+        sessionId,
+        { grantId: 'grant-profile-delete' }
+      ),
     });
     expect(deleteInvoke.status).toBe(200);
     expect(deleteInvoke.json.success).toBe(true);

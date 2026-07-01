@@ -4,11 +4,16 @@ import { getStaticRuntimeDescriptor } from '../../core/browser-pool/runtime-capa
 import { getOcrPool } from '../../core/system-automation/ocr';
 import { RuyiFirefoxClient } from './ruyi-firefox-client';
 import { prepareRuyiFirefoxLaunch } from './ruyi-runtime-shared';
+import type { BrowserDownloadArtifactSink } from '../../core/browser-automation/download-artifact-sink';
 
-export function createRuyiBrowserFactory(): BrowserFactory {
+export function createRuyiBrowserFactory(options: {
+  downloadArtifactSink?: BrowserDownloadArtifactSink;
+} = {}): BrowserFactory {
   return async (session) => {
     const prepared = prepareRuyiFirefoxLaunch(session, { startHidden: true });
-    const client = await RuyiFirefoxClient.launch(prepared);
+    const client = await RuyiFirefoxClient.launch(prepared, {
+      downloadArtifactSink: options.downloadArtifactSink,
+    });
 
     const browser = new RuyiBrowser({
       client,

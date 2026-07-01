@@ -47,6 +47,8 @@ import type {
   BrowserPdfOptions,
   BrowserPdfResult,
   BrowserScreenshotResult,
+  BrowserSessionRequestOptions,
+  BrowserSessionRequestResponse,
   BrowserStorageArea,
   BrowserTextClickResult as TextClickResult,
   BrowserTextMatchNormalizedResult as TextMatchNormalizedResult,
@@ -110,6 +112,7 @@ import {
   writeEditableSelectorValue,
 } from './selector-engine-facade';
 import { summarizeNetworkEntries } from './network-utils';
+import { runBrowserSessionRequest } from './session-request-runtime';
 import { waitForCapturedResponse } from './response-wait-runtime';
 import {
   getMimeTypeForScreenshotFormat,
@@ -123,6 +126,10 @@ import {
   browserRuntimeSupports,
   getStaticRuntimeDescriptor,
 } from '../browser-pool/runtime-capability-registry';
+import type {
+  BrowserDownloadArtifactContext,
+  BrowserDownloadArtifactSink,
+} from './download-artifact-sink';
 
 export type { TextClickResult, TextMatchNormalizedResult, TextQueryOptions, TextQueryRegion };
 
@@ -174,6 +181,8 @@ export class IntegratedBrowser implements BrowserInterface {
   private readonly defaultTimezoneId = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   private readonly downloadItems = new Map<string, DownloadItem>();
   private readonly downloadEntries: BrowserDownloadEntry[] = [];
+  private readonly downloadArtifactSink?: BrowserDownloadArtifactSink;
+  private readonly downloadArtifactContext?: BrowserDownloadArtifactContext;
   private downloadBehavior: { policy: 'allow' | 'deny'; downloadPath?: string } = {
     policy: 'allow',
   };
@@ -184,9 +193,15 @@ export class IntegratedBrowser implements BrowserInterface {
   constructor(
     private browser: SimpleBrowser,
     private viewManager: ViewManager,
-    options?: { ocrProviderFactory?: OCRProviderFactory }
+    options?: {
+      ocrProviderFactory?: OCRProviderFactory;
+      downloadArtifactSink?: BrowserDownloadArtifactSink;
+      downloadArtifactContext?: BrowserDownloadArtifactContext;
+    }
   ) {
     this.ocrProviderFactory = options?.ocrProviderFactory;
+    this.downloadArtifactSink = options?.downloadArtifactSink;
+    this.downloadArtifactContext = options?.downloadArtifactContext;
     // 初始化拦截器服务
     this.interceptorService = new BrowserInterceptorService({
       getSession: () => this.browser.getSession(),
@@ -350,6 +365,12 @@ export class IntegratedBrowser implements BrowserInterface {
     ...args: any[]
   ): Promise<T> {
     return this.browser.evaluateWithArgs(pageFunction, ...args);
+  }
+
+  async sessionRequest(
+    options: BrowserSessionRequestOptions
+  ): Promise<BrowserSessionRequestResponse> {
+    return runBrowserSessionRequest(this.evaluateWithArgs.bind(this), options);
   }
 
   private async evaluateWithSelectorEngine<T = any>(body: string): Promise<T> {
@@ -1245,6 +1266,7 @@ export class IntegratedBrowser implements BrowserInterface {
   }
 
   async listDownloads(): Promise<BrowserDownloadEntry[]> {
+    await Promise.all(this.downloadEntries.map((entry) => this.attachDownloadArtifact(entry)));
     return this.downloadEntries.map((entry) => ({ ...entry }));
   }
 
@@ -1269,9 +1291,12 @@ export class IntegratedBrowser implements BrowserInterface {
       }
 
       const nextEntry =
-        this.downloadEntries.find((entry, index) => index >= startIndex) ||
+        this.downloadEntries.find(
+          (entry, index) => index >= startIndex && entry.state !== 'in_progress'
+        ) ||
         this.downloadEntries.find((entry) => entry.state !== 'in_progress');
       if (nextEntry) {
+        await this.attachDownloadArtifact(nextEntry);
         return { ...nextEntry };
       }
 
@@ -2049,9 +2074,27 @@ export class IntegratedBrowser implements BrowserInterface {
               ? 'canceled'
               : 'interrupted';
         this.downloadItems.delete(id);
+        if (entry.state === 'completed') {
+          void this.attachDownloadArtifact(entry).catch(() => undefined);
+        }
       });
     };
 
     this.browser.getSession().on('will-download', this.downloadListener);
+  }
+
+  private async attachDownloadArtifact(entry: BrowserDownloadEntry): Promise<void> {
+    if (!this.downloadArtifactSink || !entry.path || entry.artifactRef) {
+      return;
+    }
+    entry.artifactRef = await this.downloadArtifactSink.createDownloadArtifact({
+      ...this.downloadArtifactContext,
+      browserRuntimeId: 'electron-webcontents',
+      browserId: this.getViewId(),
+      sourcePath: entry.path,
+      filename: entry.suggestedFilename || path.basename(entry.path),
+      url: entry.url,
+      downloadId: entry.id,
+    });
   }
 }

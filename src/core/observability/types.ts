@@ -17,6 +17,7 @@ export type RuntimeArtifactType =
   | 'network_summary'
   | 'screenshot'
   | 'error_context'
+  | 'download'
   | 'site_adapter_result'
   | 'site_adapter_failure'
   | 'site_adapter_repair_evidence'
@@ -93,14 +94,38 @@ export interface RuntimeArtifact {
   datasetId?: string;
   browserId?: string;
   attrs?: Record<string, unknown>;
+  payload?: RuntimeArtifactPayload;
   data?: unknown;
 }
+
+export type RuntimeArtifactPayload = RuntimeArtifactInlinePayload | RuntimeArtifactFilePayload;
+
+export interface RuntimeArtifactInlinePayload {
+  kind: 'inline';
+  data: unknown;
+}
+
+export interface RuntimeArtifactFilePayload {
+  kind: 'file';
+  storageKey: string;
+  contentAddress?: string;
+  filename: string;
+  mimeType?: string;
+  sizeBytes: number;
+  sha256: string;
+  retentionPolicy?: string;
+}
+
+export type RuntimeArtifactRefPayload =
+  | { kind: 'inline' }
+  | RuntimeArtifactFilePayload;
 
 export interface RuntimeArtifactRef {
   artifactId: string;
   type: RuntimeArtifactType;
   label?: string;
   timestamp: number;
+  payload?: RuntimeArtifactRefPayload;
 }
 
 export interface TraceSummary {
@@ -138,6 +163,7 @@ export interface FailureBundle {
   consoleTail?: RuntimeArtifact;
   networkSummary?: RuntimeArtifact;
   errorContext?: RuntimeArtifact;
+  download?: RuntimeArtifact;
   siteAdapterResult?: RuntimeArtifact;
   siteAdapterFailure?: RuntimeArtifact;
   siteAdapterRepairEvidence?: RuntimeArtifact;
@@ -197,6 +223,7 @@ export interface ObservationArtifactInput {
   label?: string;
   mimeType?: string;
   attrs?: Record<string, unknown>;
+  payload?: RuntimeArtifactPayload;
   data?: unknown;
 }
 

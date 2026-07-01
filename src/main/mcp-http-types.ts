@@ -6,6 +6,7 @@ import type { BrowserRuntimeId } from '../core/browser-pool/types';
 import type { RestApiConfig, RestApiDependencies } from '../types/http-api';
 import type { StructuredError } from '../types/error-codes';
 import type { InvokeTaskContext } from './http-session-manager';
+import type { OrchestrationCapabilityRegistry } from '../core/ai-dev/orchestration';
 
 export type McpSessionViewportHealth = 'unknown' | 'ready' | 'warning' | 'broken';
 
@@ -166,6 +167,7 @@ export interface McpHttpRouteContext {
   serverInfo: McpServerInfo;
   restApiConfig?: RestApiConfig;
   dependencies?: RestApiDependencies;
+  capabilityRegistry?: OrchestrationCapabilityRegistry;
 }
 
 export interface McpAuthContext {

@@ -113,3 +113,14 @@ export interface SiteAdapterFixtureRunResult {
   verifierResults: SiteAdapterVerifierResult[];
   artifactRefs: string[];
 }
+
+export type SiteAdapterRegistrationSource = 'built-in' | 'plugin';
+
+export interface RegisteredSiteAdapter {
+  module: SiteAdapterModule;
+  source: SiteAdapterRegistrationSource;
+  pluginId?: string;
+  packageRoot: string;
+  trusted: boolean;
+  generation: number;
+}

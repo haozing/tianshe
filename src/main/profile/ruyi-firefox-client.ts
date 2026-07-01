@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { BrowserDownloadTracker } from '../../core/browser-automation/browser-download-tracker';
+import type { BrowserDownloadArtifactSink } from '../../core/browser-automation/download-artifact-sink';
 import {
   buildRuyiFirefoxLaunchArgs,
   type PreparedRuyiFirefoxLaunch,
@@ -81,6 +82,10 @@ import type {
 
 export type { RuyiFirefoxEvent } from './ruyi-firefox-client.types';
 
+export interface RuyiFirefoxClientLaunchOptions {
+  downloadArtifactSink?: BrowserDownloadArtifactSink;
+}
+
 export class RuyiFirefoxClient {
   private readonly prepared: PreparedRuyiFirefoxLaunch;
   private child: ChildProcess | null = null;
@@ -119,10 +124,21 @@ export class RuyiFirefoxClient {
   private readonly windowController: RuyiFirefoxWindowController;
   private readonly eventRouter: RuyiFirefoxBiDiEventRouter;
 
-  private constructor(prepared: PreparedRuyiFirefoxLaunch) {
+  private constructor(
+    prepared: PreparedRuyiFirefoxLaunch,
+    options: RuyiFirefoxClientLaunchOptions = {}
+  ) {
     this.prepared = prepared;
     this.downloadController = new RuyiFirefoxDownloadController({
-      downloadTracker: new BrowserDownloadTracker(prepared.downloadDir),
+      downloadTracker: new BrowserDownloadTracker(prepared.downloadDir, {
+        artifactSink: options.downloadArtifactSink,
+        artifactContext: {
+          browserRuntimeId: 'firefox-bidi',
+          sessionId: prepared.sessionId,
+          profileId: prepared.sessionId,
+          browserId: `ruyi-session:${prepared.sessionId}`,
+        },
+      }),
       defaultDownloadPath: prepared.downloadDir,
       sendBiDiCommand: (method, params = {}, timeoutMs) =>
         this.bidi.sendCommand(method, params, timeoutMs),
@@ -290,8 +306,11 @@ export class RuyiFirefoxClient {
     });
   }
 
-  static async launch(prepared: PreparedRuyiFirefoxLaunch): Promise<RuyiFirefoxClient> {
-    const client = new RuyiFirefoxClient(prepared);
+  static async launch(
+    prepared: PreparedRuyiFirefoxLaunch,
+    options: RuyiFirefoxClientLaunchOptions = {}
+  ): Promise<RuyiFirefoxClient> {
+    const client = new RuyiFirefoxClient(prepared, options);
     try {
       await client.start();
       return client;

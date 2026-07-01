@@ -28,7 +28,7 @@ import {
 import { createSiteAdapterRepairScopeOptionsFromManifest } from '../../core/site-adapter-runtime/repair/repair-scope';
 import { createLogger } from '../../core/logger';
 import { createIpcHandler } from '../ipc-handlers/utils';
-import { officialSiteAdapters } from '../../site-adapters';
+import { siteAdapterRegistry } from '../../site-adapters';
 
 const logger = createLogger('SiteAdapterRepairStudioIPC');
 
@@ -114,19 +114,21 @@ function getTaskFixtureName(input: SiteAdapterRepairModelTask): string {
 }
 
 function getAdapterVersion(adapterId: string): string | null {
-  return officialSiteAdapters.find((adapter) => adapter.manifest.id === adapterId)
-    ?.manifest.version ?? null;
+  return siteAdapterRegistry.getRegisteredAdapter(adapterId)?.module.manifest.version ?? null;
 }
 
 function getRepairScopeForTask(
   input: SiteAdapterRepairModelTask,
   workspaceRoot: string
 ) {
-  const adapter = officialSiteAdapters.find((item) => item.manifest.id === input.task.adapterId);
-  if (!adapter) {
-    throw new Error(`Unknown official site adapter: ${input.task.adapterId}`);
+  const registration = siteAdapterRegistry.getRegisteredAdapter(input.task.adapterId);
+  if (!registration) {
+    throw new Error(`Unknown site adapter: ${input.task.adapterId}`);
   }
-  return createSiteAdapterRepairScopeOptionsFromManifest(adapter.manifest, workspaceRoot);
+  return createSiteAdapterRepairScopeOptionsFromManifest(
+    registration.module.manifest,
+    workspaceRoot
+  );
 }
 
 function getApprovedBy(input: SiteAdapterRepairStudioReviewApplyPublishInput): string | null {

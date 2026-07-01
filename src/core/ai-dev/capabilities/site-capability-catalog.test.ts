@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserInterface, BrowserRuntimeDescriptor } from '../../../types/browser-interface';
 import { setObservationSink } from '../../observability/observation-service';
 import type { ObservationSink, RuntimeArtifact, RuntimeEvent } from '../../observability/types';
+import {
+  createCapabilityConfirmationGrant,
+  __resetCapabilityConfirmationGrantsForTests,
+} from '../orchestration';
 import { createOrchestrationExecutor } from '../orchestration/capability-registry';
 import { createUnifiedCapabilityCatalog } from './unified-catalog';
 import {
@@ -76,10 +80,7 @@ const runtimeDescriptor: BrowserRuntimeDescriptor = {
       'emulation.viewport',
       'intercept.observe',
       'intercept.control',
-    ].map((name) => [
-      name,
-      { supported: true, stability: 'stable', source: 'static-runtime' },
-    ])
+    ].map((name) => [name, { supported: true, stability: 'stable', source: 'static-runtime' }])
   ) as BrowserRuntimeDescriptor['capabilities'],
 };
 
@@ -111,16 +112,47 @@ function createMockBrowser(snapshot = fixture.snapshot): BrowserInterface {
   } as unknown as BrowserInterface;
 }
 
+function createCompatExecutor(
+  deps: Parameters<typeof createOrchestrationExecutor>[0]
+): ReturnType<typeof createOrchestrationExecutor> {
+  return createOrchestrationExecutor({ enforceScopes: false, ...deps });
+}
+
+function createConfirmationGrant(
+  capabilityName: string,
+  args: Record<string, unknown>,
+  options: {
+    scopes?: string[];
+    sessionId?: string;
+    principal?: string;
+    grantId?: string;
+    invocationId?: string;
+  } = {}
+) {
+  const definition = createUnifiedCapabilityCatalog()[capabilityName]?.definition;
+  if (!definition) {
+    throw new Error(`Missing definition for ${capabilityName}`);
+  }
+  return createCapabilityConfirmationGrant({
+    definition,
+    arguments: args,
+    grantId: options.grantId || `grant-${capabilityName}`,
+    invocationId: options.invocationId || `invoke-${capabilityName}`,
+    principal: options.principal || 'test-principal',
+    source: 'agent-ui',
+    sessionId: options.sessionId || 'test-session',
+    scopes: options.scopes || [],
+    now: Date.now,
+  });
+}
+
 const ajv = new Ajv({
   allErrors: true,
   strict: false,
   validateFormats: false,
 });
 
-function expectCapabilitySchemaMatch(
-  capabilityName: string,
-  structuredContent: unknown
-): void {
+function expectCapabilitySchemaMatch(capabilityName: string, structuredContent: unknown): void {
   const capability = createUnifiedCapabilityCatalog()[capabilityName];
   const validator = ajv.compile(capability.definition.outputSchema);
   const valid = validator(structuredContent);
@@ -130,6 +162,7 @@ function expectCapabilitySchemaMatch(
 describe('site capability catalog', () => {
   afterEach(() => {
     setObservationSink(null);
+    __resetCapabilityConfirmationGrantsForTests();
   });
 
   it('registers the first real read-only site capability in the unified catalog', () => {
@@ -215,7 +248,7 @@ describe('site capability catalog', () => {
   });
 
   it('lists official business site capabilities for agent discovery', async () => {
-    const executor = createOrchestrationExecutor({});
+    const executor = createCompatExecutor({});
 
     const result = await executor.invokeApi({
       name: SITE_CAPABILITY_LIST,
@@ -280,7 +313,7 @@ describe('site capability catalog', () => {
   });
 
   it('discovers low-risk write site capabilities without generic browser fallback', async () => {
-    const executor = createOrchestrationExecutor({});
+    const executor = createCompatExecutor({});
 
     const result = await executor.invokeApi({
       name: SITE_CAPABILITY_LIST,
@@ -318,7 +351,7 @@ describe('site capability catalog', () => {
   });
 
   it('discovers the low-risk GitHub issue draft capability with login scope', async () => {
-    const executor = createOrchestrationExecutor({});
+    const executor = createCompatExecutor({});
 
     const result = await executor.invokeApi({
       name: SITE_CAPABILITY_LIST,
@@ -346,7 +379,7 @@ describe('site capability catalog', () => {
   });
 
   it('discovers the high-risk GitHub issue capability with confirmation policy', async () => {
-    const executor = createOrchestrationExecutor({});
+    const executor = createCompatExecutor({});
 
     const result = await executor.invokeApi({
       name: SITE_CAPABILITY_LIST,
@@ -376,7 +409,7 @@ describe('site capability catalog', () => {
 
   it('runs a generic official read-only site capability through SiteAdapterRunner', async () => {
     const browser = createMockBrowser(quotesFixture.snapshot);
-    const executor = createOrchestrationExecutor({ browser });
+    const executor = createCompatExecutor({ browser });
 
     const result = await executor.invokeApi(
       {
@@ -413,7 +446,7 @@ describe('site capability catalog', () => {
 
   it('runs a real package metadata site capability through the generic official handler', async () => {
     const browser = createMockBrowser(npmPackageFixture.snapshot);
-    const executor = createOrchestrationExecutor({ browser });
+    const executor = createCompatExecutor({ browser });
 
     const result = await executor.invokeApi(
       {
@@ -472,7 +505,7 @@ describe('site capability catalog', () => {
       affectedRowCount: 1,
       provenanceRecorded: true,
     });
-    const executor = createOrchestrationExecutor({
+    const executor = createCompatExecutor({
       browser,
       datasetGateway: {
         listDatasets: async () => [],
@@ -488,14 +521,22 @@ describe('site capability catalog', () => {
       },
     });
 
+    const args = {
+      url: fixture.snapshot.url,
+      datasetId: 'dataset-books',
+      commitDatasetWrite: true,
+    };
     const result = await executor.invokeApi(
       {
         name: BOOKS_TO_SCRAPE_CAPABILITY,
-        arguments: {
-          url: fixture.snapshot.url,
-          datasetId: 'dataset-books',
-          commitDatasetWrite: true,
-          confirmRisk: true,
+        arguments: args,
+        auth: {
+          principal: 'test-principal',
+          sessionId: 'test-session',
+          scopes: ['browser.read', 'dataset.write'],
+          confirmationGrant: createConfirmationGrant(BOOKS_TO_SCRAPE_CAPABILITY, args, {
+            scopes: ['browser.read', 'dataset.write'],
+          }),
         },
       },
       { traceId: 'trace-books-product' }
@@ -573,7 +614,7 @@ describe('site capability catalog', () => {
       phase: 'bound_browser',
       bindingLocked: true,
     });
-    const executor = createOrchestrationExecutor({
+    const executor = createCompatExecutor({
       browser,
       mcpSessionGateway: {
         getCurrentSessionId: () => 'session-books',
@@ -627,7 +668,7 @@ describe('site capability catalog', () => {
       phase: 'prepared_unacquired',
       bindingLocked: false,
     });
-    const executor = createOrchestrationExecutor({
+    const executor = createCompatExecutor({
       browserFactory,
       mcpSessionGateway: {
         getCurrentSessionId: () => 'session-books',
@@ -679,7 +720,7 @@ describe('site capability catalog', () => {
       phase: 'bound_browser',
       bindingLocked: true,
     });
-    const executor = createOrchestrationExecutor({
+    const executor = createCompatExecutor({
       browser,
       mcpSessionGateway: {
         getCurrentSessionId: () => 'session-books-draft',
@@ -760,7 +801,7 @@ describe('site capability catalog', () => {
       phase: 'bound_browser',
       bindingLocked: true,
     });
-    const executor = createOrchestrationExecutor({
+    const executor = createCompatExecutor({
       browser,
       mcpSessionGateway: {
         getCurrentSessionId: () => 'session-open-library-draft',
@@ -844,7 +885,7 @@ describe('site capability catalog', () => {
       phase: 'bound_browser',
       bindingLocked: true,
     });
-    const executor = createOrchestrationExecutor({
+    const executor = createCompatExecutor({
       browser,
       profileLoginStateGateway: {
         getLoginState: async () => ({
@@ -892,17 +933,12 @@ describe('site capability catalog', () => {
       visible: false,
       scopes: ['browser.write', 'profile.read'],
     });
-    expect(browser.goto).toHaveBeenCalledWith(
-      'https://github.com/tiansheai/tianshe/issues/new',
-      {
-        waitUntil: 'domcontentloaded',
-      }
-    );
-    expect(browser.type).toHaveBeenCalledWith(
-      '#issue_title',
-      'Bug: draft procedure coverage',
-      { clear: true }
-    );
+    expect(browser.goto).toHaveBeenCalledWith('https://github.com/tiansheai/tianshe/issues/new', {
+      waitUntil: 'domcontentloaded',
+    });
+    expect(browser.type).toHaveBeenCalledWith('#issue_title', 'Bug: draft procedure coverage', {
+      clear: true,
+    });
     expect(browser.type).toHaveBeenCalledWith(
       '#issue_body',
       'Draft steps to reproduce the issue procedure coverage.',
@@ -955,9 +991,9 @@ describe('site capability catalog', () => {
     );
   });
 
-  it('rejects high-risk GitHub issue creation without confirmation before browser actions', async () => {
+  it('rejects high-risk GitHub issue creation without a confirmation grant before browser actions', async () => {
     const browser = createMockBrowser(githubFixture.snapshot);
-    const executor = createOrchestrationExecutor({ browser });
+    const executor = createCompatExecutor({ browser });
 
     const result = await executor.invokeApi({
       name: GITHUB_CREATE_ISSUE_CAPABILITY,
@@ -967,12 +1003,16 @@ describe('site capability catalog', () => {
         repo: 'tianshe',
         title: 'Bug: confirmation gate',
         body: 'This should not be submitted without confirmation.',
-        confirmRisk: false,
+      },
+      auth: {
+        principal: 'test-principal',
+        sessionId: 'test-session',
+        scopes: ['browser.write', 'profile.read'],
       },
     });
 
     expect(result.ok).toBe(false);
-    expect(result.error?.message).toContain('confirmRisk=true');
+    expect(result.error?.reasonCode).toBe('capability_confirmation_required');
     expect(browser.goto).not.toHaveBeenCalled();
     expect(browser.click).not.toHaveBeenCalled();
   });
@@ -992,7 +1032,7 @@ describe('site capability catalog', () => {
       phase: 'bound_browser',
       bindingLocked: true,
     });
-    const executor = createOrchestrationExecutor({
+    const executor = createCompatExecutor({
       browser,
       profileLoginStateGateway: {
         getLoginState: async () => ({
@@ -1019,16 +1059,24 @@ describe('site capability catalog', () => {
       },
     });
 
+    const args = {
+      profileId: 'profile-github',
+      owner: 'tiansheai',
+      repo: 'tianshe',
+      title: 'Bug: issue procedure coverage',
+      body: 'Steps to reproduce the issue procedure coverage.',
+    };
     const result = await executor.invokeApi(
       {
         name: GITHUB_CREATE_ISSUE_CAPABILITY,
-        arguments: {
-          profileId: 'profile-github',
-          owner: 'tiansheai',
-          repo: 'tianshe',
-          title: 'Bug: issue procedure coverage',
-          body: 'Steps to reproduce the issue procedure coverage.',
-          confirmRisk: true,
+        arguments: args,
+        auth: {
+          principal: 'test-principal',
+          sessionId: 'test-session',
+          scopes: ['browser.write', 'profile.read'],
+          confirmationGrant: createConfirmationGrant(GITHUB_CREATE_ISSUE_CAPABILITY, args, {
+            scopes: ['browser.write', 'profile.read'],
+          }),
         },
       },
       { traceId: 'trace-github-create-issue' }
@@ -1041,17 +1089,12 @@ describe('site capability catalog', () => {
       visible: false,
       scopes: ['browser.write', 'profile.read'],
     });
-    expect(browser.goto).toHaveBeenCalledWith(
-      'https://github.com/tiansheai/tianshe/issues/new',
-      {
-        waitUntil: 'domcontentloaded',
-      }
-    );
-    expect(browser.type).toHaveBeenCalledWith(
-      '#issue_title',
-      'Bug: issue procedure coverage',
-      { clear: true }
-    );
+    expect(browser.goto).toHaveBeenCalledWith('https://github.com/tiansheai/tianshe/issues/new', {
+      waitUntil: 'domcontentloaded',
+    });
+    expect(browser.type).toHaveBeenCalledWith('#issue_title', 'Bug: issue procedure coverage', {
+      clear: true,
+    });
     expect(browser.type).toHaveBeenCalledWith(
       '#issue_body',
       'Steps to reproduce the issue procedure coverage.',
@@ -1103,7 +1146,7 @@ describe('site capability catalog', () => {
         (element) => element.attributes?.class !== 'price_color'
       ),
     };
-    const executor = createOrchestrationExecutor({
+    const executor = createCompatExecutor({
       browser: createMockBrowser(brokenSnapshot),
     });
 
@@ -1117,9 +1160,9 @@ describe('site capability catalog', () => {
 
     expect(result.ok).toBe(false);
     expect(result.error?.message).toContain('extraction failed verification');
-    expect(sink.artifacts.every((artifact) => artifact.traceId === 'trace-books-product-failure')).toBe(
-      true
-    );
+    expect(
+      sink.artifacts.every((artifact) => artifact.traceId === 'trace-books-product-failure')
+    ).toBe(true);
     expect(sink.artifacts.map((artifact) => artifact.type).slice(0, 6)).toEqual([
       'site_adapter_result',
       'procedure_state_transition',
@@ -1129,14 +1172,16 @@ describe('site capability catalog', () => {
       'site_adapter_repair_bundle',
     ]);
     expect(sink.artifacts.map((artifact) => artifact.type)).toContain('error_context');
-    const errorContext = (result.output.structuredContent.error as {
-      context?: { artifactRefs?: string[] };
-    }).context;
+    const errorContext = (
+      result.output.structuredContent.error as {
+        context?: { artifactRefs?: string[] };
+      }
+    ).context;
     expect(errorContext).toMatchObject({
-        capability: BOOKS_TO_SCRAPE_CAPABILITY,
-        adapterId: 'books-to-scrape',
-        adapterVersion: '1.0.0',
-      });
+      capability: BOOKS_TO_SCRAPE_CAPABILITY,
+      adapterId: 'books-to-scrape',
+      adapterVersion: '1.0.0',
+    });
     const referencedArtifacts = (errorContext?.artifactRefs || []).map((artifactId) =>
       sink.artifacts.find((artifact) => artifact.artifactId === artifactId)
     );
@@ -1175,7 +1220,7 @@ describe('site capability catalog', () => {
       createdAt: '2026-06-22T00:00:00.000Z',
       updatedAt: '2026-06-22T00:00:00.000Z',
     }));
-    const executor = createOrchestrationExecutor({
+    const executor = createCompatExecutor({
       profileLoginStateGateway: {
         getLoginState: async () => null,
         upsertLoginState,
@@ -1239,50 +1284,54 @@ describe('site capability catalog', () => {
   it('resumes GitHub extraction after manual login handoff is marked verified', async () => {
     const browser = createMockBrowser(githubFixture.snapshot);
     let loginState: Record<string, unknown> | null = null;
-    const prepareCurrentSession = vi.fn().mockImplementation(
-      async (request: { profileId?: string; runtimeId?: string; visible?: boolean }) => ({
-        sessionId: request.visible ? 'session-github-handoff' : 'session-github-resume',
-        prepared: true,
-        idempotent: request.visible !== true,
-        profileId: request.profileId,
-        runtimeId: request.runtimeId,
-        visible: request.visible ?? false,
-        effectiveScopes: [],
-        browserAcquired: request.visible !== true,
-        changed: request.visible ? ['visible'] : [],
-        phase: request.visible ? 'prepared_unacquired' : 'bound_browser',
-        bindingLocked: request.visible !== true,
-      })
-    );
-    const upsertLoginState = vi.fn().mockImplementation(
-      async (params: {
-        profileId: string;
-        site: string;
-        runtimeId?: string;
-        status: string;
-        verified: boolean;
-        verifiedAt?: Date;
-        evidence?: Record<string, unknown>;
-        reason?: string;
-      }) => {
-        loginState = {
-          id: 'login-github-resume',
-          profileId: params.profileId,
-          site: params.site,
-          runtimeId: params.runtimeId ?? null,
-          status: params.status,
-          verified: params.verified,
-          verifiedAt: params.verifiedAt?.toISOString?.() ?? null,
-          evidence: params.evidence,
-          reason: params.reason,
-          lastCheckedAt: '2026-06-22T00:00:00.000Z',
-          createdAt: '2026-06-22T00:00:00.000Z',
-          updatedAt: '2026-06-22T00:00:00.000Z',
-        };
-        return loginState;
-      }
-    );
-    const executor = createOrchestrationExecutor({
+    const prepareCurrentSession = vi
+      .fn()
+      .mockImplementation(
+        async (request: { profileId?: string; runtimeId?: string; visible?: boolean }) => ({
+          sessionId: request.visible ? 'session-github-handoff' : 'session-github-resume',
+          prepared: true,
+          idempotent: request.visible !== true,
+          profileId: request.profileId,
+          runtimeId: request.runtimeId,
+          visible: request.visible ?? false,
+          effectiveScopes: [],
+          browserAcquired: request.visible !== true,
+          changed: request.visible ? ['visible'] : [],
+          phase: request.visible ? 'prepared_unacquired' : 'bound_browser',
+          bindingLocked: request.visible !== true,
+        })
+      );
+    const upsertLoginState = vi
+      .fn()
+      .mockImplementation(
+        async (params: {
+          profileId: string;
+          site: string;
+          runtimeId?: string;
+          status: string;
+          verified: boolean;
+          verifiedAt?: Date;
+          evidence?: Record<string, unknown>;
+          reason?: string;
+        }) => {
+          loginState = {
+            id: 'login-github-resume',
+            profileId: params.profileId,
+            site: params.site,
+            runtimeId: params.runtimeId ?? null,
+            status: params.status,
+            verified: params.verified,
+            verifiedAt: params.verifiedAt?.toISOString?.() ?? null,
+            evidence: params.evidence,
+            reason: params.reason,
+            lastCheckedAt: '2026-06-22T00:00:00.000Z',
+            createdAt: '2026-06-22T00:00:00.000Z',
+            updatedAt: '2026-06-22T00:00:00.000Z',
+          };
+          return loginState;
+        }
+      );
+    const executor = createCompatExecutor({
       browser,
       profileLoginStateGateway: {
         getLoginState: async () => loginState,
@@ -1395,7 +1444,7 @@ describe('site capability catalog', () => {
       createdAt: '2026-06-22T00:00:00.000Z',
       updatedAt: '2026-06-22T00:00:00.000Z',
     }));
-    const executor = createOrchestrationExecutor({
+    const executor = createCompatExecutor({
       browser,
       profileLoginStateGateway: {
         getLoginState: async () => ({

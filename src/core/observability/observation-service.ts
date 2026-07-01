@@ -4,6 +4,7 @@ import type {
   ObservationSink,
   ObservationSpanInput,
   RuntimeArtifact,
+  RuntimeArtifactPayload,
   RuntimeErrorInfo,
   RuntimeEvent,
   TraceContext,
@@ -153,6 +154,27 @@ export function normalizeObservationError(error: unknown): RuntimeErrorInfo {
   };
 }
 
+function summarizeArtifactPayload(payload: RuntimeArtifactPayload): RuntimeArtifactPayload {
+  if (payload.kind === 'inline') {
+    return {
+      kind: 'inline',
+      data: summarizeForObservation(payload.data, 3),
+    };
+  }
+  return {
+    kind: 'file',
+    storageKey: payload.storageKey,
+    ...(payload.contentAddress ? { contentAddress: payload.contentAddress } : {}),
+    filename: summarizeText(payload.filename, 200),
+    ...(payload.mimeType ? { mimeType: summarizeText(payload.mimeType, 100) } : {}),
+    sizeBytes: payload.sizeBytes,
+    sha256: payload.sha256,
+    ...(payload.retentionPolicy
+      ? { retentionPolicy: summarizeText(payload.retentionPolicy, 100) }
+      : {}),
+  };
+}
+
 function eventContext(context?: TraceContext): TraceContext {
   const active = context || getCurrentTraceContext();
   if (active) {
@@ -284,6 +306,7 @@ class ObservationService {
       ...(context.datasetId ? { datasetId: context.datasetId } : {}),
       ...(context.browserId ? { browserId: context.browserId } : {}),
       ...(input.attrs ? { attrs: summarizeForObservation(input.attrs, 2) as Record<string, unknown> } : {}),
+      ...(input.payload ? { payload: summarizeArtifactPayload(input.payload) } : {}),
       ...(input.data !== undefined ? { data: summarizeForObservation(input.data, 3) } : {}),
     };
 

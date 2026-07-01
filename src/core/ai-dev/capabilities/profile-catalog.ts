@@ -77,6 +77,7 @@ const PROFILE_INFO_SCHEMA = {
     id: { type: 'string' },
     name: { type: 'string' },
     runtimeId: { type: 'string' },
+    loginStateRevision: { type: 'number' },
     status: { type: 'string' },
     partition: { type: 'string' },
     isSystem: { type: 'boolean' },
@@ -98,6 +99,7 @@ const PROFILE_LOGIN_STATE_SCHEMA = {
     'site',
     'status',
     'verified',
+    'profileRevision',
     'lastCheckedAt',
     'createdAt',
     'updatedAt',
@@ -108,9 +110,15 @@ const PROFILE_LOGIN_STATE_SCHEMA = {
     accountId: { type: ['string', 'null'] },
     site: { type: 'string' },
     loginUrl: { type: ['string', 'null'] },
+    runtimeIdSnapshot: { type: ['string', 'null'] },
     runtimeId: { type: ['string', 'null'] },
+    profileRevision: { type: 'number' },
     status: { type: 'string', enum: PROFILE_LOGIN_STATE_STATUSES },
     verified: { type: 'boolean' },
+    verifiedBy: {
+      type: ['string', 'null'],
+      enum: ['profile_service', 'capability', 'trusted_site_adapter_verifier', null],
+    },
     lastCheckedAt: { type: 'string' },
     verifiedAt: { type: ['string', 'null'] },
     evidenceArtifactId: { type: ['string', 'null'] },
@@ -301,28 +309,6 @@ const readOptionalLimitArg = (args: Record<string, unknown>, key: string): numbe
     throw createStructuredError(ErrorCode.INVALID_PARAMETER, `Parameter ${key} must be a positive integer`);
   }
   return raw;
-};
-
-const readRequiredConfirmationArg = (
-  args: Record<string, unknown>,
-  key: string,
-  label: string
-): true => {
-  const raw = args[key];
-  if (raw !== true) {
-    throw createStructuredError(
-      ErrorCode.INVALID_PARAMETER,
-      `Parameter ${key} must be true for ${label}`,
-      {
-        suggestion: `Re-issue the call with ${key}: true only after verifying the intended profile change and its runtime side effects.`,
-        context: {
-          parameter: key,
-          expected: true,
-        },
-      }
-    );
-  }
-  return true;
 };
 
 const readNullableStringArg = (
@@ -893,6 +879,7 @@ const profileEnsureLoggedInHandler: CapabilityHandler<OrchestrationDependencies>
     ...(runtimeId ? { runtimeId } : {}),
     status,
     verified,
+    verifiedBy: 'capability',
     evidence,
     reason: manualHandoffRequired
       ? 'manual login handoff or site-specific verification is required'
@@ -954,7 +941,6 @@ const profileEnsureLoggedInHandler: CapabilityHandler<OrchestrationDependencies>
 
 const profileCreateHandler: CapabilityHandler<OrchestrationDependencies> = async (args, deps) => {
   const gateway = ensureProfileGateway(deps);
-  readRequiredConfirmationArg(args, 'confirmRisk', 'profile creation');
   const created = normalizeProfile(await gateway.createProfile(buildCreateProfileParams(args)));
 
   return createStructuredResult({
@@ -975,7 +961,6 @@ const profileCreateHandler: CapabilityHandler<OrchestrationDependencies> = async
 
 const profileUpdateHandler: CapabilityHandler<OrchestrationDependencies> = async (args, deps) => {
   const gateway = ensureProfileGateway(deps);
-  readRequiredConfirmationArg(args, 'confirmRisk', 'profile update');
   const profileId = readStringArg(args, 'profileId', { required: true }) || '';
   const params = buildUpdateProfileParams(args);
   const changedFields = Object.keys(params);
@@ -1031,7 +1016,6 @@ const profileUpdateHandler: CapabilityHandler<OrchestrationDependencies> = async
 const profileDeleteHandler: CapabilityHandler<OrchestrationDependencies> = async (args, deps) => {
   const gateway = ensureProfileGateway(deps);
   const profileId = readStringArg(args, 'profileId', { required: true }) || '';
-  readRequiredConfirmationArg(args, 'confirmDelete', 'profile deletion');
   await gateway.deleteProfile(profileId);
 
   return createStructuredResult({
@@ -1176,7 +1160,7 @@ const PROFILE_CAPABILITIES: Array<{
       inputSchema: {
         type: 'object',
         additionalProperties: false,
-        required: ['name', 'confirmRisk'],
+        required: ['name'],
         properties: {
           name: { type: 'string', minLength: 1 },
           runtimeId: { type: 'string', enum: BROWSER_RUNTIME_IDS },
@@ -1188,7 +1172,6 @@ const PROFILE_CAPABILITIES: Array<{
           color: { type: ['string', 'null'] },
           idleTimeoutMs: { type: 'integer', minimum: 0 },
           lockTimeoutMs: { type: 'integer', minimum: 0 },
-          confirmRisk: { type: 'boolean' },
         },
       },
       outputSchema: PROFILE_OUTPUT_SCHEMAS.profile_create,
@@ -1207,7 +1190,6 @@ const PROFILE_CAPABILITIES: Array<{
             arguments: {
               name: 'Shop QA',
               runtimeId: 'chromium-extension-relay',
-              confirmRisk: true,
             },
           },
         ],
@@ -1229,7 +1211,7 @@ const PROFILE_CAPABILITIES: Array<{
       inputSchema: {
         type: 'object',
         additionalProperties: false,
-        required: ['profileId', 'confirmRisk'],
+        required: ['profileId'],
         properties: {
           profileId: { type: 'string', minLength: 1 },
           name: { type: 'string', minLength: 1 },
@@ -1243,7 +1225,6 @@ const PROFILE_CAPABILITIES: Array<{
           idleTimeoutMs: { type: 'integer', minimum: 0 },
           lockTimeoutMs: { type: 'integer', minimum: 0 },
           allowRuntimeReset: { type: 'boolean' },
-          confirmRisk: { type: 'boolean' },
         },
       },
       outputSchema: PROFILE_OUTPUT_SCHEMAS.profile_update,
@@ -1262,7 +1243,6 @@ const PROFILE_CAPABILITIES: Array<{
             arguments: {
               profileId: 'profile_123',
               name: 'Shop QA Updated',
-              confirmRisk: true,
             },
           },
         ],
@@ -1283,10 +1263,9 @@ const PROFILE_CAPABILITIES: Array<{
       inputSchema: {
         type: 'object',
         additionalProperties: false,
-        required: ['profileId', 'confirmDelete'],
+        required: ['profileId'],
         properties: {
           profileId: { type: 'string', minLength: 1 },
-          confirmDelete: { type: 'boolean' },
         },
       },
       outputSchema: PROFILE_OUTPUT_SCHEMAS.profile_delete,
@@ -1304,7 +1283,6 @@ const PROFILE_CAPABILITIES: Array<{
             title: 'Delete one profile',
             arguments: {
               profileId: 'profile_123',
-              confirmDelete: true,
             },
           },
         ],

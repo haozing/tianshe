@@ -21,6 +21,7 @@ import { createSiteAdapterRepairBundleView } from '../../../../core/site-adapter
 import type {
   SiteAdapterFixture,
   SiteAdapterManifest,
+  SiteAdapterProviderError,
 } from '../../../../core/site-adapter-runtime';
 import type {
   FailureBundle,
@@ -36,8 +37,52 @@ import type {
   SiteAdapterRepairStudioModelDiffResult,
 } from '../../../../main/site-adapter-repair-studio/routes-or-ipc';
 
-type AdapterListItem = { manifest: SiteAdapterManifest };
+type AdapterListItem = {
+  manifest: SiteAdapterManifest;
+  source?: string;
+  pluginId?: string;
+  trusted?: boolean;
+  packageRoot?: string;
+  generation?: number;
+};
+type ProviderDiagnostic = SiteAdapterProviderError & {
+  stage?: string;
+  quarantined?: boolean;
+  suggestion?: string;
+};
 type RunnerMode = 'fixture' | 'browser' | 'playwright';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function isAdapterListItem(value: unknown): value is AdapterListItem {
+  return isRecord(value) && isRecord(value.manifest) && typeof value.manifest.id === 'string';
+}
+
+function isProviderDiagnostic(value: unknown): value is ProviderDiagnostic {
+  return isRecord(value) && typeof value.providerId === 'string' && typeof value.message === 'string';
+}
+
+function normalizeAdapterListPayload(data: unknown): {
+  adapters: AdapterListItem[];
+  providerDiagnostics: ProviderDiagnostic[];
+} {
+  if (Array.isArray(data)) {
+    return {
+      adapters: data.filter(isAdapterListItem),
+      providerDiagnostics: [],
+    };
+  }
+
+  const record = isRecord(data) ? data : {};
+  return {
+    adapters: Array.isArray(record.adapters) ? record.adapters.filter(isAdapterListItem) : [],
+    providerDiagnostics: Array.isArray(record.providerErrors)
+      ? record.providerErrors.filter(isProviderDiagnostic)
+      : [],
+  };
+}
 
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
@@ -168,6 +213,7 @@ function createLabRepairStudioInput(
 export function SiteAdapterLabPanel() {
   const htmlFileInputRef = useRef<HTMLInputElement | null>(null);
   const [adapters, setAdapters] = useState<AdapterListItem[]>([]);
+  const [providerDiagnostics, setProviderDiagnostics] = useState<ProviderDiagnostic[]>([]);
   const [adapterId, setAdapterId] = useState('books-to-scrape');
   const [fixtureName, setFixtureName] = useState('product-page');
   const [fixture, setFixture] = useState<SiteAdapterFixture | null>(null);
@@ -208,9 +254,11 @@ export function SiteAdapterLabPanel() {
     if (!response.success || !response.data) {
       throw new Error(response.error || 'Failed to list adapters');
     }
-    setAdapters(response.data);
-    if (response.data[0]?.manifest.id && !adapterId) {
-      setAdapterId(response.data[0].manifest.id);
+    const payload = normalizeAdapterListPayload(response.data);
+    setAdapters(payload.adapters);
+    setProviderDiagnostics(payload.providerDiagnostics);
+    if (payload.adapters[0]?.manifest.id && !adapterId) {
+      setAdapterId(payload.adapters[0].manifest.id);
     }
   }
 
@@ -527,6 +575,39 @@ export function SiteAdapterLabPanel() {
           </div>
         </div>
       </div>
+
+      {providerDiagnostics.length ? (
+        <Alert>
+          <AlertDescription>
+            <div className="space-y-2">
+              <div className="font-medium">
+                {providerDiagnostics.length} Site Adapter provider issue
+                {providerDiagnostics.length === 1 ? '' : 's'} quarantined.
+              </div>
+              {providerDiagnostics.map((diagnostic, index) => (
+                <div
+                  key={`${diagnostic.providerId}-${diagnostic.pluginId || 'provider'}-${index}`}
+                  className="rounded border bg-muted/40 p-2"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="secondary">{diagnostic.providerId}</Badge>
+                    {diagnostic.pluginId ? (
+                      <Badge variant="outline">{diagnostic.pluginId}</Badge>
+                    ) : null}
+                    <Badge variant="outline">{diagnostic.stage || 'provider_refresh'}</Badge>
+                  </div>
+                  <div className="mt-1 text-sm">{diagnostic.message}</div>
+                  {diagnostic.suggestion ? (
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {diagnostic.suggestion}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {error ? (
         <Alert variant="destructive">

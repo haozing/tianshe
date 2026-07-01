@@ -43,10 +43,15 @@ export function getTempDir(): string {
   return path.join(getDuckDBDataDir(), 'temp');
 }
 
+export function getRuntimeArtifactsDir(): string {
+  return path.join(getDuckDBDataDir(), 'runtime-artifacts');
+}
+
 export async function ensureDirectories(): Promise<void> {
   await fs.ensureDir(getDuckDBDataDir());
   await fs.ensureDir(getImportsDir());
   await fs.ensureDir(getTempDir());
+  await fs.ensureDir(getRuntimeArtifactsDir());
 }
 
 export async function getFileSize(filePath: string): Promise<number> {

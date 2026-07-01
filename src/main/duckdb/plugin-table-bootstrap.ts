@@ -180,6 +180,27 @@ const PLUGIN_TABLE_CREATE_STATEMENTS = [
     )
   `,
   `
+    CREATE TABLE IF NOT EXISTS plugin_relational_state (
+      plugin_id VARCHAR NOT NULL,
+      namespace VARCHAR NOT NULL,
+      key VARCHAR NOT NULL,
+      value JSON,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (plugin_id, namespace, key)
+    )
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS plugin_state_migrations (
+      plugin_id VARCHAR NOT NULL,
+      namespace VARCHAR NOT NULL,
+      migration_id VARCHAR NOT NULL,
+      checksum VARCHAR NOT NULL,
+      description TEXT,
+      applied_at BIGINT NOT NULL,
+      PRIMARY KEY (plugin_id, namespace, migration_id)
+    )
+  `,
+  `
     CREATE TABLE IF NOT EXISTS js_plugin_custom_pages (
       id VARCHAR PRIMARY KEY,
       plugin_id VARCHAR NOT NULL,
@@ -317,6 +338,14 @@ const PLUGIN_TABLE_INDEX_STATEMENTS = [
   `
     CREATE INDEX IF NOT EXISTS idx_js_plugin_custom_pages_display_mode
     ON js_plugin_custom_pages(display_mode)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS idx_plugin_relational_state_plugin_namespace
+    ON plugin_relational_state(plugin_id, namespace)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS idx_plugin_state_migrations_plugin_namespace
+    ON plugin_state_migrations(plugin_id, namespace)
   `,
   `
     CREATE INDEX IF NOT EXISTS idx_pw_actions_recording

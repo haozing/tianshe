@@ -7,8 +7,13 @@ import { getBrowserPoolManager } from '../../core/browser-pool';
 import {
   acquireProfileLiveSessionLease,
   attachProfileLiveSessionLease,
-  takeoverProfileLiveSessionLease,
+  requestProfileLiveSessionHandoff,
+  completeProfileLiveSessionHandoff,
+  approveProfileLiveSessionHandoff,
+  getProfileLiveSessionHandoff,
+  listProfileLiveSessionHandoffs,
 } from '../../core/browser-pool/profile-live-session-lease';
+import { buildProfileResourceKey, resourceCoordinator } from '../../core/resource-coordinator';
 
 vi.mock('electron', () => ({
   ipcMain: {
@@ -34,7 +39,13 @@ vi.mock('../../core/browser-pool', () => ({
 
 vi.mock('../../core/browser-pool/profile-live-session-lease', () => ({
   acquireProfileLiveSessionLease: vi.fn(),
-  takeoverProfileLiveSessionLease: vi.fn(),
+  requestProfileLiveSessionHandoff: vi.fn(),
+  completeProfileLiveSessionHandoff: vi.fn(),
+  approveProfileLiveSessionHandoff: vi.fn(),
+  pauseProfileLiveSessionHandoff: vi.fn(),
+  cancelProfileLiveSessionHandoff: vi.fn(),
+  getProfileLiveSessionHandoff: vi.fn(),
+  listProfileLiveSessionHandoffs: vi.fn(),
   attachProfileLiveSessionLease: vi.fn((handle) => handle),
 }));
 
@@ -82,7 +93,12 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
     getView: vi.fn(),
   };
 
+  const mainWindowWebContents = {
+    send: vi.fn(),
+  };
+
   const windowManager = {
+    getMainWindowV3: vi.fn(() => ({ webContents: mainWindowWebContents })),
     findPopupIdByViewId: vi.fn(),
     getWindowById: vi.fn(),
   };
@@ -113,6 +129,7 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
     ipcRouteRegistry.unregisterAll();
     registeredHandlers.clear();
     poolEvents.removeAllListeners();
+    mainWindowWebContents.send.mockClear();
 
     (ipcMain.handle as Mock).mockImplementation(
       (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
@@ -125,9 +142,42 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
     (acquireProfileLiveSessionLease as Mock).mockResolvedValue({
       release: vi.fn().mockResolvedValue(undefined),
     });
-    (takeoverProfileLiveSessionLease as Mock).mockResolvedValue({
+    (requestProfileLiveSessionHandoff as Mock).mockResolvedValue({
+      id: 'handoff-1',
+      status: 'paused',
+    });
+    (completeProfileLiveSessionHandoff as Mock).mockResolvedValue({
       release: vi.fn().mockResolvedValue(undefined),
     });
+    (getProfileLiveSessionHandoff as Mock).mockResolvedValue(null);
+    (listProfileLiveSessionHandoffs as Mock).mockResolvedValue([]);
+    (approveProfileLiveSessionHandoff as Mock).mockImplementation(
+      async (_id: string, _options: unknown) => ({
+        id: 'handoff-1',
+        keys: ['profile:profile-1'],
+        status: 'approved',
+        requesterToken: 'agent-owner',
+        requesterSource: 'mcp',
+        requesterMetadata: { controllerKind: 'agent' },
+        ownerToken: 'human-owner',
+        ownerSource: 'ipc',
+        ownerMetadata: { controllerKind: 'human' },
+        ownerAcquiredAt: 100,
+        reason: 'agent needs profile',
+        message: null,
+        createdAt: 101,
+        updatedAt: 102,
+        expiresAt: null,
+        approvedAt: 102,
+        pausedAt: null,
+        completedAt: null,
+        canceledAt: null,
+        expiredAt: null,
+        completedByToken: null,
+        canceledByToken: null,
+        statusReason: 'approved_by_trusted_renderer',
+      })
+    );
 
     registerProfileHandlers(
       profileService as never,
@@ -163,10 +213,17 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
     })) as { success: boolean };
 
     expect(launchResult.success).toBe(true);
-    expect(acquireProfileLiveSessionLease).toHaveBeenCalledWith('profile-1', {
-      source: 'ipc',
-      timeoutMs: 15000,
-    });
+    expect(acquireProfileLiveSessionLease).toHaveBeenCalledWith(
+      'profile-1',
+      expect.objectContaining({
+        source: 'ipc',
+        timeoutMs: 15000,
+        ownerMetadata: expect.objectContaining({
+          controllerKind: 'human',
+          interruptibility: 'non_interruptible',
+        }),
+      })
+    );
     expect(attachProfileLiveSessionLease).toHaveBeenCalledWith(
       expect.objectContaining({ browserId: 'browser-1' }),
       expect.objectContaining({ release: expect.any(Function) })
@@ -237,7 +294,20 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
       },
     });
     expect(acquireProfileLiveSessionLease).not.toHaveBeenCalled();
-    expect(takeoverProfileLiveSessionLease).toHaveBeenCalledWith('profile-1', { source: 'ipc' });
+    expect(requestProfileLiveSessionHandoff).toHaveBeenCalledWith(
+      'profile-1',
+      expect.objectContaining({
+        source: 'ipc',
+        reason: 'human_requested_agent_profile_handoff',
+        autoApproveIfCurrentOwnerInterruptible: true,
+      })
+    );
+    expect(completeProfileLiveSessionHandoff).toHaveBeenCalledWith(
+      'handoff-1',
+      expect.objectContaining({
+        source: 'ipc',
+      })
+    );
     expect(poolManager.acquire).not.toHaveBeenCalled();
     expect(poolManager.takeoverLockedBrowser).toHaveBeenCalledWith(
       'profile-1',
@@ -254,5 +324,174 @@ describe('registerProfileHandlers - pool IPC lease behavior', () => {
       expect.objectContaining({ browserId: 'browser-agent-held' }),
       expect.objectContaining({ release: expect.any(Function) })
     );
+  });
+
+  it('exposes trusted profile handoff controls without returning owner tokens', async () => {
+    const handoffRequest = {
+      id: 'handoff-1',
+      keys: ['profile:profile-1'],
+      status: 'requested',
+      requesterToken: 'agent-owner',
+      requesterSource: 'mcp',
+      requesterMetadata: { controllerKind: 'agent', requestId: 'req-1' },
+      ownerToken: 'human-owner',
+      ownerSource: 'ipc',
+      ownerMetadata: { controllerKind: 'human', traceId: 'trace-1' },
+      ownerAcquiredAt: 100,
+      reason: 'agent needs profile',
+      message: 'Please approve takeover.',
+      createdAt: 101,
+      updatedAt: 101,
+      expiresAt: 201,
+      approvedAt: null,
+      pausedAt: null,
+      completedAt: null,
+      canceledAt: null,
+      expiredAt: null,
+      completedByToken: null,
+      canceledByToken: null,
+      statusReason: null,
+    };
+    const senderGuard = vi.fn();
+    ipcRouteRegistry.unregisterAll();
+    registeredHandlers.clear();
+    registerProfileHandlers(
+      profileService as never,
+      groupService as never,
+      accountService as never,
+      viewManager as never,
+      windowManager as never,
+      { senderGuard }
+    );
+    (listProfileLiveSessionHandoffs as Mock).mockResolvedValue([handoffRequest]);
+    (getProfileLiveSessionHandoff as Mock).mockResolvedValue(handoffRequest);
+
+    const event = { sender: {} };
+    const listResult = (await getHandler('profile:handoff-list')(event, 'profile-1')) as {
+      success: boolean;
+      data?: Array<Record<string, unknown>>;
+    };
+    const approveResult = (await getHandler('profile:handoff-approve')(event, 'handoff-1', {
+      reason: 'ok',
+    })) as { success: boolean; data?: Record<string, unknown> };
+
+    expect(listResult.success).toBe(true);
+    expect(listResult.data?.[0]).toMatchObject({
+      id: 'handoff-1',
+      profileId: 'profile-1',
+      status: 'requested',
+      requester: {
+        source: 'mcp',
+        metadata: { controllerKind: 'agent', requestId: 'req-1' },
+      },
+      currentOwner: {
+        source: 'ipc',
+        metadata: { controllerKind: 'human', traceId: 'trace-1' },
+      },
+    });
+    expect(JSON.stringify(listResult.data)).not.toContain('human-owner');
+    expect(JSON.stringify(listResult.data)).not.toContain('agent-owner');
+    expect(approveResult.success).toBe(true);
+    expect(approveProfileLiveSessionHandoff).toHaveBeenCalledWith('handoff-1', {
+      hostAuthorized: true,
+      reason: 'ok',
+    });
+    expect(senderGuard).toHaveBeenCalledWith(event, 'profile:handoff-list');
+    expect(senderGuard).toHaveBeenCalledWith(event, 'profile:handoff-approve');
+  });
+
+  it('forwards resource handoff events to the trusted renderer event channels', async () => {
+    await resourceCoordinator.clear();
+    const lease = await resourceCoordinator.acquire(buildProfileResourceKey('profile-1'), {
+      ownerToken: 'human-owner',
+      ownerSource: 'ipc',
+      ownerMetadata: { controllerKind: 'human' },
+    });
+
+    const request = await resourceCoordinator.requestHandoff(buildProfileResourceKey('profile-1'), {
+      requesterToken: 'agent-owner',
+      requesterSource: 'mcp',
+      requesterMetadata: { controllerKind: 'agent' },
+      reason: 'agent needs profile',
+    });
+
+    expect(mainWindowWebContents.send).toHaveBeenCalledWith(
+      'profile:handoff-changed',
+      expect.objectContaining({
+        type: 'handoff:requested',
+        handoff: expect.objectContaining({
+          id: request.id,
+          profileId: 'profile-1',
+          status: 'requested',
+        }),
+      })
+    );
+    expect(mainWindowWebContents.send).toHaveBeenCalledWith(
+      'profile:handoff-requested',
+      expect.objectContaining({
+        type: 'handoff:requested',
+        handoff: expect.objectContaining({ id: request.id }),
+      })
+    );
+    expect(JSON.stringify(mainWindowWebContents.send.mock.calls)).not.toContain('human-owner');
+    expect(JSON.stringify(mainWindowWebContents.send.mock.calls)).not.toContain('agent-owner');
+
+    await lease.release();
+    await resourceCoordinator.clear();
+  });
+
+  it('does not duplicate handoff forwarding when profile handlers are registered repeatedly', async () => {
+    ipcRouteRegistry.unregisterAll();
+    registeredHandlers.clear();
+    registerProfileHandlers(
+      profileService as never,
+      groupService as never,
+      accountService as never,
+      viewManager as never,
+      windowManager as never
+    );
+    ipcRouteRegistry.unregisterAll();
+    registeredHandlers.clear();
+    registerProfileHandlers(
+      profileService as never,
+      groupService as never,
+      accountService as never,
+      viewManager as never,
+      windowManager as never
+    );
+    mainWindowWebContents.send.mockClear();
+
+    const lease = await resourceCoordinator.acquire(buildProfileResourceKey('profile-1'), {
+      ownerToken: 'human-owner',
+      ownerSource: 'ipc',
+      ownerMetadata: { controllerKind: 'human' },
+    });
+
+    const request = await resourceCoordinator.requestHandoff(buildProfileResourceKey('profile-1'), {
+      requesterToken: 'agent-owner',
+      requesterSource: 'mcp',
+      requesterMetadata: { controllerKind: 'agent' },
+      reason: 'agent needs profile',
+    });
+
+    expect(
+      mainWindowWebContents.send.mock.calls.filter(
+        ([channel]) => channel === 'profile:handoff-changed'
+      )
+    ).toHaveLength(1);
+    expect(
+      mainWindowWebContents.send.mock.calls.filter(
+        ([channel]) => channel === 'profile:handoff-requested'
+      )
+    ).toHaveLength(1);
+    expect(mainWindowWebContents.send).toHaveBeenCalledWith(
+      'profile:handoff-changed',
+      expect.objectContaining({
+        handoff: expect.objectContaining({ id: request.id }),
+      })
+    );
+
+    await lease.release();
+    await resourceCoordinator.clear();
   });
 });

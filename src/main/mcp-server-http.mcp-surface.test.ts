@@ -1058,7 +1058,7 @@ describe('AirpaHttpMcpServer MCP public surface', () => {
       }>;
     };
     expect(catalogJson.currentSession?.browserAcquired).toBe(false);
-    expect(catalogJson.currentSession?.effectiveScopes).toEqual([]);
+    expect(catalogJson.currentSession?.effectiveScopes).toEqual(['session.write']);
     expect(catalogJson.currentSession?.closing).toBe(false);
     expect(catalogJson.currentSession?.terminateAfterResponse).toBe(false);
     expect(catalogJson.prompts).toEqual(

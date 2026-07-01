@@ -4,6 +4,16 @@ import { registerObservationHandlers } from './observation-handler';
 import { ipcRouteRegistry } from '../ipc-route-registry';
 
 vi.mock('electron', () => ({
+  BrowserWindow: {
+    getFocusedWindow: vi.fn(() => null),
+    getAllWindows: vi.fn(() => [{}]),
+  },
+  dialog: {
+    showSaveDialog: vi.fn().mockResolvedValue({
+      canceled: false,
+      filePath: 'C:\\tmp\\artifact.zip',
+    }),
+  },
   ipcMain: {
     handle: vi.fn(),
     removeHandler: vi.fn(),
@@ -27,6 +37,11 @@ describe('registerObservationHandlers', () => {
     getFailureBundle: vi.fn(),
     getTraceTimeline: vi.fn(),
     searchRecentFailures: vi.fn(),
+    getRuntimeArtifact: vi.fn(),
+    openRuntimeArtifactFile: vi.fn(),
+    revealRuntimeArtifactFile: vi.fn(),
+    saveRuntimeArtifactFileAsFromTrustedDialog: vi.fn(),
+    deleteRuntimeArtifactFile: vi.fn(),
   };
 
   const getHandler = (channel: string) => {
@@ -51,12 +66,17 @@ describe('registerObservationHandlers', () => {
     registerObservationHandlers(duckdbService as never);
   });
 
-  it('registers trace summary, failure bundle, timeline, and recent failure handlers', () => {
-    expect(ipcMain.handle).toHaveBeenCalledTimes(4);
+  it('registers trace query and artifact file handlers', () => {
+    expect(ipcMain.handle).toHaveBeenCalledTimes(9);
     expect(registeredHandlers.has('observation:get-trace-summary')).toBe(true);
     expect(registeredHandlers.has('observation:get-failure-bundle')).toBe(true);
     expect(registeredHandlers.has('observation:get-trace-timeline')).toBe(true);
     expect(registeredHandlers.has('observation:search-recent-failures')).toBe(true);
+    expect(registeredHandlers.has('observation:get-artifact')).toBe(true);
+    expect(registeredHandlers.has('observation:open-artifact-file')).toBe(true);
+    expect(registeredHandlers.has('observation:reveal-artifact-file')).toBe(true);
+    expect(registeredHandlers.has('observation:save-artifact-file-as')).toBe(true);
+    expect(registeredHandlers.has('observation:delete-artifact-file')).toBe(true);
   });
 
   it('returns trace summary through the standard IPC response shape', async () => {
@@ -163,5 +183,94 @@ describe('registerObservationHandlers', () => {
       ],
     });
     expect(duckdbService.searchRecentFailures).toHaveBeenCalledWith(5);
+  });
+
+  it('returns runtime artifacts through the standard IPC response shape', async () => {
+    duckdbService.getRuntimeArtifact.mockResolvedValue({
+      artifactId: 'artifact-file-0',
+      timestamp: 123,
+      traceId: 'trace-file',
+      type: 'screenshot',
+      component: 'browser',
+      payload: {
+        kind: 'file',
+        storageKey: 'aa/artifact-file-0/screenshot.png',
+        filename: 'screenshot.png',
+        sizeBytes: 10,
+        sha256: 'e'.repeat(64),
+      },
+    });
+
+    const handler = getHandler('observation:get-artifact');
+    const result = (await handler(null, ' artifact-file-0 ')) as {
+      success: boolean;
+      data?: { artifactId: string; payload?: { storageKey?: string } };
+    };
+
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({
+        artifactId: 'artifact-file-0',
+        payload: expect.objectContaining({
+          storageKey: 'aa/artifact-file-0/screenshot.png',
+        }),
+      }),
+    });
+    expect(JSON.stringify(result)).not.toContain('C:\\');
+    expect(duckdbService.getRuntimeArtifact).toHaveBeenCalledWith('artifact-file-0');
+  });
+
+  it('opens artifact files by artifact id only', async () => {
+    duckdbService.openRuntimeArtifactFile.mockResolvedValue({ success: true });
+
+    const handler = getHandler('observation:open-artifact-file');
+    const result = await handler(null, ' artifact-file-1 ');
+
+    expect(result).toEqual({
+      success: true,
+      data: { success: true },
+    });
+    expect(duckdbService.openRuntimeArtifactFile).toHaveBeenCalledWith('artifact-file-1');
+  });
+
+  it('saves artifact files through a main-process save dialog', async () => {
+    duckdbService.saveRuntimeArtifactFileAsFromTrustedDialog.mockResolvedValue({
+      success: true,
+      bytesWritten: 12,
+      sha256: 'd'.repeat(64),
+    });
+
+    const handler = getHandler('observation:save-artifact-file-as');
+    const result = await handler(null, 'artifact-file-2');
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        success: true,
+        canceled: false,
+        bytesWritten: 12,
+        sha256: 'd'.repeat(64),
+      },
+    });
+    expect(duckdbService.saveRuntimeArtifactFileAsFromTrustedDialog).toHaveBeenCalledWith(
+      'artifact-file-2',
+      {
+        path: 'C:\\tmp\\artifact.zip',
+        source: 'electron-save-dialog',
+      }
+    );
+  });
+
+  it('deletes artifact files by artifact id only', async () => {
+    duckdbService.deleteRuntimeArtifactFile.mockResolvedValue({ success: true, deleted: true });
+
+    const handler = getHandler('observation:delete-artifact-file');
+    const result = await handler(null, 'artifact-file-3');
+
+    expect(result).toEqual({
+      success: true,
+      data: { success: true, deleted: true },
+    });
+    expect(duckdbService.deleteRuntimeArtifactFile).toHaveBeenCalledWith('artifact-file-3');
   });
 });

@@ -156,7 +156,10 @@ export class PluginLifecycleManager {
 
       // 1.5. 注册插件到 Registry
       const registry = getPluginRegistry();
-      registry.registerPlugin(pluginId, plugin.manifest, helpers);
+      registry.registerPlugin(pluginId, plugin.manifest, helpers, {
+        packageRoot: plugin.path,
+        module: plugin.module,
+      });
 
       // 2. 调用插件的 activate 钩子
       await this.runLifecycleHook(plugin, 'activate', () =>

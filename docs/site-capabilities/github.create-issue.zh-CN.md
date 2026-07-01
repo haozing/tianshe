@@ -11,7 +11,7 @@
 - `repo`：必填，GitHub 仓库名。
 - `title`：必填，issue 标题。
 - `body`：必填，issue 正文。
-- `confirmRisk`：必填且必须为 `true`，因为该能力会创建远端 GitHub issue。
+- 该能力会创建远端 GitHub issue，必须通过 executor confirmation grant 授权，不再使用公开 `confirmRisk` 参数。
 - `runtimeId` / `visible`：可选，传入后通过 `session_prepare` 语义准备当前会话。
 
 ## 输出
@@ -35,7 +35,7 @@
 
 ## 风险和约束
 
-- 这是高风险写能力，缺少 `confirmRisk=true` 时会先于浏览器动作失败。
+- 这是高风险写能力，缺少有效 confirmation grant 时会先于浏览器动作失败。
 - 需要 `browser.write` 和 `profile.read` scope。
 - 需要 verified GitHub 登录态；未验证时返回人工接管 handoff，不读取或返回密码、cookie、token。
 - 只支持声明的 issue 创建流程，不支持编辑仓库、关闭 issue、管理 PR、修改设置或绕过 CAPTCHA/2FA。

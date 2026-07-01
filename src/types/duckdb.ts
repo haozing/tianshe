@@ -11,6 +11,8 @@ import type {
   IProfileService,
   ISavedSiteService,
 } from './service-interfaces';
+import type { PluginStateStore } from './plugin-state';
+import type { CapabilityRunStore } from './capability-run';
 
 // =====================================================
 // 字段类型枚举（业务层面的类型）
@@ -251,4 +253,6 @@ export interface IDuckDBService {
   getProfileGroupService(): IProfileGroupService;
   getAccountService(): IAccountService;
   getSavedSiteService(): ISavedSiteService;
+  getPluginStateService?(): PluginStateStore;
+  getCapabilityRunStore?(): CapabilityRunStore;
 }

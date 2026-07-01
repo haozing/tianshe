@@ -8,6 +8,10 @@ import { HTTP_SERVER_DEFAULTS } from '../constants/http-api';
 import { createLogger } from '../core/logger';
 import {
   createOrchestrationExecutor,
+  defaultOrchestrationCapabilityRegistry,
+  isCapabilityConfirmationGrant,
+  type CapabilityConfirmationGrant,
+  type OrchestrationCapabilityRegistry,
   type OrchestrationDependencies,
   type OrchestrationCapabilityDefinition,
   listCanonicalPublicCapabilities,
@@ -50,6 +54,24 @@ const toMcpToolResult = (result: ExecutorCallResult): CallToolResult => ({
   ...(result.isError ? { isError: true } : {}),
   ...(result._meta ? { _meta: result._meta } : {}),
 });
+
+const extractMcpInvocationEnvelope = (
+  args: Record<string, unknown> | undefined
+): {
+  capabilityArgs: Record<string, unknown>;
+  confirmationGrant?: CapabilityConfirmationGrant;
+} => {
+  const rawArgs = args || {};
+  const confirmationGrant = isCapabilityConfirmationGrant(rawArgs._confirmationGrant)
+    ? rawArgs._confirmationGrant
+    : undefined;
+  if (!Object.prototype.hasOwnProperty.call(rawArgs, '_confirmationGrant')) {
+    return { capabilityArgs: rawArgs, ...(confirmationGrant ? { confirmationGrant } : {}) };
+  }
+  const { _confirmationGrant, ...capabilityArgs } = rawArgs;
+  void _confirmationGrant;
+  return { capabilityArgs, ...(confirmationGrant ? { confirmationGrant } : {}) };
+};
 
 export const shouldPreAcquireBrowserForCapability = (
   definition: OrchestrationCapabilityDefinition | undefined
@@ -144,6 +166,8 @@ const createSessionRuntimeOptions = (
 });
 
 const createMcpServer = (options: RegisterMcpRoutesOptions, mcpSession: McpSessionInfo): Server => {
+  const capabilityRegistry: OrchestrationCapabilityRegistry =
+    options.routeContext.capabilityRegistry || defaultOrchestrationCapabilityRegistry;
   const ensureBrowser = async () => {
     const handle = await ensureSessionBrowserHandle(
       createSessionRuntimeOptions(options),
@@ -202,9 +226,9 @@ const createMcpServer = (options: RegisterMcpRoutesOptions, mcpSession: McpSessi
     enforceScopes:
       options.routeContext.restApiConfig?.agentHandMode === true
         ? true
-        : options.routeContext.restApiConfig?.enforceOrchestrationScopes ?? false,
+        : options.routeContext.restApiConfig?.enforceOrchestrationScopes ?? true,
   };
-  const executor = createOrchestrationExecutor(deps);
+  const executor = createOrchestrationExecutor(deps, { registry: capabilityRegistry });
   const listPublicCapabilities = (): OrchestrationCapabilityDefinition[] =>
     listCanonicalPublicCapabilities(executor.listCapabilities());
   const getCapabilityDefinition = (name: string): OrchestrationCapabilityDefinition | undefined =>
@@ -279,13 +303,19 @@ const createMcpServer = (options: RegisterMcpRoutesOptions, mcpSession: McpSessi
           } else {
             delete deps.browser;
           }
+          const { capabilityArgs, confirmationGrant } = extractMcpInvocationEnvelope(
+            (args || {}) as Record<string, unknown>
+          );
           const capabilityResult = await executor.invoke(
             {
               name,
-              arguments: args || {},
+              arguments: capabilityArgs,
               auth: {
                 scopes: mcpSession.auth.authScopes || [],
                 source: 'mcp',
+                principal: 'mcp',
+                sessionId: mcpSession.transport.sessionId || 'mcp-pending-session',
+                ...(confirmationGrant ? { confirmationGrant } : {}),
               },
             },
             {

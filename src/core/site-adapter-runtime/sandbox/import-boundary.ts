@@ -3,8 +3,19 @@ import path from 'node:path';
 
 export interface SiteAdapterImportBoundaryViolation {
   filePath: string;
+  relativeFilePath: string;
   moduleName: string;
-  reason: 'node_builtin' | 'electron' | 'playwright' | 'duckdb';
+  importChain: string[];
+  reason:
+    | 'node_builtin'
+    | 'electron'
+    | 'playwright'
+    | 'duckdb'
+    | 'framework_core'
+    | 'secrets'
+    | 'dataset'
+    | 'artifact';
+  recommendation: string;
 }
 
 export interface SiteAdapterImportBoundaryOptions {
@@ -19,6 +30,17 @@ const IMPORT_PATTERNS = [
   /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
   /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
 ] as const;
+
+const RECOMMENDATIONS: Record<SiteAdapterImportBoundaryViolation['reason'], string> = {
+  node_builtin: 'Move filesystem/process work into a framework-owned capability or fixture loader.',
+  electron: 'Use BrowserInterface or a capability boundary; Site Adapters must not import Electron.',
+  playwright: 'Use the Lab runner or BrowserInterface instead of importing Playwright from adapter code.',
+  duckdb: 'Use capability/database services outside the adapter sandbox; adapters should not access DuckDB directly.',
+  framework_core: 'Depend only on core/site-adapter-runtime contracts or local adapter files.',
+  secrets: 'Read credentials through approved profile/login flows; adapters must not import secret stores.',
+  dataset: 'Return extracted data to the caller; dataset writes belong in capabilities.',
+  artifact: 'Return evidence/artifact refs through framework APIs; adapters must not manage artifact storage.',
+};
 
 function listSourceFiles(root: string, extensions: readonly string[]): string[] {
   if (!fs.existsSync(root)) {
@@ -38,6 +60,9 @@ function listSourceFiles(root: string, extensions: readonly string[]): string[] 
 }
 
 function classifyDeniedImport(moduleName: string): SiteAdapterImportBoundaryViolation['reason'] | null {
+  const normalizedModuleName = moduleName.replace(/\\/g, '/').toLowerCase();
+  const isRelativeImport =
+    normalizedModuleName.startsWith('./') || normalizedModuleName.startsWith('../');
   if (moduleName.startsWith('node:') || ['fs', 'path', 'os', 'child_process', 'crypto'].includes(moduleName)) {
     return 'node_builtin';
   }
@@ -53,6 +78,25 @@ function classifyDeniedImport(moduleName: string): SiteAdapterImportBoundaryViol
     moduleName.toLowerCase().includes('duckdb')
   ) {
     return 'duckdb';
+  }
+  const coreSegmentIndex = normalizedModuleName.indexOf('core/');
+  if (
+    coreSegmentIndex >= 0 &&
+    !normalizedModuleName.slice(coreSegmentIndex).startsWith('core/site-adapter-runtime')
+  ) {
+    return 'framework_core';
+  }
+  if (isRelativeImport) {
+    return null;
+  }
+  if (/(^|[/@_.-])secrets?([/@_.-]|$)|(^|[/@_.-])credentials?([/@_.-]|$)/.test(normalizedModuleName)) {
+    return 'secrets';
+  }
+  if (/(^|[/@_.-])datasets?([/@_.-]|$)/.test(normalizedModuleName)) {
+    return 'dataset';
+  }
+  if (/(^|[/@_.-])artifacts?([/@_.-]|$)/.test(normalizedModuleName)) {
+    return 'artifact';
   }
   return null;
 }
@@ -85,8 +129,14 @@ export function checkSiteAdapterImportBoundary(
       }
       violations.push({
         filePath,
+        relativeFilePath: path.relative(adapterRoot, filePath).replace(/\\/g, '/'),
         moduleName,
+        importChain: [
+          path.relative(adapterRoot, filePath).replace(/\\/g, '/'),
+          moduleName,
+        ],
         reason,
+        recommendation: RECOMMENDATIONS[reason],
       });
     }
   }

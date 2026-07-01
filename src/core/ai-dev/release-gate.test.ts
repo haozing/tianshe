@@ -227,8 +227,9 @@ describe('v4 release gate', () => {
     });
     expect(report.gates.governanceSnapshot.sideEffectPolicy).toMatchObject({
       status: 'ok',
-      highRiskMissingConfirmation: [],
-      datasetCommitMissingConfirmation: [],
+      highRiskMissingConfirmationPolicy: [],
+      forbiddenConfirmationFields: [],
+      datasetCommitMissingConfirmationPolicy: [],
       writeScopeMarkedReadOnly: [],
     });
     expect(report.gates.governanceSnapshot.datasetProvenancePolicy).toMatchObject({
@@ -236,9 +237,10 @@ describe('v4 release gate', () => {
       forbiddenPublicRowMutationNames: [],
       stageWritePlanMissingProvenance: [],
       commitWritePlanMissingProvenance: [],
-      commitWritePlanMissingConfirmation: [],
+      commitWritePlanMissingConfirmationPolicy: [],
+      forbiddenConfirmationFields: [],
       siteDatasetWriteMissingStagedCommit: [],
-      siteDatasetWriteMissingConfirmation: [],
+      siteDatasetWriteMissingConfirmationPolicy: [],
     });
     expect(report.gates.governanceSnapshot.runtimeMaturityPolicy).toMatchObject({
       status: 'ok',
@@ -324,7 +326,7 @@ describe('v4 release gate', () => {
     });
   });
 
-  it('fails side effect policy when public high-risk tools lack confirmation gates', () => {
+  it('fails side effect policy when public high-risk tools expose naked confirmation fields', () => {
     const result = evaluateSideEffectPolicy({
       capabilityCatalog: {
         publicCapabilities: [
@@ -332,7 +334,7 @@ describe('v4 release gate', () => {
             name: 'plugin_install',
             sideEffectLevel: 'high',
             requiredScopes: ['plugin.write'],
-            inputFields: ['sourcePath'],
+            inputFields: ['sourcePath', 'confirmRisk'],
           },
           {
             name: 'dataset_commit_write_plan',
@@ -352,8 +354,9 @@ describe('v4 release gate', () => {
 
     expect(result).toMatchObject({
       status: 'failed',
-      highRiskMissingConfirmation: ['plugin_install', 'dataset_commit_write_plan'],
-      datasetCommitMissingConfirmation: ['dataset_commit_write_plan'],
+      forbiddenConfirmationFields: ['plugin_install'],
+      highRiskMissingConfirmationPolicy: [],
+      datasetCommitMissingConfirmationPolicy: [],
     });
   });
 
@@ -394,10 +397,10 @@ describe('v4 release gate', () => {
       forbiddenPublicRowMutationNames: ['dataset_update_record'],
       stageWritePlanMissingProvenance: ['dataset_stage_write_plan'],
       commitWritePlanMissingProvenance: ['dataset_commit_write_plan'],
-      commitWritePlanMissingConfirmation: ['dataset_commit_write_plan'],
+      commitWritePlanMissingConfirmationPolicy: [],
       siteDatasetWriteCapabilities: ['books_to_scrape.extract_product'],
       siteDatasetWriteMissingStagedCommit: ['books_to_scrape.extract_product'],
-      siteDatasetWriteMissingConfirmation: ['books_to_scrape.extract_product'],
+      siteDatasetWriteMissingConfirmationPolicy: ['books_to_scrape.extract_product'],
     });
   });
 
@@ -433,7 +436,7 @@ describe('v4 release gate', () => {
           ],
         },
         repairScope: {
-          officialAdapterMatrix: {
+          siteAdapterRegistryMatrix: {
             ok: true,
           },
         },

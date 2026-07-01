@@ -7,10 +7,11 @@ import type {
 import type { CreateProfileParams, UpdateProfileParams } from '../../../types/profile';
 import type {
   ProfileLoginStateStatus,
+  ProfileLoginStateVerifiedBy,
   UpsertProfileLoginStateParams,
 } from '../../../types/profile';
 import type { CapabilityCallResult } from '../capabilities/types';
-import type { BrowserRuntimeStatus } from '../../browser-runtime';
+import type { BrowserRuntimeStatus, ProfileSessionGateway } from '../../browser-runtime';
 import type {
   FailureBundle,
   RecentFailureSummary,
@@ -112,6 +113,18 @@ export interface OrchestrationCapabilitySpec {
   assistantSurface?: OrchestrationAssistantSurface;
   /** 搴熷純淇℃伅锛堝彲閫夛級 */
   deprecation?: OrchestrationCapabilityDeprecation;
+  /** 高风险/破坏性确认策略，供 executor confirmation middleware 统一校验 */
+  confirmationPolicy?: OrchestrationCapabilityConfirmationPolicy;
+}
+
+export interface OrchestrationCapabilityConfirmationCondition {
+  argument: string;
+  equals: unknown;
+  reason?: string;
+}
+
+export interface OrchestrationCapabilityConfirmationPolicy {
+  requiredWhen?: OrchestrationCapabilityConfirmationCondition[];
 }
 
 /**
@@ -159,7 +172,31 @@ export interface OrchestrationInvokeRequest {
     scopes?: string[];
     source?: 'mcp' | 'http' | 'internal';
     principal?: string;
+    sessionId?: string;
+    confirmationGrant?: CapabilityConfirmationGrant;
   };
+}
+
+export type CapabilityConfirmationGrantSource = 'plugin-ui' | 'workflow-ui' | 'agent-ui';
+
+export interface CapabilityConfirmationGrant {
+  grantId: string;
+  invocationId: string;
+  issuer: 'host-local';
+  issuedAt: string;
+  capability: string;
+  capabilityVersion: string;
+  argumentsHash: string;
+  policyHash: string;
+  principal: string;
+  source: CapabilityConfirmationGrantSource;
+  sessionId: string;
+  scopes: string[];
+  idempotencyKey?: string;
+  previewRef?: string;
+  expiresAt: string;
+  signatureVersion: 1;
+  signature: string;
 }
 
 export type OrchestrationIdempotencyStatus = 'stored' | 'replayed';
@@ -209,6 +246,25 @@ export interface OrchestrationIdempotencyDecision {
   reason?: string;
 }
 
+export type OrchestrationConfirmationDecisionStatus =
+  | 'not_required'
+  | 'accepted'
+  | 'rejected';
+
+export interface OrchestrationConfirmationDecision {
+  required: boolean;
+  status: OrchestrationConfirmationDecisionStatus;
+  reason?: string;
+  grantId?: string;
+  invocationId?: string;
+  argumentsHash?: string;
+  policyHash?: string;
+  principal?: string;
+  sessionId?: string;
+  source?: CapabilityConfirmationGrantSource;
+  expiresAt?: string;
+}
+
 /**
  * 缂栨帓璋冪敤鍏冩暟鎹?
  */
@@ -227,6 +283,8 @@ export interface OrchestrationInvokeMeta {
   scopeDecision?: OrchestrationScopeDecision;
   /** 骞傜瓑鍒ゅ畾缁嗚妭 */
   idempotencyDecision?: OrchestrationIdempotencyDecision;
+  /** 高风险确认授权判定细节 */
+  confirmationDecision?: OrchestrationConfirmationDecision;
 }
 
 /**
@@ -256,6 +314,9 @@ export interface OrchestrationInvokeOptions {
   };
   retry?: {
     maxAttempts?: number;
+  };
+  confirmation?: {
+    now?: () => number;
   };
 }
 
@@ -297,6 +358,8 @@ export interface OrchestrationInvokeApiResult {
 export interface OrchestrationExecutor {
   /** 鍒楀嚭鍙敤鑳藉姏 */
   listCapabilities(): OrchestrationCapabilityDefinition[];
+  /** Rebind this long-lived executor to the current registry generation after catalog refresh. */
+  refreshGeneration(): number;
   /** 妫€鏌ヨ兘鍔涙槸鍚﹀瓨鍦?*/
   hasCapability(name: string): boolean;
   /** 鎵ц鑳藉姏 */
@@ -480,6 +543,7 @@ export interface OrchestrationProfileInfo {
   id: string;
   name: string;
   runtimeId: string;
+  loginStateRevision?: number;
   status: string;
   partition?: string;
   isSystem?: boolean;
@@ -501,9 +565,12 @@ export interface OrchestrationProfileLoginState {
   accountId?: string | null;
   site: string;
   loginUrl?: string | null;
+  runtimeIdSnapshot?: string | null;
   runtimeId?: string | null;
+  profileRevision: number;
   status: ProfileLoginStateStatus;
   verified: boolean;
+  verifiedBy?: ProfileLoginStateVerifiedBy | null;
   lastCheckedAt: string;
   verifiedAt?: string | null;
   evidenceArtifactId?: string | null;
@@ -755,8 +822,9 @@ export interface OrchestrationDependencies {
   profileLoginStateGateway?: OrchestrationProfileLoginStateGateway;
   observationGateway?: OrchestrationObservationGateway;
   mcpSessionGateway?: OrchestrationMcpSessionGateway;
+  profileSessionGateway?: ProfileSessionGateway;
   mcpSessionContext?: OrchestrationBrowserSessionContext;
-  /** 鏄惁寮哄埗鎵ц requiredScopes 妫€鏌ワ紙榛樿 false锛屽吋瀹规ā寮忥級 */
+  /** Whether to enforce requiredScopes. Defaults to true; false is reserved for documented internal compatibility callers. */
   enforceScopes?: boolean;
   [key: string]: unknown;
 }

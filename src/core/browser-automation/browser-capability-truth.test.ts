@@ -7,6 +7,7 @@ import type { RuyiFirefoxEvent } from '../../main/profile/ruyi-firefox-client';
 import { getStaticRuntimeDescriptor } from '../browser-pool/runtime-capability-registry';
 import {
   assertBrowserPdfCapability,
+  hasBrowserSessionRequestCapability,
   assertBrowserTextOcrCapability,
   hasBrowserDialogCapability,
   hasBrowserInterceptCapability,
@@ -155,6 +156,7 @@ describe('browser capability truth', () => {
     const ruyi = createRuyiBrowserFixture().browser;
 
     expect(hasBrowserNetworkCaptureCapability(integrated)).toBe(true);
+    expect(hasBrowserSessionRequestCapability(integrated)).toBe(true);
     expect(hasBrowserPdfCapability(integrated)).toBe(true);
     expect(hasBrowserTextOcrCapability(integrated)).toBe(true);
     expect(hasBrowserStorageCapability(integrated)).toBe(true);
@@ -163,6 +165,7 @@ describe('browser capability truth', () => {
     assertBrowserTextOcrCapability(integrated);
 
     expect(hasBrowserInterceptCapability(extension)).toBe(true);
+    expect(hasBrowserSessionRequestCapability(extension)).toBe(true);
     expect(hasBrowserStorageCapability(extension)).toBe(true);
     expect(hasBrowserStorageCapability(ruyi)).toBe(true);
   });
@@ -175,6 +178,7 @@ describe('browser capability truth', () => {
     });
     expect(browser.hasCapability('network.capture')).toBe(true);
     expect(browser.hasCapability('network.responseBody')).toBe(false);
+    expect(browser.hasCapability('network.sessionRequest')).toBe(true);
     expect(browser.hasCapability('console.capture')).toBe(true);
     expect(browser.hasCapability('download.manage')).toBe(true);
     expect(browser.hasCapability('pdf.print')).toBe(true);
@@ -298,6 +302,7 @@ describe('browser capability truth', () => {
     expect(browser.describeRuntime()).toEqual(getStaticRuntimeDescriptor('chromium-extension-relay'));
     expect(browser.hasCapability('network.capture')).toBe(true);
     expect(browser.hasCapability('network.responseBody')).toBe(true);
+    expect(browser.hasCapability('network.sessionRequest')).toBe(true);
     expect(browser.hasCapability('dialog.basic')).toBe(true);
     expect(browser.hasCapability('dialog.promptText')).toBe(false);
     expect(browser.hasCapability('intercept.observe')).toBe(true);

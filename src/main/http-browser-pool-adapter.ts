@@ -3,7 +3,9 @@ import {
   acquireProfileLiveSessionLease,
   attachProfileLiveSessionLease,
   getProfileLiveSessionLeaseOwner,
-  takeoverProfileLiveSessionLease,
+  requestProfileLiveSessionHandoff,
+  completeProfileLiveSessionHandoff,
+  type ProfileLiveSessionHandoffRequest,
 } from '../core/browser-pool/profile-live-session-lease';
 import { DEFAULT_BROWSER_PROFILE } from '../constants/browser-pool';
 import { ResourceAcquireTimeoutError } from '../core/resource-coordinator';
@@ -218,15 +220,23 @@ const emitManualHandoffRequested = ({
   source,
   holder,
   browser,
+  handoffRequest,
 }: {
   poolManager: BrowserPoolManager;
   profileId: string;
   source: 'mcp' | 'http';
-  holder: { source: 'ipc'; pluginId?: string | null; requestId?: string | null };
+  holder: {
+    source: 'http' | 'mcp' | 'ipc' | 'internal' | 'plugin';
+    pluginId?: string | null;
+    requestId?: string | null;
+  };
   browser?: BrowserAcquireReadinessBrowserInfo | null;
+  handoffRequest?: ProfileLiveSessionHandoffRequest | null;
 }): void => {
   const eventEmitter = (poolManager as TakeoverCapablePoolManager).getEventEmitter?.();
   eventEmitter?.emit('browser:handoff-requested', {
+    ...(handoffRequest?.id ? { handoffRequestId: handoffRequest.id } : {}),
+    ...(handoffRequest?.status ? { status: handoffRequest.status } : {}),
     ...(browser?.browserId ? { browserId: browser.browserId } : {}),
     sessionId: profileId,
     runtimeId: browser?.runtimeId ?? null,
@@ -240,6 +250,50 @@ const emitManualHandoffRequested = ({
     requestedAt: Date.now(),
   });
 };
+
+const createAgentOwnerMetadata = (source: 'mcp' | 'http') => ({
+  controllerKind: 'agent' as const,
+  interruptibility: 'checkpoint' as const,
+  description: `${source} browser session`,
+});
+
+type BrowserPoolEventSource = 'http' | 'mcp' | 'ipc' | 'internal' | 'plugin';
+
+const toBrowserPoolEventSource = (
+  source: ProfileLiveSessionHandoffRequest['ownerSource'] | null | undefined
+): BrowserPoolEventSource => {
+  if (
+    source === 'http' ||
+    source === 'mcp' ||
+    source === 'ipc' ||
+    source === 'internal' ||
+    source === 'plugin'
+  ) {
+    return source;
+  }
+  return 'internal';
+};
+
+const isCompletableHandoff = (request: ProfileLiveSessionHandoffRequest): boolean =>
+  request.status === 'approved' || request.status === 'paused';
+
+const requestAgentProfileHandoff = async ({
+  profileId,
+  source,
+  reason,
+  autoApproveIfCurrentOwnerInterruptible = false,
+}: {
+  profileId: string;
+  source: 'mcp' | 'http';
+  reason: string;
+  autoApproveIfCurrentOwnerInterruptible?: boolean;
+}): Promise<ProfileLiveSessionHandoffRequest | null> =>
+  await requestProfileLiveSessionHandoff(profileId, {
+    source,
+    requesterMetadata: createAgentOwnerMetadata(source),
+    reason,
+    autoApproveIfCurrentOwnerInterruptible,
+  });
 
 const recordAcquireFailureMetrics = (
   runtimeMetrics: RuntimeMetricsSnapshot,
@@ -280,11 +334,17 @@ const tryTakeoverLockedBrowser = async ({
     (browser) => browser.status === 'locked' && browser.source === 'ipc'
   );
   if (humanLockedBrowser) {
+    const handoffRequest = await requestAgentProfileHandoff({
+      profileId,
+      source,
+      reason: 'agent_requested_human_window_handoff',
+    });
     emitManualHandoffRequested({
       poolManager,
       profileId,
       source,
       browser: humanLockedBrowser,
+      handoffRequest,
       holder: {
         source: 'ipc',
         ...(humanLockedBrowser.pluginId ? { pluginId: humanLockedBrowser.pluginId } : {}),
@@ -304,20 +364,63 @@ const tryTakeoverLockedBrowser = async ({
     return null;
   }
 
-  const takenOver = await takeoverLockedBrowser.call(
-    poolManager,
-    requestedProfileId || undefined,
-    { strategy: 'any', timeout: timeoutMs, priority: 'normal', runtimeId },
-    source
-  );
-  if (!takenOver) {
-    return null;
+  const handoffRequest = await requestAgentProfileHandoff({
+    profileId,
+    source,
+    reason: 'agent_takeover_locked_browser',
+    autoApproveIfCurrentOwnerInterruptible: true,
+  });
+  if (!handoffRequest || !isCompletableHandoff(handoffRequest)) {
+    const diagnostics =
+      getProfileAcquireReadiness(poolManager, profileId) || createEmptyReadiness(profileId);
+    emitManualHandoffRequested({
+      poolManager,
+      profileId,
+      source,
+      browser: readiness.browsers.find((browser) => browser.status === 'locked') || null,
+      handoffRequest,
+      holder: {
+        source: toBrowserPoolEventSource(handoffRequest?.ownerSource),
+        ...(handoffRequest?.ownerMetadata?.pluginId
+          ? { pluginId: handoffRequest.ownerMetadata.pluginId }
+          : {}),
+        ...(handoffRequest?.ownerMetadata?.requestId
+          ? { requestId: handoffRequest.ownerMetadata.requestId }
+          : {}),
+      },
+    });
+    throw new BrowserManualHandoffRequiredError(
+      `Profile ${profileId} requires approved handoff before agent takeover.`,
+      {
+        diagnostics,
+      }
+    );
   }
 
-  const profileLease = await takeoverProfileLiveSessionLease(profileId, { source });
-  const attached = attachProfileLiveSessionLease(takenOver, profileLease);
-  logger.debug(`Browser taken over from existing holder: ${attached.browserId}`);
-  return attached;
+  const profileLease = await completeProfileLiveSessionHandoff(handoffRequest.id, {
+    actorToken: handoffRequest.requesterToken,
+    source,
+    ownerMetadata: createAgentOwnerMetadata(source),
+  });
+  try {
+    const takenOver = await takeoverLockedBrowser.call(
+      poolManager,
+      requestedProfileId || undefined,
+      { strategy: 'any', timeout: timeoutMs, priority: 'normal', runtimeId },
+      source
+    );
+    if (!takenOver) {
+      await profileLease.release().catch(() => undefined);
+      return null;
+    }
+
+    const attached = attachProfileLiveSessionLease(takenOver, profileLease);
+    logger.debug(`Browser taken over from existing holder: ${attached.browserId}`);
+    return attached;
+  } catch (error) {
+    await profileLease.release().catch(() => undefined);
+    throw error;
+  }
 };
 
 const tryTakeoverProfileLeaseAndAcquire = async ({
@@ -343,11 +446,18 @@ const tryTakeoverProfileLeaseAndAcquire = async ({
 
   const leaseOwner = await getProfileLiveSessionLeaseOwner(profileId);
   if (leaseOwner?.ownerSource === 'ipc') {
-    const diagnostics = getProfileAcquireReadiness(poolManager, profileId) || createEmptyReadiness(profileId);
+    const diagnostics =
+      getProfileAcquireReadiness(poolManager, profileId) || createEmptyReadiness(profileId);
+    const handoffRequest = await requestAgentProfileHandoff({
+      profileId,
+      source,
+      reason: 'agent_requested_human_profile_lease_handoff',
+    });
     emitManualHandoffRequested({
       poolManager,
       profileId,
       source,
+      handoffRequest,
       holder: { source: 'ipc' },
     });
     throw new BrowserManualHandoffRequiredError(
@@ -358,7 +468,43 @@ const tryTakeoverProfileLeaseAndAcquire = async ({
     );
   }
 
-  const profileLease = await takeoverProfileLiveSessionLease(profileId, { source });
+  const handoffRequest = await requestAgentProfileHandoff({
+    profileId,
+    source,
+    reason: 'agent_takeover_profile_lease',
+    autoApproveIfCurrentOwnerInterruptible: true,
+  });
+  if (!handoffRequest || !isCompletableHandoff(handoffRequest)) {
+    const diagnostics =
+      getProfileAcquireReadiness(poolManager, profileId) || createEmptyReadiness(profileId);
+    emitManualHandoffRequested({
+      poolManager,
+      profileId,
+      source,
+      handoffRequest,
+      holder: {
+        source: toBrowserPoolEventSource(handoffRequest?.ownerSource),
+        ...(handoffRequest?.ownerMetadata?.pluginId
+          ? { pluginId: handoffRequest.ownerMetadata.pluginId }
+          : {}),
+        ...(handoffRequest?.ownerMetadata?.requestId
+          ? { requestId: handoffRequest.ownerMetadata.requestId }
+          : {}),
+      },
+    });
+    throw new BrowserManualHandoffRequiredError(
+      `Profile ${profileId} requires approved handoff before agent profile lease takeover.`,
+      {
+        diagnostics,
+      }
+    );
+  }
+
+  const profileLease = await completeProfileLiveSessionHandoff(handoffRequest.id, {
+    actorToken: handoffRequest.requesterToken,
+    source,
+    ownerMetadata: createAgentOwnerMetadata(source),
+  });
   if (!profileLease) {
     return null;
   }
@@ -424,6 +570,7 @@ export const acquireBrowserFromPool = async ({
   try {
     profileLease = await acquireProfileLiveSessionLease(resolvedProfileId, {
       source,
+      ownerMetadata: createAgentOwnerMetadata(source),
       timeoutMs: effectiveTimeoutMs,
       signal,
     });

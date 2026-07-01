@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { ErrorCode, createStructuredError, type StructuredError } from '../../../types/error-codes';
 import {
-  createUnifiedCapabilityCatalog,
+  createBuiltInCapabilityProvider,
+  createUnifiedCapabilityCatalogFromProviders,
   type CapabilityCallResult,
   type CapabilityHandler,
   type CapabilityHandlerExecutionContext,
+  type CapabilityProvider,
   type RegisteredCapability,
 } from '../capabilities';
 import { createStructuredErrorResult } from '../capabilities/result-utils';
@@ -13,6 +15,11 @@ import type { BrowserInterface } from '../../../types/browser-interface';
 import { createChildTraceContext, withTraceContext } from '../../observability/observation-context';
 import { observationService, summarizeForObservation } from '../../observability/observation-service';
 import { attachErrorContextArtifact } from '../../observability/error-context-artifact';
+import {
+  createCapabilitySchemaValidationError,
+  validateCapabilitySchemaPayload,
+} from './schema-validation';
+import { requiresCapabilityConfirmation, validateCapabilityConfirmationGrant } from './confirmation';
 import type {
   OrchestrationCapabilityDefinition,
   OrchestrationInvokeApiResult,
@@ -24,17 +31,136 @@ import type {
   OrchestrationInvokeRequest,
 } from './types';
 
-const capabilityCatalog: Record<string, RegisteredCapability> = Object.fromEntries(
-  Object.entries(createUnifiedCapabilityCatalog()).filter(
-    ([, capability]) => capability.definition.assistantSurface?.publicMcp === true
-  )
-);
+export type OrchestrationCapabilityRegistryView = 'publicMcp' | 'all';
 
-const capabilityHandlers: Record<string, CapabilityHandler<OrchestrationDependencies>> =
-  Object.fromEntries(Object.entries(capabilityCatalog).map(([name, item]) => [name, item.handler]));
+export interface OrchestrationCapabilityRegistrySnapshot {
+  generation: number;
+  catalog: Record<string, RegisteredCapability>;
+  handlers: Record<string, CapabilityHandler<OrchestrationDependencies>>;
+  definitionsByName: Record<string, OrchestrationCapabilityDefinition>;
+}
 
-const capabilityDefinitionsByName: Record<string, OrchestrationCapabilityDefinition> =
-  Object.fromEntries(Object.entries(capabilityCatalog).map(([name, item]) => [name, item.definition]));
+export class OrchestrationCapabilityRegistry {
+  private providers: CapabilityProvider[];
+  private providerUnsubscribers: Array<() => void> = [];
+  private generation = 0;
+  private snapshot: OrchestrationCapabilityRegistrySnapshot;
+  private readonly view: OrchestrationCapabilityRegistryView;
+
+  constructor(options: {
+    providers?: readonly CapabilityProvider[];
+    additionalProviders?: readonly CapabilityProvider[];
+    view?: OrchestrationCapabilityRegistryView;
+  } = {}) {
+    this.providers = [
+      ...(options.providers || [createBuiltInCapabilityProvider()]),
+      ...(options.additionalProviders || []),
+    ];
+    this.view = options.view || 'publicMcp';
+    this.subscribeToProviders();
+    this.snapshot = this.buildSnapshot();
+  }
+
+  getGeneration(): number {
+    return this.snapshot.generation;
+  }
+
+  getSnapshot(): OrchestrationCapabilityRegistrySnapshot {
+    return this.snapshot;
+  }
+
+  listCapabilities(): OrchestrationCapabilityDefinition[] {
+    return Object.values(this.snapshot.catalog).map((item) => item.definition);
+  }
+
+  hasCapability(name: string): boolean {
+    return Object.prototype.hasOwnProperty.call(this.snapshot.handlers, name);
+  }
+
+  replaceProviders(providers: readonly CapabilityProvider[]): void {
+    this.unsubscribeFromProviders();
+    this.providers = [...providers];
+    this.subscribeToProviders();
+    this.refresh();
+  }
+
+  refresh(): OrchestrationCapabilityRegistrySnapshot {
+    this.generation += 1;
+    this.snapshot = this.buildSnapshot();
+    return this.snapshot;
+  }
+
+  __replaceCatalogForTests(catalog: Record<string, RegisteredCapability>): () => void {
+    const previousProviders = this.providers;
+    const previousUnsubscribers = this.providerUnsubscribers;
+    const previousGeneration = this.generation;
+    const previousSnapshot = this.snapshot;
+
+    this.unsubscribeFromProviders();
+    this.generation += 1;
+    this.snapshot = this.createSnapshotFromCatalog(catalog);
+
+    return () => {
+      this.unsubscribeFromProviders();
+      this.providers = previousProviders;
+      this.generation = previousGeneration;
+      this.snapshot = previousSnapshot;
+      this.providerUnsubscribers = previousUnsubscribers;
+      this.subscribeToProviders();
+    };
+  }
+
+  private subscribeToProviders(): void {
+    this.providerUnsubscribers = this.providers
+      .map((provider) => provider.subscribe?.(() => this.refresh()))
+      .filter((unsubscribe): unsubscribe is () => void => typeof unsubscribe === 'function');
+  }
+
+  private unsubscribeFromProviders(): void {
+    for (const unsubscribe of this.providerUnsubscribers.splice(0)) {
+      unsubscribe();
+    }
+  }
+
+  private buildSnapshot(): OrchestrationCapabilityRegistrySnapshot {
+    const merged = createUnifiedCapabilityCatalogFromProviders(this.providers);
+    const catalog =
+      this.view === 'publicMcp'
+        ? Object.fromEntries(
+            Object.entries(merged).filter(
+              ([, capability]) => capability.definition.assistantSurface?.publicMcp === true
+            )
+          )
+        : merged;
+
+    return this.createSnapshotFromCatalog(catalog);
+  }
+
+  private createSnapshotFromCatalog(
+    catalog: Record<string, RegisteredCapability>
+  ): OrchestrationCapabilityRegistrySnapshot {
+    return {
+      generation: this.generation,
+      catalog,
+      handlers: Object.fromEntries(
+        Object.values(catalog).map((item) => [item.definition.name, item.handler])
+      ),
+      definitionsByName: Object.fromEntries(
+        Object.values(catalog).map((item) => [item.definition.name, item.definition])
+      ),
+    };
+  }
+}
+
+export function createOrchestrationCapabilityRegistry(options: {
+  providers?: readonly CapabilityProvider[];
+  additionalProviders?: readonly CapabilityProvider[];
+  view?: OrchestrationCapabilityRegistryView;
+} = {}): OrchestrationCapabilityRegistry {
+  return new OrchestrationCapabilityRegistry(options);
+}
+
+export const defaultOrchestrationCapabilityRegistry = createOrchestrationCapabilityRegistry();
 
 const ABORTED_INVOCATION_DRAIN_TIMEOUT_MS = 1_500;
 
@@ -92,11 +218,17 @@ interface InvokeExecutionContext {
   runtime: InvokeRuntimeMeta;
 }
 
+interface InvokeCapabilityLookup {
+  registry: OrchestrationCapabilityRegistry;
+  executorGeneration: number;
+}
+
 interface InvokeRuntimeMeta {
   traceId: string;
   attemptTimeline: NonNullable<OrchestrationInvokeMeta['attemptTimeline']>;
   scopeDecision?: NonNullable<OrchestrationInvokeMeta['scopeDecision']>;
   idempotencyDecision?: NonNullable<OrchestrationInvokeMeta['idempotencyDecision']>;
+  confirmationDecision?: NonNullable<OrchestrationInvokeMeta['confirmationDecision']>;
 }
 
 const NON_RETRYABLE_ABORT_REASONS = new Set<string>(['session_closing', 'invocation_aborted']);
@@ -431,6 +563,9 @@ const buildRuntimeMeta = (runtime: InvokeRuntimeMeta): OrchestrationInvokeMeta =
       : {}),
     ...(runtime.scopeDecision ? { scopeDecision: runtime.scopeDecision } : {}),
     ...(runtime.idempotencyDecision ? { idempotencyDecision: runtime.idempotencyDecision } : {}),
+    ...(runtime.confirmationDecision
+      ? { confirmationDecision: runtime.confirmationDecision }
+      : {}),
   };
 };
 
@@ -510,6 +645,14 @@ const buildCapabilityObservationAttrs = (
   ...(context.runtime.idempotencyDecision
     ? { idempotencyDecision: summarizeForObservation(context.runtime.idempotencyDecision, 2) }
     : {}),
+  ...(context.runtime.confirmationDecision
+    ? {
+        confirmationDecision: summarizeForObservation(
+          context.runtime.confirmationDecision,
+          2
+        ),
+      }
+    : {}),
   ...(outcome
     ? {
         output: summarizeForObservation(
@@ -524,7 +667,7 @@ const scopeMiddleware: InvokeMiddleware = async (context, next) => {
   const requiredScopes = context.definition.requiredScopes || [];
   const providedScopes = context.request.auth?.scopes || [];
   const missingScopes = requiredScopes.filter((scope) => !providedScopes.includes(scope));
-  const scopeEnforced = Boolean(context.deps.enforceScopes);
+  const scopeEnforced = context.deps.enforceScopes !== false;
 
   const scopeDecision: NonNullable<OrchestrationInvokeMeta['scopeDecision']> = {
     enforced: scopeEnforced,
@@ -541,7 +684,7 @@ const scopeMiddleware: InvokeMiddleware = async (context, next) => {
 
   const error = createStructuredError(ErrorCode.PERMISSION_DENIED, '权限不足，缺少调用能力所需 scope', {
     details: `能力 "${context.request.name}" 需要 scope: ${requiredScopes.join(', ')}`,
-    suggestion: '请在请求中提供 x-airpa-scopes，或关闭 enforceOrchestrationScopes 兼容模式',
+    suggestion: '请在请求中提供 x-airpa-scopes 或通过 session_prepare 设置会话 scopes',
     context: {
       capability: context.request.name,
       requiredScopes,
@@ -709,6 +852,16 @@ const idempotencyMiddleware: InvokeMiddleware = async (context, next) => {
   const now = context.options.idempotency?.now || Date.now;
   const derivedError = inferErrorFromResult(outcome);
 
+  if (derivedError?.reasonCode === 'capability_output_schema_validation_failed') {
+    context.runtime.idempotencyDecision = {
+      enabled: true,
+      key: idempotencyKey,
+      status: 'skipped',
+      reason: 'schema_validation_failed',
+    };
+    return outcome;
+  }
+
   store.set(idempotencyKey, {
     state: 'completed',
     requestHash,
@@ -725,6 +878,70 @@ const idempotencyMiddleware: InvokeMiddleware = async (context, next) => {
       idempotencyKey,
       idempotencyStatus: 'stored',
     }),
+  };
+};
+
+const inputSchemaValidationMiddleware: InvokeMiddleware = async (context, next) => {
+  const inputFailure = validateCapabilitySchemaPayload(
+    context.definition,
+    'input',
+    context.definition.inputSchema,
+    context.request.arguments || {}
+  );
+  if (inputFailure) {
+    const error = createCapabilitySchemaValidationError(context.definition, inputFailure);
+    return {
+      result: formatStructuredErrorResult(error),
+      error,
+    };
+  }
+
+  return next();
+};
+
+const confirmationMiddleware: InvokeMiddleware = async (context, next) => {
+  const validation = validateCapabilityConfirmationGrant({
+    definition: context.definition,
+    request: context.request,
+    idempotencyKey: context.options.idempotency?.key?.trim(),
+    now: context.options.confirmation?.now || context.options.idempotency?.now,
+  });
+  context.runtime.confirmationDecision = validation.decision;
+
+  if (!validation.error) {
+    return next();
+  }
+
+  return {
+    result: formatStructuredErrorResult(validation.error),
+    error: validation.error,
+    meta: {
+      confirmationDecision: validation.decision,
+    },
+  };
+};
+
+const outputSchemaValidationMiddleware: InvokeMiddleware = async (context, next) => {
+  const outcome = await next();
+  if (outcome.result.isError || !outcome.result.structuredContent) {
+    return outcome;
+  }
+
+  const outputFailure = validateCapabilitySchemaPayload(
+    context.definition,
+    'output',
+    context.definition.outputSchema,
+    outcome.result.structuredContent
+  );
+  if (!outputFailure) {
+    return outcome;
+  }
+
+  const error = createCapabilitySchemaValidationError(context.definition, outputFailure);
+  return {
+    result: formatStructuredErrorResult(error),
+    error,
+    meta: outcome.meta,
   };
 };
 
@@ -830,11 +1047,16 @@ const invokeCapabilityCore = async (context: InvokeExecutionContext): Promise<In
 async function invokeCapability(
   request: OrchestrationInvokeRequest,
   deps: OrchestrationDependencies,
-  options: OrchestrationInvokeOptions = {}
+  options: OrchestrationInvokeOptions = {},
+  lookup: InvokeCapabilityLookup = {
+    registry: defaultOrchestrationCapabilityRegistry,
+    executorGeneration: defaultOrchestrationCapabilityRegistry.getGeneration(),
+  }
 ): Promise<InvokeOutcome> {
   const traceId = options.traceId?.trim() || randomUUID();
-  const handler = capabilityHandlers[request.name];
-  const definition = capabilityDefinitionsByName[request.name];
+  const registrySnapshot = lookup.registry.getSnapshot();
+  const handler = registrySnapshot.handlers[request.name];
+  const definition = registrySnapshot.definitionsByName[request.name];
   const traceContext = createChildTraceContext({
     traceId,
     source: request.auth?.source ?? 'internal',
@@ -895,6 +1117,61 @@ async function invokeCapability(
       };
     }
 
+    if (
+      registrySnapshot.generation !== lookup.executorGeneration &&
+      requiresCapabilityConfirmation(definition, request.arguments || {})
+    ) {
+      const runtime = {
+        traceId,
+        attemptTimeline: [],
+      };
+      const error = createStructuredError(
+        ErrorCode.REQUEST_FAILED,
+        `Capability registry changed before high-risk invocation: ${request.name}`,
+        {
+          reasonCode: 'capability_registry_generation_stale',
+          suggestion: '请刷新 capability catalog 后重新确认并调用该高风险能力',
+          context: {
+            capability: request.name,
+            executorGeneration: lookup.executorGeneration,
+            registryGeneration: registrySnapshot.generation,
+          },
+        }
+      );
+      const artifact = await attachErrorContextArtifact({
+        span,
+        component: 'orchestration',
+        label: 'capability failure context',
+        data: {
+          capability: request.name,
+          reason: 'capability_registry_generation_stale',
+          traceId,
+          executorGeneration: lookup.executorGeneration,
+          registryGeneration: registrySnapshot.generation,
+        },
+      });
+      await span.fail(error, {
+        artifactRefs: [artifact.artifactId],
+        attrs: buildCapabilityObservationAttrs(
+          {
+            request,
+            runtime,
+          },
+          {
+            result: formatStructuredErrorResult(error),
+            error,
+          }
+        ),
+      });
+      return {
+        result: formatStructuredErrorResult(error),
+        error,
+        meta: {
+          traceId,
+        },
+      };
+    }
+
     const context: InvokeExecutionContext = {
       request,
       deps,
@@ -910,7 +1187,14 @@ async function invokeCapability(
     try {
       const outcome = await applyMiddlewares(
         context,
-        [scopeMiddleware, idempotencyMiddleware, retryMiddleware],
+        [
+          scopeMiddleware,
+          inputSchemaValidationMiddleware,
+          idempotencyMiddleware,
+          confirmationMiddleware,
+          outputSchemaValidationMiddleware,
+          retryMiddleware,
+        ],
         () => invokeCapabilityCore(context)
       );
 
@@ -949,35 +1233,59 @@ async function invokeCapability(
 }
 
 export function listOrchestrationCapabilities(): OrchestrationCapabilityDefinition[] {
-  return Object.values(capabilityCatalog).map((item) => item.definition);
+  return defaultOrchestrationCapabilityRegistry.listCapabilities();
+}
+
+export function __setOrchestrationCapabilityCatalogForTests(
+  catalog: Record<string, RegisteredCapability>
+): () => void {
+  return defaultOrchestrationCapabilityRegistry.__replaceCatalogForTests(catalog);
 }
 
 export function createOrchestrationExecutor(
-  deps: OrchestrationDependencies
+  deps: OrchestrationDependencies,
+  executorOptions: {
+    registry?: OrchestrationCapabilityRegistry;
+  } = {}
 ): OrchestrationExecutor {
+  const registry = executorOptions.registry || defaultOrchestrationCapabilityRegistry;
+  let executorGeneration = registry.getGeneration();
+  const refreshGeneration = () => {
+    executorGeneration = registry.getGeneration();
+    return executorGeneration;
+  };
   return {
     listCapabilities(): OrchestrationCapabilityDefinition[] {
-      return listOrchestrationCapabilities();
+      refreshGeneration();
+      return registry.listCapabilities();
     },
 
+    refreshGeneration,
+
     hasCapability(name: string): boolean {
-      return Object.prototype.hasOwnProperty.call(capabilityHandlers, name);
+      return registry.hasCapability(name);
     },
 
     async invoke(
       request: OrchestrationInvokeRequest,
-      options?: OrchestrationInvokeOptions
+      invokeOptions?: OrchestrationInvokeOptions
     ): Promise<CapabilityCallResult> {
-      const outcome = await invokeCapability(request, deps, options);
+      const outcome = await invokeCapability(request, deps, invokeOptions, {
+        registry,
+        executorGeneration,
+      });
       const execution = toExecutionResult(request, outcome);
       return execution.result;
     },
 
     async invokeApi(
       request: OrchestrationInvokeRequest,
-      options?: OrchestrationInvokeOptions
+      invokeOptions?: OrchestrationInvokeOptions
     ): Promise<OrchestrationInvokeApiResult> {
-      const outcome = await invokeCapability(request, deps, options);
+      const outcome = await invokeCapability(request, deps, invokeOptions, {
+        registry,
+        executorGeneration,
+      });
       const execution = toExecutionResult(request, outcome);
       return {
         ok: execution.ok,

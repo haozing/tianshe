@@ -21,6 +21,7 @@ export { DatabaseNamespace } from './database';
 export { NetworkNamespace } from './network';
 export { UINamespace } from './ui';
 export { StorageNamespace } from './storage';
+export { StateNamespace } from './state';
 export { UtilsNamespace, type TaskController, type IntervalOptions } from './utils';
 
 // ============================================================================

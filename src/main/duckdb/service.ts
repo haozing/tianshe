@@ -16,7 +16,7 @@ import type {
   DatasetRecordEvidenceTrace,
   LogEntry,
 } from './types';
-import { ensureDirectories, getMainDBPath } from './utils';
+import { ensureDirectories, getMainDBPath, getRuntimeArtifactsDir } from './utils';
 import fs from 'fs-extra';
 import path from 'path';
 import { createLogger } from '../../core/logger';
@@ -31,6 +31,10 @@ import {
   installDuckDBServiceQueryFacade,
   type DuckDBServiceQueryFacade,
 } from './duckdb-service-query-facade';
+import {
+  installDuckDBServiceRuntimeArtifactFacade,
+  type DuckDBServiceRuntimeArtifactFacade,
+} from './duckdb-service-runtime-artifact-facade';
 import { initPluginTables } from './plugin-table-bootstrap';
 
 // 导入专门服务
@@ -53,6 +57,9 @@ import { SyncMetadataService } from '../sync/sync-metadata-service';
 import { RuntimeObservationService } from './runtime-observation-service';
 import { ObservationQueryService } from '../observation-query-service';
 import { setObservationSink, getObservationSink } from '../../core/observability/observation-service';
+import { RuntimeArtifactFileStore } from '../runtime-artifact-file-store';
+import { PluginStateService } from './plugin-state-service';
+import { DuckDbCapabilityRunStore } from './capability-run-store';
 // import { getGlobalConnectionPool } from './connection-pool';  // ? 已移除：统一使用主连接（方案A）
 
 const logger = createLogger('DuckDBService');
@@ -129,21 +136,16 @@ export class DuckDBService implements IDatasetResolver {
   private syncMetadataService: SyncMetadataService | null = null;
   private runtimeObservationService: RuntimeObservationService | null = null;
   private observationQueryService: ObservationQueryService | null = null;
+  private runtimeArtifactFileStore: RuntimeArtifactFileStore | null = null;
+  private pluginStateService: PluginStateService | null = null;
+  private capabilityRunStore: DuckDbCapabilityRunStore | null = null;
 
-  // ?? HookBus（用于 Webhook 回调）
   private hookBus?: import('../../core/hookbus').HookBus;
 
-  /**
-   * ?? 构造函数
-   * @param hookBus - 可选的 HookBus 实例（用于 Webhook 回调）
-   */
   constructor(hookBus?: import('../../core/hookbus').HookBus) {
     this.hookBus = hookBus;
   }
 
-  /**
-   * 初始化服务
-   */
   async init(): Promise<void> {
     await ensureDirectories();
 
@@ -235,8 +237,16 @@ export class DuckDBService implements IDatasetResolver {
     this.extensionPackagesService = new ExtensionPackagesService(this.conn);
     this.syncOutboxService = new SyncOutboxService(this.conn);
     this.syncMetadataService = new SyncMetadataService(this.conn);
-    this.runtimeObservationService = new RuntimeObservationService(this.conn);
+    this.runtimeArtifactFileStore = new RuntimeArtifactFileStore({
+      rootDir: getRuntimeArtifactsDir(),
+    });
+    await this.runtimeArtifactFileStore.cleanupOrphanTempFiles();
+    this.runtimeObservationService = new RuntimeObservationService(this.conn, {
+      artifactFileStore: this.runtimeArtifactFileStore,
+    });
     this.observationQueryService = new ObservationQueryService(this.runtimeObservationService);
+    this.pluginStateService = new PluginStateService(this.conn);
+    this.capabilityRunStore = new DuckDbCapabilityRunStore(this.conn);
     setObservationSink(this.runtimeObservationService);
 
     // 初始化所有表（DuckDB 默认使用 WAL 模式）
@@ -265,7 +275,8 @@ export class DuckDBService implements IDatasetResolver {
       !this.extensionPackagesService ||
       !this.syncOutboxService ||
       !this.syncMetadataService ||
-      !this.runtimeObservationService
+      !this.runtimeObservationService ||
+      !this.capabilityRunStore
     ) {
       throw new Error('Services not initialized');
     }
@@ -285,6 +296,7 @@ export class DuckDBService implements IDatasetResolver {
     await this.syncOutboxService.initTable();
     await this.syncMetadataService.initTable();
     await this.runtimeObservationService.initTable();
+    await this.capabilityRunStore.initTable();
     try {
       const cleanupResult = await this.runtimeObservationService.cleanupRetention();
       if (cleanupResult.eventsDeleted > 0 || cleanupResult.artifactsDeleted > 0) {
@@ -673,6 +685,20 @@ export class DuckDBService implements IDatasetResolver {
     return this.syncMetadataService;
   }
 
+  getPluginStateService(): PluginStateService {
+    if (!this.pluginStateService) {
+      throw new Error('PluginStateService not initialized');
+    }
+    return this.pluginStateService;
+  }
+
+  getCapabilityRunStore(): DuckDbCapabilityRunStore {
+    if (!this.capabilityRunStore) {
+      throw new Error('CapabilityRunStore not initialized');
+    }
+    return this.capabilityRunStore;
+  }
+
   getConnection(): DuckDBConnection {
     if (!this.conn) {
       throw new Error('Connection not initialized');
@@ -840,6 +866,8 @@ export class DuckDBService implements IDatasetResolver {
       this.queryEngine = null;
       this.runtimeObservationService = null;
       this.observationQueryService = null;
+      this.runtimeArtifactFileStore = null;
+      this.pluginStateService = this.capabilityRunStore = null;
 
       if (activeObservationSink && getObservationSink() === activeObservationSink) {
         setObservationSink(null);
@@ -860,7 +888,11 @@ export class DuckDBService implements IDatasetResolver {
 }
 
 // eslint-disable-next-line no-redeclare
-export interface DuckDBService extends DuckDBServiceDatasetFacade, DuckDBServiceQueryFacade {}
+export interface DuckDBService
+  extends DuckDBServiceDatasetFacade,
+    DuckDBServiceQueryFacade,
+    DuckDBServiceRuntimeArtifactFacade {}
 
 installDuckDBServiceDatasetFacade(DuckDBService.prototype);
 installDuckDBServiceQueryFacade(DuckDBService.prototype);
+installDuckDBServiceRuntimeArtifactFacade(DuckDBService.prototype);

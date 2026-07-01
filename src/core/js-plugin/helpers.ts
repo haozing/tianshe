@@ -79,6 +79,7 @@ import { DatabaseNamespace } from './namespaces/database';
 import { NetworkNamespace } from './namespaces/network';
 import { UINamespace } from './namespaces/ui';
 import { StorageNamespace } from './namespaces/storage';
+import { StateNamespace } from './namespaces/state';
 import { UtilsNamespace } from './namespaces/utils';
 import { WindowNamespace, type InternalDevToolsOpener } from './namespaces/window';
 import { PluginNamespace } from './namespaces/plugin';
@@ -118,6 +119,7 @@ import { getBrowserPoolManager } from '../browser-pool';
  * - helpers.network.* - 网络请求（GET、POST、PUT、DELETE、Webhook）
  * - helpers.ui.* - UI 操作（通知、获取当前数据集）
  * - helpers.storage.* - 存储管理（配置、持久化数据）
+ * - helpers.state.* - 插件作用域运行状态（KV 状态入口）
  * - helpers.utils.* - 工具函数（验证、格式化、ID 生成等）
  * - helpers.openai.* - OpenAI API（对话、嵌入、图像、语音、批量处理）
  * - helpers.profile.* - 浏览器配置/编排（Profile 管理、launch、池化回收）
@@ -148,7 +150,6 @@ import { getBrowserPoolManager } from '../browser-pool';
  * === 浏览器公共接口（推荐方式）===
  * 通过 browser 实例直接访问：
  * - browser.native.* - 原生输入事件（isTrusted=true）
- * - browser.getCookies()/setCookie()/clearCookies() - Cookie 操作
  * - browser.getUserAgent() - 读取当前 User-Agent
  * - browser.screenshot()/screenshotDetailed()/snapshot() - 截图与页面快照
  * - browser.startNetworkCapture()/getNetworkEntries()/waitForResponse() - 网络捕获
@@ -233,8 +234,7 @@ import { getBrowserPoolManager } from '../browser-pool';
  * const bounds = await browser.getElementBounds('#button');
  * await browser.native.click(bounds.centerX, bounds.centerY);
  *
- * // Cookie / User-Agent
- * const cookies = await browser.getCookies();
+ * // User-Agent
  * const userAgent = await browser.getUserAgent();
  *
  * // 截图/页面快照
@@ -266,6 +266,9 @@ export class PluginHelpers {
 
   /** 存储管理命名空间 */
   public readonly storage: StorageNamespace;
+
+  /** 插件作用域状态命名空间 */
+  public readonly state: StateNamespace;
 
   /** 工具函数命名空间 */
   public readonly utils: UtilsNamespace;
@@ -496,6 +499,7 @@ export class PluginHelpers {
     this.network = new NetworkNamespace(pluginId);
     this.ui = new UINamespace(pluginId);
     this.storage = new StorageNamespace(duckdb, pluginId, manifest);
+    this.state = new StateNamespace(this.storage, duckdb, pluginId, manifest);
     this.utils = new UtilsNamespace(pluginId, this);
     this.window = new WindowNamespace(
       pluginId,
@@ -524,6 +528,7 @@ export class PluginHelpers {
       duckdb.getProfileGroupService(),
       viewManager,
       windowManager,
+      manifest,
       (key: string) => this.storage.getConfig(key),
       devToolsOpener
     );

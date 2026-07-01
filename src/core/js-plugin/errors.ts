@@ -7,6 +7,60 @@
 import { CoreError, type SerializedError } from '../errors/BaseError';
 import { toOptionalError } from '../../utils/error-message';
 
+const DATABASE_ERROR_SENSITIVE_DETAIL_KEYS = new Set([
+  'sql',
+  'params',
+  'param',
+  'value',
+  'values',
+  'record',
+  'records',
+  'updates',
+  'originalerror',
+  'cookie',
+  'cookies',
+  'token',
+  'authorization',
+  'header',
+  'headers',
+  'rawheader',
+  'rawheaders',
+]);
+
+function sanitizeDatabaseErrorDetails(
+  details: Record<string, any> | undefined
+): Record<string, unknown> | undefined {
+  if (!details) {
+    return undefined;
+  }
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(details)) {
+    if (DATABASE_ERROR_SENSITIVE_DETAIL_KEYS.has(key.toLowerCase())) {
+      sanitized[`${key}Redacted`] = true;
+      continue;
+    }
+
+    if (Array.isArray(value)) {
+      sanitized[key] = value.map((item) =>
+        item && typeof item === 'object'
+          ? sanitizeDatabaseErrorDetails(item as Record<string, any>)
+          : item
+      );
+      continue;
+    }
+
+    if (value && typeof value === 'object') {
+      sanitized[key] = sanitizeDatabaseErrorDetails(value as Record<string, any>);
+      continue;
+    }
+
+    sanitized[key] = value;
+  }
+
+  return sanitized;
+}
+
 /**
  * 插件错误基类
  *
@@ -86,9 +140,9 @@ export class DatabaseError extends PluginError {
       operation?: string;
       [key: string]: any;
     },
-    cause?: unknown
+    _cause?: unknown
   ) {
-    super('DATABASE_ERROR', message, details, cause);
+    super('DATABASE_ERROR', message, sanitizeDatabaseErrorDetails(details));
     this.name = 'DatabaseError';
     Object.setPrototypeOf(this, DatabaseError.prototype);
   }

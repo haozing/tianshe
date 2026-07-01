@@ -275,7 +275,7 @@ function readGovernanceSnapshot(snapshotPath = SNAPSHOT_PATH) {
   const sideEffectPolicy = evaluateSideEffectPolicy(snapshot);
   const datasetProvenancePolicy = evaluateDatasetProvenancePolicy(snapshot);
   const runtimeMaturityPolicy = evaluateRuntimeMaturityPolicy(snapshot);
-  const repairScopeMatrixOk = snapshot.repairScope?.officialAdapterMatrix?.ok === true;
+  const repairScopeMatrixOk = snapshot.repairScope?.siteAdapterRegistryMatrix?.ok === true;
   return {
     status:
       publicSurfacePolicy.status === 'ok' &&
@@ -346,6 +346,14 @@ function hasConfirmationField(capability) {
     : false;
 }
 
+function hasConfirmationPolicy(capability) {
+  if (capability?.sideEffectLevel === 'high' || capability?.destructiveHint === true) {
+    return true;
+  }
+  const conditions = capability?.confirmationPolicy?.requiredWhen;
+  return Array.isArray(conditions) && conditions.length > 0;
+}
+
 function hasInputField(capability, fieldName) {
   return Array.isArray(capability?.inputFields)
     ? capability.inputFields.includes(fieldName)
@@ -370,7 +378,8 @@ function evaluateSideEffectPolicy(snapshot) {
       missingPolicy: [],
       missingScopes: [],
       highRiskMissingWriteScope: [],
-      highRiskMissingConfirmation: [],
+      highRiskMissingConfirmationPolicy: [],
+      forbiddenConfirmationFields: [],
       datasetCommitMissingConfirmation: [],
       writeScopeMarkedReadOnly: [],
     };
@@ -391,17 +400,20 @@ function evaluateSideEffectPolicy(snapshot) {
   const highRiskMissingWriteScope = highRisk
     .filter((capability) => !hasWriteScope(capability))
     .map((capability) => capability.name);
-  const highRiskMissingConfirmation = highRisk
-    .filter((capability) => !hasConfirmationField(capability))
+  const highRiskMissingConfirmationPolicy = highRisk
+    .filter((capability) => !hasConfirmationPolicy(capability))
     .map((capability) => capability.name);
-  const datasetCommitMissingConfirmation = publicCapabilities
+  const forbiddenConfirmationFields = publicCapabilities
+    .filter((capability) => hasConfirmationField(capability))
+    .map((capability) => capability.name);
+  const datasetCommitMissingConfirmationPolicy = publicCapabilities
     .filter(
       (capability) =>
         capability.name === 'dataset_commit_write_plan' ||
         (Array.isArray(capability.inputFields) &&
           capability.inputFields.includes('commitDatasetWrite'))
     )
-    .filter((capability) => !hasConfirmationField(capability))
+    .filter((capability) => !hasConfirmationPolicy(capability))
     .map((capability) => capability.name);
   const writeScopeMarkedReadOnly = publicCapabilities
     .filter(
@@ -415,8 +427,9 @@ function evaluateSideEffectPolicy(snapshot) {
     missingPolicy.length === 0 &&
     missingScopes.length === 0 &&
     highRiskMissingWriteScope.length === 0 &&
-    highRiskMissingConfirmation.length === 0 &&
-    datasetCommitMissingConfirmation.length === 0 &&
+    highRiskMissingConfirmationPolicy.length === 0 &&
+    forbiddenConfirmationFields.length === 0 &&
+    datasetCommitMissingConfirmationPolicy.length === 0 &&
     writeScopeMarkedReadOnly.length === 0
       ? 'ok'
       : 'failed';
@@ -427,8 +440,11 @@ function evaluateSideEffectPolicy(snapshot) {
     missingPolicy,
     missingScopes,
     highRiskMissingWriteScope,
-    highRiskMissingConfirmation,
-    datasetCommitMissingConfirmation,
+    highRiskMissingConfirmationPolicy,
+    highRiskMissingConfirmation: highRiskMissingConfirmationPolicy,
+    forbiddenConfirmationFields,
+    datasetCommitMissingConfirmationPolicy,
+    datasetCommitMissingConfirmation: datasetCommitMissingConfirmationPolicy,
     writeScopeMarkedReadOnly,
     allowedReadOnlyWriteScopeNames: Array.from(ALLOWED_READONLY_WRITE_SCOPE_NAMES).sort(),
   };
@@ -448,10 +464,11 @@ function evaluateDatasetProvenancePolicy(snapshot) {
       stageWritePlanMissingProvenance: [],
       commitWritePlanMissingPlanInput: [],
       commitWritePlanMissingProvenance: [],
-      commitWritePlanMissingConfirmation: [],
+      commitWritePlanMissingConfirmationPolicy: [],
+      forbiddenConfirmationFields: [],
       siteDatasetWriteCapabilities: [],
       siteDatasetWriteMissingStagedCommit: [],
-      siteDatasetWriteMissingConfirmation: [],
+      siteDatasetWriteMissingConfirmationPolicy: [],
     };
   }
 
@@ -480,10 +497,13 @@ function evaluateDatasetProvenancePolicy(snapshot) {
     commitCapability && !hasInputField(commitCapability, 'provenance')
       ? ['dataset_commit_write_plan']
       : [];
-  const commitWritePlanMissingConfirmation =
-    commitCapability && !hasConfirmationField(commitCapability)
+  const commitWritePlanMissingConfirmationPolicy =
+    commitCapability && !hasConfirmationPolicy(commitCapability)
       ? ['dataset_commit_write_plan']
       : [];
+  const forbiddenConfirmationFields = publicCapabilities
+    .filter((capability) => hasConfirmationField(capability))
+    .map((capability) => capability.name);
   const siteDatasetWriteCapabilities = publicCapabilities.filter(
     (capability) =>
       hasRequiredScope(capability, 'dataset.write') &&
@@ -493,8 +513,8 @@ function evaluateDatasetProvenancePolicy(snapshot) {
   const siteDatasetWriteMissingStagedCommit = siteDatasetWriteCapabilities
     .filter((capability) => !hasInputField(capability, 'commitDatasetWrite'))
     .map((capability) => capability.name);
-  const siteDatasetWriteMissingConfirmation = siteDatasetWriteCapabilities
-    .filter((capability) => !hasConfirmationField(capability))
+  const siteDatasetWriteMissingConfirmationPolicy = siteDatasetWriteCapabilities
+    .filter((capability) => !hasConfirmationPolicy(capability))
     .map((capability) => capability.name);
   const status =
     forbiddenPublicRowMutationNames.length === 0 &&
@@ -502,9 +522,10 @@ function evaluateDatasetProvenancePolicy(snapshot) {
     stageWritePlanMissingProvenance.length === 0 &&
     commitWritePlanMissingPlanInput.length === 0 &&
     commitWritePlanMissingProvenance.length === 0 &&
-    commitWritePlanMissingConfirmation.length === 0 &&
+    commitWritePlanMissingConfirmationPolicy.length === 0 &&
+    forbiddenConfirmationFields.length === 0 &&
     siteDatasetWriteMissingStagedCommit.length === 0 &&
-    siteDatasetWriteMissingConfirmation.length === 0
+    siteDatasetWriteMissingConfirmationPolicy.length === 0
       ? 'ok'
       : 'failed';
 
@@ -516,10 +537,13 @@ function evaluateDatasetProvenancePolicy(snapshot) {
     stageWritePlanMissingProvenance,
     commitWritePlanMissingPlanInput,
     commitWritePlanMissingProvenance,
-    commitWritePlanMissingConfirmation,
+    commitWritePlanMissingConfirmationPolicy,
+    commitWritePlanMissingConfirmation: commitWritePlanMissingConfirmationPolicy,
+    forbiddenConfirmationFields,
     siteDatasetWriteCapabilities: siteDatasetWriteCapabilities.map((capability) => capability.name),
     siteDatasetWriteMissingStagedCommit,
-    siteDatasetWriteMissingConfirmation,
+    siteDatasetWriteMissingConfirmationPolicy,
+    siteDatasetWriteMissingConfirmation: siteDatasetWriteMissingConfirmationPolicy,
   };
 }
 
@@ -993,8 +1017,8 @@ function buildProcedureGate(snapshotPath = SNAPSHOT_PATH) {
   }
 
   const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
-  const adapters = Array.isArray(snapshot.officialSiteAdapters?.adapters)
-    ? snapshot.officialSiteAdapters.adapters
+  const adapters = Array.isArray(snapshot.siteAdapterRegistry?.adapters)
+    ? snapshot.siteAdapterRegistry.adapters
     : [];
   const procedures = adapters.flatMap((adapter) =>
     Array.isArray(adapter.procedures)

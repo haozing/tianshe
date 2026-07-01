@@ -2,6 +2,7 @@ import { DuckDBConnection } from '@duckdb/node-api';
 import type {
   ObservationSink,
   RuntimeArtifact,
+  RuntimeArtifactPayload,
   RuntimeEvent,
 } from '../../core/observability/types';
 import { createLogger } from '../../core/logger';
@@ -45,6 +46,7 @@ const RUNTIME_ARTIFACT_COMPAT_COLUMNS = [
   ['dataset_id', 'VARCHAR'],
   ['browser_id', 'VARCHAR'],
   ['attrs', 'JSON'],
+  ['payload', 'JSON'],
   ['data', 'JSON'],
 ] as const;
 
@@ -94,7 +96,16 @@ interface RuntimeArtifactRow {
   dataset_id?: string | null;
   browser_id?: string | null;
   attrs?: string | null;
+  payload?: string | null;
   data?: string | null;
+}
+
+export interface RuntimeObservationArtifactFileStore {
+  deleteFilePayload(payload: Extract<RuntimeArtifactPayload, { kind: 'file' }>): Promise<boolean>;
+}
+
+export interface RuntimeObservationServiceOptions {
+  artifactFileStore?: RuntimeObservationArtifactFileStore;
 }
 
 export interface RuntimeObservationRetentionCleanupOptions {
@@ -106,6 +117,8 @@ export interface RuntimeObservationRetentionCleanupResult {
   cutoffTimestamp: number;
   eventsDeleted: number;
   artifactsDeleted: number;
+  artifactFilesDeleted?: number;
+  artifactRowsRetained?: number;
 }
 
 function parseJson<T>(
@@ -130,7 +143,10 @@ export class RuntimeObservationService implements ObservationSink {
   private lastSeqTimestamp = 0;
   private lastSeqCounter = 0;
 
-  constructor(private conn: DuckDBConnection) {}
+  constructor(
+    private conn: DuckDBConnection,
+    private options: RuntimeObservationServiceOptions = {}
+  ) {}
 
   private nextSeq(): number {
     const now = Date.now();
@@ -193,6 +209,7 @@ export class RuntimeObservationService implements ObservationSink {
         dataset_id VARCHAR,
         browser_id VARCHAR,
         attrs JSON,
+        payload JSON,
         data JSON
       )
     `);
@@ -265,8 +282,8 @@ export class RuntimeObservationService implements ObservationSink {
       INSERT INTO runtime_artifacts (
         id, trace_id, span_id, parent_span_id, timestamp, seq, type, component, label, mime_type,
         source, capability, plugin_id, browser_runtime_id, session_id, profile_id, dataset_id,
-        browser_id, attrs, data
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        browser_id, attrs, payload, data
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
         artifact.artifactId,
         artifact.traceId,
@@ -287,6 +304,7 @@ export class RuntimeObservationService implements ObservationSink {
         artifact.datasetId ?? null,
         artifact.browserId ?? null,
         artifact.attrs ? JSON.stringify(artifact.attrs) : null,
+        artifact.payload ? JSON.stringify(artifact.payload) : null,
         artifact.data !== undefined ? JSON.stringify(artifact.data) : null,
       ]);
   }
@@ -343,6 +361,21 @@ export class RuntimeObservationService implements ObservationSink {
     return parseRows<RuntimeArtifactRow>(result).map((row) => this.toRuntimeArtifact(row));
   }
 
+  async getArtifactById(id: string): Promise<RuntimeArtifact | null> {
+    const normalizedId = String(id || '').trim();
+    if (!normalizedId) {
+      return null;
+    }
+
+    const result = await allPrepared(
+      this.conn,
+      'SELECT * FROM runtime_artifacts WHERE id = ? LIMIT 1',
+      [normalizedId]
+    );
+    const row = parseRows<RuntimeArtifactRow>(result)[0];
+    return row ? this.toRuntimeArtifact(row) : null;
+  }
+
   async listRecentFailureEvents(limit: number): Promise<RuntimeEvent[]> {
     const normalizedLimit = Math.max(1, Math.floor(limit || 20));
     const result = await allPrepared(this.conn, `
@@ -380,8 +413,28 @@ export class RuntimeObservationService implements ObservationSink {
   }
 
   async clearAll(): Promise<void> {
+    const artifactStore = this.options.artifactFileStore;
+    if (artifactStore) {
+      const artifacts = parseRows<RuntimeArtifactRow>(
+        await allPrepared(this.conn, 'SELECT * FROM runtime_artifacts', [])
+      ).map((row) => this.toRuntimeArtifact(row));
+      await this.deleteArtifactFiles(artifacts, artifactStore);
+    }
     await this.conn.run('DELETE FROM runtime_events');
     await this.conn.run('DELETE FROM runtime_artifacts');
+  }
+
+  async deleteArtifactById(artifactId: string): Promise<boolean> {
+    const normalizedId = String(artifactId || '').trim();
+    if (!normalizedId) {
+      return false;
+    }
+    const artifact = await this.getArtifactById(normalizedId);
+    if (!artifact) {
+      return false;
+    }
+    await runPrepared(this.conn, 'DELETE FROM runtime_artifacts WHERE id = ?', [normalizedId]);
+    return true;
   }
 
   async cleanupRetention(
@@ -395,31 +448,83 @@ export class RuntimeObservationService implements ObservationSink {
       typeof options.now === 'number' && Number.isFinite(options.now) ? options.now : Date.now();
     const cutoffTimestamp = now - daysToKeep * DAY_MS;
 
-    const artifactRows = parseRows<{ count: number }>(
+    const expiredArtifacts = parseRows<RuntimeArtifactRow>(
       await allPrepared(
         this.conn,
-        'SELECT COUNT(*) AS count FROM runtime_artifacts WHERE timestamp < ?',
+        'SELECT * FROM runtime_artifacts WHERE timestamp < ?',
         [cutoffTimestamp]
       )
-    );
+    ).map((row) => this.toRuntimeArtifact(row));
     const eventRows = parseRows<{ count: number }>(
       await allPrepared(this.conn, 'SELECT COUNT(*) AS count FROM runtime_events WHERE timestamp < ?', [
         cutoffTimestamp,
       ])
     );
 
-    await runPrepared(this.conn, 'DELETE FROM runtime_artifacts WHERE timestamp < ?', [
-      cutoffTimestamp,
-    ]);
+    const artifactStore = this.options.artifactFileStore;
+    let fileDeleteResult: { deleted: Set<string>; retained: Set<string> } = {
+      deleted: new Set(),
+      retained: new Set(),
+    };
+    if (artifactStore) {
+      fileDeleteResult = await this.deleteArtifactFiles(expiredArtifacts, artifactStore);
+    }
+
+    const deleteableExpiredArtifactIds = expiredArtifacts
+      .map((artifact) => artifact.artifactId)
+      .filter((artifactId) => !fileDeleteResult.retained.has(artifactId));
+    await this.deleteArtifactRowsByIds(deleteableExpiredArtifactIds);
     await runPrepared(this.conn, 'DELETE FROM runtime_events WHERE timestamp < ?', [
       cutoffTimestamp,
     ]);
 
     return {
       cutoffTimestamp,
-      artifactsDeleted: Number(artifactRows[0]?.count || 0),
+      artifactsDeleted: deleteableExpiredArtifactIds.length,
       eventsDeleted: Number(eventRows[0]?.count || 0),
+      ...(artifactStore
+        ? {
+            artifactFilesDeleted: fileDeleteResult.deleted.size,
+            artifactRowsRetained: fileDeleteResult.retained.size,
+          }
+        : {}),
     };
+  }
+
+  private async deleteArtifactRowsByIds(artifactIds: string[]): Promise<void> {
+    const normalizedIds = Array.from(
+      new Set(artifactIds.map((id) => String(id || '').trim()).filter(Boolean))
+    );
+    if (normalizedIds.length === 0) {
+      return;
+    }
+    const placeholders = normalizedIds.map(() => '?').join(', ');
+    await runPrepared(this.conn, `DELETE FROM runtime_artifacts WHERE id IN (${placeholders})`, normalizedIds);
+  }
+
+  private async deleteArtifactFiles(
+    artifacts: RuntimeArtifact[],
+    artifactStore: RuntimeObservationArtifactFileStore
+  ): Promise<{ deleted: Set<string>; retained: Set<string> }> {
+    const deleted = new Set<string>();
+    const retained = new Set<string>();
+    for (const artifact of artifacts) {
+      if (artifact.payload?.kind !== 'file') {
+        continue;
+      }
+      try {
+        await artifactStore.deleteFilePayload(artifact.payload);
+        deleted.add(artifact.artifactId);
+      } catch (error) {
+        retained.add(artifact.artifactId);
+        logger.warn('Failed to delete runtime artifact file; retaining artifact row', {
+          artifactId: artifact.artifactId,
+          storageKey: artifact.payload.storageKey,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return { deleted, retained };
   }
 
   private toRuntimeEvent(row: RuntimeEventRow): RuntimeEvent {
@@ -486,6 +591,13 @@ export class RuntimeObservationService implements ObservationSink {
           field: 'data',
         })
       : undefined;
+    const payload = row.payload
+      ? parseJson<RuntimeArtifactPayload>(row.payload, {
+          rowId: row.id,
+          table: 'runtime_artifacts',
+          field: 'payload',
+        })
+      : undefined;
 
     return {
       artifactId: row.id,
@@ -506,6 +618,7 @@ export class RuntimeObservationService implements ObservationSink {
       ...(row.dataset_id ? { datasetId: row.dataset_id } : {}),
       ...(row.browser_id ? { browserId: row.browser_id } : {}),
       ...(attrs ? { attrs } : {}),
+      ...(payload ? { payload } : {}),
       ...(data !== undefined ? { data } : {}),
     };
   }

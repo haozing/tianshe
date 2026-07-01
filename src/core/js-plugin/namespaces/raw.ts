@@ -91,7 +91,7 @@ export interface WebContentsProvider {
  *
  * 仅保留 WebContents API，其他 API 已迁移到 SimpleBrowser 子命名空间：
  * - browser.native (原 helpers.raw.input)
- * - browser.getCookies()/setCookie()/clearCookies()/getUserAgent()
+ * - browser.sessionRequest()/getUserAgent()
  * - browser.screenshot()/screenshotDetailed()/snapshot()
  */
 export class RawNamespace {

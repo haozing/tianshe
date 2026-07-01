@@ -1,4 +1,4 @@
-import { officialSiteAdapters, getOfficialSiteAdapter } from '../../site-adapters';
+import { siteAdapterRegistry } from '../../site-adapters';
 import {
   captureSiteAdapterFixture,
   runSelectorWorkbench,
@@ -10,7 +10,12 @@ import type {
 } from '../../core/site-adapter-lab';
 import { saveSiteAdapterExpected, type SaveExpectedAndRunInput } from './artifact-service';
 import type { PageSnapshot } from '../../types/browser-interface';
-import type { SiteAdapterFixture } from '../../core/site-adapter-runtime';
+import type {
+  SiteAdapterFixture,
+  SiteAdapterManifest,
+  SiteAdapterProviderError,
+  SiteAdapterRegistrationSource,
+} from '../../core/site-adapter-runtime';
 import { createIpcHandler } from '../ipc-handlers/utils';
 import { createLogger } from '../../core/logger';
 
@@ -55,12 +60,57 @@ export interface SiteAdapterLabHandlerOptions {
   ) => Promise<SiteAdapterLabPlaywrightRunnerOptions> | SiteAdapterLabPlaywrightRunnerOptions;
 }
 
+export interface SiteAdapterLabProviderDiagnostic extends SiteAdapterProviderError {
+  stage: 'provider_refresh';
+  quarantined: true;
+  suggestion: string;
+}
+
+export interface SiteAdapterLabAdapterListResult {
+  adapters: Array<{
+    manifest: SiteAdapterManifest;
+    source: SiteAdapterRegistrationSource;
+    pluginId?: string;
+    trusted: boolean;
+    packageRoot: string;
+    generation: number;
+  }>;
+  providerErrors: SiteAdapterLabProviderDiagnostic[];
+  generation: number;
+}
+
 function requireAdapter(adapterId: string) {
-  const adapter = getOfficialSiteAdapter(String(adapterId || '').trim());
+  const adapter = siteAdapterRegistry.getAdapter(String(adapterId || '').trim());
   if (!adapter) {
     throw new Error(`Site adapter not found: ${adapterId}`);
   }
   return adapter;
+}
+
+function toProviderDiagnostic(error: SiteAdapterProviderError): SiteAdapterLabProviderDiagnostic {
+  return {
+    ...error,
+    stage: 'provider_refresh',
+    quarantined: true,
+    suggestion: error.pluginId
+      ? 'Open the plugin package, fix its site adapter manifest/entry/import boundary, then reload the plugin.'
+      : 'Check the Site Adapter provider implementation and refresh the registry.',
+  };
+}
+
+export function listSiteAdapterLabAdapters(): SiteAdapterLabAdapterListResult {
+  return {
+    adapters: siteAdapterRegistry.listRegisteredAdapters().map((entry) => ({
+      manifest: entry.module.manifest,
+      source: entry.source,
+      pluginId: entry.pluginId,
+      trusted: entry.trusted,
+      packageRoot: entry.packageRoot,
+      generation: entry.generation,
+    })),
+    providerErrors: siteAdapterRegistry.listProviderErrors().map(toProviderDiagnostic),
+    generation: siteAdapterRegistry.getGeneration(),
+  };
 }
 
 type OfficialFixtureLoader = () => Promise<{
@@ -215,10 +265,7 @@ export async function runSiteAdapterLabFixtureFromInput(
 export function registerSiteAdapterLabHandlers(options: SiteAdapterLabHandlerOptions = {}): void {
   createIpcHandler(
     'site-adapter-lab:list-adapters',
-    async () =>
-      officialSiteAdapters.map((adapter) => ({
-        manifest: adapter.manifest,
-      })),
+    async () => listSiteAdapterLabAdapters(),
     { errorMessage: '获取 Site Adapter 列表失败', permission: 'trusted-renderer' }
   );
 

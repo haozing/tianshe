@@ -64,6 +64,7 @@ export class ProfileSchemaBootstrap {
         quota           INTEGER DEFAULT 1,
         idle_timeout_ms INTEGER DEFAULT 300000,
         lock_timeout_ms INTEGER DEFAULT 300000,
+        login_state_revision INTEGER DEFAULT 0,
         is_system       BOOLEAN DEFAULT FALSE,
         created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -248,9 +249,9 @@ export class ProfileSchemaBootstrap {
         `
         INSERT INTO browser_profiles (
           id, name, runtime_id, runtime_source_override, group_id, partition, proxy_config, fingerprint, fingerprint_core, fingerprint_source,
-          notes, tags, color, status, quota, idle_timeout_ms, lock_timeout_ms, is_system,
+          notes, tags, color, status, quota, idle_timeout_ms, lock_timeout_ms, login_state_revision, is_system,
           created_at, updated_at
-        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, 0, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `,
         [
           DEFAULT_BROWSER_PROFILE.id,

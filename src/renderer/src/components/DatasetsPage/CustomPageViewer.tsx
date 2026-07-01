@@ -50,7 +50,11 @@ export function CustomPageViewer({ page, datasetId }: CustomPageViewerProps) {
       } else if (data.type === 'plugin-page-message') {
         try {
           // 转发消息到后端处理
-          const result = await pluginFacade.sendPageMessage(data);
+          const result = await pluginFacade.sendPageMessage({
+            ...data,
+            pluginId: page.plugin_id,
+            pageId: page.page_id,
+          });
 
           // 回复消息到iframe
           if (iframeRef.current?.contentWindow) {

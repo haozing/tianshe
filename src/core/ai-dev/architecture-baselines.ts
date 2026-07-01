@@ -21,6 +21,8 @@ export const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Existing oversized session catalog; split session lifecycle, queue, and browser binding capability groups.',
   'src/core/ai-dev/capabilities/site-capability-catalog.ts':
     'New v4 site capability catalog owns discovery, public read-only site handlers, and logged-in handoff flow; split site-specific capability handlers after the first v4 vertical slice stabilizes.',
+  'src/core/ai-dev/capabilities/site-capability-catalog.test.ts':
+    'Existing oversized site capability contract test; split site families and high-risk procedure fixtures when adding new site capability coverage.',
   'src/core/ai-dev/orchestration/capability-registry.test.ts':
     'Existing oversized orchestration registry contract test; split capability families when adding new registry cases.',
   'src/core/ai-dev/orchestration/capability-registry.ts':
@@ -35,6 +37,8 @@ export const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Existing oversized global browser pool; split lifecycle, acquire queue, and diagnostics during pool refactor.',
   'src/core/browser-pool/pool-manager.ts':
     'Existing oversized browser pool manager; split acquire, release, profile state sync, and event coordination during pool lifecycle refactor.',
+  'src/core/resource-coordinator.ts':
+    'Resource coordinator now owns shared resource locks plus v4 owner metadata and request-handoff state; split lock core, handoff protocol, and notification DTOs after C-02 handoff stabilizes.',
   'src/core/browser-ruyi/ruyi-browser.ts':
     'Existing oversized Ruyi browser facade; ongoing plan extracts role capabilities and shared browser operation helpers.',
   'src/core/js-plugin/manager.test.ts':
@@ -78,7 +82,7 @@ export const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
   'src/main/duckdb/dataset-service.ts':
     'Existing oversized dataset facade; ongoing plan moves storage/query/schema/tab responsibilities to subservices.',
   'src/main/duckdb/profile-service.ts':
-    'Existing oversized profile service; split profile CRUD, pool metadata, and extension association logic.',
+    'Existing oversized profile service; split profile CRUD, login health lifecycle hooks, pool metadata, and extension association logic.',
   'src/main/duckdb/utils.test.ts':
     'Existing oversized DuckDB utils test; split SQL identifier, statement, and validation contracts.',
   'src/main/ipc-handlers/dataset-handler.test.ts':
@@ -139,6 +143,8 @@ export const ARCHITECTURE_SIZE_NOTES: Record<string, string> = {
     'Existing oversized TanStack table wrapper; split virtual table, controls, and row operations.',
   'src/renderer/src/components/PluginMarket/PluginMarket.tsx':
     'Existing oversized plugin market page; split catalog, install flow, and package detail panels.',
+  'src/renderer/src/components/SettingsPage/SiteAdapterLabPanel.tsx':
+    'New v4 site adapter lab panel combines provider diagnostics, fixture runner, trace handoff, and Repair Studio model diff; split into lab data hooks and focused panels after the v4 canary workflow stabilizes.',
   'src/renderer/src/stores/__tests__/datasetStore.test.ts':
     'Legacy dataset store compatibility suite; kept under 1500 lines by split contract.',
   'src/types/browser-interface.ts':
@@ -187,6 +193,7 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
       'src/core/ai-dev/capabilities/profile-catalog.ts',
       'src/core/ai-dev/capabilities/session-catalog.ts',
       'src/core/ai-dev/capabilities/site-capability-catalog.ts',
+      'src/core/ai-dev/capabilities/site-capability-catalog.test.ts',
       'src/core/ai-dev/orchestration/capability-registry.ts',
       'src/core/ai-dev/orchestration/capability-registry.test.ts',
     ]
@@ -200,6 +207,7 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
       'src/core/browser-extension/extension-browser.ts',
       'src/core/browser-pool/global-pool.ts',
       'src/core/browser-pool/pool-manager.ts',
+      'src/core/resource-coordinator.ts',
       'src/core/browser-ruyi/ruyi-browser.ts',
     ]
   ),
@@ -248,6 +256,7 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
       'src/main/duckdb/__tests__/dataset-service.integration.test.ts',
       'src/main/duckdb/dataset-schema-service.ts',
       'src/main/duckdb/dataset-service.ts',
+      'src/main/duckdb/profile-service.ts',
       'src/main/duckdb/utils.test.ts',
     ]
   ),
@@ -258,6 +267,7 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
     [
       'src/main/profile/browser-pool-integration-cloak.ts',
       'src/main/profile/extension-packages-manager.ts',
+      'src/main/profile/ruyi-firefox-client.ts',
       'src/main/profile/ruyi-firefox-client.test.ts',
     ]
   ),
@@ -297,6 +307,7 @@ export const ARCHITECTURE_SIZE_REPAIR_TARGETS: Record<string, ArchitectureSizeRe
       'src/renderer/src/components/DatasetsPage/TanStackDataTable/columns.tsx',
       'src/renderer/src/components/DatasetsPage/TanStackDataTable/index.tsx',
       'src/renderer/src/components/PluginMarket/PluginMarket.tsx',
+      'src/renderer/src/components/SettingsPage/SiteAdapterLabPanel.tsx',
       'src/renderer/src/stores/__tests__/datasetStore.test.ts',
     ]
   ),

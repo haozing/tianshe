@@ -129,7 +129,7 @@ describe('HttpApiIPCHandler', () => {
       expect.objectContaining({
         mcpRequireAuth: true,
         mcpAllowedOrigins: [],
-        enforceOrchestrationScopes: false,
+        enforceOrchestrationScopes: true,
         orchestrationIdempotencyStore: 'memory',
       })
     );
@@ -143,7 +143,7 @@ describe('HttpApiIPCHandler', () => {
       expect.objectContaining({
         mcpRequireAuth: true,
         mcpAllowedOrigins: [],
-        enforceOrchestrationScopes: false,
+        enforceOrchestrationScopes: true,
         orchestrationIdempotencyStore: 'memory',
       })
     );

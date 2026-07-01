@@ -26,6 +26,8 @@ export interface SiteLoginHealthState {
   site: string;
   loginUrl?: string | null;
   runtimeId?: string | null;
+  runtimeIdSnapshot?: string | null;
+  profileRevision?: number | null;
   status: ProfileLoginStateStatus;
   verified: boolean;
   lastCheckedAt?: string | Date | null;
@@ -38,6 +40,7 @@ export interface SiteLoginHealthInput {
   site: string;
   state?: SiteLoginHealthState | null;
   requiredRuntimeId?: string | null;
+  currentProfileRevision?: number | null;
   maxVerifiedAgeMs?: number;
   now?: Date;
 }
@@ -51,6 +54,8 @@ export interface SiteLoginHealthResult {
   site: string;
   loginUrl: string | null;
   runtimeId: string | null;
+  profileRevision: number | null;
+  currentProfileRevision: number | null;
   requiredRuntimeId: string | null;
   verified: boolean;
   lastCheckedAt: string | null;
@@ -101,11 +106,21 @@ export function evaluateSiteLoginHealth(input: SiteLoginHealthInput): SiteLoginH
   const state = input.state || null;
   const now = input.now || new Date();
   const requiredRuntimeId = input.requiredRuntimeId?.trim() || null;
+  const currentProfileRevision =
+    typeof input.currentProfileRevision === 'number' && Number.isFinite(input.currentProfileRevision)
+      ? Math.trunc(input.currentProfileRevision)
+      : null;
+  const profileRevision =
+    typeof state?.profileRevision === 'number' && Number.isFinite(state.profileRevision)
+      ? Math.trunc(state.profileRevision)
+      : null;
   const base = {
     profileId: input.profileId,
     site: input.site,
     loginUrl: state?.loginUrl?.trim() || null,
-    runtimeId: state?.runtimeId?.trim() || null,
+    runtimeId: state?.runtimeIdSnapshot?.trim() || state?.runtimeId?.trim() || null,
+    profileRevision,
+    currentProfileRevision,
     requiredRuntimeId,
     verified: state?.verified === true,
     lastCheckedAt: toIsoOrNull(state?.lastCheckedAt),
@@ -132,15 +147,29 @@ export function evaluateSiteLoginHealth(input: SiteLoginHealthInput): SiteLoginH
 
   if (
     requiredRuntimeId &&
-    state.runtimeId &&
-    state.runtimeId.trim() &&
-    state.runtimeId.trim() !== requiredRuntimeId
+    (state.runtimeIdSnapshot || state.runtimeId) &&
+    (state.runtimeIdSnapshot || state.runtimeId || '').trim() &&
+    (state.runtimeIdSnapshot || state.runtimeId || '').trim() !== requiredRuntimeId
   ) {
     return {
       ...base,
       ok: false,
       status: 'runtime_mismatch',
       reasonCode: 'runtime_mismatch',
+      manualHandoffRequired: true,
+    };
+  }
+
+  if (
+    currentProfileRevision !== null &&
+    profileRevision !== null &&
+    profileRevision !== currentProfileRevision
+  ) {
+    return {
+      ...base,
+      ok: false,
+      status: 'expired',
+      reasonCode: 'login_state_expired',
       manualHandoffRequired: true,
     };
   }

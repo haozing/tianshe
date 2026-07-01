@@ -41,6 +41,10 @@ import {
 import { createLogger } from '../../core/logger';
 import { resolveCloakBrowserExecutablePathOverride } from '../../constants/runtime-config';
 import { getUserDataBaseDir, resolveExtensionProxy } from './chrome-runtime-shared';
+import type {
+  BrowserDownloadArtifactContext,
+  BrowserDownloadArtifactSink,
+} from '../../core/browser-automation/download-artifact-sink';
 
 type PlaywrightCookie = {
   name: string;
@@ -510,6 +514,8 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
   private readonly consoleMessages: ConsoleMessage[] = [];
   private readonly runtimeListeners = new Set<(event: BrowserRuntimeEvent) => void>();
   private readonly downloads = new Map<string, CloakDownloadState>();
+  private readonly downloadArtifactSink?: BrowserDownloadArtifactSink;
+  private readonly downloadArtifactContext?: BrowserDownloadArtifactContext;
   private readonly interceptedRequests = new Map<string, { request: BrowserInterceptedRequest; route: PlaywrightRoute }>();
   private readonly interceptWaiters = new Set<InterceptWaiter>();
   private readonly responseWaiters = new Set<ResponseWaiter>();
@@ -528,9 +534,15 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
     private readonly context: PlaywrightContext,
     private page: PlaywrightPage,
     descriptor: BrowserRuntimeDescriptor,
-    private readonly domStorageSnapshotPath: string
+    private readonly domStorageSnapshotPath: string,
+    options: {
+      downloadArtifactSink?: BrowserDownloadArtifactSink;
+      downloadArtifactContext?: BrowserDownloadArtifactContext;
+    } = {}
   ) {
     this.descriptor = descriptor;
+    this.downloadArtifactSink = options.downloadArtifactSink;
+    this.downloadArtifactContext = options.downloadArtifactContext;
     this.getTabId(page);
     this.attachPageListeners(page);
     this.attachContextListeners(context);
@@ -920,6 +932,7 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
   }
 
   async listDownloads(): Promise<BrowserDownloadEntry[]> {
+    await Promise.all([...this.downloads.values()].map((entry) => this.attachDownloadArtifact(entry)));
     return [...this.downloads.values()].map(({ download: _download, ...entry }) => ({ ...entry }));
   }
 
@@ -935,6 +948,7 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
         (entry) => entry.state !== 'in_progress' && Number(entry.id.split('-')[1] ?? 0) >= startedAt - 1000
       );
       if (recent) {
+        await this.attachDownloadArtifact(recent);
         const { download: _download, ...publicEntry } = recent;
         return { ...publicEntry };
       }
@@ -1564,12 +1578,14 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
 
       entry.state = 'completed';
       entry.path = downloadPath ?? undefined;
+      await this.attachDownloadArtifact(entry);
       this.emitRuntimeEvent('download.completed', {
         id,
         url: entry.url,
         suggestedFilename: entry.suggestedFilename,
         state: 'completed',
         path: entry.path,
+        artifactRef: entry.artifactRef,
         source: 'native',
       });
     } catch (error) {
@@ -1581,6 +1597,19 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async attachDownloadArtifact(entry: CloakDownloadState): Promise<void> {
+    if (!this.downloadArtifactSink || entry.state !== 'completed' || !entry.path || entry.artifactRef) {
+      return;
+    }
+    entry.artifactRef = await this.downloadArtifactSink.createDownloadArtifact({
+      ...this.downloadArtifactContext,
+      sourcePath: entry.path,
+      filename: entry.suggestedFilename || path.basename(entry.path),
+      url: entry.url,
+      downloadId: entry.id,
+    });
   }
 
   private toInterceptedRequest(route: PlaywrightRoute, request: PlaywrightRequest): BrowserInterceptedRequest {
@@ -1730,7 +1759,9 @@ class CloakPlaywrightBrowser implements PooledBrowserController {
   }
 }
 
-export function createCloakBrowserFactory(): BrowserFactory {
+export function createCloakBrowserFactory(options: {
+  downloadArtifactSink?: BrowserDownloadArtifactSink;
+} = {}): BrowserFactory {
   return async (session) => {
     const runtime = await resolveCloakRuntimeInfo(session.runtimeSourceOverride ?? null);
     if (!runtime.installed && runtime.source.type !== 'managed-download') {
@@ -1756,7 +1787,15 @@ export function createCloakBrowserFactory(): BrowserFactory {
       context,
       page,
       getCloakRuntimeDescriptor(),
-      getCloakDomStorageSnapshotPath(session.id)
+      getCloakDomStorageSnapshotPath(session.id),
+      {
+        downloadArtifactSink: options.downloadArtifactSink,
+        downloadArtifactContext: {
+          browserRuntimeId: CLOAK_RUNTIME_ID,
+          sessionId: session.id,
+          profileId: session.id,
+        },
+      }
     );
     return {
       browser,

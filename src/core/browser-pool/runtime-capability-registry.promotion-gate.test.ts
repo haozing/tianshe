@@ -33,63 +33,74 @@ const browserCapabilityTruth = (
   semanticSmokeTest,
 });
 
+const sessionRequestContractEvidence: CapabilityPromotionEvidence = {
+  methodPresenceTest: 'src/core/browser-automation/browser-capability-truth.test.ts',
+  semanticSmokeTest: 'src/core/browser-runtime/profile-session-gateway.test.ts',
+};
+
 const PROMOTION_EVIDENCE: Record<
   BrowserRuntimeId,
   Partial<Record<BrowserCapabilityName, CapabilityPromotionEvidence>>
 > = {
-  'electron-webcontents': capabilityEvidence(
-    [
-      'cookies.read',
-      'cookies.write',
-      'cookies.clear',
-      'cookies.filter',
-      'storage.dom',
-      'userAgent.read',
-      'snapshot.page',
-      'screenshot.detailed',
-      'pdf.print',
-      'window.showHide',
-      'window.openPolicy',
-      'input.native',
-      'input.touch',
-      'text.dom',
-      'text.ocr',
-      'network.capture',
-      'console.capture',
-      'download.manage',
-      'emulation.identity',
-      'emulation.viewport',
-    ],
-    browserCapabilityTruth('src/core/browser-automation/browser-runtime.cross-runtime-contract.test.ts')
-  ),
-  'chromium-extension-relay': capabilityEvidence(
-    [
-      'cookies.read',
-      'cookies.write',
-      'cookies.clear',
-      'cookies.filter',
-      'storage.dom',
-      'userAgent.read',
-      'snapshot.page',
-      'screenshot.detailed',
-      'window.showHide',
-      'window.openPolicy',
-      'input.native',
-      'input.touch',
-      'text.dom',
-      'text.ocr',
-      'network.capture',
-      'network.responseBody',
-      'console.capture',
-      'dialog.basic',
-      'tabs.manage',
-      'emulation.identity',
-      'emulation.viewport',
-      'intercept.observe',
-      'intercept.control',
-    ],
-    browserCapabilityTruth('src/main/profile/browser-pool-integration-extension.canary.test.ts')
-  ),
+  'electron-webcontents': {
+    ...capabilityEvidence(
+      [
+        'cookies.read',
+        'cookies.write',
+        'cookies.clear',
+        'cookies.filter',
+        'storage.dom',
+        'userAgent.read',
+        'snapshot.page',
+        'screenshot.detailed',
+        'pdf.print',
+        'window.showHide',
+        'window.openPolicy',
+        'input.native',
+        'input.touch',
+        'text.dom',
+        'text.ocr',
+        'network.capture',
+        'console.capture',
+        'download.manage',
+        'emulation.identity',
+        'emulation.viewport',
+      ],
+      browserCapabilityTruth('src/core/browser-automation/browser-runtime.cross-runtime-contract.test.ts')
+    ),
+    'network.sessionRequest': sessionRequestContractEvidence,
+  },
+  'chromium-extension-relay': {
+    ...capabilityEvidence(
+      [
+        'cookies.read',
+        'cookies.write',
+        'cookies.clear',
+        'cookies.filter',
+        'storage.dom',
+        'userAgent.read',
+        'snapshot.page',
+        'screenshot.detailed',
+        'window.showHide',
+        'window.openPolicy',
+        'input.native',
+        'input.touch',
+        'text.dom',
+        'text.ocr',
+        'network.capture',
+        'network.responseBody',
+        'console.capture',
+        'dialog.basic',
+        'tabs.manage',
+        'emulation.identity',
+        'emulation.viewport',
+        'intercept.observe',
+        'intercept.control',
+      ],
+      browserCapabilityTruth('src/main/profile/browser-pool-integration-extension.canary.test.ts')
+    ),
+    'network.sessionRequest': sessionRequestContractEvidence,
+  },
   'firefox-bidi': capabilityEvidence(
     [
       'cookies.read',

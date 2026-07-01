@@ -128,7 +128,7 @@ describe('github profile site adapter', () => {
         procedureId: 'create-issue',
         browser,
       })
-    ).rejects.toThrow('confirmRisk=true');
+    ).rejects.toThrow('confirmationGranted=true');
     expect(browser.goto).not.toHaveBeenCalled();
   });
 
@@ -156,7 +156,7 @@ describe('github profile site adapter', () => {
       adapter: githubProfileAdapter,
       procedureId: 'create-issue',
       browser,
-      options: { confirmRisk: true },
+      options: { confirmationGranted: true },
     });
 
     expect(result.ok).toBe(true);

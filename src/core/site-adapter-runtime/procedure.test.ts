@@ -170,10 +170,10 @@ describe('site adapter procedure runner', () => {
     };
 
     await expect(runSiteAdapterProcedure(procedure, createBrowser())).rejects.toThrow(
-      'confirmRisk=true'
+      'confirmationGranted=true'
     );
     await expect(
-      runSiteAdapterProcedure(procedure, createBrowser(), { confirmRisk: true })
+      runSiteAdapterProcedure(procedure, createBrowser(), { confirmationGranted: true })
     ).resolves.toMatchObject({ ok: true });
   });
 

@@ -37,6 +37,33 @@ import {
   waitForAssertion,
 } from './__tests__/mcp-server-http-test-utils';
 
+const ORCHESTRATION_TEST_SCOPES = [
+  'browser.read',
+  'browser.write',
+  'dataset.read',
+  'dataset.write',
+  'observation.read',
+  'plugin.read',
+  'plugin.write',
+  'profile.read',
+  'profile.write',
+  'session.read',
+  'session.write',
+  'system.read',
+  'plugin.execute',
+].join(',');
+
+const withOrchestrationScopes = (headers: Record<string, string> = {}): Record<string, string> => ({
+  'x-airpa-scopes': ORCHESTRATION_TEST_SCOPES,
+  ...headers,
+});
+
+const postOrchestrationInvoke = (
+  baseUrl: string,
+  body?: unknown,
+  headers?: Record<string, string>
+) => postJson(baseUrl, '/api/v1/orchestration/invoke', body, withOrchestrationScopes(headers));
+
 describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
   const originalBindAddress = HTTP_SERVER_DEFAULTS.BIND_ADDRESS;
   let server: AirpaHttpMcpServer | undefined;
@@ -226,7 +253,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const sessionId = createResponse.json.data.sessionId as string;
     expect(sessionId).toBeTruthy();
 
-    const invokeResponse = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const invokeResponse = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'browser_snapshot',
       arguments: {},
@@ -249,7 +276,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
       expect(release).toHaveBeenCalledTimes(1);
     });
 
-    const invokeAfterDelete = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const invokeAfterDelete = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'browser_snapshot',
       arguments: {},
@@ -271,9 +298,8 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const sessionId = createResponse.json.data.sessionId as string;
     const traceId = 'trace-http-contract-success';
 
-    const invokeResponse = await postJson(
+    const invokeResponse = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId,
         name: 'browser_snapshot',
@@ -310,9 +336,8 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const sessionId = createResponse.json.data.sessionId as string;
     const traceId = 'trace-http-contract-failure';
 
-    const response = await postJson(
+    const response = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId,
         name: 'browser_snapshot',
@@ -463,12 +488,12 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const invoke1 = postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const invoke1 = postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'browser_snapshot',
       arguments: {},
     });
-    const invoke2 = postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const invoke2 = postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'browser_snapshot',
       arguments: {},
@@ -504,7 +529,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const invokePromise = postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const invokePromise = postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'browser_snapshot',
       arguments: {},
@@ -565,9 +590,8 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const sessionId = createResponse.json.data.sessionId as string;
     const idemKey = 'idem-001';
 
-    const invoke1 = await postJson(
+    const invoke1 = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId,
         name: 'browser_snapshot',
@@ -579,9 +603,8 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(invoke1.json._meta.idempotencyKey).toBe(idemKey);
     expect(invoke1.json._meta.idempotencyStatus).toBe('stored');
 
-    const invoke2 = await postJson(
+    const invoke2 = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId,
         name: 'browser_snapshot',
@@ -629,9 +652,8 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const response = await postJson(
+    const response = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId,
         name: 'browser_snapshot',
@@ -697,9 +719,8 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
 
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
     const sessionId = createResponse.json.data.sessionId as string;
-    const response = await postJson(
+    const response = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId,
         name: 'browser_snapshot',
@@ -715,6 +736,68 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(response.json.success).toBe(false);
     expect(response.json.code).toBe(ErrorCode.REQUEST_FAILED);
     expect(response.json.context.reason).toBe('idempotency_request_running');
+    expect(reserve).toHaveBeenCalledTimes(1);
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(setPersisted).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 for persisted idempotency payload conflicts before executing side effects', async () => {
+    const snapshot = vi
+      .fn()
+      .mockResolvedValue(createSnapshotResult('https://example.com/conflict', 'Conflict'));
+    const persistedEntry = {
+      state: 'completed' as const,
+      requestHash: 'different-request-hash',
+      capability: 'browser_snapshot',
+      createdAt: Date.now(),
+      result: createSnapshotResult('https://example.com/old', 'Old'),
+      meta: {
+        idempotencyKey: 'persisted-conflict-key',
+      },
+    };
+    const reserve = vi.fn().mockResolvedValue({
+      status: 'exists',
+      entry: persistedEntry,
+    });
+    const getPersisted = vi.fn().mockResolvedValue(persistedEntry);
+    const setPersisted = vi.fn().mockResolvedValue(undefined);
+    const deleteNamespace = vi.fn().mockResolvedValue(undefined);
+    const pruneExpired = vi.fn().mockResolvedValue(0);
+
+    await startServer(createMockBrowser({ snapshot }), {
+      restApiConfig: {
+        orchestrationIdempotencyStore: 'duckdb',
+      },
+      dependencies: {
+        idempotencyPersistence: {
+          get: getPersisted,
+          reserve,
+          set: setPersisted,
+          deleteNamespace,
+          pruneExpired,
+        },
+      },
+    });
+
+    const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
+    const sessionId = createResponse.json.data.sessionId as string;
+    const response = await postOrchestrationInvoke(
+      baseUrl,
+      {
+        sessionId,
+        name: 'browser_snapshot',
+        arguments: { includeHtml: true },
+      },
+      {
+        'Idempotency-Key': 'persisted-conflict-key',
+        'x-airpa-idempotency-namespace': 'order-conflict',
+      }
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.json.success).toBe(false);
+    expect(response.json.code).toBe(ErrorCode.REQUEST_FAILED);
+    expect(response.json.context.reason).toBe('idempotency_conflict');
     expect(reserve).toHaveBeenCalledTimes(1);
     expect(snapshot).not.toHaveBeenCalled();
     expect(setPersisted).not.toHaveBeenCalled();
@@ -757,9 +840,8 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
       'x-airpa-idempotency-namespace': 'order-cross-session',
     };
 
-    const firstInvoke = await postJson(
+    const firstInvoke = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId: firstSessionId,
         name: 'browser_snapshot',
@@ -780,9 +862,8 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
 
     const secondCreate = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
     const secondSessionId = secondCreate.json.data.sessionId as string;
-    const replay = await postJson(
+    const replay = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId: secondSessionId,
         name: 'browser_snapshot',
@@ -812,9 +893,8 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const first = await postJson(
+    const first = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId,
         name: 'browser_snapshot',
@@ -824,13 +904,12 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     );
     expect(first.status).toBe(200);
 
-    const conflict = await postJson(
+    const conflict = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId,
         name: 'browser_snapshot',
-        arguments: { changed: true },
+        arguments: { elementsFilter: 'all' },
       },
       { 'Idempotency-Key': 'idem-conflict-001' }
     );
@@ -856,7 +935,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const invoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const invoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'browser_snapshot',
       arguments: {},
@@ -880,9 +959,8 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const response = await postJson(
+    const response = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId,
         name: 'browser_act',
@@ -893,7 +971,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
 
     expect(response.status).toBe(400);
     expect(response.json.success).toBe(false);
-    expect(response.json.code).toBe(ErrorCode.INVALID_PARAMETER);
+    expect(response.json.code).toBe(ErrorCode.VALIDATION_ERROR);
   });
 
   it('enforceOrchestrationScopes 鐎殿喒鍋撻柛姘煎灡濡炲倻绱撻崫鍕瘜 scope 閺夆晜鏌ㄥú?PERMISSION_DENIED', async () => {
@@ -973,9 +1051,8 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
     const sessionId = createResponse.json.data.sessionId as string;
 
-    const response = await postJson(
+    const response = await postOrchestrationInvoke(
       baseUrl,
-      '/api/v1/orchestration/invoke',
       {
         sessionId,
         name: 'browser_snapshot',
@@ -989,7 +1066,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     expect(response.json.data.ok).toBe(true);
     expect(response.json.data.output.structuredContent.data.url).toBe('https://example.com/scoped');
 
-    const stickyResponse = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const stickyResponse = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'browser_snapshot',
       arguments: {},
@@ -1002,12 +1079,34 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     );
   });
 
+  it('requires session_prepare scopes before MCP business tool calls by default', async () => {
+    await startServer(createMockBrowser(), { enableMcp: true });
+
+    const initialize = await initializeMcpSession(baseUrl);
+    expect(initialize.status).toBe(200);
+
+    const denied = await callMcpToolRaw(baseUrl, initialize.sessionId, 'browser_observe', {});
+    expect(denied.status).toBe(200);
+    expect(denied.json.result.isError).toBe(true);
+    expect(JSON.stringify(denied.json.result)).toContain(ErrorCode.PERMISSION_DENIED);
+
+    const prepared = await callMcpToolRaw(baseUrl, initialize.sessionId, 'session_prepare', {
+      scopes: ['browser.write'],
+    });
+    expect(prepared.status).toBe(200);
+    expect(prepared.json.result.isError).not.toBe(true);
+
+    const allowed = await callMcpToolRaw(baseUrl, initialize.sessionId, 'browser_observe', {});
+    expect(allowed.status).toBe(200);
+    expect(allowed.json.result.isError).not.toBe(true);
+  });
+
   it('returns orchestration runtime metrics', async () => {
     await startServer(createMockBrowser());
 
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
     const sessionId = createResponse.json.data.sessionId as string;
-    await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'browser_snapshot',
       arguments: {},
@@ -1070,14 +1169,14 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     const session = sessions.get(sessionId);
     session.maxQueueSize = 1;
 
-    const invoke1 = postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const invoke1 = postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'browser_snapshot',
       arguments: {},
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const invoke2 = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const invoke2 = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'browser_snapshot',
       arguments: {},
@@ -1110,7 +1209,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
       const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
       const sessionId = createResponse.json.data.sessionId as string;
 
-      const response = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+      const response = await postOrchestrationInvoke(baseUrl, {
         sessionId,
         name: 'browser_snapshot',
         arguments: {},
@@ -1137,7 +1236,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
 
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
     const sessionId = createResponse.json.data.sessionId as string;
-    const invoke = await postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const invoke = await postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'browser_snapshot',
       arguments: {},
@@ -1199,11 +1298,23 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
           },
           "scopeDecision": {
             "allowed": true,
-            "enforced": false,
-            "missingScopes": [
+            "enforced": true,
+            "missingScopes": [],
+            "providedScopes": [
               "browser.read",
+              "browser.write",
+              "dataset.read",
+              "dataset.write",
+              "observation.read",
+              "plugin.read",
+              "plugin.write",
+              "profile.read",
+              "profile.write",
+              "session.read",
+              "session.write",
+              "system.read",
+              "plugin.execute",
             ],
-            "providedScopes": [],
             "requiredScopes": [
               "browser.read",
             ],
@@ -1224,6 +1335,12 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
               },
             ],
             "attempts": 1,
+            "confirmationDecision": {
+              "argumentsHash": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "policyHash": "224d10fffb88367070f2a10b5e0278fb53fb7620be00e621d94913e261c7716c",
+              "required": false,
+              "status": "not_required",
+            },
             "idempotencyDecision": {
               "enabled": false,
               "reason": "missing_idempotency_key",
@@ -1231,11 +1348,23 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
             },
             "scopeDecision": {
               "allowed": true,
-              "enforced": false,
-              "missingScopes": [
+              "enforced": true,
+              "missingScopes": [],
+              "providedScopes": [
                 "browser.read",
+                "browser.write",
+                "dataset.read",
+                "dataset.write",
+                "observation.read",
+                "plugin.read",
+                "plugin.write",
+                "profile.read",
+                "profile.write",
+                "session.read",
+                "session.write",
+                "system.read",
+                "plugin.execute",
               ],
-              "providedScopes": [],
               "requiredScopes": [
                 "browser.read",
               ],
@@ -1363,6 +1492,10 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
     });
     mcpTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
     await mcpClient.connect(mcpTransport);
+    await mcpClient.callTool({
+      name: 'session_prepare',
+      arguments: { scopes: ['browser.write'] },
+    });
 
     const call1 = mcpClient.callTool({ name: 'browser_observe', arguments: {} });
     const call2 = mcpClient.callTool({ name: 'browser_observe', arguments: {} });
@@ -1393,7 +1526,7 @@ describe('AirpaHttpMcpServer auth and orchestration invoke', () => {
 
     const createResponse = await postJson(baseUrl, '/api/v1/orchestration/sessions', {});
     const sessionId = createResponse.json.data.sessionId as string;
-    const invokePromise = postJson(baseUrl, '/api/v1/orchestration/invoke', {
+    const invokePromise = postOrchestrationInvoke(baseUrl, {
       sessionId,
       name: 'browser_snapshot',
       arguments: {},

@@ -54,6 +54,20 @@ export {
   type BrowserWindowControlSupport,
 } from './window-control-contract';
 export {
+  ProfileSessionGateway,
+  ProfileSessionGatewayError,
+  createProfileSessionGateway,
+  type ProfileSession,
+  type ProfileSessionGatewayAcquireOptions,
+  type ProfileSessionGatewayAcquireResult,
+  type ProfileSessionGatewayErrorCode,
+  type ProfileSessionGatewayExecutionContext,
+  type ProfileSessionGatewayIntent,
+  type ProfileSessionGatewayOptions,
+  type ProfileSessionGatewayRequestOptions,
+  type ProfileSessionGatewayWithSessionOptions,
+} from './profile-session-gateway';
+export {
   STATIC_BROWSER_RUNTIME_DESCRIPTORS,
   applyRuntimeCapabilitySupport,
   browserRuntimeSupports,

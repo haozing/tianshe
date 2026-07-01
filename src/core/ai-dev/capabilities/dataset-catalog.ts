@@ -447,24 +447,6 @@ const readOptionalFolderIdArg = (
   return value;
 };
 
-const readRequiredConfirmationArg = (args: Record<string, unknown>, key: string): true => {
-  const raw = args[key];
-  if (raw !== true) {
-    throw createStructuredError(
-      ErrorCode.INVALID_PARAMETER,
-      `Parameter ${key} must be true for this high-risk dataset operation`,
-      {
-        suggestion: `Re-issue the call with ${key}: true only after verifying the dataset import source and expected side effects.`,
-        context: {
-          parameter: key,
-          expected: true,
-        },
-      }
-    );
-  }
-  return true;
-};
-
 const isAbsoluteLocalPath = (value: string): boolean =>
   value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\');
 
@@ -616,7 +598,6 @@ const datasetCreateEmptyHandler: CapabilityHandler<OrchestrationDependencies> = 
 
 const datasetImportFileHandler: CapabilityHandler<OrchestrationDependencies> = async (args, deps) => {
   const gateway = ensureDatasetGateway(deps);
-  readRequiredConfirmationArg(args, 'confirmRisk');
 
   const filePath = readExistingFileArg(args, 'filePath');
   const datasetName = readStringArg(args, 'datasetName') || '';
@@ -676,7 +657,7 @@ const datasetStageWritePlanHandler: CapabilityHandler<OrchestrationDependencies>
     },
     nextActionHints: [
       'Review the staged plan before committing.',
-      'Call dataset_commit_write_plan with confirmRisk=true only after confirming the intended row changes.',
+      'Call dataset_commit_write_plan only after confirming the intended row changes.',
     ],
     recommendedNextTools: ['dataset_commit_write_plan', 'dataset_get_record_provenance'],
     authoritativeFields: [
@@ -698,7 +679,6 @@ const datasetCommitWritePlanHandler: CapabilityHandler<OrchestrationDependencies
       'Dataset gateway does not support staged write commits'
     );
   }
-  readRequiredConfirmationArg(args, 'confirmRisk');
 
   const plan = readStagedWritePlanArg(args);
   const provenance = readProvenanceContextArg(args);
@@ -899,12 +879,11 @@ const DATASET_CAPABILITIES: Array<{
       inputSchema: {
         type: 'object',
         additionalProperties: false,
-        required: ['filePath', 'datasetName', 'confirmRisk'],
+        required: ['filePath', 'datasetName'],
         properties: {
           filePath: { type: 'string', minLength: 1 },
           datasetName: { type: 'string', minLength: 1 },
           folderId: { type: ['string', 'null'] },
-          confirmRisk: { type: 'boolean' },
         },
       },
       outputSchema: DATASET_OUTPUT_SCHEMAS.dataset_import_file,
@@ -924,7 +903,6 @@ const DATASET_CAPABILITIES: Array<{
               filePath: 'D:\\data\\orders.csv',
               datasetName: 'Orders',
               folderId: null,
-              confirmRisk: true,
             },
           },
         ],
@@ -1000,11 +978,10 @@ const DATASET_CAPABILITIES: Array<{
       inputSchema: {
         type: 'object',
         additionalProperties: false,
-        required: ['plan', 'confirmRisk'],
+        required: ['plan'],
         properties: {
           plan: createOpaqueOutputSchema(),
           provenance: DATASET_PROVENANCE_CONTEXT_SCHEMA,
-          confirmRisk: { type: 'boolean' },
         },
       },
       outputSchema: DATASET_OUTPUT_SCHEMAS.dataset_commit_write_plan,
@@ -1022,7 +999,6 @@ const DATASET_CAPABILITIES: Array<{
             title: 'Commit a reviewed write plan',
             arguments: {
               plan: { planId: 'plan-id-from-dataset_stage_write_plan' },
-              confirmRisk: true,
             },
           },
         ],

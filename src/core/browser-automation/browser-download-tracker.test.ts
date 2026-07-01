@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserDownloadTracker } from './browser-download-tracker';
 
 const tempRoots: string[] = [];
@@ -227,6 +227,64 @@ describe('BrowserDownloadTracker', () => {
     ]);
     await expect(fs.stat(path.join(targetDir, 'report.csv'))).resolves.toBeTruthy();
     await expect(fs.stat(sourcePath)).rejects.toThrow();
+  });
+
+  it('attaches a file-backed artifact ref when a completed download is observed', async () => {
+    const root = await createTempRoot();
+    const downloadDir = path.join(root, 'ruyi-downloads');
+    await fs.mkdir(downloadDir, { recursive: true });
+    const createDownloadArtifact = vi.fn(async (input) => ({
+      artifactId: `artifact-${path.basename(input.sourcePath)}`,
+      type: 'download' as const,
+      label: input.filename,
+      payload: {
+        kind: 'file' as const,
+        filename: input.filename || 'download.bin',
+        sizeBytes: 12,
+        sha256: 'a'.repeat(64),
+      },
+    }));
+
+    const tracker = new BrowserDownloadTracker(downloadDir, {
+      artifactSink: { createDownloadArtifact },
+      artifactContext: {
+        browserRuntimeId: 'firefox-bidi',
+        sessionId: 'profile-1',
+      },
+    });
+    await tracker.setBehavior({ policy: 'allow' });
+
+    const sourcePath = path.join(downloadDir, 'artifact.csv');
+    await fs.writeFile(sourcePath, 'artifact-data', 'utf8');
+
+    await waitForCondition(async () => {
+      const downloads = await tracker.listDownloads();
+      return downloads.some((entry) => entry.artifactRef?.artifactId === 'artifact-artifact.csv');
+    });
+
+    const [entry] = await tracker.listDownloads();
+    expect(entry).toMatchObject({
+      suggestedFilename: 'artifact.csv',
+      state: 'completed',
+      artifactRef: {
+        artifactId: 'artifact-artifact.csv',
+        type: 'download',
+        payload: {
+          kind: 'file',
+          filename: 'artifact.csv',
+        },
+      },
+    });
+    expect(createDownloadArtifact).toHaveBeenCalledTimes(1);
+    expect(createDownloadArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourcePath,
+        filename: 'artifact.csv',
+        browserRuntimeId: 'firefox-bidi',
+        sessionId: 'profile-1',
+        downloadId: entry.id,
+      })
+    );
   });
 
   it('waits for a lifecycle-tracked download that started before waitForDownload was called', async () => {

@@ -14,6 +14,27 @@ describe('ProfileLoginStateService', () => {
     return service;
   }
 
+  async function createProfileSnapshotTable(): Promise<void> {
+    await conn!.run(`
+      CREATE TABLE browser_profiles (
+        id VARCHAR PRIMARY KEY,
+        runtime_id VARCHAR,
+        login_state_revision INTEGER DEFAULT 0
+      )
+    `);
+  }
+
+  async function upsertProfileSnapshot(
+    profileId: string,
+    runtimeId = 'electron-webcontents',
+    revision = 0
+  ): Promise<void> {
+    await conn!.run(`
+      INSERT INTO browser_profiles (id, runtime_id, login_state_revision)
+      VALUES ('${profileId}', '${runtimeId}', ${revision})
+    `);
+  }
+
   afterEach(() => {
     conn?.closeSync();
     db?.closeSync();
@@ -58,9 +79,81 @@ describe('ProfileLoginStateService', () => {
       profileId: 'profile-1',
       site: 'example',
       loginUrl: 'https://example.test/account',
+      runtimeIdSnapshot: 'electron-webcontents',
       runtimeId: 'electron-webcontents',
+      profileRevision: 0,
       status: 'logged_in',
       verified: true,
+    });
+  });
+
+  it('stores writer role and expires states when profile revision changes', async () => {
+    const service = await openService();
+    await createProfileSnapshotTable();
+    await upsertProfileSnapshot('profile-1', 'electron-webcontents', 1);
+
+    const state = await service.upsertLoginState({
+      profileId: 'profile-1',
+      site: 'example',
+      status: 'logged_in',
+      verifiedBy: 'trusted_site_adapter_verifier',
+    });
+
+    expect(state).toMatchObject({
+      runtimeIdSnapshot: 'electron-webcontents',
+      runtimeId: 'electron-webcontents',
+      profileRevision: 1,
+      verifiedBy: 'trusted_site_adapter_verifier',
+      status: 'logged_in',
+      verified: true,
+    });
+
+    await conn!.run(`
+      UPDATE browser_profiles
+      SET login_state_revision = 2
+      WHERE id = 'profile-1'
+    `);
+
+    const expired = await service.getLoginState({
+      profileId: 'profile-1',
+      site: 'example',
+    });
+
+    expect(expired).toMatchObject({
+      id: state.id,
+      status: 'expired',
+      verified: false,
+      verifiedAt: null,
+      reason: 'profile login state expired after profile runtime or revision changed',
+    });
+  });
+
+  it('expires states when the profile runtime snapshot changes', async () => {
+    const service = await openService();
+    await createProfileSnapshotTable();
+    await upsertProfileSnapshot('profile-1', 'electron-webcontents', 0);
+
+    await service.upsertLoginState({
+      profileId: 'profile-1',
+      site: 'example',
+      status: 'logged_in',
+    });
+
+    await conn!.run(`
+      UPDATE browser_profiles
+      SET runtime_id = 'chromium-extension-relay'
+      WHERE id = 'profile-1'
+    `);
+
+    const expired = await service.getLoginState({
+      profileId: 'profile-1',
+      site: 'example',
+    });
+
+    expect(expired).toMatchObject({
+      status: 'expired',
+      verified: false,
+      reason: 'profile login state expired after profile runtime or revision changed',
     });
   });
 

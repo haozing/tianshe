@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   acquireProfileLiveSessionLease,
   attachProfileLiveSessionLease,
+  completeProfileLiveSessionHandoff,
+  requestProfileLiveSessionHandoff,
   takeoverProfileLiveSessionLease,
 } from '../profile-live-session-lease';
 import { buildProfileResourceKey, resourceCoordinator } from '../../resource-coordinator';
@@ -79,5 +81,55 @@ describe('profile live session lease helpers', () => {
     const contenderLease = await contenderPromise;
     expect(contenderResolved).toBe(true);
     await contenderLease.release();
+  });
+
+  it('requests and completes an approved profile live-session handoff', async () => {
+    const originalLease = await acquireProfileLiveSessionLease('p1', {
+      ownerToken: 'plugin-owner',
+      source: 'plugin',
+      ownerMetadata: {
+        controllerKind: 'plugin',
+        pluginId: 'plugin-a',
+        interruptibility: 'checkpoint',
+      },
+    });
+    expect(originalLease).not.toBeNull();
+
+    const request = await requestProfileLiveSessionHandoff('p1', {
+      requesterToken: 'agent-owner',
+      source: 'mcp',
+      requesterMetadata: {
+        controllerKind: 'agent',
+        interruptibility: 'checkpoint',
+      },
+      reason: 'resume automation',
+      autoApproveIfCurrentOwnerInterruptible: true,
+    });
+
+    expect(request).toMatchObject({
+      status: 'paused',
+      requesterToken: 'agent-owner',
+      ownerToken: 'plugin-owner',
+      reason: 'resume automation',
+    });
+
+    const handoffLease = await completeProfileLiveSessionHandoff(request!.id, {
+      actorToken: 'agent-owner',
+      ownerToken: 'agent-owner',
+      source: 'mcp',
+      ownerMetadata: {
+        controllerKind: 'agent',
+        interruptibility: 'checkpoint',
+      },
+    });
+
+    expect(await resourceCoordinator.getOwner(buildProfileResourceKey('p1'))).toMatchObject({
+      ownerToken: 'agent-owner',
+      ownerSource: 'mcp',
+      controllerKind: 'agent',
+    });
+
+    await originalLease!.release();
+    await handoffLease.release();
   });
 });

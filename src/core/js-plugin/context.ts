@@ -116,7 +116,7 @@ export class PluginContext {
 
   constructor(
     public readonly manifest: JSPluginManifest,
-    private readonly helpers: PluginHelpers,
+    public readonly helpers: PluginHelpers,
     private readonly duckdb: IDuckDBService,
     private readonly pluginId: string,
     dataTables: DataTableInfo[] = [] // ✅ 新增参数

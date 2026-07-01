@@ -1,6 +1,5 @@
 import type { Application } from 'express';
 import type { RestApiConfig } from '../types/http-api';
-import { HTTP_SERVER_DEFAULTS } from '../constants/http-api';
 import {
   MCP_PROTOCOL_COMPATIBILITY_MODE,
   MCP_PROTOCOL_ALLOWED_VERSIONS,
@@ -167,7 +166,7 @@ export const buildHealthPayload = ({
     mcpProtocolVersion: MCP_PROTOCOL_UNIFIED_VERSION,
     mcpSupportedProtocolVersions: [...MCP_PROTOCOL_ALLOWED_VERSIONS],
     mcpSdkSupportedProtocolVersions: [...MCP_PROTOCOL_SDK_SUPPORTED_VERSIONS],
-    enforceOrchestrationScopes: restApiConfig?.enforceOrchestrationScopes ?? false,
+    enforceOrchestrationScopes: restApiConfig?.enforceOrchestrationScopes ?? true,
     orchestrationIdempotencyStore: restApiConfig?.orchestrationIdempotencyStore ?? 'memory',
     queueDepth: runtimeMetrics.queueDepth as unknown as Record<string, unknown>,
     runtimeCounters: runtimeMetrics.counters as unknown as Record<string, unknown>,

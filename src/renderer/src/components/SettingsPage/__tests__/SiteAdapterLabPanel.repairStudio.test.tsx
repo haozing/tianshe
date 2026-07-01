@@ -18,15 +18,19 @@ function installElectronApiMock() {
       siteAdapterLab: {
         listAdapters: vi.fn().mockResolvedValue({
           success: true,
-          data: [
-            {
-              manifest: {
-                id: 'books-to-scrape',
-                fixtures: ['product-page'],
-                expected: ['product-page'],
+          data: {
+            adapters: [
+              {
+                manifest: {
+                  id: 'books-to-scrape',
+                  fixtures: ['product-page'],
+                  expected: ['product-page'],
+                },
               },
-            },
-          ],
+            ],
+            providerErrors: [],
+            generation: 1,
+          },
         }),
         loadFixture: vi.fn().mockResolvedValue({
           success: true,

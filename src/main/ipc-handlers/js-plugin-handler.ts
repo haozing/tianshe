@@ -97,6 +97,7 @@ export class JSPluginIPCHandler {
       duckdb: this.duckdb,
       buttonExecutor: this.buttonExecutor,
       ensurePluginLoaded: this.ensurePluginLoaded.bind(this),
+      viewManager: this.viewManager,
     });
     registerJSPluginViewRoutes(this.viewManager);
     registerJSPluginHotReloadRoutes(this.pluginManager);
