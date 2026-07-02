@@ -1,0 +1,422 @@
+:root {
+  color-scheme: light;
+  font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+  color: #17233d;
+  background: #eef3f9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: #eef3f9;
+}
+
+button,
+a {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.boot-screen,
+.fallback-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+}
+
+.boot-screen h1,
+.fallback-screen h1 {
+  margin: 0;
+  color: #16376f;
+  font-size: 24px;
+}
+
+.boot-screen p,
+.fallback-screen p {
+  margin: 0;
+  color: #61708a;
+}
+
+.boot-mark,
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  background: #5d91f2;
+  color: #fff;
+  font-weight: 700;
+}
+
+.fallback-screen a {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 6px;
+  border: 1px solid #5d91f2;
+  background: #5d91f2;
+  color: #fff;
+  text-decoration: none;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 244px minmax(0, 1fr);
+}
+
+.sidebar {
+  min-height: 100vh;
+  padding: 16px 12px;
+  border-right: 1px solid #dbe5f2;
+  background: #f8fbff;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 16px;
+  border-bottom: 1px solid #e4ebf5;
+}
+
+.brand strong {
+  display: block;
+  color: #17396f;
+  font-size: 16px;
+}
+
+.brand span {
+  display: block;
+  color: #7a889d;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.nav-group {
+  margin-top: 14px;
+}
+
+.nav-group h2 {
+  margin: 0 8px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #8290a4;
+}
+
+.route-button {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #263a58;
+  text-align: left;
+}
+
+.route-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-button small {
+  flex: 0 0 auto;
+  color: #8a98ad;
+}
+
+.route-button:hover,
+.route-button.active {
+  border-color: #cfe0fb;
+  background: #edf4ff;
+  color: #174b9a;
+}
+
+.main {
+  min-width: 0;
+  padding: 14px;
+}
+
+.topbar {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+  border: 1px solid #dbe5f2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.topbar strong {
+  display: block;
+  color: #17396f;
+}
+
+.topbar span {
+  display: block;
+  margin-top: 2px;
+  color: #718098;
+  font-size: 12px;
+}
+
+.top-actions,
+.panel-actions,
+.legacy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.top-actions button,
+.panel-actions button,
+.legacy-actions button,
+.panel-actions a {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid #c8d5e8;
+  border-radius: 6px;
+  background: #fff;
+  color: #17396f;
+  text-decoration: none;
+  line-height: 30px;
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.workspace,
+.panel {
+  border: 1px solid #dbe5f2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.workspace {
+  min-height: calc(100vh - 96px);
+  overflow: hidden;
+}
+
+.workspace-head {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e4ebf5;
+}
+
+.workspace-head h1 {
+  margin: 0;
+  color: #17396f;
+  font-size: 20px;
+}
+
+.workspace-head p {
+  margin: 4px 0 0;
+  color: #718098;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+}
+
+.mode-badge {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: #e9f3ef;
+  color: #157347;
+  font-size: 12px;
+}
+
+.legacy-frame {
+  display: grid;
+  grid-template-columns: minmax(260px, 420px) minmax(280px, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 22px;
+}
+
+.legacy-copy h2 {
+  margin: 0 0 10px;
+  color: #1b2b44;
+  font-size: 18px;
+}
+
+.legacy-copy p {
+  margin: 0 0 16px;
+  color: #627189;
+  line-height: 1.8;
+}
+
+.legacy-frame img {
+  width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+  border: 1px solid #e1e8f2;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.right-rail {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.panel {
+  padding: 14px;
+}
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.panel-title h2 {
+  margin: 0;
+  color: #17396f;
+  font-size: 16px;
+}
+
+.panel-title span {
+  color: #718098;
+  font-size: 12px;
+}
+
+.kv {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.kv div {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.kv dt {
+  color: #7a889d;
+  font-size: 12px;
+}
+
+.kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #24364f;
+  font-size: 12px;
+}
+
+.diagnostics-panel {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.log-list {
+  display: grid;
+  gap: 8px;
+}
+
+.log-item {
+  padding: 8px;
+  border-radius: 6px;
+  background: #f7f9fc;
+}
+
+.log-item strong,
+.log-item span {
+  display: block;
+  font-size: 12px;
+}
+
+.log-item span {
+  margin-top: 2px;
+  color: #7a889d;
+}
+
+.log-item pre {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #41516a;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+}
+
+.empty {
+  margin: 0;
+  color: #718098;
+  font-size: 13px;
+}
+
+@media (max-width: 1100px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    min-height: auto;
+    border-right: 0;
+    border-bottom: 1px solid #dbe5f2;
+  }
+
+  .content-grid,
+  .legacy-frame {
+    grid-template-columns: 1fr;
+  }
+
+  .right-rail {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .main {
+    padding: 10px;
+  }
+
+  .topbar,
+  .workspace-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .right-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .legacy-frame {
+    padding: 14px;
+  }
+}
+

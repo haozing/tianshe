@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>小尊宝入口</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+        color: #17233d;
+        background: #f4f7fb;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          linear-gradient(180deg, rgba(255,255,255,.9), rgba(244,247,251,.95)),
+          #f4f7fb;
+      }
+
+      main {
+        width: min(560px, calc(100vw - 32px));
+        padding: 28px;
+        border: 1px solid #dbe5f2;
+        border-radius: 8px;
+        background: rgba(255,255,255,.96);
+        box-shadow: 0 12px 36px rgba(40, 74, 132, .08);
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 22px;
+        line-height: 1.35;
+        color: #16376f;
+      }
+
+      p {
+        margin: 0;
+        color: #61708a;
+        font-size: 14px;
+        line-height: 1.7;
+      }
+
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+
+      .mark {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        background: #5d91f2;
+        color: #fff;
+        font-weight: 700;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 22px;
+      }
+
+      button,
+      a {
+        height: 34px;
+        padding: 0 14px;
+        border-radius: 6px;
+        border: 1px solid #c8d5e8;
+        background: #fff;
+        color: #16376f;
+        font: inherit;
+        font-size: 14px;
+        line-height: 32px;
+        text-decoration: none;
+        cursor: pointer;
+      }
+
+      button.primary {
+        border-color: #5d91f2;
+        background: #5d91f2;
+        color: #fff;
+      }
+
+      .details {
+        margin-top: 18px;
+        padding: 12px;
+        border-radius: 6px;
+        background: #f7f9fc;
+        color: #6f7f98;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="status">
+        <div class="mark">尊</div>
+        <div>
+          <h1>正在进入小尊宝</h1>
+          <p id="entry-message">正在读取入口配置，请稍候。</p>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="primary" id="retry-button" type="button">重试</button>
+        <a id="fallback-link" href="/old-entry/legacy/index.html">进入兜底页</a>
+      </div>
+      <div class="details" id="entry-details">entry version: loading</div>
+    </main>
+    <script src="./entry.js"></script>
+  </body>
+</html>
+

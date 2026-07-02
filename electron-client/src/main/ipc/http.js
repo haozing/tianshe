@@ -1,0 +1,169 @@
+const { ipcMain, session } = require("electron");
+const axios = require("axios");
+const http = require("node:http");
+const https = require("node:https");
+
+const defaultHttpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 20,
+  timeout: 15000
+});
+
+const defaultHttpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 20,
+  rejectUnauthorized: true,
+  timeout: 15000
+});
+
+const axiosInstance = axios.create({
+  httpAgent: defaultHttpAgent,
+  httpsAgent: defaultHttpsAgent,
+  timeout: 30000,
+  decompress: true
+});
+
+function getImageBase64(url) {
+  return new Promise((resolve, reject) => {
+    const protocol = url.startsWith("https") ? https : http;
+    protocol.get(url, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => resolve(Buffer.concat(chunks).toString("base64")));
+      res.on("error", reject);
+    }).on("error", reject);
+  });
+}
+
+function extractSetCookieLines(headers) {
+  if (!headers) return [];
+  const raw = headers["set-cookie"] || headers["Set-Cookie"] || headers["Set-cookie"];
+  if (!raw) return [];
+  return Array.isArray(raw) ? raw : [String(raw)];
+}
+
+function parseOneSetCookieLine(line) {
+  const parts = String(line).split(";").map((part) => part.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  const [nameValue, ...attrs] = parts;
+  const eq = nameValue.indexOf("=");
+  if (eq < 1) return null;
+
+  const cookie = {
+    name: nameValue.slice(0, eq).trim(),
+    value: nameValue.slice(eq + 1).trim(),
+    path: "/",
+    secure: false,
+    httpOnly: false
+  };
+
+  for (const attr of attrs) {
+    const idx = attr.indexOf("=");
+    const key = (idx > -1 ? attr.slice(0, idx) : attr).trim().toLowerCase();
+    const value = idx > -1 ? attr.slice(idx + 1).trim() : "";
+
+    if (key === "secure") cookie.secure = true;
+    else if (key === "httponly") cookie.httpOnly = true;
+    else if (key === "domain") cookie.domain = value.replace(/^\./, "");
+    else if (key === "path") cookie.path = value || "/";
+    else if (key === "max-age") {
+      const seconds = Number.parseInt(value, 10);
+      if (Number.isFinite(seconds)) cookie.expirationDate = Math.floor(Date.now() / 1000 + seconds);
+    } else if (key === "expires") {
+      const ms = Date.parse(value);
+      if (Number.isFinite(ms)) cookie.expirationDate = Math.floor(ms / 1000);
+    } else if (key === "samesite") {
+      const sameSite = value.toLowerCase();
+      if (sameSite === "none") cookie.sameSite = "no_restriction";
+      if (sameSite === "lax") cookie.sameSite = "lax";
+      if (sameSite === "strict") cookie.sameSite = "strict";
+    }
+  }
+
+  return cookie;
+}
+
+function cookieStoreUrl(cookie, requestUrl) {
+  let host = cookie.domain;
+  if (!host && requestUrl) {
+    try {
+      host = new URL(requestUrl).hostname;
+    } catch {
+      host = "localhost";
+    }
+  }
+  return `${cookie.secure ? "https:" : "http:"}//${host || "localhost"}${cookie.path || "/"}`;
+}
+
+async function persistSetCookieHeaders(partition, headers, requestUrl) {
+  const p = String(partition || "").trim();
+  if (!p) return;
+  const lines = extractSetCookieLines(headers);
+  if (!lines.length) return;
+
+  const ses = session.fromPartition(p);
+  for (const line of lines) {
+    const parsed = parseOneSetCookieLine(line);
+    if (!parsed) continue;
+
+    const detail = {
+      url: cookieStoreUrl(parsed, requestUrl),
+      name: parsed.name,
+      value: parsed.value,
+      path: parsed.path || "/",
+      secure: parsed.secure,
+      httpOnly: parsed.httpOnly
+    };
+    if (parsed.domain && parsed.domain.includes(".")) {
+      detail.domain = `.${parsed.domain.replace(/^\./, "")}`;
+    }
+    if (parsed.expirationDate != null) detail.expirationDate = parsed.expirationDate;
+    if (parsed.sameSite) detail.sameSite = parsed.sameSite;
+
+    try {
+      await ses.cookies.set(detail);
+    } catch (error) {
+      console.warn(`[http] Set-Cookie 写入 partition 失败 (${parsed.name}):`, error.message);
+    }
+  }
+}
+
+function registerHttpHandlers() {
+  ipcMain.handle("http", async (_event, args = {}) => {
+    const result = { data: null, error: null };
+
+    if (args.getBase64) {
+      return { data: await getImageBase64(args.url) };
+    }
+
+    const httpAgent = args.httpAgentPagrams ? new http.Agent(args.httpAgentPagrams) : defaultHttpAgent;
+    const httpsAgent = args.httpsAgentPagrams ? new https.Agent(args.httpsAgentPagrams) : defaultHttpsAgent;
+    const axiosParams = {
+      ...args.axiosParmars,
+      httpAgent,
+      httpsAgent,
+      timeout: args.axiosParamsTimeout || 30000
+    };
+
+    const requestUrl = typeof axiosParams.url === "string" ? axiosParams.url : undefined;
+
+    try {
+      const response = await axiosInstance(axiosParams);
+      result.data = response.data;
+      await persistSetCookieHeaders(args.partition, response.headers, requestUrl);
+    } catch (error) {
+      const errorInfo = { message: error.message || String(error) };
+      if (error.response) {
+        errorInfo.status = error.response.status ?? null;
+        result.data = error.response.data ?? null;
+        await persistSetCookieHeaders(args.partition, error.response.headers, requestUrl);
+      }
+      result.error = errorInfo;
+    }
+
+    return result;
+  });
+}
+
+module.exports = { registerHttpHandlers };
+

@@ -1,3 +1,9 @@
 analysis_output
 analysis_unpack
 小抖
+remote-web/artifacts/
+electron-client/node_modules/
+electron-client/.npm-cache/
+electron-client/out/
+electron-client/dist/
+electron-client/release/
