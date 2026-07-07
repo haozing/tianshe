@@ -5,47 +5,7 @@ const root = path.join(__dirname, "..");
 const preloadPath = path.join(root, "src", "preload", "index.js");
 const ipcRoot = path.join(root, "src", "main", "ipc");
 const mainPath = path.join(root, "src", "main", "index.js");
-
-const expectedClientMethods = [
-  ["get_cookies", "get_cookies"],
-  ["set_cookies", "set_cookies"],
-  ["copy_cookies", "copy_cookies"],
-  ["clear_session", "clear_session"],
-  ["http", "http"],
-  ["uploadFile", "uploadFile"],
-  ["openWindow", "openWindow"],
-  ["closeWindow", "closeWindow"],
-  ["editBrowserWindow", "editBrowserWindow"],
-  ["getBrowserWindowInfo", "getBrowserWindowInfo"],
-  ["destroyBrowserWindow", "destroyBrowserWindow"],
-  ["executeJavaScriptBrowserWindow", "executeJavaScriptBrowserWindow"],
-  ["reloadHomeUrl", "reloadHomeUrl"],
-  ["db", "db"],
-  ["_db", "_db"],
-  ["sendNotification", "send_notification"],
-  ["getMainWindowInfo", "getMainWindowInfo"],
-  ["resetMainWindow", "resetMainWindow"],
-  ["getAllBrowserWindowInfos", "getAllBrowserWindowInfos"],
-  ["getAppInfo", "app_info"],
-  ["startAutoUpdate", "startAutoUpdate"],
-  ["cleanInvalidPartitions", "cleanInvalidPartitions"],
-  ["minimizeWindow", "minimizeWindow"],
-  ["maximizeWindow", "maximizeWindow"],
-  ["isWindowMaximized", "isWindowMaximized"],
-  ["isWindowDestroyed", "isWindowDestroyed"],
-  ["getClientVersionData", "getClientVersionData"],
-  ["startEnumsPdd", "startEnumsPdd"],
-  ["cancelEnumsPdd", "cancelEnumsPdd"],
-  ["checkProcessRunning", "checkProcessRunning"],
-  ["reportClientLog", "reportClientLog"],
-  ["getCrashLogDir", "getCrashLogDir"],
-  ["cleanCrashLogs", "cleanupOldCrashLogs"],
-  ["selectDirectory", "selectDirectory"],
-  ["downloadFileToPath", "downloadFileToPath"],
-  ["cancelDownloadFileToPath", "cancelDownloadFileToPath"],
-  ["saveBufferToPath", "saveBufferToPath"],
-  ["openPathInExplorer", "openPathInExplorer"]
-];
+const { expectedClientMethods } = require("./client-contract-baseline");
 
 function read(filePath) {
   return fs.readFileSync(filePath, "utf8");
@@ -82,4 +42,3 @@ if (failures.length) {
 }
 
 console.log(`CONTRACT_OK ${expectedClientMethods.length} methods`);
-

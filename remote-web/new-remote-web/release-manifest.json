@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "releaseId": "2026.07.04.client-shell",
+  "buildTime": "2026-07-04T00:00:00+08:00",
+  "entry": {
+    "remoteWebOrigin": "NEW_REMOTE_WEB_ORIGIN_PROD"
+  },
+  "cachePolicy": {
+    "html": "no-cache",
+    "config": "no-cache",
+    "manifest": "no-cache",
+    "assets": "immutable-after-hash-build"
+  },
+  "rollback": {
+    "config": "previous validated config",
+    "resource": "previous release-manifest.json",
+    "shell": "previous client shell release"
+  },
+  "artifacts": [
+    {
+      "path": "new-remote-web/index.html",
+      "type": "remote-html",
+      "cache": "no-cache",
+      "required": true,
+      "sha256": "5e7868790f80fab35bbbd1aa94b43763053be7f8e62ccc686471b248b0d2333a"
+    },
+    {
+      "path": "new-remote-web/bridge.js",
+      "type": "remote-js",
+      "cache": "short",
+      "required": true,
+      "sha256": "95ba251bcbc510f25ca8d12d45cb3d71a6114ade724f627b28468455a5c3c7c0"
+    },
+    {
+      "path": "new-remote-web/app.js",
+      "type": "remote-js",
+      "cache": "short",
+      "required": true,
+      "sha256": "f9ede0eaea3eb0950319d942b410632c90be119db4218fe231bda4d808c48191"
+    },
+    {
+      "path": "new-remote-web/styles.css",
+      "type": "remote-css",
+      "cache": "short",
+      "required": true,
+      "sha256": "8068f0c5bcf70a6b9b6f5d425b6c199468f6e9b11d018e701b9648a7facffd63"
+    },
+    {
+      "path": "new-remote-web/assets/chihu-client-shell.png",
+      "type": "remote-asset",
+      "cache": "immutable-after-hash-build",
+      "required": true,
+      "sha256": "b427e8958c66fff52ec4f33c1076ac86dd3d73f00cfad7567fd524f7b4b41cab"
+    },
+    {
+      "path": "new-remote-web/config/chihu-config.json",
+      "type": "chihu-config",
+      "cache": "no-cache",
+      "required": true,
+      "sha256": "df78fe59f9e26ac4277ba09ee5247097bedd5b623dc50cade09d7ce3d31e7680"
+    },
+    {
+      "path": "new-remote-web/config/doudian-adapter.json",
+      "type": "doudian-adapter",
+      "cache": "no-cache",
+      "required": true,
+      "sha256": "0aa6204c5d9b9d5ae6d41973c57a857808ff20ec387076ad782fb403020d00cd"
+    },
+    {
+      "path": "new-remote-web/config/invalid-config.json",
+      "type": "chihu-config-smoke",
+      "cache": "no-cache",
+      "required": false
+    },
+    {
+      "path": "new-remote-web/config/upload-config.json",
+      "type": "chihu-config-smoke",
+      "cache": "no-cache",
+      "required": false
+    },
+    {
+      "path": "new-remote-web/release-manifest.json",
+      "type": "release-manifest",
+      "cache": "no-cache",
+      "required": true,
+      "sha256Mode": "computed-by-release-gate"
+    }
+  ],
+  "acceptance": [
+    "Electron loads /new-remote-web/ directly",
+    "No old remote entry is required",
+    "single active entry only; no secondary entry is part of the active baseline",
+    "Chihu config references this manifest",
+    "Release artifact records sha256 for every required file"
+  ]
+}

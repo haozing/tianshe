@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "environment": "staging",
+  "releaseId": "2026.07.04.client-shell",
+  "origins": {
+    "newRemoteWebOrigin": "https://__REPLACE_WITH_NEW_REMOTE_WEB_ORIGIN_STAGING__/",
+    "remoteConfigUrl": "https://__REPLACE_WITH_NEW_REMOTE_WEB_ORIGIN_STAGING__/new-remote-web/config/chihu-config.json",
+    "remoteAssetsBase": "https://__REPLACE_WITH_NEW_REMOTE_WEB_ORIGIN_STAGING__/",
+    "diagnosticsUploadUrl": "https://__REPLACE_WITH_DIAGNOSTICS_UPLOAD_URL_STAGING__/"
+  },
+  "cdn": {
+    "rules": [
+      {
+        "name": "html-config-no-cache",
+        "artifactCache": "no-cache",
+        "appliesTo": ["remote-html", "chihu-config", "chihu-config-smoke", "doudian-adapter", "release-manifest"],
+        "headers": { "cacheControl": "no-cache, no-store, must-revalidate", "maxAgeSeconds": 0 }
+      },
+      {
+        "name": "short-js-css",
+        "artifactCache": "short",
+        "appliesTo": ["remote-js", "remote-css"],
+        "headers": { "cacheControl": "public, max-age=300, must-revalidate", "maxAgeSeconds": 300 }
+      },
+      {
+        "name": "hashed-assets",
+        "artifactCache": "immutable-after-hash-build",
+        "appliesTo": ["remote-asset"],
+        "headers": { "cacheControl": "public, max-age=31536000, immutable", "maxAgeSeconds": 31536000 },
+        "requiresHashOrCoexistence": true
+      }
+    ]
+  },
+  "retention": { "minimumRetainedPackages": 2, "rollbackTtlHours": 48 }
+}

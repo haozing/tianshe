@@ -4,8 +4,18 @@ function invoke(channel) {
   return (message) => ipcRenderer.invoke(channel, message);
 }
 
+function configuredBlockedSchemes() {
+  return String(process.env.CHIHU_BLOCKED_EXTERNAL_SCHEMES || "")
+    .split(",")
+    .map((scheme) => scheme.trim().toLowerCase().replace(/:$/, ""))
+    .filter(Boolean)
+    .map((scheme) => `${scheme}:`);
+}
+
 function installSchemeBlocker() {
-  const blockedSchemes = ["bytedance:", "snssdk:", "aweme:", "sslocal:", "video:", "bitbrowser:"];
+  const blockedSchemes = configuredBlockedSchemes();
+  if (!blockedSchemes.length) return;
+
   const isBlockedScheme = (url) => {
     if (!url || typeof url !== "string") return false;
     const lower = url.toLowerCase().trim();
@@ -67,23 +77,57 @@ const client = {
   isWindowMaximized: invoke("isWindowMaximized"),
   isWindowDestroyed: invoke("isWindowDestroyed"),
   getClientVersionData: invoke("getClientVersionData"),
-  startEnumsPdd: invoke("startEnumsPdd"),
-  cancelEnumsPdd: invoke("cancelEnumsPdd"),
-  checkProcessRunning: invoke("checkProcessRunning"),
   reportClientLog: invoke("reportClientLog"),
   getCrashLogDir: invoke("getCrashLogDir"),
   cleanCrashLogs: invoke("cleanupOldCrashLogs"),
   selectDirectory: invoke("selectDirectory"),
+  selectAndParseDelimitedFile: invoke("selectAndParseDelimitedFile"),
   downloadFileToPath: invoke("downloadFileToPath"),
   cancelDownloadFileToPath: invoke("cancelDownloadFileToPath"),
   saveBufferToPath: invoke("saveBufferToPath"),
-  openPathInExplorer: invoke("openPathInExplorer")
+  openPathInExplorer: invoke("openPathInExplorer"),
+  storesList: invoke("stores:list"),
+  storesFetch: invoke("stores:fetch"),
+  storesRefreshStatus: invoke("stores:refreshStatus"),
+  storesBusinessData: invoke("stores:businessData"),
+  storesBusinessDataLatest: invoke("stores:businessDataLatest"),
+  storesFundsData: invoke("stores:fundsData"),
+  storesFundsDataLatest: invoke("stores:fundsDataLatest"),
+  storesViolationsData: invoke("stores:violationsData"),
+  storesViolationsDataLatest: invoke("stores:violationsDataLatest"),
+  storesStaleGoodsCleanup: invoke("stores:staleGoodsCleanup"),
+  storesCancel: invoke("stores:cancel"),
+  storesOpen: invoke("stores:open"),
+  storesDelete: invoke("stores:delete"),
+  storesUpdateGroup: invoke("stores:updateGroup")
 };
 
 contextBridge.exposeInMainWorld("client", client);
+contextBridge.exposeInMainWorld("chihu", {
+  stores: {
+    list: client.storesList,
+    fetch: client.storesFetch,
+    refreshStatus: client.storesRefreshStatus,
+    businessData: client.storesBusinessData,
+    businessDataLatest: client.storesBusinessDataLatest,
+    fundsData: client.storesFundsData,
+    fundsDataLatest: client.storesFundsDataLatest,
+    violationsData: client.storesViolationsData,
+    violationsDataLatest: client.storesViolationsDataLatest,
+    staleGoodsCleanup: client.storesStaleGoodsCleanup,
+    cancel: client.storesCancel,
+    open: client.storesOpen,
+    delete: client.storesDelete,
+    updateGroup: client.storesUpdateGroup
+  }
+});
 
-ipcRenderer.on("zzb-notification", (_event, args) => {
-  const customEvent = new CustomEvent(args.zzb_event_name, { detail: args });
+ipcRenderer.on("chihu-notification", (_event, args) => {
+  const customEvent = new CustomEvent(args.chihu_event_name, { detail: args });
   window.dispatchEvent(customEvent);
 });
 
+ipcRenderer.on("chihu-stores-progress", (_event, args) => {
+  const customEvent = new CustomEvent("chihu-stores-progress", { detail: args });
+  window.dispatchEvent(customEvent);
+});

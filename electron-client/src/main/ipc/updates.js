@@ -46,8 +46,8 @@ async function startAutoUpdate(context, args = {}) {
   updater.forceDevUpdateConfig = true;
   updater.autoDownload = false;
 
-  if (process.env.NODE_ENV === "development" || process.env.XZB_DEV_UPDATE_CONFIG) {
-    const configPath = process.env.XZB_DEV_UPDATE_CONFIG || path.join(__dirname, "..", "dev-update-config.json");
+  if (process.env.NODE_ENV === "development" || process.env.CHIHU_DEV_UPDATE_CONFIG) {
+    const configPath = process.env.CHIHU_DEV_UPDATE_CONFIG || path.join(__dirname, "..", "dev-update-config.json");
     if (fs.existsSync(configPath)) {
       updater.updateConfigPath = configPath;
     }

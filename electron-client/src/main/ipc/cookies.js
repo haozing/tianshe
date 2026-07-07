@@ -18,6 +18,24 @@ function normalizeCookieForSet(cookie) {
   };
 }
 
+function cookieSetKey(cookie) {
+  return `${cookie.name};${cookie.domain || ""};${cookie.path || "/"}`;
+}
+
+function uniqueCookiesForSet(cookies) {
+  const byKey = new Map();
+  for (const cookie of cookies || []) {
+    if (typeof cookie.name !== "string" || typeof cookie.value !== "string") continue;
+    const detail = normalizeCookieForSet(cookie);
+    const key = cookieSetKey(detail);
+    const existing = byKey.get(key);
+    if (!existing || (detail.secure && !existing.secure)) {
+      byKey.set(key, detail);
+    }
+  }
+  return Array.from(byKey.values()).sort((left, right) => Number(left.secure) - Number(right.secure));
+}
+
 async function setCookies(partition, cookies) {
   if (!Array.isArray(cookies)) {
     return new Error("传入的 cookies 不是数组类型");
@@ -26,9 +44,8 @@ async function setCookies(partition, cookies) {
   const targetSession = session.fromPartition(partition);
   let err = null;
   try {
-    for (const cookie of cookies) {
-      if (typeof cookie.name !== "string" || typeof cookie.value !== "string") continue;
-      await targetSession.cookies.set(normalizeCookieForSet(cookie));
+    for (const cookie of uniqueCookiesForSet(cookies)) {
+      await targetSession.cookies.set(cookie);
     }
   } catch (error) {
     err = error;
@@ -36,14 +53,28 @@ async function setCookies(partition, cookies) {
   return err;
 }
 
-async function copyCookies(oldPartition, newPartition) {
+async function copyCookies(oldPartition, newPartition, options = {}) {
   const oldSession = session.fromPartition(oldPartition);
   const newSession = session.fromPartition(newPartition);
   let err = null;
   try {
     const cookies = await oldSession.cookies.get({});
-    for (const cookie of cookies) {
-      await newSession.cookies.set(normalizeCookieForSet(cookie));
+    if (oldPartition !== newPartition && options.clearTarget !== false) {
+      await newSession.clearStorageData({
+        storages: ["cookies"]
+      });
+    }
+    for (const detail of uniqueCookiesForSet(cookies)) {
+      try {
+        await newSession.cookies.set(detail);
+      } catch (error) {
+        try {
+          await newSession.cookies.remove(detail.url, detail.name);
+          await newSession.cookies.set(detail);
+        } catch {
+          throw error;
+        }
+      }
     }
   } catch (error) {
     err = error;
@@ -99,5 +130,9 @@ function registerCookieHandlers() {
   });
 }
 
-module.exports = { registerCookieHandlers };
-
+module.exports = {
+  clearAllSessionData,
+  copyCookies,
+  registerCookieHandlers,
+  setCookies
+};

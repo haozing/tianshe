@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "version": "2026.07.03.clean-foundation-upload-smoke",
+  "configTtlSeconds": 300,
+  "entry": {
+    "newRemoteOrigin": "/new-remote-web/"
+  },
+  "shell": {
+    "mode": "foundation",
+    "enabled": true,
+    "shellVersion": "clean-foundation"
+  },
+  "features": {
+    "diagnostics": { "enabled": true },
+    "bridgeSelfCheck": { "enabled": true },
+    "storageHealth": { "enabled": true },
+    "businessSlot": { "enabled": true }
+  },
+  "assets": {
+    "shellEntry": "/new-remote-web/app.js",
+    "cssEntry": "/new-remote-web/styles.css",
+    "manifestUrl": "/new-remote-web/release-manifest.json"
+  },
+  "diagnostics": {
+    "enabled": true,
+    "sampleRate": 1,
+    "uploadUrl": "/__chihu-smoke-upload"
+  },
+  "release": {
+    "gitCommit": "local-clean-foundation",
+    "buildTime": "2026-07-03T00:00:00+08:00"
+  }
+}

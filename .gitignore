@@ -2,8 +2,13 @@ analysis_output
 analysis_unpack
 小抖
 remote-web/artifacts/
+electron-client/artifacts/
 electron-client/node_modules/
+remote-web/client-shell/node_modules/
+remote-web/client-shell/*.log
 electron-client/.npm-cache/
 electron-client/out/
 electron-client/dist/
 electron-client/release/
+archive
+docs

@@ -1,6 +1,8 @@
 const { app, screen, ipcMain } = require("electron");
 const {
+  APP_NAME,
   APP_TITLE,
+  APP_WINDOW,
   HOME_INDEX_URL,
   HOME_PRELOAD,
   ICON_PATH
@@ -24,6 +26,7 @@ function registerAppInfoHandlers() {
       systemLocale: app.getLocale(),
       version: app.getVersion(),
       name: app.getName(),
+      appName: APP_NAME,
       path: app.getAppPath(),
       userData: safeGetPath("userData"),
       temp: safeGetPath("temp"),
@@ -41,6 +44,7 @@ function registerAppInfoHandlers() {
       width,
       height,
       title: APP_TITLE,
+      windowConfig: APP_WINDOW,
       icon: ICON_PATH,
       preload: HOME_PRELOAD,
       index: HOME_INDEX_URL
@@ -49,4 +53,3 @@ function registerAppInfoHandlers() {
 }
 
 module.exports = { registerAppInfoHandlers };
-

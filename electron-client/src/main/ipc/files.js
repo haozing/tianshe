@@ -11,6 +11,82 @@ const DEFAULT_DOWNLOAD_TIMEOUT = 120000;
 const TEMP_SUFFIX = ".downloading";
 const downloadTasks = new Map();
 
+function parseDelimitedRows(text) {
+  const clean = String(text || "").replace(/^\ufeff/, "");
+  const delimiter = clean.includes("\t") ? "\t" : ",";
+  const rows = [];
+  let cell = "";
+  let row = [];
+  let quoted = false;
+  for (let index = 0; index < clean.length; index += 1) {
+    const char = clean[index];
+    const next = clean[index + 1];
+    if (char === "\"" && quoted && next === "\"") {
+      cell += "\"";
+      index += 1;
+    } else if (char === "\"") {
+      quoted = !quoted;
+    } else if (char === delimiter && !quoted) {
+      row.push(cell.trim());
+      cell = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell.trim());
+      if (row.some(Boolean)) rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+  row.push(cell.trim());
+  if (row.some(Boolean)) rows.push(row);
+  const header = (rows.shift() || []).map((item) => String(item || "").trim());
+  return rows.map((cells) => {
+    const item = {};
+    header.forEach((key, index) => {
+      if (key) item[key] = cells[index] ?? "";
+    });
+    const productId = String(
+      item["商品ID"] ||
+      item["商品id"] ||
+      item["商品 Id"] ||
+      item.productId ||
+      item.product_id ||
+      item.goods_id ||
+      ""
+    ).trim();
+    if (productId) item.productId = productId;
+    return item;
+  }).filter((item) => item.productId || Object.keys(item).length > 1);
+}
+
+function normalizeMetricRows(rows) {
+  return (Array.isArray(rows) ? rows : []).map((source) => {
+    const item = { ...source };
+    const productId = String(
+      item["商品ID"] ||
+      item["商品id"] ||
+      item["商品 Id"] ||
+      item.productId ||
+      item.product_id ||
+      item.goods_id ||
+      ""
+    ).trim();
+    if (productId) item.productId = productId;
+    return item;
+  }).filter((item) => item.productId || Object.keys(item).length > 1);
+}
+
+function parseWorkbookRows(filePath) {
+  const xlsx = require("xlsx");
+  const workbook = xlsx.readFile(filePath, { cellDates: false });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) return [];
+  const sheet = workbook.Sheets[sheetName];
+  return normalizeMetricRows(xlsx.utils.sheet_to_json(sheet, { defval: "", raw: false }));
+}
+
 function getTask(taskId) {
   const id = String(taskId || "").trim();
   if (!id) return null;
@@ -49,6 +125,13 @@ async function writeStreamToPath(stream, destPath) {
 }
 
 async function selectDirectoryDialog(event, options = {}) {
+  if (process.env.CHIHU_E2E_SMOKE === "1" && options.chihu_e2e_mock_path) {
+    return {
+      canceled: false,
+      path: String(options.chihu_e2e_mock_path),
+      e2e: true
+    };
+  }
   const win = BrowserWindow.fromWebContents(event.sender);
   const result = await dialog.showOpenDialog(win, {
     title: "选择保存目录",
@@ -57,6 +140,50 @@ async function selectDirectoryDialog(event, options = {}) {
   });
   if (result.canceled || !result.filePaths.length) return { canceled: true, path: "" };
   return { canceled: false, path: result.filePaths[0] };
+}
+
+async function selectAndParseDelimitedFile(event, options = {}) {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(win, {
+    title: options.title || "选择经营版商品列表",
+    properties: ["openFile"],
+    filters: [
+      { name: "经营版商品列表", extensions: ["csv", "tsv", "txt", "xlsx", "xls"] },
+      { name: "文本表格", extensions: ["csv", "tsv", "txt"] },
+      { name: "Excel", extensions: ["xlsx", "xls"] }
+    ],
+    ...options
+  });
+  if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true, rows: [], fileName: "", message: "已取消选择" };
+  const filePath = result.filePaths[0];
+  const fileName = path.basename(filePath);
+  const ext = path.extname(fileName).toLowerCase();
+  if (ext === ".xlsx" || ext === ".xls") {
+    const rows = parseWorkbookRows(filePath);
+    return {
+      ok: true,
+      canceled: false,
+      rows,
+      fileName,
+      filePath,
+      count: rows.length,
+      message: rows.length ? `已读取 ${rows.length} 条经营版商品指标` : "XLSX 未识别到商品指标"
+    };
+  }
+  if (![".csv", ".tsv", ".txt"].includes(ext)) {
+    return { ok: false, canceled: false, rows: [], fileName, filePath, status: "unsupported", message: "不支持的文件类型" };
+  }
+  const text = fs.readFileSync(filePath, "utf8");
+  const rows = parseDelimitedRows(text);
+  return {
+    ok: true,
+    canceled: false,
+    rows,
+    fileName,
+    filePath,
+    count: rows.length,
+    message: rows.length ? `已读取 ${rows.length} 条经营版商品指标` : "文件未识别到商品指标"
+  };
 }
 
 async function saveBufferToPath(options = {}) {
@@ -152,6 +279,13 @@ async function openPathInExplorer(options = {}) {
   if (!fs.existsSync(target)) return { isSuccess: false, message: "路径不存在" };
 
   const stat = fs.statSync(target);
+  if (process.env.CHIHU_E2E_SMOKE === "1" && options.chihu_e2e_dry_run) {
+    return {
+      isSuccess: true,
+      e2e: true,
+      targetType: stat.isDirectory() ? "directory" : "file"
+    };
+  }
   if (stat.isDirectory()) {
     const error = await shell.openPath(target);
     return error ? { isSuccess: false, message: error } : { isSuccess: true };
@@ -219,6 +353,7 @@ function base64ToFileLike(base64, fileName) {
 function registerFileHandlers() {
   registerUploadHandler();
   ipcMain.handle("selectDirectory", (event, args) => selectDirectoryDialog(event, args));
+  ipcMain.handle("selectAndParseDelimitedFile", (event, args) => selectAndParseDelimitedFile(event, args));
   ipcMain.handle("downloadFileToPath", (_event, args) => downloadFileToPath(args));
   ipcMain.handle("cancelDownloadFileToPath", (_event, args) => cancelTask(args && args.taskId));
   ipcMain.handle("saveBufferToPath", (_event, args) => saveBufferToPath(args));
@@ -226,4 +361,3 @@ function registerFileHandlers() {
 }
 
 module.exports = { registerFileHandlers };
-

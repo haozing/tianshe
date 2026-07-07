@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "version": "invalid.schema-smoke",
+  "configTtlSeconds": 300,
+  "entry": {
+    "newRemoteOrigin": "/new-remote-web/"
+  },
+  "shell": {
+    "mode": "foundation",
+    "enabled": "yes",
+    "shellVersion": "invalid"
+  },
+  "features": {
+    "diagnostics": { "enabled": true }
+  },
+  "assets": {
+    "shellEntry": "/new-remote-web/app.js",
+    "cssEntry": "/new-remote-web/styles.css",
+    "manifestUrl": "/new-remote-web/release-manifest.json"
+  },
+  "diagnostics": {
+    "enabled": true,
+    "sampleRate": 1
+  },
+  "release": {
+    "gitCommit": "invalid",
+    "buildTime": "2026-07-03T00:00:00+08:00"
+  }
+}

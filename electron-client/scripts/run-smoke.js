@@ -6,12 +6,13 @@ const os = require("node:os");
 const path = require("node:path");
 
 const root = path.join(__dirname, "..");
+const artifactsDir = path.join(root, "artifacts");
 const electronBin = require("electron");
-const scenario = process.argv[2] || process.env.XZB_E2E_SMOKE_SCENARIO || "bridge";
+const scenario = process.argv[2] || process.env.CHIHU_E2E_SMOKE_SCENARIO || "bridge";
 
-const binaryBody = "xzb-http-smoke-binary";
-const fileDownloadBody = "xzb-file-smoke-download";
-const uploadExpectedText = "xzb-file-upload-payload";
+const binaryBody = "chihu-http-smoke-binary";
+const fileDownloadBody = "chihu-file-smoke-download";
+const uploadExpectedText = "chihu-file-upload-payload";
 
 function sendJson(res, status, payload, headers = {}) {
   res.writeHead(status, {
@@ -63,7 +64,7 @@ async function createHttpSmokeServer() {
       }
 
       if (url.pathname === "/set-cookie") {
-        const name = url.searchParams.get("name") || "xzb_http_smoke";
+        const name = url.searchParams.get("name") || "chihu_http_smoke";
         const value = url.searchParams.get("value") || "ok";
         sendJson(res, 200, {
           ok: true,
@@ -72,7 +73,7 @@ async function createHttpSmokeServer() {
         }, {
           "Set-Cookie": [
             `${name}=${value}; Path=/; Max-Age=3600; HttpOnly`,
-            "xzb_http_smoke_extra=extra; Path=/; Max-Age=3600"
+            "chihu_http_smoke_extra=extra; Path=/; Max-Age=3600"
           ]
         });
         return;
@@ -151,6 +152,32 @@ async function createHttpSmokeServer() {
         return;
       }
 
+      if (url.pathname === "/write-file") {
+        const target = url.searchParams.get("path") || "";
+        const text = url.searchParams.get("text") || "";
+        try {
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.writeFileSync(target, text, "utf8");
+          sendJson(res, 200, { ok: true });
+        } catch (error) {
+          sendJson(res, 500, { ok: false, message: error.message });
+        }
+        return;
+      }
+
+      if (url.pathname === "/list-dir") {
+        const target = url.searchParams.get("path") || "";
+        try {
+          sendJson(res, 200, {
+            ok: true,
+            entries: fs.readdirSync(target)
+          });
+        } catch (error) {
+          sendJson(res, 404, { ok: false, entries: [], message: error.message });
+        }
+        return;
+      }
+
       sendJson(res, 404, { ok: false, code: "not_found" });
     } catch (error) {
       sendJson(res, 500, { ok: false, message: error.message });
@@ -167,22 +194,39 @@ async function createHttpSmokeServer() {
   };
 }
 
+function writeSmokeArtifact(result) {
+  fs.mkdirSync(artifactsDir, { recursive: true });
+  const outputPath = path.join(artifactsDir, `smoke-${scenario}.json`);
+  const report = {
+    generatedAt: new Date().toISOString(),
+    scenario,
+    ok: result && result.ok === true,
+    result,
+    redaction: {
+      cookieValuesIncluded: false,
+      tokenValuesIncluded: false,
+      responseBodiesIncluded: false
+    }
+  };
+  fs.writeFileSync(outputPath, JSON.stringify(report, null, 2), "utf8");
+}
+
 async function main() {
-  const httpSmoke = ["http", "files"].includes(scenario) ? await createHttpSmokeServer() : null;
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), `xzb-electron-smoke-${scenario}-`));
+  const httpSmoke = ["http", "files", "logs", "ui-contract", "maintenance"].includes(scenario) ? await createHttpSmokeServer() : null;
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), `chihu-electron-smoke-${scenario}-`));
   const env = {
     ...process.env,
-    XZB_E2E_SMOKE: "1",
-    XZB_E2E_SMOKE_SCENARIO: scenario,
-    XZB_USER_DATA_DIR: userDataDir,
-    XZB_HOME_URL: process.env.XZB_HOME_URL || "http://127.0.0.1:4173/old-entry/"
+    CHIHU_E2E_SMOKE: "1",
+    CHIHU_E2E_SMOKE_SCENARIO: scenario,
+    CHIHU_USER_DATA_DIR: userDataDir,
+    CHIHU_HOME_URL: process.env.CHIHU_HOME_URL || process.env.CHIHU_REMOTE_WEB_URL || "http://chihu-remote.localhost:4173/new-remote-web/"
   };
 
   if (httpSmoke) {
-    env.XZB_E2E_HTTP_BASE_URL = httpSmoke.baseUrl;
-    env.XZB_E2E_HTTP_EXPECTED_BASE64 = httpSmoke.expectedBase64;
-    env.XZB_E2E_FILE_DOWNLOAD_BODY = fileDownloadBody;
-    env.XZB_E2E_UPLOAD_TEXT = uploadExpectedText;
+    env.CHIHU_E2E_HTTP_BASE_URL = httpSmoke.baseUrl;
+    env.CHIHU_E2E_HTTP_EXPECTED_BASE64 = httpSmoke.expectedBase64;
+    env.CHIHU_E2E_FILE_DOWNLOAD_BODY = fileDownloadBody;
+    env.CHIHU_E2E_UPLOAD_TEXT = uploadExpectedText;
   }
 
   delete env.ELECTRON_RUN_AS_NODE;
@@ -227,6 +271,7 @@ async function main() {
       }
 
       const result = JSON.parse(match[1]);
+      writeSmokeArtifact(result);
       if (!result.ok) {
         console.error(`ELECTRON_SMOKE_FAIL scenario=${scenario}`);
         cleanup();

@@ -4,29 +4,36 @@ const { app } = require("electron");
 const ROOT = path.resolve(__dirname, "../..");
 const SRC_ROOT = path.join(ROOT, "src");
 
-const APP_TITLE = `小尊宝工具箱 V${app.getVersion()}`;
-const DEFAULT_PARTITION = "persist:myappzzbtool";
+const APP_NAME = "赤狐管家";
+const APP_TITLE = `${APP_NAME} V${app.getVersion()}`;
+const DEFAULT_PARTITION = "persist:chihu-default";
+const APP_WINDOW = {
+  defaultWidth: Number(process.env.CHIHU_WINDOW_WIDTH || 1480),
+  defaultHeight: Number(process.env.CHIHU_WINDOW_HEIGHT || 920),
+  minWidth: Number(process.env.CHIHU_WINDOW_MIN_WIDTH || 1480),
+  minHeight: Number(process.env.CHIHU_WINDOW_MIN_HEIGHT || 920),
+  resizable: process.env.CHIHU_WINDOW_RESIZABLE === "0" ? false : true
+};
 
-const LOCAL_OLD_ENTRY_URL = "http://127.0.0.1:4173/old-entry/";
-const LEGACY_REMOTE_ENTRY_URL = "https://apptool.zzbtool.com";
+const LOCAL_REMOTE_WEB_URL = "http://127.0.0.1:4173/new-remote-web/";
 
 const HOME_INDEX_URL =
-  process.env.XZB_HOME_URL ||
-  process.env.OLD_REMOTE_ENTRY ||
-  (process.env.XZB_USE_LOCAL_REMOTE === "0" ? LEGACY_REMOTE_ENTRY_URL : LOCAL_OLD_ENTRY_URL);
+  process.env.CHIHU_HOME_URL ||
+  process.env.CHIHU_REMOTE_WEB_URL ||
+  LOCAL_REMOTE_WEB_URL;
 
 const HOME_PRELOAD = path.join(SRC_ROOT, "preload", "index.js");
-const ICON_PATH = path.join(ROOT, "assets", "icon.png");
+const ICON_PATH = path.join(ROOT, "assets", "icon-chihu.png");
 
 module.exports = {
   ROOT,
   SRC_ROOT,
+  APP_NAME,
   APP_TITLE,
+  APP_WINDOW,
   DEFAULT_PARTITION,
   HOME_INDEX_URL,
   HOME_PRELOAD,
   ICON_PATH,
-  LEGACY_REMOTE_ENTRY_URL,
-  LOCAL_OLD_ENTRY_URL
+  LOCAL_REMOTE_WEB_URL
 };
-

@@ -1,4 +1,12 @@
-const BLOCKED_SCHEMES = ["bytedance:", "snssdk:", "bitbrowser:", "aweme:", "sslocal:", "video:"];
+function configuredBlockedSchemes() {
+  return String(process.env.CHIHU_BLOCKED_EXTERNAL_SCHEMES || "")
+    .split(",")
+    .map((scheme) => scheme.trim().toLowerCase().replace(/:$/, ""))
+    .filter(Boolean)
+    .map((scheme) => `${scheme}:`);
+}
+
+const BLOCKED_SCHEMES = configuredBlockedSchemes();
 
 function isBlockedScheme(url) {
   if (!url || typeof url !== "string") return false;
@@ -14,6 +22,8 @@ function isBlockedScheme(url) {
 }
 
 function installSchemeBlocker(app, protocol) {
+  if (!BLOCKED_SCHEMES.length) return;
+
   protocol.registerSchemesAsPrivileged(
     BLOCKED_SCHEMES.map((scheme) => ({
       scheme: scheme.replace(":", ""),
@@ -62,4 +72,3 @@ module.exports = {
   isBlockedScheme,
   installSchemeBlocker
 };
-

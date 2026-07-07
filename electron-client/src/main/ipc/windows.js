@@ -2,17 +2,19 @@ const { app, BrowserWindow, ipcMain, session, screen } = require("electron");
 const { APP_TITLE, HOME_PRELOAD, ICON_PATH } = require("../config");
 const { addDevShortcuts } = require("../utils/dev-shortcuts");
 
+const ENABLE_GPU = process.env.CHIHU_ENABLE_GPU === "1";
+
 function registerWindowHandlers() {
   ipcMain.handle("openWindow", async (_event, args = {}) => {
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.workAreaSize;
-    const fallbackWidth = Math.round(width * 0.8);
-    const fallbackHeight = Math.round(height * 0.8);
+    const defaultWidth = Math.round(width * 0.8);
+    const defaultHeight = Math.round(height * 0.8);
 
     const preload = args.preload || HOME_PRELOAD;
     let params = {
-      width: args.width || fallbackWidth,
-      height: args.height || fallbackHeight,
+      width: args.width || defaultWidth,
+      height: args.height || defaultHeight,
       show: !args.isNotShow,
       fullscreen: args.fullscreen,
       frame: args.frame !== undefined ? args.frame : true,
@@ -41,7 +43,7 @@ function registerWindowHandlers() {
         devTools: args.devTools || false,
         webviewTag: args.webviewTag || false,
         enableBlinkFeatures: args.enableBlinkFeatures || "",
-        hardwareAcceleration: args.hardwareAcceleration !== undefined ? args.hardwareAcceleration : true,
+        hardwareAcceleration: args.hardwareAcceleration !== undefined ? args.hardwareAcceleration : ENABLE_GPU,
         sandbox: args.sandbox || false
       }
     };
@@ -178,4 +180,3 @@ function setupRequestInterceptor(win, info = {}) {
 }
 
 module.exports = { registerWindowHandlers };
-
