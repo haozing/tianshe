@@ -13,6 +13,7 @@ import type {
 import { repositoryDelete, repositoryGetAll, repositoryPut } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
+import { requireChihuNative } from "../../native/client";
 
 interface StaleGoodsArgs {
   doudianAdapter?: DoudianAdapterPayload;
@@ -643,6 +644,65 @@ function readTotal(payload: unknown, adapter: DoudianAdapterConfig) {
   return total !== undefined ? total : 0;
 }
 
+function responseCode(response: RequestPlanResult | undefined) {
+  return firstPathValue(response?.data, ["code", "st", "status_code", "statusCode", "errno"]);
+}
+
+function responseMessage(response: RequestPlanResult | undefined) {
+  return text(firstPathValue(response?.data, ["msg", "message", "status_msg", "statusMessage"]) || response?.error || "").slice(0, 160);
+}
+
+function summarizeResponses(responses: Record<string, RequestPlanResult>, adapter: DoudianAdapterConfig) {
+  return Object.fromEntries(Object.entries(responses).map(([key, response]) => {
+    const planKey = key.split(":page:")[0] || key;
+    return [key, {
+      status: response.status || 0,
+      success: requestPlanResponseOk(response, adapter, planKey, mappings(adapter)),
+      code: responseCode(response) ?? null,
+      message: responseMessage(response)
+    }];
+  }));
+}
+
+async function reportStaleGoodsRow(args: {
+  store: DoudianStoreSummary;
+  row: DoudianStaleGoodsRow;
+  detail: DoudianRunDetail;
+  products: DoudianStaleGoodsCandidate[];
+  candidates: DoudianStaleGoodsCandidate[];
+  responses: Record<string, RequestPlanResult>;
+  adapter: DoudianAdapterConfig;
+}) {
+  try {
+    const responseSummary = summarizeResponses(args.responses, args.adapter);
+    await requireChihuNative().logs.report({
+      category: "doudian-stale-goods",
+      event: "row",
+      shopId: args.store.shopId,
+      shopName: args.store.shopName,
+      partition: args.store.partition,
+      ok: args.detail.ok === true,
+      status: args.detail.status || "",
+      reason: args.detail.reason || "",
+      message: args.detail.message || "",
+      metrics: {
+        productCount: args.products.length,
+        candidateCount: args.candidates.length,
+        remoteTotal: args.row.totalProducts,
+        highRiskCount: args.row.highRiskCount,
+        offlineCount: args.row.offlineCount,
+        recycleCount: args.row.recycleCount,
+        deleteCount: args.row.deleteCount,
+        optimizeCount: args.row.optimizeCount
+      },
+      sourceHealth: objectRecord(args.detail.diagnostic).sourceHealth || [],
+      responses: responseSummary
+    }).catch(() => undefined);
+  } catch {
+    // Diagnostics must never block syncing.
+  }
+}
+
 async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, planKeys: string[], args: StaleGoodsArgs, runId: string, rules: DoudianStaleGoodsRules) {
   const collected = await collectProducts(payload, store, planKeys, args);
   const compass = compassByProductId(args.compassRows || []);
@@ -669,6 +729,15 @@ async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSumm
       sourceHealth: collected.sourceHealth
     }
   };
+  await reportStaleGoodsRow({
+    store,
+    row,
+    detail,
+    products,
+    candidates,
+    responses: collected.responses,
+    adapter: payload.adapter
+  });
   return { row, products, candidates, detail, sourceHealth: collected.sourceHealth };
 }
 

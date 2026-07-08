@@ -36,6 +36,10 @@ function uniqueCookiesForSet(cookies) {
   return Array.from(byKey.values()).sort((left, right) => Number(left.secure) - Number(right.secure));
 }
 
+function optionSet(value) {
+  return new Set((Array.isArray(value) ? value : []).map((item) => String(item || "").trim()).filter(Boolean));
+}
+
 async function setCookies(partition, cookies) {
   if (!Array.isArray(cookies)) {
     return new Error("传入的 cookies 不是数组类型");
@@ -59,12 +63,14 @@ async function copyCookies(oldPartition, newPartition, options = {}) {
   let err = null;
   try {
     const cookies = await oldSession.cookies.get({});
+    const excludeNames = optionSet(options.excludeNames || options.excludeCookieNames);
     if (oldPartition !== newPartition && options.clearTarget !== false) {
       await newSession.clearStorageData({
         storages: ["cookies"]
       });
     }
     for (const detail of uniqueCookiesForSet(cookies)) {
+      if (excludeNames.has(detail.name)) continue;
       try {
         await newSession.cookies.set(detail);
       } catch (error) {
@@ -80,6 +86,35 @@ async function copyCookies(oldPartition, newPartition, options = {}) {
     err = error;
   }
   return err;
+}
+
+async function removeCookies(partition, args = {}) {
+  const currentSession = session.fromPartition(partition);
+  const names = optionSet([
+    ...(Array.isArray(args.names) ? args.names : []),
+    args.name
+  ]);
+  const query = {};
+  if (typeof args.url === "string" && args.url.trim()) {
+    query.url = args.url.trim();
+  } else if (typeof args.domain === "string" && args.domain.trim()) {
+    query.domain = args.domain.trim();
+  }
+
+  let err = null;
+  let removed = 0;
+  try {
+    const cookies = await currentSession.cookies.get(query);
+    for (const cookie of cookies) {
+      if (names.size && !names.has(cookie.name)) continue;
+      const detail = normalizeCookieForSet(cookie);
+      await currentSession.cookies.remove(detail.url, cookie.name);
+      removed += 1;
+    }
+  } catch (error) {
+    err = error;
+  }
+  return { err, removed };
 }
 
 async function clearAllSessionData(partition) {
@@ -175,6 +210,11 @@ function registerCookieHandlers() {
     return { ok: !err, err };
   });
 
+  ipcMain.handle("native:cookies:remove", async (_event, args = {}) => {
+    const result = await removeCookies(args.partition, args);
+    return { ok: !result.err, ...result };
+  });
+
   ipcMain.handle("native:cookies:getHeader", async (_event, args = {}) => {
     return getCookieHeader(args);
   });
@@ -189,6 +229,7 @@ module.exports = {
   clearAllSessionData,
   copyCookies,
   getCookieHeader,
+  removeCookies,
   registerCookieHandlers,
   setCookies
 };

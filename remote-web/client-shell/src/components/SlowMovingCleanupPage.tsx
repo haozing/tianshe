@@ -1916,7 +1916,7 @@ export function SlowMovingCleanupPage() {
 
           <div className="flex items-center justify-between gap-3 border-t border-[#edf1f6] px-4 text-[12px] text-[#667085]">
             <span className="min-w-0 truncate">
-              共 {filteredCandidates.length} 个商品，最近计算 {lastScanAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}，适配器 {adapterVersion}
+              共 {filteredCandidates.length} 个商品，最近计算 {lastScanAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}
             </span>
             <span className="inline-flex items-center gap-2">
               <Archive className="size-[14px]" strokeWidth={2} />

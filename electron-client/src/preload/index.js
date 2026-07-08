@@ -108,6 +108,7 @@ const chihuNative = {
     get: invoke("native:cookies:get"),
     set: invoke("native:cookies:set"),
     copy: invoke("native:cookies:copy"),
+    remove: invoke("native:cookies:remove"),
     getHeader: invoke("native:cookies:getHeader"),
     clear: invoke("native:cookies:clear")
   },

@@ -1,11 +1,18 @@
 import {
   BarChart3,
   Building2,
+  ChevronRight,
   CircleDollarSign,
   Crown,
+  CreditCard,
+  FileClock,
+  LogOut,
+  Mail,
   Maximize2,
   Megaphone,
   Minus,
+  RefreshCcw,
+  Settings,
   ShieldAlert,
   ShoppingBag,
   Trash2,
@@ -65,13 +72,91 @@ function activeSecondaryRoute(route: string, routes: SecondaryRoute[]) {
     .find((item) => isActiveRoute(route, item.route))?.route || routes[0]?.route || "";
 }
 
+function ProfileMenu({ workspace }: { workspace: WorkspaceState }) {
+  const userName = workspace.operator || "hhhhh123";
+  const avatarText = userName.trim().slice(0, 1).toLowerCase() || "h";
+  const phone = workspace.phone || "18906311658";
+  const points = workspace.points || "0.1";
+  const computePower = workspace.computePower || "8.00";
+
+  const menuItems = [
+    { label: "卡密兑换", Icon: CreditCard, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} /> },
+    { label: "消耗日志", Icon: FileClock, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} /> },
+    { label: "更新说明", Icon: Mail, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} /> },
+    { label: "检查更新", Icon: RefreshCcw, suffix: <span className="ml-auto text-[12px] text-[#98a2b3]">暂无版本更新</span> }
+  ];
+
+  return (
+    <div className="group relative">
+      <button className="inline-flex h-8 items-center gap-2 px-2 font-medium text-[#101828]" type="button">
+        <span className="grid size-5 place-items-center rounded-full bg-brand-navy text-[12px] font-bold text-white">{avatarText}</span>
+        <span>{userName}</span>
+      </button>
+
+      <div className="pointer-events-none absolute right-0 top-[30px] z-50 w-[250px] translate-y-1 opacity-0 transition duration-150 group-focus-within:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100">
+        <div className="mt-2 overflow-hidden rounded-md border border-[#e4eaf3] bg-white text-[#344054] shadow-[0_18px_42px_rgba(15,23,42,0.18)]">
+          <div className="px-5 pb-3 pt-5">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="grid size-[46px] shrink-0 place-items-center rounded-full bg-[#3d43e9] text-[17px] font-semibold text-white">{avatarText}</span>
+              <div className="min-w-0">
+                <div className="truncate text-[15px] font-semibold leading-5 text-[#1d2939]">{userName}</div>
+                <div className="mt-1 truncate text-[12px] text-[#98a2b3]">手机号： {phone}</div>
+              </div>
+            </div>
+
+            <div className="mt-5 grid grid-cols-[1fr_1px_1fr] items-center">
+              <div className="text-center">
+                <div className="text-[19px] font-bold leading-6 text-[#3346e8]">{points}</div>
+                <div className="mt-1 text-[12px] text-[#344054]">积分</div>
+              </div>
+              <span className="h-4 bg-[#d8dee8]" />
+              <div className="text-center">
+                <div className="text-[19px] font-bold leading-6 text-[#3346e8]">{computePower}</div>
+                <div className="mt-1 text-[12px] text-[#344054]">算力</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="px-3 pb-2">
+            {menuItems.map((item, index) => {
+              const Icon = item.Icon;
+              return (
+                <div key={item.label}>
+                  {index === 2 ? <div className="my-1 h-px bg-[#edf1f6]" /> : null}
+                  <button className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] font-medium text-[#475467] transition-colors hover:bg-[#f6f8fc] hover:text-brand-navy" type="button">
+                    <Icon className="size-[16px] shrink-0 text-[#52627a]" strokeWidth={1.9} />
+                    <span>{item.label}</span>
+                    <span className="ml-auto inline-flex items-center">{item.suffix}</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="grid h-11 grid-cols-[1fr_1px_1fr] items-center border-t border-[#edf1f6]">
+            <button className="inline-flex h-full items-center justify-center gap-1.5 text-[13px] font-medium text-[#3346e8] transition-colors hover:bg-[#f6f8fc]" type="button">
+              <Settings className="size-[15px]" strokeWidth={1.9} />
+              <span>设置</span>
+            </button>
+            <span className="h-4 bg-[#d8dee8]" />
+            <button className="inline-flex h-full items-center justify-center gap-1.5 text-[13px] font-medium text-[#f04438] transition-colors hover:bg-[#fff1f0]" type="button">
+              <LogOut className="size-[15px]" strokeWidth={1.9} />
+              <span>退出登录</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ShellHeader({ route, workspace }: { route: string; workspace: WorkspaceState }) {
   const activeTopRoute = topRoutes.find((item) => isActiveRoute(route, item.route)) || topRoutes[0];
   const secondaryRoutes = activeTopRoute.subRoutes;
   const subActive = activeSecondaryRoute(route, secondaryRoutes);
 
   return (
-    <header className="app-drag-region grid grid-cols-[214px_minmax(0,1fr)] border-b border-brand-line bg-[#fbfcff]/95 shadow-[0_10px_28px_rgba(15,23,42,0.045)] backdrop-blur max-[860px]:grid-cols-1">
+    <header className="app-drag-region relative z-[45] grid grid-cols-[214px_minmax(0,1fr)] overflow-visible border-b border-brand-line bg-[#fbfcff]/95 shadow-[0_10px_28px_rgba(15,23,42,0.045)] backdrop-blur max-[860px]:grid-cols-1">
       <aside className="row-span-2 flex min-h-[84px] items-center gap-3 border-r border-[#e6ebf3] px-5 max-[860px]:row-span-1 max-[860px]:min-h-[60px] max-[860px]:border-r-0 max-[860px]:border-b">
         <img
           alt="赤狐管家"
@@ -101,10 +186,7 @@ export function ShellHeader({ route, workspace }: { route: string; workspace: Wo
         </nav>
 
         <div className="app-no-drag flex shrink-0 items-center gap-2.5 px-4 text-[13px] text-[#475467]">
-          <button className="inline-flex h-8 items-center gap-2 px-2 font-medium text-[#101828]" type="button">
-            <span className="grid size-5 place-items-center rounded-full bg-brand-navy text-[12px] font-bold text-white">h</span>
-            <span>{workspace.operator}</span>
-          </button>
+          <ProfileMenu workspace={workspace} />
           <button className="inline-flex h-7 items-center gap-1.5 px-2 text-[12px] font-bold text-[#a45b00] transition-colors hover:text-[#8a4b00]" type="button">
             <Crown className="size-[14px]" strokeWidth={2} />
             <span>点击购买</span>

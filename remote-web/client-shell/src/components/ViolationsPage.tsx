@@ -459,7 +459,7 @@ function sameDate(value: string, date: Date) {
 function recordInPreset(record: ViolationRecord, preset: typeof datePresets[number]) {
   if (preset === "全部") return true;
   const due = toDate(record.dueAt).getTime();
-  if (!Number.isFinite(due)) return false;
+  if (!Number.isFinite(due)) return true;
   const now = Date.now();
   if (preset === "今天") return sameDate(record.dueAt, new Date());
   const days = preset === "近7天" ? 7 : 30;
@@ -778,6 +778,23 @@ export function ViolationsPage() {
       return row ? rowFromRemote(row, store, detailById.get(store.id)) : zeroViolationRow(store);
     });
     const nextRecords = (result.records || []).map(recordFromRemote);
+    window.chihuNative?.logs?.report({
+      category: "doudian-violations-page",
+      event: "apply-result",
+      ok: result.ok,
+      status: result.status,
+      message: result.message || "",
+      baseStoreCount: baseStores.length,
+      resultRowCount: result.rows?.length || 0,
+      resultRecordCount: result.records?.length || 0,
+      visibleRowCount: nextRows.length,
+      visibleRecordCount: nextRecords.length,
+      totalRecords: nextRows.reduce((sum, row) => sum + Number(row.totalRecords || 0), 0),
+      selectedCount: selectedIds.size,
+      datePreset,
+      severityFilter,
+      processFilter
+    }).catch(() => undefined);
     setStoreRows(nextRows);
     setRecords(nextRecords);
     setViolationDetails(details as DoudianRunDetail[]);
@@ -985,9 +1002,11 @@ export function ViolationsPage() {
 
   const selectedStores = stores.filter((store) => selectedIds.has(store.id));
   const rows = useMemo(() => {
-    if (records.length) return rowsFromRecords(selectedStores, sortedRecords);
     const rowById = new Map(storeRows.map((row) => [row.shopId, row]));
-    return selectedStores.map((store) => rowById.get(store.id) || zeroViolationRow(store));
+    const remoteRows = selectedStores.map((store) => rowById.get(store.id)).filter(Boolean) as ViolationRow[];
+    if (remoteRows.length) return selectedStores.map((store) => rowById.get(store.id) || zeroViolationRow(store));
+    if (records.length) return rowsFromRecords(selectedStores, sortedRecords);
+    return selectedStores.map(zeroViolationRow);
   }, [records.length, selectedStores, sortedRecords, storeRows]);
   const totals = aggregateRows(rows);
   const tableMinWidth = Math.max(980, 260 + visibleColumns.length * 112);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   BarChart3,
@@ -495,6 +495,7 @@ export function BusinessDataPage() {
   const [columnPanelOpen, setColumnPanelOpen] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [adapterVersion, setAdapterVersion] = useState("");
+  const businessRequestSeq = useRef(0);
 
   async function refreshStores() {
     if (!nativeBridge) {
@@ -534,6 +535,8 @@ export function BusinessDataPage() {
   }
 
   async function refreshBusinessData(ids = selectedIds) {
+    const requestSeq = businessRequestSeq.current + 1;
+    businessRequestSeq.current = requestSeq;
     if (!nativeBridge) {
       setBusinessState("error");
       setBusinessMessage("本地经营数据桥接不可用");
@@ -541,6 +544,7 @@ export function BusinessDataPage() {
     }
     const shopIds = [...ids];
     if (!shopIds.length) {
+      if (requestSeq !== businessRequestSeq.current) return;
       setBusinessRows(stores.map(zeroBusinessRow));
       setBusinessDetails([]);
       setBusinessState("ready");
@@ -556,6 +560,7 @@ export function BusinessDataPage() {
         datePreset,
         forceAdapter: true
       });
+      if (requestSeq !== businessRequestSeq.current) return;
       const detailList = Array.isArray(result.details) ? result.details : [];
       const detailById = new Map(detailList.map((detail) => [String(detail.shopId || ""), detail]));
       const storeById = new Map(stores.map((store) => [store.id, store]));
@@ -575,16 +580,20 @@ export function BusinessDataPage() {
       setBusinessState(result.ok || result.status === "partial" ? "ready" : "error");
       setLastSyncAt(new Date());
     } catch (error) {
+      if (requestSeq !== businessRequestSeq.current) return;
       setBusinessState("error");
       setBusinessMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      setSyncing(false);
-      setBusinessProgress("");
+      if (requestSeq === businessRequestSeq.current) {
+        setSyncing(false);
+        setBusinessProgress("");
+      }
     }
   }
 
   async function hydrateLatestBusinessData(ids = selectedIds) {
     if (!nativeBridge || !stores.length || !ids.size) return;
+    const requestSeq = businessRequestSeq.current;
     try {
       const result = await fetchDoudianBusinessDataLatest({
         shopIds: [...ids],
@@ -592,6 +601,7 @@ export function BusinessDataPage() {
         forceAdapter: true
       });
       if (!result.rows?.length) return;
+      if (requestSeq !== businessRequestSeq.current) return;
       const detailList = Array.isArray(result.details) ? result.details : [];
       const detailById = new Map(detailList.map((detail) => [String(detail.shopId || ""), detail]));
       const rowById = new Map(result.rows.map((row) => [String(row.shopId), row]));

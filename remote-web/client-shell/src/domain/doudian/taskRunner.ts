@@ -38,12 +38,13 @@ function installProgressForwarder(channel: BroadcastChannel) {
 
 function startTask(channel: BroadcastChannel, message: Extract<DoudianTaskMessage, { type: "task:start" }>) {
   const operationId = message.operation.operationId;
-  if (runningTasks.has(operationId)) return;
+  if (runningTasks.has(operationId)) return true;
   if (message.task.taskType === "mockLongTask") {
     runMockLongTask(channel, operationId, message.task);
   } else {
     void runDomainTask(channel, operationId, message.task);
   }
+  return true;
 }
 
 function runMockLongTask(channel: BroadcastChannel, operationId: string, task: DoudianTaskRequest) {
@@ -135,24 +136,31 @@ async function runDomainTask(channel: BroadcastChannel, operationId: string, tas
 export function installDoudianTaskRunner() {
   const channel = createTaskChannel();
   const removeProgressForwarder = installProgressForwarder(channel);
+  const runnerTaskId = new URLSearchParams(location.search).get("taskId") || "";
+  const isTargetTask = (operationId: string) => !runnerTaskId || operationId === runnerTaskId;
   const runnerWindow = window as typeof window & {
-    __chihuDoudianTaskStart?: (message: DoudianTaskMessage) => void;
-    __chihuDoudianTaskCancel?: (operationId: string) => void;
+    __chihuDoudianTaskStart?: (message: DoudianTaskMessage) => boolean;
+    __chihuDoudianTaskCancel?: (operationId: string) => boolean;
   };
   runnerWindow.__chihuDoudianTaskStart = (message) => {
-    if (message?.type === "task:start") startTask(channel, message);
+    if (message?.type !== "task:start") return false;
+    const operationId = message.operation.operationId;
+    if (!isTargetTask(operationId)) return false;
+    return startTask(channel, message);
   };
   runnerWindow.__chihuDoudianTaskCancel = (operationId) => {
+    if (!isTargetTask(operationId)) return false;
     cancelTask(operationId);
     post(channel, { type: "task:result", operationId, resultSummary: "cancelled", result: { ok: false, status: "cancelled", message: "已取消任务" } });
     runningTasks.delete(operationId);
+    return true;
   };
   channel.postMessage({ type: "task:ready", href: location.href } satisfies DoudianTaskMessage);
   channel.addEventListener("message", (event: MessageEvent<DoudianTaskMessage>) => {
     const message = event.data;
     if (!message || typeof message !== "object") return;
     if (message.type === "task:start") {
-      startTask(channel, message);
+      runnerWindow.__chihuDoudianTaskStart?.(message);
     }
     if (message.type === "task:cancel") {
       runnerWindow.__chihuDoudianTaskCancel?.(message.operationId);

@@ -1,4 +1,5 @@
 import type {
+  DoudianAdapterConfig,
   DoudianAdapterPayload,
   DoudianRunDetail,
   DoudianStoreResult,
@@ -6,7 +7,7 @@ import type {
 } from "../../types";
 import { requireChihuNative } from "../../native/client";
 import { listStoreLedger, upsertStoreLedgers } from "./storeGroups";
-import { firstPathValue, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
+import { firstPathValue, getPathValue, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { dispatchDoudianProgress } from "./progress";
 import { loadDoudianAdapterPayload } from "../../bridge/doudianAdapter";
 import { runRefreshDoudianStoreStatusTask } from "./storeStatus";
@@ -26,12 +27,28 @@ interface FetchStoresPayload {
 
 interface LoginDetectionResult {
   ok: boolean;
-  source: "role-list" | "api" | "timeout";
+  source: "role-list" | "api" | "home-page" | "timeout";
   message: string;
   shopListResult?: RequestPlanResult;
   currentResult?: RequestPlanResult;
   stores?: Array<Partial<DoudianStoreSummary>>;
+  roleNames?: string[];
+  isHomePage?: boolean;
 }
+
+interface ImportActivationResult {
+  ok: boolean;
+  skipped?: boolean;
+  activateUrl?: string;
+  currentShopId?: string;
+  currentShopName?: string;
+  confirmedStore?: Partial<DoudianStoreSummary>;
+  message?: string;
+  switchResult?: unknown;
+  switchAttempts?: number;
+}
+
+const LUOPAN_VIEW_COOKIE_NAMES = ["LUOPAN_DT"];
 
 function nowIso() {
   return new Date().toISOString();
@@ -118,6 +135,42 @@ function storesFromResponses(shopListData: unknown, currentData: unknown, adapte
   return stores;
 }
 
+function uniqueStores(stores: Array<Partial<DoudianStoreSummary>>) {
+  const seen = new Set<string>();
+  const output: Array<Partial<DoudianStoreSummary>> = [];
+  for (const store of stores) {
+    const key = text(store.shopId) || text(store.shopName);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(store);
+  }
+  return output;
+}
+
+function storesFromRoleNames(roleNames: string[], apiStores: Array<Partial<DoudianStoreSummary>> = []) {
+  const byName = new Map<string, Partial<DoudianStoreSummary>>();
+  for (const store of apiStores) {
+    const name = text(store.shopName);
+    if (name) byName.set(name, store);
+  }
+  return uniqueStores(roleNames
+    .map((name) => {
+      const shopName = text(name);
+      if (!shopName) return null;
+      const exact = byName.get(shopName);
+      const loose = exact || apiStores.find((store) => {
+        const apiName = text(store.shopName);
+        return apiName && (apiName.includes(shopName) || shopName.includes(apiName));
+      });
+      return loose || {
+        shopId: "",
+        shopName,
+        shopInfoSummary: { shop_name: shopName }
+      };
+    })
+    .filter((store): store is Partial<DoudianStoreSummary> => !!store));
+}
+
 function filterRepairStores(stores: Array<Partial<DoudianStoreSummary>>, repairShopIds?: string[]) {
   const ids = new Set((repairShopIds || []).map((id) => text(id)).filter(Boolean));
   if (!ids.size) return stores;
@@ -134,6 +187,295 @@ function detailForStore(store: DoudianStoreSummary, index: number, total: number
     index,
     total
   };
+}
+
+function failureDetail(store: DoudianStoreSummary, message: string, diagnostic: unknown): DoudianRunDetail {
+  return {
+    shopId: store.shopId,
+    shopName: store.shopName,
+    status: "offline",
+    ok: false,
+    message,
+    reason: "activate-store-failed",
+    category: "import",
+    diagnostic
+  };
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function policy(adapter: DoudianAdapterConfig, path: string, fallback: unknown = undefined): unknown {
+  const value = getPathValue(adapter.policies || {}, path);
+  return value === undefined ? fallback : value;
+}
+
+function policyNumber(adapter: DoudianAdapterConfig, path: string, fallback: number) {
+  const value = Number(policy(adapter, path, fallback));
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function policyBool(adapter: DoudianAdapterConfig, path: string, fallback: boolean) {
+  const value = policy(adapter, path);
+  if (value === undefined) return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return !["false", "0", "no"].includes(value.toLowerCase());
+  return Boolean(value);
+}
+
+function adapterTimeout(adapter: DoudianAdapterConfig, key: string, fallback: number) {
+  const value = Number(adapter.timeouts?.[key]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, ms)));
+}
+
+async function readCurrentShop(adapter: DoudianAdapterPayload, store: DoudianStoreSummary, context: Record<string, unknown>) {
+  return runDoudianRequestPlan(adapter, {
+    partition: store.partition,
+    planKey: "currentShop",
+    context
+  }).catch((error) => ({
+    ok: false,
+    status: 0,
+    data: null,
+    error: error instanceof Error ? error.message : String(error),
+    source: "currentShop"
+  }) as RequestPlanResult);
+}
+
+function currentShopFromResponse(response: RequestPlanResult, adapter: DoudianAdapterConfig): Partial<DoudianStoreSummary> | null {
+  const currentObject = firstPathValue(response.data, adapter.responseMappings?.currentShopObjectPaths || []);
+  const current = normalizeShopItem(currentObject);
+  if (current) return current;
+  const shopId = text(firstPathValue(response.data, adapter.responseMappings?.currentShopIdPaths || []));
+  if (!shopId) return null;
+  return {
+    shopId,
+    shopInfoSummary: { id: shopId }
+  };
+}
+
+function currentShopState(response: RequestPlanResult, adapter: DoudianAdapterConfig, target: DoudianStoreSummary) {
+  const confirmedStore = currentShopFromResponse(response, adapter);
+  const currentShopId = text(confirmedStore?.shopId || confirmedStore?.shopInfoSummary?.id || firstPathValue(response.data, adapter.responseMappings?.currentShopIdPaths || []));
+  const currentShopName = text(confirmedStore?.shopName || confirmedStore?.shopInfoSummary?.shop_name);
+  const targetShopId = text(target.shopId);
+  const targetShopName = text(target.shopName);
+  const idMatched = policyBool(adapter, "activateStore.matchById", true) && targetShopId && currentShopId === targetShopId;
+  const nameMatched = policyBool(adapter, "activateStore.matchByName", true) && targetShopName && (
+    currentShopName === targetShopName
+  );
+  return {
+    ok: Boolean(idMatched || nameMatched),
+    currentShopId,
+    currentShopName,
+    confirmedStore: confirmedStore || undefined
+  };
+}
+
+function withActivationIdFallback(state: ReturnType<typeof currentShopState>, target: DoudianStoreSummary, switchResult: unknown) {
+  if (state.ok) return state;
+  const switchRecord = objectRecord(switchResult);
+  const targetShopId = text(target.shopId);
+  const targetShopName = text(target.shopName);
+  const matchedName = text((objectRecord(switchRecord.matched)).nameText);
+  const clickedTargetByName = switchRecord.ok === true && targetShopName && matchedName === targetShopName;
+  if (!targetShopId && clickedTargetByName && state.currentShopId) {
+    return {
+      ...state,
+      ok: true,
+      confirmedStore: {
+        ...(state.confirmedStore || {}),
+        shopId: state.currentShopId,
+        shopName: state.currentShopName || targetShopName,
+        shopInfoSummary: {
+          ...(state.confirmedStore?.shopInfoSummary || {}),
+          id: state.currentShopId,
+          shop_name: state.currentShopName || targetShopName
+        }
+      }
+    };
+  }
+  return state;
+}
+
+function mergeConfirmedStore(record: DoudianStoreSummary, activation: ImportActivationResult, adapter: DoudianAdapterPayload, index: number) {
+  const confirmed = activation.confirmedStore || {};
+  const merged: Partial<DoudianStoreSummary> = {
+    ...record,
+    ...confirmed,
+    shopId: text(confirmed.shopId || activation.currentShopId) || record.shopId,
+    shopName: text(confirmed.shopName || activation.currentShopName) || record.shopName,
+    operateStatus: text(confirmed.operateStatus) || record.operateStatus,
+    shopInfoSummary: confirmed.shopInfoSummary || {
+      ...(record.shopInfoSummary || {}),
+      id: text(activation.currentShopId) || record.shopInfoSummary?.id,
+      shop_name: text(activation.currentShopName) || record.shopInfoSummary?.shop_name || record.shopName
+    },
+    status: "online",
+    partition: record.partition
+  };
+  return normalizeStore(merged, adapter, record.partition, index) || record;
+}
+
+function importActivationLogPayload(store: DoudianStoreSummary, activation: ImportActivationResult) {
+  const switchResult = objectRecord(activation.switchResult);
+  return {
+    category: "doudian-store-import",
+    event: "activate-store",
+    shopId: store.shopId,
+    shopName: store.shopName,
+    partition: store.partition,
+    ok: activation.ok,
+    skipped: activation.skipped === true,
+    activateUrl: activation.activateUrl || "",
+    currentShopId: activation.currentShopId || "",
+    currentShopName: activation.currentShopName || "",
+    message: activation.message || "",
+    switchAttempts: activation.switchAttempts || 0,
+    switchOk: switchResult.ok === true,
+    switchReason: text(switchResult.reason),
+    switchHref: text(switchResult.href).slice(0, 200),
+    switchTitle: text(switchResult.title).slice(0, 120)
+  };
+}
+
+function switchShopEvalCode(switchFactory: string, payload: unknown, timeoutMs: number) {
+  return `
+    (async () => {
+      const payload = ${JSON.stringify(payload)};
+      const timeoutMs = ${JSON.stringify(timeoutMs)};
+      const switchShop = ${switchFactory};
+      const timeout = new Promise((resolve) => {
+        setTimeout(() => resolve({ ok: false, reason: "switch-script-timeout", href: location.href, title: document.title }), timeoutMs);
+      });
+      try {
+        const result = switchShop(payload);
+        return await Promise.race([Promise.resolve(result), timeout]);
+      } catch (error) {
+        return { ok: false, reason: "switch-script-error", message: error && error.message ? error.message : String(error), href: location.href, title: document.title };
+      }
+    })();
+  `;
+}
+
+async function activateImportedStore(adapter: DoudianAdapterPayload, store: DoudianStoreSummary): Promise<ImportActivationResult> {
+  const native = requireChihuNative();
+  const context = { shopId: store.shopId, shopName: store.shopName };
+  const report = async (activation: ImportActivationResult) => {
+    await native.logs.report(importActivationLogPayload(store, activation)).catch(() => undefined);
+    return activation;
+  };
+  const before = await readCurrentShop(adapter, store, context);
+  const beforeState = currentShopState(before, adapter.adapter, store);
+  if (beforeState.ok) {
+    return report({
+      ok: true,
+      skipped: true,
+      currentShopId: beforeState.currentShopId,
+      currentShopName: beforeState.currentShopName,
+      confirmedStore: beforeState.confirmedStore,
+      message: "current shop already active"
+    });
+  }
+
+  const switchFactory = adapter.scripts?.switchShopFactory;
+  if (!switchFactory) {
+    return report({ ok: false, currentShopId: beforeState.currentShopId, currentShopName: beforeState.currentShopName, message: "switchShopFactory missing" });
+  }
+
+  let winId: number | null = null;
+  const activateUrl = adapter.adapter.chooseEntriesUrl || adapter.adapter.homeUrl || adapter.adapter.loginUrl;
+  let lastSwitchResult: unknown = { ok: false, reason: "not-run" };
+  let switchAttempts = 0;
+  try {
+    winId = await native.windows.open({
+      url: activateUrl,
+      partition: store.partition,
+      show: false,
+      waitForLoad: false,
+      width: 480,
+      height: 360,
+      title: "Chihu Doudian Import Activate",
+      nodeIntegration: false,
+      contextIsolation: true
+    });
+    const bootWaitMs = Math.max(0, policyNumber(adapter.adapter, "businessData.activateBootWaitMs", 1200));
+    if (bootWaitMs) await delay(bootWaitMs);
+    const selectTimeoutMs = adapterTimeout(adapter.adapter, "shopSelectMs", 15000);
+    const pollMs = adapterTimeout(adapter.adapter, "shopSwitchPollMs", 1000);
+    const probeTimeoutMs = adapterTimeout(adapter.adapter, "probeMs", 18000);
+    const switchTimeoutMs = Math.max(2000, Math.min(probeTimeoutMs, policyNumber(adapter.adapter, "businessData.activateScriptTimeoutMs", probeTimeoutMs)));
+    const readyAttemptLimit = Number(adapter.adapter.strategies?.shopSwitchHomePageReadyAttempts || 8);
+    const readyHints = Array.isArray(adapter.adapter.strategies?.homePageReadyPathHints) ? adapter.adapter.strategies.homePageReadyPathHints : [];
+    const selectDeadline = Date.now() + selectTimeoutMs;
+    while (Date.now() < selectDeadline) {
+      switchAttempts += 1;
+      lastSwitchResult = await native.windows.eval({
+        winId,
+        code: switchShopEvalCode(switchFactory, { adapter: adapter.adapter, shop: store, context }, switchTimeoutMs),
+        timeoutMs: switchTimeoutMs + 2000
+      }).catch((error) => ({
+        ok: false,
+        reason: "switch-eval-failed",
+        message: error instanceof Error ? error.message : String(error)
+      }));
+      const switchRecord = objectRecord(lastSwitchResult);
+      if (switchRecord.ok === true) break;
+      if (switchAttempts > readyAttemptLimit) {
+        const href = text(switchRecord.href);
+        if (readyHints.some((hint) => href.includes(String(hint)))) break;
+      }
+      await delay(Math.min(pollMs, Math.max(0, selectDeadline - Date.now())));
+    }
+    const settleWaitMs = Math.max(0, policyNumber(adapter.adapter, "businessData.activateSettleWaitMs", 2200));
+    if (settleWaitMs) await delay(settleWaitMs);
+    const verifyTimeoutMs = adapterTimeout(adapter.adapter, "shopSwitchMs", 15000);
+    const verifyDeadline = Date.now() + verifyTimeoutMs;
+    let lastState = beforeState;
+    while (Date.now() < verifyDeadline) {
+      const after = await readCurrentShop(adapter, store, context);
+      lastState = withActivationIdFallback(currentShopState(after, adapter.adapter, store), store, lastSwitchResult);
+      if (lastState.ok) {
+        return await report({
+          ok: true,
+          activateUrl,
+          currentShopId: lastState.currentShopId,
+          currentShopName: lastState.currentShopName,
+          confirmedStore: lastState.confirmedStore,
+          message: "target shop active",
+          switchResult: lastSwitchResult,
+          switchAttempts
+        });
+      }
+      await delay(Math.min(1000, Math.max(0, verifyDeadline - Date.now())));
+    }
+    const switchOk = objectRecord(lastSwitchResult).ok === true;
+    return await report({
+      ok: false,
+      activateUrl,
+      currentShopId: lastState.currentShopId || beforeState.currentShopId,
+      currentShopName: lastState.currentShopName || beforeState.currentShopName,
+      confirmedStore: lastState.confirmedStore || beforeState.confirmedStore,
+      message: switchOk ? "target shop clicked but not confirmed" : "target shop not confirmed",
+      switchResult: lastSwitchResult,
+      switchAttempts
+    });
+  } catch (error) {
+    return await report({
+      ok: false,
+      activateUrl,
+      currentShopId: beforeState.currentShopId,
+      currentShopName: beforeState.currentShopName,
+      message: error instanceof Error ? error.message : String(error)
+    });
+  } finally {
+    if (winId != null) await native.windows.destroy({ winId }).catch(() => undefined);
+  }
 }
 
 async function importMockStores(args: FetchStoresPayload): Promise<DoudianStoreResult> {
@@ -226,20 +568,25 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
         details: { imported: [], failed: [] }
       };
     }
+    await native.windows.destroy({ winId: loginWinId }).catch(() => null);
+    loginWinId = null;
 
     let shopListResult = detection.shopListResult;
     let currentResult = detection.currentResult;
-    if (!shopListResult || !currentResult) {
+    let detectedStores = detection.stores || [];
+    if (!detectedStores.length && (!shopListResult || !currentResult)) {
       progress(args, 40, "Fetching Doudian store list");
       [shopListResult, currentResult] = await Promise.all([
         runDoudianRequestPlan(adapter, { partition, planKey: "shopList" }),
         runDoudianRequestPlan(adapter, { partition, planKey: "currentShop" })
       ]);
     }
-    progress(args, 55, `Store APIs returned ${shopListResult.status}/${currentResult.status}`);
-    const detectedStores = detection.stores?.length
-      ? detection.stores
-      : storesFromResponses(shopListResult.data, currentResult.data, adapter);
+    if (!detectedStores.length && shopListResult && currentResult) {
+      detectedStores = storesFromResponses(shopListResult.data, currentResult.data, adapter);
+    }
+    progress(args, 55, shopListResult && currentResult
+      ? `Store APIs returned ${shopListResult.status}/${currentResult.status}`
+      : detection.message);
     const sourceStores = filterRepairStores(detectedStores, args.repairShopIds);
     if (!sourceStores.length) {
       return {
@@ -253,25 +600,53 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
     }
 
     const records: DoudianStoreSummary[] = [];
+    const failed: DoudianRunDetail[] = [];
     for (const [index, shop] of sourceStores.entries()) {
       const targetPartition = shopPartition(adapter, shop, index);
-      await native.cookies.copy({ fromPartition: partition, toPartition: targetPartition });
+      await native.cookies.copy({
+        fromPartition: partition,
+        toPartition: targetPartition,
+        excludeNames: LUOPAN_VIEW_COOKIE_NAMES
+      });
       const record = normalizeStore(shop, adapter, targetPartition, index);
-      if (record) records.push(record);
-      progress(args, Math.max(60, Math.round(((index + 1) / sourceStores.length) * 90)), record ? `${record.shopName} login copied` : "Copying login state");
+      if (!record) {
+        progress(args, Math.max(60, Math.round(((index + 1) / sourceStores.length) * 90)), "Copying login state");
+        continue;
+      }
+      if (!text(shop.shopId) && text(shop.shopName)) {
+        record.shopId = "";
+        record.shopInfoSummary = {
+          ...(record.shopInfoSummary || {}),
+          id: "",
+          shop_name: text(shop.shopName)
+        };
+      }
+      progress(args, Math.max(60, Math.round(((index + 1) / sourceStores.length) * 85)), `${record.shopName} login copied`);
+      const activation = await activateImportedStore(adapter, record);
+      if (activation.ok) {
+        const confirmedRecord = mergeConfirmedStore(record, activation, adapter, index);
+        records.push(confirmedRecord);
+        progress(args, Math.max(65, Math.round(((index + 1) / sourceStores.length) * 95)), `${confirmedRecord.shopName} active`);
+      } else {
+        await native.cookies.clear({ partition: targetPartition }).catch(() => null);
+        failed.push(failureDetail(record, activation.message || "target shop not confirmed after import", activation));
+        progress(args, Math.max(65, Math.round(((index + 1) / sourceStores.length) * 95)), `${record.shopName} activation failed`);
+      }
     }
 
     const changed = await upsertStoreLedgers(records);
     const details = changed.map((store, index) => detailForStore(store, index + 1, changed.length));
     return {
       ...(await listStoreLedger()),
-      ok: true,
-      status: "ok",
+      ok: failed.length === 0,
+      status: failed.length ? (changed.length ? "partial" : "failed") : "ok",
       operationId: args.operationId,
       imported: changed.length,
-      failed: 0,
-      message: `登录成功已导入 ${changed.length} 家店铺`,
-      details: { imported: details, failed: [] }
+      failed: failed.length,
+      message: failed.length
+        ? `登录成功已导入 ${changed.length} 家店铺，${failed.length} 家未确认`
+        : `登录成功已导入 ${changed.length} 家店铺`,
+      details: { imported: details, failed }
     };
   } finally {
     if (loginWinId) await native.windows.destroy({ winId: loginWinId }).catch(() => null);
@@ -342,15 +717,49 @@ async function waitForLoginDetection(winId: number, partition: string, args: Fet
   const timeoutMs = Math.max(3000, Number(args.timeoutMs || adapter.adapter.timeouts?.loginMs || 300000));
   const deadline = Date.now() + timeoutMs;
   let lastApiMessage = "";
-  let roleListDetected = false;
+  let lastRoleNames: string[] = [];
+  let isHomePage = false;
+  let homePageAttempts = 0;
+  const roleListPollMs = adapterTimeout(adapter.adapter, "shopSwitchPollMs", Number(adapter.adapter.strategies?.roleListPollMs || 1500));
+  const probeEvalTimeoutMs = Math.max(3000, adapterTimeout(adapter.adapter, "probeMs", 18000));
+  const homePageConfirmAttempts = Math.max(1, Number(adapter.adapter.strategies?.homePageConfirmAttempts || 8));
+  if (roleListPollMs > 0) {
+    await delayWithCancel(Math.min(roleListPollMs, Math.max(0, deadline - Date.now())), args);
+  }
   while (Date.now() < deadline) {
     if (args.isCancelled?.()) throw new Error("cancelled");
     const roleNames = await native.windows.eval({
       winId,
       code: adapter.scripts?.collectRoleShopNames || "[]",
-      timeoutMs: 3000
+      timeoutMs: probeEvalTimeoutMs
     }).catch(() => []);
-    if (Array.isArray(roleNames) && roleNames.length > 0) roleListDetected = true;
+    if (Array.isArray(roleNames) && roleNames.length > 0) {
+      lastRoleNames = roleNames.map((name) => text(name)).filter(Boolean);
+      if (lastRoleNames.length) {
+        const [shopListResult, currentResult] = await Promise.all([
+          runDoudianRequestPlan(adapter, { partition, planKey: "shopList" }),
+          runDoudianRequestPlan(adapter, { partition, planKey: "currentShop" })
+        ]);
+        const apiStores = storesFromResponses(shopListResult.data, currentResult.data, adapter);
+        return {
+          ok: true,
+          source: "role-list",
+          message: `Doudian role list detected ${lastRoleNames.length} stores`,
+          shopListResult,
+          currentResult,
+          stores: storesFromRoleNames(lastRoleNames, apiStores),
+          roleNames: lastRoleNames,
+          isHomePage: false
+        };
+      }
+    }
+
+    isHomePage = !!(await native.windows.eval({
+      winId,
+      code: adapter.scripts?.isHomePage || "false",
+      timeoutMs: probeEvalTimeoutMs
+    }).catch(() => false));
+    homePageAttempts = isHomePage ? homePageAttempts + 1 : 0;
 
     const [shopListResult, currentResult] = await Promise.all([
       runDoudianRequestPlan(adapter, { partition, planKey: "shopList" }),
@@ -364,20 +773,39 @@ async function waitForLoginDetection(winId: number, partition: string, args: Fet
         message: `Doudian store API detected ${stores.length} stores`,
         shopListResult,
         currentResult,
-        stores
+        stores,
+        roleNames: lastRoleNames,
+        isHomePage
       };
+    }
+    if (homePageAttempts >= homePageConfirmAttempts) {
+      const current = currentShopFromResponse(currentResult, adapter.adapter);
+      if (current?.shopId || current?.shopName) {
+        return {
+          ok: true,
+          source: "home-page",
+          message: "Doudian home page detected current store",
+          shopListResult,
+          currentResult,
+          stores: [current],
+          roleNames: lastRoleNames,
+          isHomePage: true
+        };
+      }
     }
     lastApiMessage = [shopListResult.error, currentResult.error]
       .map((item) => text(item))
       .filter(Boolean)
       .join(" / ");
-    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    await delay(Math.min(roleListPollMs, Math.max(0, deadline - Date.now())));
   }
   return {
     ok: false,
-    source: roleListDetected ? "role-list" : "timeout",
+    source: lastRoleNames.length ? "role-list" : "timeout",
     message: lastApiMessage
       ? `Doudian store API did not return stores after ${timeoutMs}ms: ${lastApiMessage}`
-      : `Doudian store API did not return stores after ${timeoutMs}ms`
+      : `Doudian store API did not return stores after ${timeoutMs}ms`,
+    roleNames: lastRoleNames,
+    isHomePage
   };
 }

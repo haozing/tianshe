@@ -613,7 +613,7 @@
         "dealAmount": 100,
         "refundAmount": 100,
         "customerPrice": 100,
-        "refundRate": 0.01,
+        "refundRate": 1,
         "platformSubsidyAmount": 100
       },
       "fields": {
@@ -626,16 +626,20 @@
             "businessCoreIndex.data.data.pay_amt.value",
             "businessCoreIndex.data.data.core_index.pay_amt.value",
             "businessCoreIndex.data.pay_amt",
+            "businessHomepage.data.pay_amt",
+            "businessHomepage.data.deal_amount",
             "businessHomepage.data.data.pay_amt",
             "businessHomepage.data.data.deal_amount"
           ],
+          "pathScales": {
+            "businessHomepage.": 1
+          },
           "aliases": [
             "income_amt",
             "pay_amt",
             "payAmount",
             "deal_amount",
-            "dealAmount",
-            "gmv"
+            "dealAmount"
           ]
         },
         "orderCount": {
@@ -644,6 +648,9 @@
             "businessCoreIndex.data.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.pay_cnt.index_value.value.value",
             "businessCoreIndex.data.data.pay_order_cnt.value",
             "businessCoreIndex.data.data.core_index.pay_order_cnt.value",
+            "businessHomepage.data.pay_cnt",
+            "businessHomepage.data.pay_order_cnt",
+            "businessHomepage.data.order_count",
             "businessHomepage.data.data.pay_order_cnt",
             "businessHomepage.data.data.order_count"
           ],
@@ -662,9 +669,15 @@
             "businessCoreIndex.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.refund_amt.index_value.value.value",
             "businessCoreIndex.data.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.refund_amt.index_value.value.value",
             "businessCoreIndex.data.data.refund_amt.value",
+            "businessHomepage.data.rfndsuc_amt",
+            "businessHomepage.data.refund_amt",
+            "businessHomepage.data.refund_amount",
             "businessHomepage.data.data.refund_amt",
             "businessHomepage.data.data.refund_amount"
           ],
+          "pathScales": {
+            "businessHomepage.": 1
+          },
           "aliases": [
             "rfndsuc_amt",
             "refund_amt",
@@ -679,6 +692,9 @@
             "businessCoreIndex.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.refund_order_cnt.index_value.value.value",
             "businessCoreIndex.data.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.refund_order_cnt.index_value.value.value",
             "businessCoreIndex.data.data.refund_order_cnt.value",
+            "businessHomepage.data.real_refund_cnt",
+            "businessHomepage.data.refund_order_cnt",
+            "businessHomepage.data.refund_order_count",
             "businessHomepage.data.data.refund_order_cnt",
             "businessHomepage.data.data.refund_order_count"
           ],
@@ -780,6 +796,7 @@
             "businessCoreIndex.data.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.pay_ucnt.index_value.value.value",
             "businessCoreIndex.data.data.pay_ucnt.value",
             "businessCoreIndex.data.data.core_index.pay_ucnt.value",
+            "businessHomepage.data.pay_ucnt",
             "businessHomepage.data.data.pay_ucnt"
           ],
           "aliases": [
@@ -795,9 +812,16 @@
             "businessCoreIndex.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.per_usr_pay_amt.index_value.value.value",
             "businessCoreIndex.data.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.per_usr_pay_amt.index_value.value.value",
             "businessCoreIndex.data.data.per_order_amt.value",
+            "businessHomepage.data.avg_pay_user_amt",
+            "businessHomepage.data.per_usr_pay_amt",
+            "businessHomepage.data.customer_price",
+            "businessHomepage.data.per_order_amt",
             "businessHomepage.data.data.customer_price",
             "businessHomepage.data.data.per_order_amt"
           ],
+          "pathScales": {
+            "businessHomepage.": 1
+          },
           "aliases": [
             "avg_pay_user_amt",
             "per_usr_pay_amt",
@@ -807,10 +831,11 @@
         },
         "exposureUsers": {
           "paths": [
+            "businessHomepage.data.product_show_ucnt",
+            "businessHomepage.data.data.product_show_ucnt",
             "businessCoreIndex.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.product_show_ucnt.index_value.value.value",
             "businessCoreIndex.data.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.product_show_ucnt.index_value.value.value",
-            "businessCoreIndex.data.data.product_show_ucnt.value",
-            "businessHomepage.data.data.product_show_ucnt"
+            "businessCoreIndex.data.data.product_show_ucnt.value"
           ],
           "aliases": [
             "product_show_ucnt",
@@ -820,10 +845,11 @@
         },
         "clickUsers": {
           "paths": [
+            "businessHomepage.data.product_click_ucnt",
+            "businessHomepage.data.data.product_click_ucnt",
             "businessCoreIndex.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.product_click_ucnt.index_value.value.value",
             "businessCoreIndex.data.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.product_click_ucnt.index_value.value.value",
-            "businessCoreIndex.data.data.product_click_ucnt.value",
-            "businessHomepage.data.data.product_click_ucnt"
+            "businessCoreIndex.data.data.product_click_ucnt.value"
           ],
           "aliases": [
             "product_click_ucnt",
@@ -850,6 +876,8 @@
             "businessCoreIndex.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.refund_amt_rate.index_value.value.value",
             "businessCoreIndex.data.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.refund_amt_rate.index_value.value.value",
             "businessCoreIndex.data.data.refund_rate.value",
+            "businessHomepage.data.refund_amt_rate",
+            "businessHomepage.data.refund_rate",
             "businessHomepage.data.data.refund_rate"
           ],
           "aliases": [
@@ -998,10 +1026,11 @@
         },
         "productExposureCount": {
           "paths": [
+            "businessHomepage.data.product_show_cnt",
+            "businessHomepage.data.data.product_show_cnt",
             "businessCoreIndex.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.product_show_cnt.index_value.value.value",
             "businessCoreIndex.data.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.product_show_cnt.index_value.value.value",
-            "businessCoreIndex.data.data.product_show_cnt.value",
-            "businessHomepage.data.data.product_show_cnt"
+            "businessCoreIndex.data.data.product_show_cnt.value"
           ],
           "aliases": [
             "product_show_cnt",
@@ -1010,10 +1039,11 @@
         },
         "productClickCount": {
           "paths": [
+            "businessHomepage.data.product_click_cnt",
+            "businessHomepage.data.data.product_click_cnt",
             "businessCoreIndex.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.product_click_cnt.index_value.value.value",
             "businessCoreIndex.data.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.product_click_cnt.index_value.value.value",
-            "businessCoreIndex.data.data.product_click_cnt.value",
-            "businessHomepage.data.data.product_click_cnt"
+            "businessCoreIndex.data.data.product_click_cnt.value"
           ],
           "aliases": [
             "product_click_cnt",
@@ -1888,17 +1918,20 @@
     },
     "businessCoreIndex": {
       "endpointKey": "businessCoreIndex",
-      "sign": false,
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
       "signatureParam": false,
       "includeEmptySignature": false,
       "origin": "https://compass.jinritemai.com",
       "referer": "https://compass.jinritemai.com/shop",
       "signerUrl": "https://compass.jinritemai.com/shop",
       "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
       "headers": {
         "Accept": "application/json, text/plain, */*"
       },
       "rawQuery": "activity_id=&index_selected=pay_amt%2Cpay_cnt%2Cper_usr_pay_amt%2Cproduct_show_ucnt%2Cproduct_click_ucnt%2Cpay_ucnt%2Cincome_amt%2Crfndsuc_amt%2Crefund_order_cnt%2Cproduct_show_cnt%2Cproduct_click_cnt%2Cpay_plat_cost_amt%2Crefund_amt_rate&operate_type=0&date_type={legacyDateType}&begin_date={beginDateSlash}&end_date={endDateSlash}",
+      "signQueryString": "activity_id=&index_selected=pay_amt%2Cpay_cnt%2Cper_usr_pay_amt%2Cproduct_show_ucnt%2Cproduct_click_ucnt%2Cpay_ucnt%2Cincome_amt%2Crfndsuc_amt%2Crefund_order_cnt%2Cproduct_show_cnt%2Cproduct_click_cnt%2Cpay_plat_cost_amt%2Crefund_amt_rate&operate_type=0&date_type={legacyDateType}&begin_date={beginDateSlash}&end_date={endDateSlash}",
       "allowMissingCode": true,
       "successPaths": [
         "data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0",
@@ -1918,6 +1951,10 @@
         "当前网络不稳定"
       ],
       "prepareUrl": "https://compass.jinritemai.com/shop",
+      "prepareBeforeRequest": true,
+      "removeCookiesBeforePrepare": [
+        "LUOPAN_DT"
+      ],
       "prepareWaitMs": 9900,
       "prepareRetryAttempts": 1,
       "retryOnHttpError": true,
@@ -1925,8 +1962,9 @@
       "retryDelayMs": 1200,
       "retryBackoff": "linear",
       "pageFetchOnSignFailure": true,
+      "pageFetchBootWaitMs": 9900,
       "pageFetchTimeoutMs": 18000,
-      "requestMode": "page-fetch"
+      "requestMode": "native-http"
     },
     "businessHomepage": {
       "endpointKey": "businessHomepage",
@@ -2393,6 +2431,7 @@
       "signDomain": ".jinritemai.com",
       "signQuery": "appid=1",
       "signBody": "",
+      "signWindowTokenFallback": false,
       "prepareBeforeSign": true,
       "headers": {
         "Accept": "application/json, text/plain, */*",
@@ -2407,8 +2446,8 @@
           "sort_params": "create_time"
         },
         "page_tab": "penalty_ticket_v2",
-        "page": 0,
-        "page_size": 50
+        "page": "{page}",
+        "page_size": "{pageSize}"
       },
       "retryOnHttpError": true,
       "maxAttempts": 2,
@@ -2470,9 +2509,14 @@
         "keyword": "{keyword}"
       },
       "retryOnHttpError": true,
-      "maxAttempts": 2,
+      "retryOnBusinessFailure": true,
+      "maxAttempts": 4,
       "retryDelayMs": 1200,
       "retryBackoff": "linear",
+      "successCodes": [
+        0,
+        "0"
+      ],
       "allowMissingCode": true,
       "successPaths": []
     },
@@ -2489,13 +2533,19 @@
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json"
       },
-      "retryOnHttpError": false,
-      "maxAttempts": 1,
+      "retryOnHttpError": true,
+      "retryOnBusinessFailure": true,
+      "maxAttempts": 4,
       "retryDelayMs": 1200,
       "retryBackoff": "linear",
+      "successCodes": [
+        0,
+        "0"
+      ],
       "allowMissingCode": true,
       "successPaths": [],
       "signStrategy": "mstoken-myargs",
+      "signWindowTokenFallback": false,
       "localSigner": true,
       "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
       "debugPlan": true,
@@ -3711,6 +3761,7 @@
     },
     "violationsData": {
       "concurrency": 2,
+      "maxPages": 50,
       "requestPlans": [
         "violationPenaltyList"
       ],

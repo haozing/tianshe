@@ -92,6 +92,7 @@ export interface ChihuNativeApi {
     get: (args: unknown) => Promise<unknown>;
     set: (args: unknown) => Promise<unknown>;
     copy: (args: unknown) => Promise<unknown>;
+    remove?: (args: unknown) => Promise<unknown>;
     getHeader: (args: CookieHeaderRequest) => Promise<CookieHeaderResult>;
     clear: (args: { partition: string }) => Promise<unknown>;
   };

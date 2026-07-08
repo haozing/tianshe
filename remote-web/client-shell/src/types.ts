@@ -210,6 +210,9 @@ export interface WorkspaceState {
   selectedStoreId: string;
   operator: string;
   balance: string;
+  phone?: string;
+  points?: string;
+  computePower?: string;
 }
 
 export interface ShellState {

@@ -29,7 +29,10 @@ export const STORAGE_KEYS = [
 export const defaultWorkspace: WorkspaceState = {
   selectedStoreId: "all",
   operator: "hhhhh123",
-  balance: "200.00"
+  balance: "200.00",
+  phone: "18906311658",
+  points: "0.1",
+  computePower: "8.00"
 };
 
 export function isChihuStorageKey(key: string) {

@@ -42,6 +42,7 @@ const chihuNativeMethods = [
   ["cookies.get", "native:cookies:get"],
   ["cookies.set", "native:cookies:set"],
   ["cookies.copy", "native:cookies:copy"],
+  ["cookies.remove", "native:cookies:remove"],
   ["cookies.getHeader", "native:cookies:getHeader"],
   ["cookies.clear", "native:cookies:clear"],
   ["http.request", "native:http:request"],

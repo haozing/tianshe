@@ -23,6 +23,15 @@ function writeLog(tag, payload) {
   fs.appendFileSync(getLogFile(), line, "utf8");
 }
 
+function rendererLogPayload(event, payload) {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return {
+    ...(payload && typeof payload === "object" ? payload : { rawPayload: payload }),
+    browserWindowId: win ? win.id : null,
+    senderUrl: event.sender.getURL()
+  };
+}
+
 function cleanupOldCrashLogs(keepToday = true) {
   const dir = getLogDir();
   const keepName = keepToday ? `crash-${dayString()}.log` : "";
@@ -38,12 +47,7 @@ function cleanupOldCrashLogs(keepToday = true) {
 
 function registerLogHandlers() {
   ipcMain.handle("reportClientLog", async (event, payload) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    writeLog("RENDERER", {
-      ...(payload && typeof payload === "object" ? payload : { rawPayload: payload }),
-      browserWindowId: win ? win.id : null,
-      url: event.sender.getURL()
-    });
+    writeLog("RENDERER", rendererLogPayload(event, payload));
     return { ok: true, logDir: getLogDir() };
   });
 
@@ -52,12 +56,7 @@ function registerLogHandlers() {
     return cleanupOldCrashLogs(payload);
   });
   ipcMain.handle("native:logs:report", async (event, payload) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    writeLog("RENDERER", {
-      ...(payload && typeof payload === "object" ? payload : { rawPayload: payload }),
-      browserWindowId: win ? win.id : null,
-      url: event.sender.getURL()
-    });
+    writeLog("RENDERER", rendererLogPayload(event, payload));
     return { ok: true, logDir: getLogDir() };
   });
   ipcMain.handle("native:logs:getDir", async () => getLogDir());

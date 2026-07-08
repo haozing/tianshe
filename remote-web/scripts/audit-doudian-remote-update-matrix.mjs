@@ -500,7 +500,7 @@ const checks = [
       requestPlanClient.includes("pageFetchOnSignFailure") &&
       doudianScriptsClient.includes("mstoken-myargs") &&
       requestPlanClient.includes("signDoudianRequest") &&
-      businessCoreIndexPlan.requestMode === "page-fetch",
+      (businessCoreIndexPlan.requestMode === "page-fetch" || businessCoreIndexPlan.pageFetchOnSignFailure === true),
     source: rel(requestPlanClientPath)
   },
   {

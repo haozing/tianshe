@@ -1,6 +1,7 @@
 import type { DoudianAdapterConfig, DoudianAdapterPayload } from "../../types";
 import { requireChihuNative } from "../../native/client";
 import { signDoudianRequest } from "./signer";
+import { XZB_SIGN_USER_AGENT } from "./xzbSigner";
 
 export interface RequestPlanResult {
   ok: boolean;
@@ -8,6 +9,11 @@ export interface RequestPlanResult {
   data: unknown;
   error?: string;
   source: string;
+  url?: string;
+  openUrl?: string;
+  pageHref?: string;
+  pageTitle?: string;
+  requestCookieState?: Record<string, unknown>;
 }
 
 function endpointUrl(adapter: DoudianAdapterConfig, endpoint: string) {
@@ -78,46 +84,139 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   const endpoint = adapter.endpoints[endpointKey];
   if (!endpoint) return { ok: false, status: 0, data: null, error: `missing endpoint: ${endpointKey}`, source: args.planKey };
 
-  const url = buildPlanUrl(adapter, endpoint, plan, args.context || {});
-  if (plan.requestMode === "page-fetch") {
-    return pageFetchJson(args.partition, url, args.planKey, plan, args.context || {});
+  const context = args.context || {};
+  const url = buildPlanUrl(adapter, endpoint, plan, context);
+  if (plan.prepareBeforeRequest === true) {
+    await prepareRequestPlanContext(args.partition, args.planKey, plan, adapter, context, url);
   }
-  const headers: Record<string, string> = {
-    accept: "application/json, text/plain, */*",
-    ...stringRecord(plan.headers),
-    ...(args.headers || {})
+  const runRequest = async (attempt: number | string = 0) => {
+    let result: RequestPlanResult;
+    if (plan.requestMode === "page-fetch") {
+      result = await pageFetchJson(args.partition, url, args.planKey, plan, context);
+    } else {
+      let requestUrl = url;
+      if (plan.sign === true) {
+        const sign = await signDoudianRequest(payload, {
+          targetUrl: url,
+          partition: args.partition,
+          plan,
+          context
+        });
+        if (sign.ok && sign.query) {
+          const signedUrl = new URL(url);
+          signedUrl.search = sign.query.startsWith("?") ? sign.query : `?${sign.query}`;
+          requestUrl = signedUrl.toString();
+        } else if (plan.pageFetchOnSignFailure === true) {
+          result = await pageFetchJson(args.partition, url, args.planKey, plan, context);
+          await reportPlanSummary(args.planKey, args.partition, attempt, result, adapter, plan);
+          return result;
+        } else {
+          result = { ok: false, status: 0, data: null, error: "sign failed", source: args.planKey, url };
+          await reportPlanSummary(args.planKey, args.partition, attempt, result, adapter, plan);
+          return result;
+        }
+      }
+      const headers = await buildRequestHeaders(adapter, args.partition, requestUrl, plan, args.headers, context);
+      result = await requestJson(args.partition, requestUrl, headers, args.planKey, plan, context);
+      if (args.planKey === "businessCoreIndex") {
+        result.requestCookieState = summarizeCookieHeader(headers.cookie);
+      }
+    }
+    await reportPlanSummary(args.planKey, args.partition, attempt, result, adapter, plan);
+    return result;
   };
-  if (typeof plan.referer === "string") headers.referer = interpolate(plan.referer, args.context || {});
-  const cookieHeader = await requireChihuNative().cookies.getHeader({
-    partition: args.partition,
-    url,
-    domain: adapter.cookieDomain
-  });
-  if (cookieHeader.cookieHeader) headers.cookie = cookieHeader.cookieHeader;
 
-  if (plan.sign === true) {
-    const sign = await signDoudianRequest(payload, {
-      targetUrl: url,
-      partition: args.partition,
-      plan,
-      context: args.context
-    });
-    if (sign.ok && sign.query) {
-      const signedUrl = new URL(url);
-      signedUrl.search = sign.query.startsWith("?") ? sign.query : `?${sign.query}`;
-      return requestJson(args.partition, signedUrl.toString(), headers, args.planKey, plan, args.context || {});
-    }
-    if (plan.pageFetchOnSignFailure === true) {
-      return pageFetchJson(args.partition, url, args.planKey, plan, args.context || {});
+  let response = await runRequest();
+  const prepareMessages = arrayText(plan.prepareOnMessages);
+  const prepareAttempts = Math.max(0, Math.min(3, Math.floor(Number(plan.prepareRetryAttempts || (prepareMessages.length ? 1 : 0)))));
+  for (let attempt = 0; attempt < prepareAttempts && responseMatches(response, prepareMessages); attempt += 1) {
+    await reportPlanRetry(args.planKey, args.partition, "prepare", attempt + 1, response);
+    const delayMs = retryDelayMs(plan, attempt + 1, "prepareRetryDelayMs", "prepareRetryBackoff", 0);
+    if (delayMs) await delay(delayMs);
+    await prepareRequestPlanContext(args.partition, args.planKey, plan, adapter, context, url);
+    response = await runRequest(`prepare-${attempt + 1}`);
+  }
+
+  const maxAttempts = Math.max(1, Math.min(8, Math.floor(Number(plan.maxAttempts || 1))));
+  if (plan.retryOnHttpError === true) {
+    for (let attempt = 1; attempt < maxAttempts && responseHasHttpError(response); attempt += 1) {
+      await reportPlanRetry(args.planKey, args.partition, "http", attempt, response);
+      const delayMs = retryDelayMs(plan, attempt, "retryDelayMs", "retryBackoff", 1000);
+      if (delayMs) await delay(delayMs);
+      response = await runRequest(attempt);
     }
   }
 
-  return requestJson(args.partition, url, headers, args.planKey, plan, args.context || {});
+  if (plan.retryOnBusinessFailure === true) {
+    for (let attempt = 1; attempt < maxAttempts && !requestPlanResponseOk(response, adapter, args.planKey); attempt += 1) {
+      await reportPlanRetry(args.planKey, args.partition, "business", attempt, response);
+      const delayMs = retryDelayMs(plan, attempt, "retryDelayMs", "retryBackoff", 1000);
+      if (delayMs) await delay(delayMs);
+      response = await runRequest(`business-${attempt}`);
+    }
+  }
+
+  return response;
 }
 
 function stringRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, next]) => [key, String(next)]));
+}
+
+function hasHeader(headers: Record<string, string>, name: string) {
+  return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
+}
+
+function mergeCookieHeaders(values: string[]) {
+  const cookies = new Map<string, string>();
+  for (const value of values) {
+    for (const item of String(value || "").split(";")) {
+      const trimmed = item.trim();
+      if (!trimmed) continue;
+      const index = trimmed.indexOf("=");
+      if (index <= 0) continue;
+      const name = trimmed.slice(0, index).trim();
+      const cookieValue = trimmed.slice(index + 1).trim();
+      if (!name) continue;
+      if (!cookies.has(name)) cookies.set(name, cookieValue);
+    }
+  }
+  return Array.from(cookies.entries()).map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
+function summarizeCookieHeader(cookieHeader: string | undefined) {
+  const values = new Map<string, string>();
+  const counts = new Map<string, number>();
+  for (const value of String(cookieHeader || "").split(";")) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const index = trimmed.indexOf("=");
+    if (index <= 0) continue;
+    const name = trimmed.slice(0, index).trim();
+    const cookieValue = trimmed.slice(index + 1).trim();
+    if (!name) continue;
+    counts.set(name, (counts.get(name) || 0) + 1);
+    if (!values.has(name)) values.set(name, cookieValue);
+  }
+
+  const luopanDt = values.get("LUOPAN_DT") || "";
+  const msToken = values.get("msToken") || "";
+  const sVWebId = values.get("s_v_web_id") || "";
+  return {
+    finalCookieNameCount: values.size,
+    finalDuplicateCookieNames: Array.from(counts.entries())
+      .filter(([, count]) => count > 1)
+      .map(([name, count]) => `${name}:${count}`)
+      .slice(0, 12),
+    finalHasLuopanDt: !!luopanDt,
+    finalLuopanDtLength: luopanDt.length,
+    finalLuopanDtHash: luopanDt ? shortHash(luopanDt) : "",
+    finalHasMsToken: !!msToken,
+    finalMsTokenLength: msToken.length,
+    finalHasSVWebId: !!sVWebId,
+    finalSVWebIdLength: sVWebId.length
+  };
 }
 
 function arrayText(value: unknown): string[] {
@@ -136,12 +235,313 @@ function responseMatches(response: RequestPlanResult, patterns: string[]) {
   return patterns.some((pattern) => pattern && messages.some((message) => message.includes(pattern)));
 }
 
+function responseCode(response: RequestPlanResult | undefined) {
+  return firstPathValue(response?.data, ["code", "st", "status_code", "statusCode", "errno"]);
+}
+
+function responseMessage(response: RequestPlanResult | undefined) {
+  return String(firstPathValue(response?.data, ["msg", "message", "status_msg", "statusMessage"]) || response?.error || "").slice(0, 240);
+}
+
+function responseHasHttpError(response: RequestPlanResult | undefined) {
+  return Number(response?.status || 0) >= 400 || (Number(response?.status || 0) === 0 && !!response?.error);
+}
+
+function retryDelayMs(plan: Record<string, unknown>, attempt: number, delayKey: string, backoffKey: string, fallback: number) {
+  const base = Math.max(0, Number(plan[delayKey] ?? fallback));
+  return base * (plan[backoffKey] === "linear" ? Math.max(1, attempt) : 1);
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shortHash(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+async function removePlanCookies(
+  partition: string,
+  planKey: string,
+  plan: Record<string, unknown>,
+  context: Record<string, unknown>,
+  targetUrl: string,
+  phase: string
+) {
+  const names = arrayText(plan.removeCookiesBeforePrepare || plan.clearCookiesBeforePrepare);
+  if (!names.length) return;
+  const native = requireChihuNative();
+  if (!native.cookies.remove) return;
+  const urls = [
+    planWindowUrl(plan, targetUrl, context, ["prepareUrl", "signerUrl"]),
+    targetUrl,
+    ...arrayText(plan.cookieRemoveUrls).map((url) => interpolate(url, context))
+  ].filter(Boolean);
+  const seen = new Set<string>();
+  let removed = 0;
+  for (const url of urls) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const result = await native.cookies.remove({
+      partition,
+      url,
+      names
+    }).catch(() => null) as { removed?: number } | null;
+    removed += Number(result?.removed || 0);
+  }
+  if (removed > 0) {
+    await native.logs.report({
+      category: "doudian-request-plan",
+      event: "cookies-removed",
+      planKey,
+      partition,
+      phase,
+      names,
+      removed
+    }).catch(() => undefined);
+  }
+}
+
+async function requestPlanCookieState(partition: string, planKey: string) {
+  if (planKey !== "businessCoreIndex") return {};
+  const native = requireChihuNative();
+  const names = ["LUOPAN_DT", "msToken", "s_v_web_id"];
+  const candidates = [
+    { url: "https://compass.jinritemai.com/shop" },
+    { domain: ".jinritemai.com" },
+    { domain: ".bytedance.com" }
+  ];
+  const values = new Map<string, string>();
+
+  for (const candidate of candidates) {
+    const result = await native.cookies.getHeader({
+      partition,
+      names,
+      ...candidate
+    }).catch(() => null);
+    for (const cookie of result?.cookies || []) {
+      if (cookie?.name && cookie?.value && !values.has(cookie.name)) values.set(cookie.name, cookie.value);
+    }
+  }
+
+  const luopanDt = values.get("LUOPAN_DT") || "";
+  const msToken = values.get("msToken") || "";
+  const sVWebId = values.get("s_v_web_id") || "";
+  return {
+    cookieState: {
+      hasLuopanDt: !!luopanDt,
+      luopanDtLength: luopanDt.length,
+      luopanDtHash: luopanDt ? shortHash(luopanDt) : "",
+      hasMsToken: !!msToken,
+      msTokenLength: msToken.length,
+      hasSVWebId: !!sVWebId,
+      sVWebIdLength: sVWebId.length
+    }
+  };
+}
+
+function hasBadUrlToken(value: string) {
+  return /[{}]/.test(value) || /(^|[/?#=&])(?:undefined|null)(?=$|[/?#=&])/.test(value);
+}
+
+function fallbackWindowUrl(targetUrl: string) {
+  try {
+    const target = new URL(targetUrl);
+    return `${target.origin}/`;
+  } catch {
+    return "";
+  }
+}
+
+function normalizeWindowUrl(value: unknown, context: Record<string, unknown>, targetUrl: string) {
+  const raw = typeof value === "string" ? interpolate(value, context).trim() : "";
+  if (!raw || hasBadUrlToken(raw)) return "";
+  try {
+    const base = fallbackWindowUrl(targetUrl) || undefined;
+    const normalized = new URL(raw, base).toString();
+    return hasBadUrlToken(normalized) ? "" : normalized;
+  } catch {
+    return "";
+  }
+}
+
+function planWindowUrl(
+  plan: Record<string, unknown>,
+  targetUrl: string,
+  context: Record<string, unknown>,
+  keys: string[] = ["signerUrl", "prepareUrl"]
+) {
+  for (const key of keys) {
+    const candidate = normalizeWindowUrl(plan[key], context, targetUrl);
+    if (candidate) return candidate;
+  }
+  return fallbackWindowUrl(targetUrl) || targetUrl;
+}
+
+async function buildRequestHeaders(
+  adapter: DoudianAdapterConfig,
+  partition: string,
+  url: string,
+  plan: Record<string, unknown>,
+  extraHeaders: Record<string, string> | undefined,
+  context: Record<string, unknown>
+) {
+  const headers: Record<string, string> = {
+    accept: "application/json, text/plain, */*",
+    ...stringRecord(plan.headers),
+    ...(extraHeaders || {})
+  };
+  if (typeof plan.referer === "string") headers.referer = interpolate(plan.referer, context);
+  if (plan.signStrategy === "mstoken-myargs" && !hasHeader(headers, "user-agent")) {
+    const userAgent = typeof plan.userAgent === "string" ? interpolate(plan.userAgent, context).trim() : "";
+    headers["User-Agent"] = userAgent || XZB_SIGN_USER_AGENT;
+  }
+  const cookieHeaderValues: string[] = [];
+  const cookieHeader = await requireChihuNative().cookies.getHeader({
+    partition,
+    url,
+    domain: adapter.cookieDomain
+  });
+  if (cookieHeader.cookieHeader) cookieHeaderValues.push(cookieHeader.cookieHeader);
+
+  for (const cookieUrl of arrayText(plan.cookieUrls)) {
+    const extra = await requireChihuNative().cookies.getHeader({
+      partition,
+      url: interpolate(cookieUrl, context)
+    }).catch(() => null);
+    if (extra?.cookieHeader) cookieHeaderValues.push(extra.cookieHeader);
+  }
+  for (const cookieDomain of arrayText(plan.cookieDomains)) {
+    const extra = await requireChihuNative().cookies.getHeader({
+      partition,
+      domain: interpolate(cookieDomain, context)
+    }).catch(() => null);
+    if (extra?.cookieHeader) cookieHeaderValues.push(extra.cookieHeader);
+  }
+
+  const mergedCookieHeader = mergeCookieHeaders(cookieHeaderValues);
+  if (mergedCookieHeader) headers.cookie = mergedCookieHeader;
+  return headers;
+}
+
+async function prepareRequestPlanContext(
+  partition: string,
+  planKey: string,
+  plan: Record<string, unknown>,
+  adapter: DoudianAdapterConfig,
+  context: Record<string, unknown>,
+  fallbackUrl: string
+) {
+  const prepareUrl = planWindowUrl(plan, fallbackUrl, context, ["prepareUrl", "signerUrl"]);
+  if (!prepareUrl) return false;
+  const native = requireChihuNative();
+  let winId: number | null = null;
+  try {
+    await removePlanCookies(partition, planKey, plan, context, fallbackUrl, "before-prepare");
+    winId = await native.windows.open({
+      url: prepareUrl,
+      partition,
+      show: false,
+      waitForLoad: false,
+      width: 480,
+      height: 360,
+      title: "Chihu Doudian Prepare",
+      nodeIntegration: false,
+      contextIsolation: true
+    });
+    const waitMs = Math.max(0, Number(plan.prepareWaitMs || adapter.timeouts?.loadMs || 0));
+    if (waitMs) await delay(waitMs);
+    await native.logs.report({
+      category: "doudian-request-plan",
+      event: "prepared",
+      planKey,
+      partition,
+      openUrl: prepareUrl,
+      targetUrl: prepareUrl
+    }).catch(() => undefined);
+    return true;
+  } catch (error) {
+    await native.logs.report({
+      category: "doudian-request-plan",
+      event: "prepare-failed",
+      planKey,
+      partition,
+      openUrl: prepareUrl,
+      targetUrl: prepareUrl,
+      message: error instanceof Error ? error.message : String(error)
+    }).catch(() => undefined);
+    return false;
+  } finally {
+    if (winId != null) await native.windows.destroy({ winId }).catch(() => undefined);
+  }
+}
+
+async function reportPlanSummary(
+  planKey: string,
+  partition: string,
+  attempt: number | string,
+  response: RequestPlanResult,
+  adapter: DoudianAdapterConfig,
+  plan: Record<string, unknown>
+) {
+  const successPaths = arrayText(plan.successPaths);
+  const hasSuccessPath = successPaths.some((path) => getPathValue(response.data, path) !== undefined);
+  const cookieState = await requestPlanCookieState(partition, planKey);
+  await requireChihuNative().logs.report({
+    category: "doudian-request-plan",
+    event: "result",
+    planKey,
+    partition,
+    attempt,
+    requestMode: String(plan.requestMode || "native-http"),
+    status: response.status,
+    httpOk: response.ok,
+    contractOk: requestPlanResponseOk(response, adapter, planKey),
+    code: responseCode(response) ?? null,
+    message: responseMessage(response),
+    hasSuccessPath,
+    targetUrl: response.url,
+    openUrl: response.openUrl,
+    pageHref: response.pageHref,
+    pageTitle: response.pageTitle,
+    ...(response.requestCookieState ? { requestCookieState: response.requestCookieState } : {}),
+    ...cookieState
+  }).catch(() => undefined);
+}
+
+async function reportPlanRetry(planKey: string, partition: string, kind: string, attempt: number, response: RequestPlanResult) {
+  await requireChihuNative().logs.report({
+    category: "doudian-request-plan",
+    event: "retry",
+    planKey,
+    partition,
+    kind,
+    attempt,
+    status: response.status,
+    code: responseCode(response) ?? null,
+    message: responseMessage(response),
+    targetUrl: response.url,
+    openUrl: response.openUrl,
+    pageHref: response.pageHref,
+    pageTitle: response.pageTitle
+  }).catch(() => undefined);
+}
+
 function interpolate(value: unknown, context: Record<string, unknown>): string {
   return String(value ?? "").replace(/\{([^}]+)\}/g, (_match, key) => String(context[key] ?? ""));
 }
 
 function interpolateDeep(value: unknown, context: Record<string, unknown>): unknown {
-  if (typeof value === "string") return interpolate(value, context);
+  if (typeof value === "string") {
+    const exact = value.match(/^\{([^}]+)\}$/);
+    if (exact) return context[exact[1]] ?? "";
+    return interpolate(value, context);
+  }
   if (Array.isArray(value)) return value.map((item) => interpolateDeep(item, context));
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, next]) => [key, interpolateDeep(next, context)]));
@@ -178,13 +578,14 @@ async function requestJson(partition: string, url: string, headers: Record<strin
     responseType: "json",
     timeoutMs: 15000
   });
-  const result = response as { ok?: boolean; status?: number; data?: unknown; error?: { message?: string } };
+  const result = response as { ok?: boolean; status?: number; data?: unknown; error?: { message?: string } | string };
   return {
     ok: result.ok === true,
     status: Number(result.status || 0),
     data: result.data ?? null,
-    error: result.error?.message || "",
-    source
+    error: typeof result.error === "string" ? result.error : result.error?.message || "",
+    source,
+    url
   };
 }
 
@@ -198,18 +599,21 @@ async function pageFetchJson(partition: string, url: string, source: string, pla
     ...stringRecord(plan.headers)
   };
   let winId: number | null = null;
+  const openUrl = planWindowUrl(plan, url, context);
   try {
     winId = await native.windows.open({
-      url: String(plan.signerUrl || plan.prepareUrl || url),
+      url: openUrl,
       partition,
       show: false,
-      waitForLoad: true,
+      waitForLoad: false,
       width: 480,
       height: 360,
       title: "Chihu Doudian Page Fetch",
       nodeIntegration: false,
       contextIsolation: true
     });
+    const bootWaitMs = Math.max(0, Number(plan.pageFetchBootWaitMs ?? 800));
+    if (bootWaitMs) await delay(bootWaitMs);
     const code = `
       (async () => {
         const controller = new AbortController();
@@ -229,21 +633,52 @@ async function pageFetchJson(partition: string, url: string, source: string, pla
           const text = await response.text();
           let data = text;
           try { data = JSON.parse(text); } catch {}
-          return { ok: response.ok, status: response.status, data, error: response.ok ? "" : text.slice(0, 240) };
+          return {
+            ok: response.ok,
+            status: response.status,
+            url: response.url || ${JSON.stringify(url)},
+            pageHref: location.href,
+            pageTitle: document.title,
+            data,
+            error: response.ok ? "" : text.slice(0, 240)
+          };
         } catch (error) {
-          return { ok: false, status: 0, data: null, error: error && error.message ? error.message : String(error) };
+          return {
+            ok: false,
+            status: 0,
+            url: ${JSON.stringify(url)},
+            pageHref: location.href,
+            pageTitle: document.title,
+            data: null,
+            error: error && error.message ? error.message : String(error)
+          };
         } finally {
           clearTimeout(timer);
         }
       })();
     `;
-    const result = await native.windows.eval({ winId, code, timeoutMs: timeoutMs + 2000 }) as { ok?: boolean; status?: number; data?: unknown; error?: string };
+    const result = await native.windows.eval({ winId, code, timeoutMs: timeoutMs + 2000 }) as { ok?: boolean; status?: number; url?: string; pageHref?: string; pageTitle?: string; data?: unknown; error?: string } | null;
+    if (!result) {
+      return {
+        ok: false,
+        status: 0,
+        data: null,
+        error: "page fetch eval returned no result",
+        source,
+        url,
+        openUrl
+      };
+    }
     return {
       ok: result?.ok === true,
       status: Number(result?.status || 0),
       data: result?.data ?? null,
       error: String(result?.error || ""),
-      source
+      source,
+      url: String(result?.url || url),
+      openUrl,
+      pageHref: String(result?.pageHref || ""),
+      pageTitle: String(result?.pageTitle || "")
     };
   } finally {
     if (winId != null) await native.windows.destroy({ winId }).catch(() => undefined);

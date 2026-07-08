@@ -7,6 +7,7 @@ import type {
   DoudianViolationsDataResult,
   DoudianViolationsDataRow
 } from "../../types";
+import { requireChihuNative } from "../../native/client";
 import { repositoryDelete, repositoryGetAll, repositoryPut } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
@@ -381,6 +382,27 @@ function readTotal(payload: unknown, adapter: DoudianAdapterConfig) {
   return total !== undefined ? total : 0;
 }
 
+function mergePagePayloads(planKey: string, responses: RequestPlanResult[], adapter: DoudianAdapterConfig) {
+  const list = responses.flatMap((response) => firstArray({ [planKey]: response.data }, listPaths(adapter)));
+  const total = responses.reduce((max, response) => Math.max(max, readTotal({ [planKey]: response.data }, adapter)), 0);
+  const first = responses[0];
+  if (!first) return { ok: false, status: 0, data: null, error: "missing response", source: planKey };
+  return {
+    ...first,
+    ok: responses.every((response) => response.ok),
+    status: first.status || responses.find((response) => response.status)?.status || 0,
+    error: responses.map((response) => response.error).filter(Boolean).join("; "),
+    data: {
+      data: {
+        tickets: list,
+        total: total || list.length
+      },
+      tickets: list,
+      total: total || list.length
+    }
+  };
+}
+
 function extractRecords(store: DoudianStoreSummary, responses: Record<string, RequestPlanResult>, requestContext: Record<string, unknown>, adapter: DoudianAdapterConfig): DoudianViolationRecord[] {
   const payload = payloadFromResponses(responses);
   const items = firstArray(payload, listPaths(adapter));
@@ -494,6 +516,41 @@ function summarizeFailures(summary: Record<string, { status: number; success: bo
       code: response.code,
       message: response.message || ""
     }));
+}
+
+async function reportViolationsDataRow(args: {
+  store: DoudianStoreSummary;
+  row: DoudianViolationsDataRow;
+  detail: DoudianRunDetail;
+  summary: ReturnType<typeof rowSummary>;
+  responseSummary: Record<string, { status: number; success: boolean; code: unknown; message: string }>;
+  pageSummary: Record<string, unknown>;
+}) {
+  try {
+    await requireChihuNative().logs.report({
+      category: "doudian-violations-data",
+      event: "row",
+      shopId: args.store.shopId,
+      shopName: args.store.shopName,
+      partition: args.store.partition,
+      ok: args.detail.ok,
+      reason: args.detail.reason || "",
+      message: args.detail.message || "",
+      rowSummary: args.summary,
+      metrics: {
+        totalRecords: args.row.totalRecords,
+        pendingCount: args.row.pendingCount,
+        appealCount: args.row.appealCount,
+        rectificationCount: args.row.rectificationCount,
+        highRiskCount: args.row.highRiskCount,
+        penaltyAmount: args.row.penaltyAmount
+      },
+      pageSummary: args.pageSummary,
+      responses: args.responseSummary
+    }).catch(() => undefined);
+  } catch {
+    // Diagnostics must never block syncing.
+  }
 }
 
 function firstErrorMessage(responses: Record<string, RequestPlanResult>, adapter: DoudianAdapterConfig) {
@@ -679,9 +736,10 @@ function targetStores(stores: DoudianStoreSummary[], shopIds: string[] = []) {
 async function collectForStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, planKeys: string[], dateContext: DateContext, args: ViolationsDataArgs, index: number, total: number) {
   if (!store.partition) throw new Error("store partition missing");
   const responses: Record<string, RequestPlanResult> = {};
+  const pageSummary: Record<string, unknown> = {};
   const pageSize = Math.max(1, Math.min(200, Math.floor(Number(args.pageSize || 50))));
   const pageStart = Math.max(0, Math.floor(Number(args.page || 0)));
-  const maxPages = Math.max(1, Math.min(20, Math.floor(Number(args.maxPages || 1))));
+  const maxPages = Math.max(1, Math.min(200, Math.floor(Number(args.maxPages || policyNumber(payload.adapter, "violationsData.maxPages", 50)))));
   const requestContext: Record<string, unknown> = {
     ...dateContext,
     processStatus: args.processStatus || "",
@@ -699,21 +757,47 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
     let page = pageStart;
     let fetchedPages = 0;
     let remoteTotal = 0;
+    const pageResponses: RequestPlanResult[] = [];
+    const pageRecords: Array<Record<string, unknown>> = [];
     do {
       const key = fetchedPages === 0 ? planKey : `${planKey}:page:${page}`;
       const response = await runDoudianRequestPlan(payload, {
         partition: store.partition,
         planKey,
-        context: { ...requestContext, page: String(page), page_size: String(pageSize), pageSize: String(pageSize) }
+        context: { ...requestContext, page, page_size: pageSize, pageSize }
       });
       responses[key] = response;
+      pageResponses.push(response);
       const pagePayload = payloadFromResponses({ [planKey]: response });
+      const pageListCount = firstArray(pagePayload, listPaths(payload.adapter)).length;
       remoteTotal = readTotal(pagePayload, payload.adapter) || remoteTotal;
+      pageRecords.push({
+        page,
+        status: response.status || 0,
+        ok: requestPlanResponseOk(response, payload.adapter, planKey, violationsDataMappings(payload.adapter)),
+        code: responseCode(response) ?? null,
+        listCount: pageListCount,
+        total: remoteTotal || 0,
+        message: responseMessage(response)
+      });
       fetchedPages += 1;
       page += 1;
       if (!requestPlanResponseOk(response, payload.adapter, planKey, violationsDataMappings(payload.adapter))) break;
       if (!remoteTotal || fetchedPages >= Math.ceil(remoteTotal / pageSize)) break;
     } while (fetchedPages < maxPages);
+    if (pageResponses.length) {
+      responses[planKey] = mergePagePayloads(planKey, pageResponses, payload.adapter);
+      for (const key of Object.keys(responses)) {
+        if (key.startsWith(`${planKey}:page:`)) delete responses[key];
+      }
+    }
+    pageSummary[planKey] = {
+      fetchedPages,
+      pageSize,
+      remoteTotal,
+      mergedRecordCount: pageResponses.flatMap((response) => firstArray({ [planKey]: response.data }, listPaths(payload.adapter))).length,
+      pages: pageRecords
+    };
   }
 
   const normalizedResponses = Object.fromEntries(Object.entries(responses).map(([key, value]) => [key.split(":page:")[0], value]));
@@ -759,6 +843,7 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
       sourceFailures,
       productAssociationEnabled: associationEnabled(payload.adapter),
       productAssociationResponses: associationResult.responses,
+      pageSummary,
       rowSummary: summary,
       datePreset: dateContext.datePreset,
       beginDate: dateContext.beginDate,
@@ -767,6 +852,7 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
     index,
     total
   };
+  await reportViolationsDataRow({ store, row, detail, summary, responseSummary, pageSummary });
   return { row, records, detail };
 }
 

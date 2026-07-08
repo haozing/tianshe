@@ -98,7 +98,10 @@ function registerWindowHandlers() {
       const timeout = new Promise((_, reject) => {
         setTimeout(() => {
           const destroyed = win.isDestroyed() || win.webContents.isDestroyed();
-          reject(new Error(destroyed ? "executeJavaScript cancelled because window was destroyed" : `executeJavaScript timeout after ${timeoutMs}ms`));
+          const currentUrl = !destroyed ? win.webContents.getURL() : "";
+          reject(new Error(destroyed
+            ? "executeJavaScript cancelled because window was destroyed"
+            : `executeJavaScript timeout after ${timeoutMs}ms (winId=${args.winId}, url=${currentUrl}, codeLength=${String(args.code || args.jsContent || "").length})`));
         }, timeoutMs);
       });
       return await Promise.race([

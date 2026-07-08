@@ -36,6 +36,16 @@ function isTerminal(record?: DoudianOperationRecord | null) {
   return !!record && ["succeeded", "failed", "cancelled"].includes(record.status);
 }
 
+async function destroyRunnerWindow(operationId: string) {
+  const native = getChihuNative();
+  const existing = await getOperation(operationId);
+  const winId = runnerWindows.get(operationId) || existing?.runnerWinId;
+  if (native?.windows.destroy && winId) {
+    await native.windows.destroy({ winId }).catch(() => null);
+  }
+  runnerWindows.delete(operationId);
+}
+
 function operationIdFor(taskType: string) {
   return `${taskType}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -89,6 +99,7 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
       progress: record?.progress ?? 100,
       resultSummary: message.resultSummary
     });
+    await destroyRunnerWindow(message.operationId);
     resolveWaiters(message.operationId, record || null);
   }
   if (message.type === "task:error") {
@@ -105,6 +116,7 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
       progress: record?.progress ?? 0,
       error: message.error
     });
+    await destroyRunnerWindow(message.operationId);
     resolveWaiters(message.operationId, record || null);
   }
 }
