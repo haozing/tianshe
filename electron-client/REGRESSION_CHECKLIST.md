@@ -2,6 +2,13 @@
 
 This checklist covers the active Chihu Electron runtime. The current scope is Douyin/DouDian commerce plus shared desktop capabilities. PDD legacy workbench behavior is out of active scope.
 
+## Architecture Source Of Truth
+
+DouDian business orchestration is being migrated according to
+[`REMOTE_BUSINESS_ORCHESTRATION_MIGRATION_PLAN.md`](REMOTE_BUSINESS_ORCHESTRATION_MIGRATION_PLAN.md).
+Electron now exposes only generic desktop capabilities; remote-web owns the
+DouDian business orchestration and IndexedDB repository.
+
 ## Automated Checks
 
 Run the full local check:
@@ -21,7 +28,6 @@ Targeted smoke checks:
 ```powershell
 npm run smoke:cookie
 npm run smoke:http
-npm run smoke:db
 npm run smoke:files
 npm run smoke:logs
 npm run smoke:ui-contract
@@ -44,12 +50,11 @@ npm run check:desktop-ui-manual-ready
 - Default remote-web entry and environment override entry.
 - Cookie/session helpers, including temporary partition smoke coverage.
 - HTTP proxy helpers, including GET, POST JSON, Base64 response handling, and `Set-Cookie` writeback.
-- NeDB and SQLite helpers under temporary `userData`.
 - File helpers, including save, download, cancel download, upload, and explorer error handling.
 - Notification and log IPC contracts.
 - Window helpers, hidden child window lifecycle, information reads, JavaScript execution, and destroy flow.
 - Maintenance helpers, including invalid partition cleanup and client version data.
-- Store/DouDian service bridge contract exposed through the Chihu store IPC layer.
+- Remote DouDian task/runtime self-checks through `window.chihuNative` primitives.
 
 ## Manual Or External Checks
 

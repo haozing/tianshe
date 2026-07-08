@@ -1,5 +1,6 @@
 import type {
   BridgeSelfCheck,
+  DoudianAdapterPayload,
   DoudianBusinessDataResult,
   DoudianFundsDataResult,
   DoudianStaleGoodsCandidate,
@@ -8,6 +9,26 @@ import type {
   DoudianStoreResult,
   DoudianViolationsDataResult
 } from "../types";
+import { getChihuNative } from "../native/client";
+import {
+  createStoreGroup,
+  deleteEmptyStoreGroup,
+  deleteStoreLedger,
+  fetchBusinessData,
+  fetchBusinessDataLatest,
+  fetchFundsData,
+  fetchFundsDataLatest,
+  fetchStaleGoodsCleanup,
+  fetchViolationsData,
+  fetchViolationsDataLatest,
+  listStoreLedger,
+  openStoreWindow,
+  runDoudianStoreTask,
+  cancelDoudianTask,
+  renameStoreGroup,
+  updateStoreGroup
+} from "../domain/doudian";
+import { selectAndParseCompassFile as selectAndParseCompassFileRemote } from "../domain/doudian/fileImport";
 import { withDoudianAdapter } from "./doudianAdapter";
 
 export function missingBridgeSelfCheck(): BridgeSelfCheck {
@@ -26,18 +47,33 @@ export async function runBridgeSelfCheck(): Promise<BridgeSelfCheck> {
 }
 
 export async function minimizeMainWindow() {
+  const native = getChihuNative();
+  if (native?.windows.minimize) {
+    await native.windows.minimize({});
+    return true;
+  }
   if (!window.client || typeof window.client.minimizeWindow !== "function") return false;
   await window.client.minimizeWindow({});
   return true;
 }
 
 export async function toggleMaximizeMainWindow() {
+  const native = getChihuNative();
+  if (native?.windows.maximize) {
+    await native.windows.maximize({});
+    return true;
+  }
   if (!window.client || typeof window.client.maximizeWindow !== "function") return false;
   await window.client.maximizeWindow({});
   return true;
 }
 
 export async function closeMainWindow() {
+  const native = getChihuNative();
+  if (native?.windows.close) {
+    await native.windows.close({});
+    return true;
+  }
   if (!window.client || typeof window.client.closeWindow !== "function") return false;
   await window.client.closeWindow({});
   return true;
@@ -50,12 +86,26 @@ export async function openPlatformWindow(args: {
   width?: number;
   height?: number;
 }): Promise<{ ok: boolean; id?: unknown; message?: string }> {
+  const native = getChihuNative();
+  if (native?.windows.open) {
+    const id = await native.windows.open({
+      url: args.url,
+      title: args.title || "Chihu Manager - Platform Page",
+      partition: args.partition || "persist:chihu-doudian-shared",
+      width: args.width || 1280,
+      height: args.height || 820,
+      show: true,
+      nodeIntegration: false,
+      contextIsolation: true
+    });
+    return { ok: true, id };
+  }
   if (!window.client || typeof window.client.openWindow !== "function") {
     return { ok: false, message: "local window bridge unavailable" };
   }
   const id = await window.client.openWindow({
     url: args.url,
-    title: args.title || "赤狐管家 - 平台页面",
+    title: args.title || "Chihu Manager - Platform Page",
     partition: args.partition || "persist:chihu-doudian-shared",
     width: args.width || 1280,
     height: args.height || 820,
@@ -66,40 +116,41 @@ export async function openPlatformWindow(args: {
   return { ok: true, id };
 }
 
-function storesApi() {
-  return window.chihu?.stores || null;
-}
-
-async function withOptionalDoudianAdapter<T extends Record<string, unknown>>(args: T): Promise<T> {
-  try {
-    return await withDoudianAdapter(args);
-  } catch {
-    return args;
-  }
-}
-
 export async function listDoudianStores(): Promise<DoudianStoreResult> {
-  const args = await withOptionalDoudianAdapter({});
-  const api = storesApi();
-  if (api?.list) return api.list(args);
-  if (window.client?.storesList) return window.client.storesList(args);
-  return { ok: false, message: "本地店铺桥接不可用", stores: [] };
+  return listStoreLedger();
 }
 
 export async function fetchDoudianStores(operationId?: string, repairShopIds?: string[]): Promise<DoudianStoreResult> {
-  const args = await withDoudianAdapter({ ...(operationId ? { operationId } : {}), ...(repairShopIds?.length ? { repairShopIds } : {}) });
-  const api = storesApi();
-  if (api?.fetch) return api.fetch(args);
-  if (window.client?.storesFetch) return window.client.storesFetch(args);
-  return { ok: false, message: "本地店铺桥接不可用", stores: [] };
+  const args = await withDoudianAdapter({
+    ...(operationId ? { operationId } : {}),
+    ...(repairShopIds?.length ? { repairShopIds } : {})
+  });
+  const loginTimeoutMs = Math.max(3000, Number(args.doudianAdapter.adapter.timeouts?.loginMs || 300000));
+  return runDoudianStoreTask({
+    taskType: "fetchDoudianStores",
+    operationId,
+    adapterVersion: args.doudianAdapter.adapter.version,
+    ruleVersion: args.doudianAdapter.scripts?.version || "",
+    payload: {
+      doudianAdapter: args.doudianAdapter,
+      repairShopIds,
+      timeoutMs: loginTimeoutMs
+    }
+  }, loginTimeoutMs + 60000);
 }
 
 export async function refreshDoudianStoreStatus(shopIds?: string[], operationId?: string): Promise<DoudianStoreResult> {
   const args = await withDoudianAdapter({ shopIds: shopIds || [], ...(operationId ? { operationId } : {}) });
-  const api = storesApi();
-  if (api?.refreshStatus) return api.refreshStatus(args);
-  if (window.client?.storesRefreshStatus) return window.client.storesRefreshStatus(args);
-  return { ok: false, message: "本地店铺桥接不可用", stores: [] };
+  return runDoudianStoreTask({
+    taskType: "refreshDoudianStoreStatus",
+    operationId,
+    adapterVersion: args.doudianAdapter.adapter.version,
+    ruleVersion: args.doudianAdapter.scripts?.version || "",
+    payload: {
+      doudianAdapter: args.doudianAdapter,
+      shopIds: shopIds || []
+    }
+  }, 180000);
 }
 
 export async function fetchDoudianBusinessData(args: {
@@ -117,10 +168,7 @@ export async function fetchDoudianBusinessData(args: {
     ...(args.endDate ? { endDate: args.endDate } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
-  const api = storesApi();
-  if (api?.businessData) return api.businessData(nextArgs);
-  if (window.client?.storesBusinessData) return window.client.storesBusinessData(nextArgs);
-  return { ok: false, message: "local business data bridge unavailable", rows: [], stores: [] };
+  return fetchBusinessData(nextArgs);
 }
 
 export async function fetchDoudianBusinessDataLatest(args: {
@@ -136,10 +184,7 @@ export async function fetchDoudianBusinessDataLatest(args: {
     ...(args.beginDate ? { beginDate: args.beginDate } : {}),
     ...(args.endDate ? { endDate: args.endDate } : {})
   }, { force: args.forceAdapter === true });
-  const api = storesApi();
-  if (api?.businessDataLatest) return api.businessDataLatest(nextArgs);
-  if (window.client?.storesBusinessDataLatest) return window.client.storesBusinessDataLatest(nextArgs);
-  return { ok: true, status: "empty", message: "暂无最近经营数据", rows: [], stores: [] };
+  return fetchBusinessDataLatest(nextArgs);
 }
 
 export async function fetchDoudianFundsData(args: {
@@ -157,10 +202,7 @@ export async function fetchDoudianFundsData(args: {
     ...(args.endDate ? { endDate: args.endDate } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
-  const api = storesApi();
-  if (api?.fundsData) return api.fundsData(nextArgs);
-  if (window.client?.storesFundsData) return window.client.storesFundsData(nextArgs);
-  return { ok: false, status: "missing", message: "本地资金数据桥接待接入", rows: [], stores: [] };
+  return fetchFundsData(nextArgs);
 }
 
 export async function fetchDoudianFundsDataLatest(args: {
@@ -176,10 +218,7 @@ export async function fetchDoudianFundsDataLatest(args: {
     ...(args.beginDate ? { beginDate: args.beginDate } : {}),
     ...(args.endDate ? { endDate: args.endDate } : {})
   }, { force: args.forceAdapter === true });
-  const api = storesApi();
-  if (api?.fundsDataLatest) return api.fundsDataLatest(nextArgs);
-  if (window.client?.storesFundsDataLatest) return window.client.storesFundsDataLatest(nextArgs);
-  return { ok: false, status: "missing", message: "本地资金数据桥接待接入", rows: [], stores: [] };
+  return fetchFundsDataLatest(nextArgs);
 }
 
 export async function fetchDoudianViolationsData(args: {
@@ -199,10 +238,7 @@ export async function fetchDoudianViolationsData(args: {
     ...(args.processStatus ? { processStatus: args.processStatus } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
-  const api = storesApi();
-  if (api?.violationsData) return api.violationsData(nextArgs);
-  if (window.client?.storesViolationsData) return window.client.storesViolationsData(nextArgs);
-  return { ok: false, status: "missing", message: "本地违规管理桥接待接入", rows: [], records: [], stores: [] };
+  return fetchViolationsData(nextArgs);
 }
 
 export async function fetchDoudianViolationsDataLatest(args: {
@@ -220,10 +256,7 @@ export async function fetchDoudianViolationsDataLatest(args: {
     ...(args.endDate ? { endDate: args.endDate } : {}),
     ...(args.processStatus ? { processStatus: args.processStatus } : {})
   }, { force: args.forceAdapter === true });
-  const api = storesApi();
-  if (api?.violationsDataLatest) return api.violationsDataLatest(nextArgs);
-  if (window.client?.storesViolationsDataLatest) return window.client.storesViolationsDataLatest(nextArgs);
-  return { ok: true, status: "empty", message: "暂无最近违规数据", rows: [], records: [], stores: [] };
+  return fetchViolationsDataLatest(nextArgs);
 }
 
 export async function fetchDoudianStaleGoodsCleanup(args: {
@@ -253,10 +286,7 @@ export async function fetchDoudianStaleGoodsCleanup(args: {
     ...(args.compassRows?.length ? { compassRows: args.compassRows } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
-  const api = storesApi();
-  if (api?.staleGoodsCleanup) return api.staleGoodsCleanup(nextArgs);
-  if (window.client?.storesStaleGoodsCleanup) return window.client.storesStaleGoodsCleanup(nextArgs);
-  return { ok: false, status: "missing", message: "local stale goods cleanup bridge unavailable", rows: [], candidates: [], executions: [], stores: [] };
+  return fetchStaleGoodsCleanup(nextArgs);
 }
 
 export async function selectAndParseCompassFile(): Promise<{
@@ -268,80 +298,38 @@ export async function selectAndParseCompassFile(): Promise<{
   rows?: Array<Record<string, unknown>>;
   count?: number;
 }> {
-  const parser = window.client?.selectAndParseDelimitedFile;
-  if (typeof parser !== "function") {
-    return { ok: false, status: "missing", message: "本地文件解析桥接待接入", rows: [] };
-  }
-  return parser({
-    title: "选择经营版_商品_商品列表",
-    filters: [
-      { name: "经营版商品列表", extensions: ["csv", "tsv", "txt", "xlsx", "xls"] },
-      { name: "CSV/TSV/TXT", extensions: ["csv", "tsv", "txt"] },
-      { name: "Excel", extensions: ["xlsx", "xls"] }
-    ]
-  }) as Promise<{
-    ok: boolean;
-    canceled?: boolean;
-    status?: string;
-    message?: string;
-    fileName?: string;
-    rows?: Array<Record<string, unknown>>;
-    count?: number;
-  }>;
+  return selectAndParseCompassFileRemote();
 }
 
 export async function cancelDoudianStoreOperation(operationId: string): Promise<DoudianStoreResult> {
-  const args = { operationId };
-  const api = storesApi();
-  if (api?.cancel) return api.cancel(args);
-  if (window.client?.storesCancel) return window.client.storesCancel(args);
-  return { ok: false, message: "本地店铺桥接不可用", stores: [] };
+  await cancelDoudianTask(operationId);
+  return { ...(await listStoreLedger()), ok: false, status: "cancelled", operationId, message: "已取消任务" };
 }
 
 export async function openDoudianStore(shopId: string): Promise<DoudianStoreResult> {
-  const args = await withDoudianAdapter({ shopId });
-  const api = storesApi();
-  if (api?.open) return api.open(args);
-  if (window.client?.storesOpen) return window.client.storesOpen(args);
-  return { ok: false, message: "本地店铺桥接不可用", stores: [] };
+  let doudianAdapter: DoudianAdapterPayload | undefined;
+  try {
+    doudianAdapter = (await withDoudianAdapter({ shopId })).doudianAdapter;
+  } catch {}
+  return openStoreWindow(shopId, { doudianAdapter });
 }
 
 export async function deleteDoudianStores(shopIds: string[]): Promise<DoudianStoreResult> {
-  const args = await withOptionalDoudianAdapter({ shopIds });
-  const api = storesApi();
-  if (api?.delete) return api.delete(args);
-  if (window.client?.storesDelete) return window.client.storesDelete(args);
-  return { ok: false, message: "本地店铺桥接不可用", stores: [] };
+  return deleteStoreLedger(shopIds);
 }
 
 export async function renameDoudianStoreGroup(oldGroupName: string, groupName: string): Promise<DoudianStoreResult> {
-  const args = await withOptionalDoudianAdapter({ action: "rename", oldGroupName, groupName, groupId: groupName });
-  const api = storesApi();
-  if (api?.updateGroup) return api.updateGroup(args);
-  if (window.client?.storesUpdateGroup) return window.client.storesUpdateGroup(args);
-  return { ok: false, message: "本地店铺桥接不可用", stores: [] };
+  return renameStoreGroup(oldGroupName, groupName);
 }
 
 export async function deleteEmptyDoudianStoreGroup(groupName: string): Promise<DoudianStoreResult> {
-  const args = await withOptionalDoudianAdapter({ action: "deleteEmpty", groupName });
-  const api = storesApi();
-  if (api?.updateGroup) return api.updateGroup(args);
-  if (window.client?.storesUpdateGroup) return window.client.storesUpdateGroup(args);
-  return { ok: false, message: "本地店铺桥接不可用", stores: [] };
+  return deleteEmptyStoreGroup(groupName);
 }
 
 export async function createDoudianStoreGroup(groupName: string): Promise<DoudianStoreResult> {
-  const args = await withOptionalDoudianAdapter({ action: "create", groupName, groupId: groupName });
-  const api = storesApi();
-  if (api?.updateGroup) return api.updateGroup(args);
-  if (window.client?.storesUpdateGroup) return window.client.storesUpdateGroup(args);
-  return { ok: false, message: "本地店铺桥接不可用", stores: [] };
+  return createStoreGroup(groupName);
 }
 
 export async function updateDoudianStoreGroup(shopIds: string[], groupName: string): Promise<DoudianStoreResult> {
-  const args = await withOptionalDoudianAdapter({ shopIds, groupName, groupId: groupName });
-  const api = storesApi();
-  if (api?.updateGroup) return api.updateGroup(args);
-  if (window.client?.storesUpdateGroup) return window.client.storesUpdateGroup(args);
-  return { ok: false, message: "本地店铺桥接不可用", stores: [] };
+  return updateStoreGroup(shopIds, groupName);
 }

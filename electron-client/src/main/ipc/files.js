@@ -11,82 +11,6 @@ const DEFAULT_DOWNLOAD_TIMEOUT = 120000;
 const TEMP_SUFFIX = ".downloading";
 const downloadTasks = new Map();
 
-function parseDelimitedRows(text) {
-  const clean = String(text || "").replace(/^\ufeff/, "");
-  const delimiter = clean.includes("\t") ? "\t" : ",";
-  const rows = [];
-  let cell = "";
-  let row = [];
-  let quoted = false;
-  for (let index = 0; index < clean.length; index += 1) {
-    const char = clean[index];
-    const next = clean[index + 1];
-    if (char === "\"" && quoted && next === "\"") {
-      cell += "\"";
-      index += 1;
-    } else if (char === "\"") {
-      quoted = !quoted;
-    } else if (char === delimiter && !quoted) {
-      row.push(cell.trim());
-      cell = "";
-    } else if ((char === "\n" || char === "\r") && !quoted) {
-      if (char === "\r" && next === "\n") index += 1;
-      row.push(cell.trim());
-      if (row.some(Boolean)) rows.push(row);
-      row = [];
-      cell = "";
-    } else {
-      cell += char;
-    }
-  }
-  row.push(cell.trim());
-  if (row.some(Boolean)) rows.push(row);
-  const header = (rows.shift() || []).map((item) => String(item || "").trim());
-  return rows.map((cells) => {
-    const item = {};
-    header.forEach((key, index) => {
-      if (key) item[key] = cells[index] ?? "";
-    });
-    const productId = String(
-      item["商品ID"] ||
-      item["商品id"] ||
-      item["商品 Id"] ||
-      item.productId ||
-      item.product_id ||
-      item.goods_id ||
-      ""
-    ).trim();
-    if (productId) item.productId = productId;
-    return item;
-  }).filter((item) => item.productId || Object.keys(item).length > 1);
-}
-
-function normalizeMetricRows(rows) {
-  return (Array.isArray(rows) ? rows : []).map((source) => {
-    const item = { ...source };
-    const productId = String(
-      item["商品ID"] ||
-      item["商品id"] ||
-      item["商品 Id"] ||
-      item.productId ||
-      item.product_id ||
-      item.goods_id ||
-      ""
-    ).trim();
-    if (productId) item.productId = productId;
-    return item;
-  }).filter((item) => item.productId || Object.keys(item).length > 1);
-}
-
-function parseWorkbookRows(filePath) {
-  const xlsx = require("xlsx");
-  const workbook = xlsx.readFile(filePath, { cellDates: false });
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) return [];
-  const sheet = workbook.Sheets[sheetName];
-  return normalizeMetricRows(xlsx.utils.sheet_to_json(sheet, { defval: "", raw: false }));
-}
-
 function getTask(taskId) {
   const id = String(taskId || "").trim();
   if (!id) return null;
@@ -101,7 +25,7 @@ function clearTask(taskId) {
 
 function cancelTask(taskId) {
   const task = downloadTasks.get(String(taskId || "").trim());
-  if (!task) return { isSuccess: false, message: "任务不存在或已结束" };
+  if (!task) return { isSuccess: false, message: "task not found or already completed" };
   task.cancelled = true;
   if (task.abort) task.abort();
   return { isSuccess: true };
@@ -134,7 +58,7 @@ async function selectDirectoryDialog(event, options = {}) {
   }
   const win = BrowserWindow.fromWebContents(event.sender);
   const result = await dialog.showOpenDialog(win, {
-    title: "选择保存目录",
+    title: "Select save directory",
     properties: ["openDirectory", "createDirectory"],
     ...options
   });
@@ -142,54 +66,66 @@ async function selectDirectoryDialog(event, options = {}) {
   return { canceled: false, path: result.filePaths[0] };
 }
 
-async function selectAndParseDelimitedFile(event, options = {}) {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  const result = await dialog.showOpenDialog(win, {
-    title: options.title || "选择经营版商品列表",
-    properties: ["openFile"],
-    filters: [
-      { name: "经营版商品列表", extensions: ["csv", "tsv", "txt", "xlsx", "xls"] },
-      { name: "文本表格", extensions: ["csv", "tsv", "txt"] },
-      { name: "Excel", extensions: ["xlsx", "xls"] }
-    ],
-    ...options
-  });
-  if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true, rows: [], fileName: "", message: "已取消选择" };
-  const filePath = result.filePaths[0];
-  const fileName = path.basename(filePath);
-  const ext = path.extname(fileName).toLowerCase();
-  if (ext === ".xlsx" || ext === ".xls") {
-    const rows = parseWorkbookRows(filePath);
+async function selectFileDialog(event, options = {}) {
+  if (process.env.CHIHU_E2E_SMOKE === "1" && options.chihu_e2e_mock_path) {
+    const filePath = String(options.chihu_e2e_mock_path);
     return {
       ok: true,
       canceled: false,
-      rows,
-      fileName,
+      fileName: path.basename(filePath),
       filePath,
-      count: rows.length,
-      message: rows.length ? `已读取 ${rows.length} 条经营版商品指标` : "XLSX 未识别到商品指标"
+      e2e: true
     };
   }
-  if (![".csv", ".tsv", ".txt"].includes(ext)) {
-    return { ok: false, canceled: false, rows: [], fileName, filePath, status: "unsupported", message: "不支持的文件类型" };
-  }
-  const text = fs.readFileSync(filePath, "utf8");
-  const rows = parseDelimitedRows(text);
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(win, {
+    title: options.title || "Select file",
+    properties: ["openFile"],
+    filters: Array.isArray(options.filters) ? options.filters : undefined
+  });
+  if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
+  const filePath = result.filePaths[0];
   return {
     ok: true,
     canceled: false,
-    rows,
-    fileName,
-    filePath,
-    count: rows.length,
-    message: rows.length ? `已读取 ${rows.length} 条经营版商品指标` : "文件未识别到商品指标"
+    fileName: path.basename(filePath),
+    filePath
   };
+}
+
+async function readFileRaw(options = {}) {
+  const filePath = String(options.filePath || "").trim();
+  const encoding = options.encoding === "base64" ? "base64" : "utf8";
+  const maxBytes = Number(options.maxBytes || 0);
+  if (!filePath) return { ok: false, message: "missing filePath" };
+  try {
+    const stat = fs.statSync(filePath);
+    if (maxBytes > 0 && stat.size > maxBytes) {
+      return { ok: false, message: "file exceeds maxBytes", fileName: path.basename(filePath), size: stat.size };
+    }
+    return {
+      ok: true,
+      fileName: path.basename(filePath),
+      encoding,
+      content: fs.readFileSync(filePath, encoding),
+      size: stat.size
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      fileName: path.basename(filePath),
+      encoding,
+      content: "",
+      size: 0,
+      message: error.message || "read file failed"
+    };
+  }
 }
 
 async function saveBufferToPath(options = {}) {
   const { destPath, buffer } = options;
-  if (!destPath) return { isSuccess: false, message: "缺少 destPath" };
-  if (buffer == null) return { isSuccess: false, message: "缺少 buffer" };
+  if (!destPath) return { isSuccess: false, message: "missing destPath" };
+  if (buffer == null) return { isSuccess: false, message: "missing buffer" };
 
   try {
     const data = Buffer.isBuffer(buffer)
@@ -205,7 +141,7 @@ async function saveBufferToPath(options = {}) {
     fs.renameSync(tmp, destPath);
     return { isSuccess: true, destPath };
   } catch (error) {
-    return { isSuccess: false, message: error.message || "写入失败" };
+    return { isSuccess: false, message: error.message || "write failed" };
   }
 }
 
@@ -227,8 +163,8 @@ async function downloadFileToPath(options = {}) {
     method = "auto"
   } = options;
 
-  if (!url) return { isSuccess: false, message: "缺少 url" };
-  if (!destPath) return { isSuccess: false, message: "缺少 destPath" };
+  if (!url) return { isSuccess: false, message: "missing url" };
+  if (!destPath) return { isSuccess: false, message: "missing destPath" };
 
   const task = getTask(taskId);
   const requestHeaders = { ...headers };
@@ -245,7 +181,7 @@ async function downloadFileToPath(options = {}) {
           headers: requestHeaders,
           signal: controller.signal
         });
-        if (!response.ok) throw new Error(`下载失败: HTTP ${response.status}`);
+        if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`);
         await writeStreamToPath(Readable.fromWeb(response.body), destPath);
       } finally {
         clearTimeout(timer);
@@ -267,7 +203,7 @@ async function downloadFileToPath(options = {}) {
     return { isSuccess: true, destPath, usedMethod: "headers" };
   } catch (error) {
     if (task && task.cancelled) return { isSuccess: false, message: "cancelled" };
-    return { isSuccess: false, message: error.message || "下载失败", status: error.status };
+    return { isSuccess: false, message: error.message || "download failed", status: error.status };
   } finally {
     clearTask(taskId);
   }
@@ -275,8 +211,8 @@ async function downloadFileToPath(options = {}) {
 
 async function openPathInExplorer(options = {}) {
   const target = String(options.path || "").trim();
-  if (!target) return { isSuccess: false, message: "缺少 path" };
-  if (!fs.existsSync(target)) return { isSuccess: false, message: "路径不存在" };
+  if (!target) return { isSuccess: false, message: "missing path" };
+  if (!fs.existsSync(target)) return { isSuccess: false, message: "path does not exist" };
 
   const stat = fs.statSync(target);
   if (process.env.CHIHU_E2E_SMOKE === "1" && options.chihu_e2e_dry_run) {
@@ -353,7 +289,9 @@ function base64ToFileLike(base64, fileName) {
 function registerFileHandlers() {
   registerUploadHandler();
   ipcMain.handle("selectDirectory", (event, args) => selectDirectoryDialog(event, args));
-  ipcMain.handle("selectAndParseDelimitedFile", (event, args) => selectAndParseDelimitedFile(event, args));
+  ipcMain.handle("native:files:selectFile", (event, args) => selectFileDialog(event, args));
+  ipcMain.handle("native:files:readFile", (_event, args) => readFileRaw(args));
+  ipcMain.handle("native:files:download", (_event, args) => downloadFileToPath(args));
   ipcMain.handle("downloadFileToPath", (_event, args) => downloadFileToPath(args));
   ipcMain.handle("cancelDownloadFileToPath", (_event, args) => cancelTask(args && args.taskId));
   ipcMain.handle("saveBufferToPath", (_event, args) => saveBufferToPath(args));

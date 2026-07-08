@@ -1,6 +1,16 @@
 import * as Tabs from "@radix-ui/react-tabs";
+import { useEffect, useState } from "react";
 import { RELEASE_MANIFEST_URL } from "../bridge/config";
 import { STORAGE_KEYS } from "../bridge/storage";
+import {
+  addDoudianProgressListener,
+  cancelDoudianTask,
+  runDoudianRepositorySelfCheck,
+  restoreDoudianTasks,
+  startMockLongDoudianTask,
+  type DoudianOperationRecord,
+  type DoudianProgressDetail
+} from "../domain/doudian";
 import type { ShellState } from "../types";
 import { StatusPill } from "./StatusPill";
 
@@ -32,6 +42,58 @@ function Panel({ title, marker, children }: { title: string; marker: string; chi
 export function DiagnosticsPage({ state }: { state: ShellState }) {
   const bridgeStatus = state.bridge.ok ? "ready" : "missing";
   const configStatus = state.configError ? "error" : "ready";
+  const [operation, setOperation] = useState<DoudianOperationRecord | null>(null);
+  const [progress, setProgress] = useState<DoudianProgressDetail | null>(null);
+  const [activeCount, setActiveCount] = useState(0);
+  const [repositoryStatus, setRepositoryStatus] = useState("pending");
+
+  useEffect(() => {
+    let cancelled = false;
+    restoreDoudianTasks().then((records) => {
+      if (cancelled) return;
+      setActiveCount(records.length);
+      setOperation(records[0] || null);
+    }).catch(() => {
+      if (!cancelled) setActiveCount(0);
+    });
+    runDoudianRepositorySelfCheck().then((result) => {
+      if (!cancelled) setRepositoryStatus(result.ok ? `${result.dbName} / ${result.objectStores.length} stores` : "failed");
+    }).catch((error) => {
+      if (!cancelled) setRepositoryStatus(error instanceof Error ? error.message : String(error));
+    });
+    const remove = addDoudianProgressListener((event) => {
+      setProgress(event.detail);
+    });
+    return () => {
+      cancelled = true;
+      remove();
+    };
+  }, []);
+
+  async function startMockTask() {
+    const record = await startMockLongDoudianTask({
+      durationMs: 3000,
+      stepMs: 300,
+      adapterVersion: state.doudianAdapter.adapterVersion,
+      ruleVersion: state.doudianAdapter.contractVersion,
+      metadata: { source: "diagnostics" }
+    });
+    setOperation(record);
+    setProgress({
+      operationId: record.operationId,
+      taskType: record.taskType,
+      status: "running",
+      progress: 0,
+      message: "mock task started"
+    });
+    setActiveCount((count) => Math.max(1, count));
+  }
+
+  async function cancelMockTask() {
+    if (!operation) return;
+    await cancelDoudianTask(operation.operationId);
+    setActiveCount(0);
+  }
 
   return (
     <section className="min-h-0 rounded-xl border border-shell-line bg-white/90 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]" data-business-slot="ready">
@@ -107,6 +169,7 @@ export function DiagnosticsPage({ state }: { state: ShellState }) {
                   </li>
                 ))}
               </ul>
+              <p className="mt-3 text-[12px] font-semibold text-[#344054]">Doudian repository: {repositoryStatus}</p>
             </Panel>
 
             <Panel title="Diagnostics" marker={String(state.diagnostics.length)}>
@@ -119,6 +182,27 @@ export function DiagnosticsPage({ state }: { state: ShellState }) {
                   </li>
                 ))}
               </ul>
+            </Panel>
+
+            <Panel title="Doudian Task Runner" marker={progress?.status || operation?.status || "idle"}>
+              <KeyValue
+                rows={[
+                  ["Active", String(activeCount)],
+                  ["Operation", operation?.operationId || "-"],
+                  ["Task", operation?.taskType || "-"],
+                  ["Status", progress?.status || operation?.status || "-"],
+                  ["Progress", progress ? `${progress.progress}%` : `${operation?.progress || 0}%`],
+                  ["Message", progress?.message || progress?.resultSummary || progress?.error || operation?.resultSummary || "-"]
+                ]}
+              />
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button className="h-8 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white disabled:opacity-50" type="button" disabled={progress?.status === "running"} onClick={() => void startMockTask()}>
+                  Start Mock Task
+                </button>
+                <button className="h-8 rounded-md border border-[#dbe5f2] bg-white px-3 text-[12px] font-semibold text-[#344054] disabled:opacity-50" type="button" disabled={!operation || progress?.status !== "running"} onClick={() => void cancelMockTask()}>
+                  Cancel
+                </button>
+              </div>
             </Panel>
           </div>
         </Tabs.Content>

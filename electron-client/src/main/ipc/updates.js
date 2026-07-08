@@ -126,6 +126,14 @@ function registerUpdateHandlers(context) {
   ipcMain.handle("getClientVersionData", async () => {
     return getClientVersionData();
   });
+
+  ipcMain.handle("native:updates:start", async (_event, args = {}) => {
+    return startAutoUpdate(context, args);
+  });
+
+  ipcMain.handle("native:updates:getVersionData", async () => {
+    return getClientVersionData();
+  });
 }
 
 module.exports = { registerUpdateHandlers };

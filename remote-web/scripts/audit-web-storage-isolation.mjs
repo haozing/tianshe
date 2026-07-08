@@ -17,8 +17,12 @@ const SOURCE_FILES = [
   "new-remote-web/bridge.js",
   "new-remote-web/config/chihu-config.json",
   "new-remote-web/release-manifest.json",
-  "client-shell/src/bridge/storage.ts"
+  "client-shell/src/bridge/storage.ts",
+  "client-shell/src/domain/doudian/repository.ts"
 ];
+
+const CONTROLLED_INDEXEDDB_FILE = "client-shell/src/domain/doudian/repository.ts";
+const CONTROLLED_INDEXEDDB_NAME = "chihu20_doudian";
 
 const DYNAMIC_STORAGE_FUNCTIONS = new Set([
   "storageSet",
@@ -134,7 +138,27 @@ function guardStatus(appText) {
   return output;
 }
 
-function auditForbiddenPatterns(source, issues) {
+function isControlledIndexedDbUsage(source) {
+  return source.relativePath === CONTROLLED_INDEXEDDB_FILE &&
+    source.text.includes(`DOUDIAN_DB_NAME = "${CONTROLLED_INDEXEDDB_NAME}"`) &&
+    source.text.includes("window.indexedDB.open(DOUDIAN_DB_NAME");
+}
+
+function isBundledControlledIndexedDbUsage(source) {
+  return source.relativePath === "new-remote-web/app.js" &&
+    source.text.includes(CONTROLLED_INDEXEDDB_NAME) &&
+    source.text.includes(".indexedDB.open(");
+}
+
+function isScriptTemplateCookieUsage(source, index) {
+  if (source.relativePath === "client-shell/src/bridge/doudianScripts.ts") return true;
+  if (source.relativePath !== "new-remote-web/app.js") return false;
+  const before = source.text.slice(Math.max(0, index - 500), index);
+  const after = source.text.slice(index, index + 500);
+  return before.includes("readCookie") && after.includes("callABogus");
+}
+
+function auditForbiddenPatterns(source, issues, controlledIndexedDbUsages) {
   const patterns = [
     {
       rule: "no-document-cookie",
@@ -160,6 +184,33 @@ function auditForbiddenPatterns(source, issues) {
 
   for (const pattern of patterns) {
     for (const match of source.text.matchAll(pattern.regex)) {
+      if (pattern.rule === "no-indexeddb" && isControlledIndexedDbUsage(source)) {
+        const location = lineColumn(source.text, match.index || 0);
+        controlledIndexedDbUsages.push({
+          file: rel(source.filePath),
+          line: location.line,
+          column: location.column,
+          dbName: CONTROLLED_INDEXEDDB_NAME,
+          status: "controlled",
+          detail: "fixed doudian business repository IndexedDB"
+        });
+        continue;
+      }
+      if (pattern.rule === "no-indexeddb" && isBundledControlledIndexedDbUsage(source)) {
+        const location = lineColumn(source.text, match.index || 0);
+        controlledIndexedDbUsages.push({
+          file: rel(source.filePath),
+          line: location.line,
+          column: location.column,
+          dbName: CONTROLLED_INDEXEDDB_NAME,
+          status: "controlled-bundle",
+          detail: "bundled use traced to fixed doudian business repository"
+        });
+        continue;
+      }
+      if (pattern.rule === "no-document-cookie" && isScriptTemplateCookieUsage(source, match.index || 0)) {
+        continue;
+      }
       addIssue(issues, source, match.index || 0, pattern.rule, pattern.detail);
     }
   }
@@ -281,6 +332,7 @@ function renderMarkdown(report) {
     `- Source files: ${report.summary.sourceFileCount}`,
     `- Allowed storage keys: ${report.summary.allowedStorageKeyCount}`,
     `- localStorage calls: ${report.summary.localStorageCallCount}`,
+    `- Controlled IndexedDB usages: ${report.summary.controlledIndexedDbUsageCount}`,
     `- Issues: ${report.summary.issueCount}`,
     `- Runtime guard: ${report.summary.runtimeGuardOk ? "ok" : "fail"}`,
     "",
@@ -301,6 +353,22 @@ function renderMarkdown(report) {
       call.status,
       call.detail
     ].map(mdEscape).join(" | ")} |`),
+    "",
+    "## Controlled IndexedDB",
+    "",
+    report.controlledIndexedDbUsages.length
+      ? [
+        "| File | Line | DB | Status | Detail |",
+        "|---|---:|---|---|---|",
+        ...report.controlledIndexedDbUsages.map((usage) => `| ${[
+          usage.file,
+          usage.line,
+          usage.dbName,
+          usage.status,
+          usage.detail
+        ].map(mdEscape).join(" | ")} |`)
+      ].join("\n")
+      : "- none",
     "",
     "## Issues",
     "",
@@ -329,6 +397,7 @@ function renderMarkdown(report) {
 const sources = SOURCE_FILES.map(readSource);
 const missingSources = sources.filter((source) => !source.exists);
 const issues = [];
+const controlledIndexedDbUsages = [];
 for (const source of sources) {
   if (!source.exists) {
     issues.push({
@@ -341,7 +410,7 @@ for (const source of sources) {
     });
     continue;
   }
-  auditForbiddenPatterns(source, issues);
+  auditForbiddenPatterns(source, issues, controlledIndexedDbUsages);
 }
 
 const appSource = sources.find((source) => source.relativePath === "new-remote-web/app.js");
@@ -369,6 +438,7 @@ const report = {
     missingSourceCount: missingSources.length,
     allowedStorageKeyCount: localStorageAudit.allowedValues.length,
     localStorageCallCount: localStorageAudit.calls.length,
+    controlledIndexedDbUsageCount: controlledIndexedDbUsages.length,
     issueCount: issues.length,
     failedIssueCount: failedIssues.length,
     runtimeGuardOk
@@ -376,6 +446,8 @@ const report = {
   rules: {
     oldWebCookieDirectAccessAllowed: false,
     oldWebIndexedDbAllowed: false,
+    controlledIndexedDbName: CONTROLLED_INDEXEDDB_NAME,
+    controlledIndexedDbFile: CONTROLLED_INDEXEDDB_FILE,
     oldWebSessionStorageAllowed: false,
     localStoragePrefix: "chihu20_",
     placeholderDomainRuntimeTargetAllowed: false
@@ -388,6 +460,7 @@ const report = {
   allowedStorageKeys: localStorageAudit.allowedValues,
   runtimeGuards: guards,
   localStorageCalls: localStorageAudit.calls,
+  controlledIndexedDbUsages,
   issues,
   outputs: {
     json: rel(jsonOutputPath),

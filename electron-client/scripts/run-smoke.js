@@ -212,12 +212,13 @@ function writeSmokeArtifact(result) {
 }
 
 async function main() {
-  const httpSmoke = ["http", "files", "logs", "ui-contract", "maintenance"].includes(scenario) ? await createHttpSmokeServer() : null;
+  const httpSmoke = ["bridge", "http", "files", "logs", "ui-contract", "maintenance"].includes(scenario) ? await createHttpSmokeServer() : null;
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), `chihu-electron-smoke-${scenario}-`));
   const env = {
     ...process.env,
     CHIHU_E2E_SMOKE: "1",
     CHIHU_E2E_SMOKE_SCENARIO: scenario,
+    CHIHU_E2E_TIMEOUT_MS: process.env.CHIHU_E2E_TIMEOUT_MS || (scenario === "bridge" ? "45000" : "15000"),
     CHIHU_USER_DATA_DIR: userDataDir,
     CHIHU_HOME_URL: process.env.CHIHU_HOME_URL || process.env.CHIHU_REMOTE_WEB_URL || "http://chihu-remote.localhost:4173/new-remote-web/"
   };

@@ -9,6 +9,20 @@ const remoteRoot = join(repoRoot, "remote-web");
 const adapterPath = join(remoteRoot, "new-remote-web", "config", "doudian-adapter.json");
 const servicePath = join(repoRoot, "electron-client", "src", "main", "doudian", "service.js");
 const businessDataPagePath = join(remoteRoot, "client-shell", "src", "components", "BusinessDataPage.tsx");
+const clientShellRoot = join(remoteRoot, "client-shell", "src");
+const appPath = join(clientShellRoot, "App.tsx");
+const doudianAdapterClientPath = join(clientShellRoot, "bridge", "doudianAdapter.ts");
+const doudianScriptsClientPath = join(clientShellRoot, "bridge", "doudianScripts.ts");
+const requestPlanClientPath = join(clientShellRoot, "domain", "doudian", "requestPlan.ts");
+const businessDataClientPath = join(clientShellRoot, "domain", "doudian", "businessData.ts");
+const fundsDataClientPath = join(clientShellRoot, "domain", "doudian", "fundsData.ts");
+const violationsDataClientPath = join(clientShellRoot, "domain", "doudian", "violationsData.ts");
+const staleGoodsClientPath = join(clientShellRoot, "domain", "doudian", "staleGoods.ts");
+const storeImportClientPath = join(clientShellRoot, "domain", "doudian", "storeImport.ts");
+const storeGroupsClientPath = join(clientShellRoot, "domain", "doudian", "storeGroups.ts");
+const taskClientPath = join(clientShellRoot, "domain", "doudian", "taskClient.ts");
+const progressClientPath = join(clientShellRoot, "domain", "doudian", "progress.ts");
+const repositoryClientPath = join(clientShellRoot, "domain", "doudian", "repository.ts");
 const outputPath = join(remoteRoot, "artifacts", "doudian-remote-update-matrix.json");
 const leakageOutputPath = join(remoteRoot, "artifacts", "doudian-local-leakage-audit.json");
 const leakageScriptPath = join(remoteRoot, "scripts", "audit-doudian-local-leakage.mjs");
@@ -120,6 +134,19 @@ const adapter = readJson(adapterPath);
 const stringIssues = collectStringIssues(adapter);
 const service = existsSync(servicePath) ? readFileSync(servicePath, "utf8") : "";
 const businessDataPage = existsSync(businessDataPagePath) ? readFileSync(businessDataPagePath, "utf8") : "";
+const app = existsSync(appPath) ? readFileSync(appPath, "utf8") : "";
+const doudianAdapterClient = existsSync(doudianAdapterClientPath) ? readFileSync(doudianAdapterClientPath, "utf8") : "";
+const doudianScriptsClient = existsSync(doudianScriptsClientPath) ? readFileSync(doudianScriptsClientPath, "utf8") : "";
+const requestPlanClient = existsSync(requestPlanClientPath) ? readFileSync(requestPlanClientPath, "utf8") : "";
+const businessDataClient = existsSync(businessDataClientPath) ? readFileSync(businessDataClientPath, "utf8") : "";
+const fundsDataClient = existsSync(fundsDataClientPath) ? readFileSync(fundsDataClientPath, "utf8") : "";
+const violationsDataClient = existsSync(violationsDataClientPath) ? readFileSync(violationsDataClientPath, "utf8") : "";
+const staleGoodsClient = existsSync(staleGoodsClientPath) ? readFileSync(staleGoodsClientPath, "utf8") : "";
+const storeImportClient = existsSync(storeImportClientPath) ? readFileSync(storeImportClientPath, "utf8") : "";
+const storeGroupsClient = existsSync(storeGroupsClientPath) ? readFileSync(storeGroupsClientPath, "utf8") : "";
+const taskClient = existsSync(taskClientPath) ? readFileSync(taskClientPath, "utf8") : "";
+const progressClient = existsSync(progressClientPath) ? readFileSync(progressClientPath, "utf8") : "";
+const repositoryClient = existsSync(repositoryClientPath) ? readFileSync(repositoryClientPath, "utf8") : "";
 const electronAdapterPath = join(repoRoot, "electron-client", "src", "main", "doudian", "adapter.js");
 const electronAdapter = existsSync(electronAdapterPath) ? readFileSync(electronAdapterPath, "utf8") : "";
 const leakageRun = spawnSync(process.execPath, [leakageScriptPath], {
@@ -313,7 +340,7 @@ const checks = [
   },
   {
     key: "businessCoreIndexXzbRequestShapeRemote",
-    ok: businessCoreIndexPlan.signStrategy === "mstoken-myargs" &&
+    ok: (businessCoreIndexPlan.requestMode === "page-fetch" || businessCoreIndexPlan.signStrategy === "mstoken-myargs") &&
       businessCoreIndexPlan.signatureParam === false &&
       businessCoreIndexPlan.includeEmptySignature === false &&
       hasText(businessCoreIndexPlan.signerUrl) &&
@@ -392,10 +419,10 @@ const checks = [
         Number(businessDatePresets[preset]?.earlyMorningBeforeHour) === 9 &&
         Number(businessDatePresets[preset]?.earlyMorningShiftDays) === -1
       )) &&
-      service.includes("resolveBusinessDatePreset") &&
-      service.includes("earlyMorningShiftDays") &&
-      !service.includes("function legacyBusinessDateType") &&
-      !service.includes("function legacyBusinessActiveKey"),
+      businessDataClient.includes("resolveDatePreset") &&
+      businessDataClient.includes("earlyMorningShiftDays") &&
+      !businessDataClient.includes("function legacyBusinessDateType") &&
+      !businessDataClient.includes("function legacyBusinessActiveKey"),
     source: rel(adapterPath)
   },
   {
@@ -413,8 +440,12 @@ const checks = [
   },
   {
     key: "pageScriptsRemote",
-    ok: service.includes("REQUIRED_REMOTE_SCRIPT_KEYS") && service.includes("assertRemoteAdapterInput"),
-    source: rel(servicePath)
+    ok: doudianScriptsClient.includes("buildDoudianScripts") &&
+      doudianScriptsClient.includes("signFactory") &&
+      doudianScriptsClient.includes("probeFactory") &&
+      doudianAdapterClient.includes("buildDoudianScripts(adapter)") &&
+      doudianAdapterClient.includes("isDoudianAdapterConfig"),
+    source: rel(doudianScriptsClientPath)
   },
   {
     key: "frontendSchemaCompatible",
@@ -444,40 +475,58 @@ const checks = [
     source: rel(adapterPath)
   },
   {
-    key: "electronConsumesOperationPlans",
-    ok: service.includes("requireOperationActions(adapter, \"fetchStores\"") &&
-      service.includes("requireOperationActions(adapter, \"importStore\"") &&
-      service.includes("requireOperationActions(adapter, \"refreshStatus\"") &&
-      service.includes("requireOperationActions(adapter, \"refreshStore\"") &&
-      service.includes("requireOperationActions(adapter, \"fetchBusinessData\"") &&
-      service.includes("runActionList(adapter, \"fetchStores\"") &&
-      service.includes("runActionList(adapter, \"refreshStatus\"") &&
-      service.includes("runActionList(adapter, \"fetchBusinessData\""),
-    source: rel(servicePath)
+    key: "remoteDomainConsumesRequestPlans",
+    ok: [businessDataClient, fundsDataClient, violationsDataClient, staleGoodsClient, storeImportClient].every((source) => source.includes("runDoudianRequestPlan")) &&
+      requestPlanClient.includes("requireChihuNative().cookies.getHeader") &&
+      requestPlanClient.includes("requireChihuNative().http.request") &&
+      requestPlanClient.includes("signDoudianRequest"),
+    source: rel(requestPlanClientPath)
   },
   {
-    key: "electronConsumesRemotePolicies",
-    ok: service.includes("policyMessage(adapter") &&
-      service.includes("policyText(adapter") &&
-      service.includes("repository.configurePolicy") &&
-      service.includes("policyNumber(adapter, \"refreshStatus.concurrency\""),
-    source: rel(servicePath)
+    key: "remoteDomainConsumesRemotePolicies",
+    ok: [businessDataClient, fundsDataClient, violationsDataClient, staleGoodsClient].every((source) => (
+      source.includes("policyMessage") &&
+      source.includes("policyText") &&
+      source.includes("requestPlans")
+    )) &&
+      storeGroupsClient.includes("repositoryPut") &&
+      repositoryClient.includes("chihu20_doudian"),
+    source: rel(clientShellRoot)
   },
   {
-    key: "electronHasBusinessPageFetchFallback",
-    ok: service.includes("doudianPageFetchByPlan") &&
-      service.includes("pageFetchOnSignFailure") &&
-      service.includes("getCachedDoudianSignerWindow(partition") &&
-      service.includes("response?.data?.st"),
-    source: rel(servicePath)
+    key: "remoteHasBusinessPageFetchFallback",
+    ok: requestPlanClient.includes("pageFetchJson") &&
+      requestPlanClient.includes("requestMode") &&
+      requestPlanClient.includes("pageFetchOnSignFailure") &&
+      doudianScriptsClient.includes("mstoken-myargs") &&
+      requestPlanClient.includes("signDoudianRequest") &&
+      businessCoreIndexPlan.requestMode === "page-fetch",
+    source: rel(requestPlanClientPath)
   },
   {
-    key: "electronDefaultAdapterIsSkeleton",
-    ok: !/homePageReadyPathHints:\s*\[\s*["']\//.test(electronAdapter) && !/failureRules:\s*\[\s*\{/.test(electronAdapter),
-    source: rel(electronAdapterPath)
+    key: "remoteRuntimeSelfChecksExposed",
+    ok: [
+      "repositorySelfCheck",
+      "stage5SelfCheck",
+      "businessDataSelfCheck",
+      "fundsDataSelfCheck",
+      "violationsDataSelfCheck",
+      "fileImportSelfCheck",
+      "staleGoodsScanSelfCheck",
+      "staleGoodsExecuteSelfCheck"
+    ].every((name) => app.includes(name)),
+    source: rel(appPath)
   },
   {
-    key: "electronHasNoLocalDoudianRuleLeakage",
+    key: "remoteTaskAndProgressChannels",
+    ok: taskClient.includes("BroadcastChannel") &&
+      progressClient.includes("chihu-doudian-task") &&
+      progressClient.includes("chihu-doudian-progress") &&
+      taskClient.includes("cancelDoudianTask"),
+    source: rel(taskClientPath)
+  },
+  {
+    key: "nonLegacyElectronHasNoDoudianRuleLeakage",
     ok: leakageRun.status === 0 && leakageReport?.status === "ok" && leakageReport?.issueCount === 0,
     source: rel(leakageOutputPath)
   }

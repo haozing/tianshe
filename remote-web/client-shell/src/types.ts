@@ -378,6 +378,8 @@ export interface DoudianBusinessDataResult extends DoudianStoreResult {
   failureCount?: number;
   partialSourceCount?: number;
   noMetricMatchCount?: number;
+  cached?: boolean;
+  cachedRows?: unknown[];
   dateRange?: {
     datePreset?: string;
     beginDate?: string;
@@ -425,6 +427,8 @@ export interface DoudianFundsDataResult extends DoudianStoreResult {
   noMetricMatchCount?: number;
   fieldSchemaVersion?: string;
   requestPlanHash?: string;
+  cached?: boolean;
+  cachedRows?: unknown[];
   dateRange?: {
     datePreset?: string;
     beginDate?: string;
@@ -484,6 +488,8 @@ export interface DoudianViolationsDataResult extends DoudianStoreResult {
   fieldSchemaVersion?: string;
   requestPlanHash?: string;
   productLinkageVersion?: string;
+  cached?: boolean;
+  cachedRows?: unknown[];
   dateRange?: {
     datePreset?: string;
     beginDate?: string;
@@ -586,6 +592,7 @@ export interface DoudianStaleGoodsRow {
 
 export interface DoudianStaleGoodsExecution {
   id?: string;
+  sourceRunId?: string;
   shopId: string;
   shopName: string;
   productId: string;
@@ -599,6 +606,7 @@ export interface DoudianStaleGoodsExecution {
 
 export interface DoudianStaleGoodsCleanupResult extends DoudianStoreResult {
   mode?: "scan" | "execute" | string;
+  sourceRunId?: string;
   rows?: DoudianStaleGoodsRow[];
   candidates?: DoudianStaleGoodsCandidate[];
   executions?: DoudianStaleGoodsExecution[];
@@ -632,85 +640,91 @@ export interface ChihuBridgeApi {
   };
 }
 
+export type { ChihuNativeApi } from "./native/types";
+import type { DoudianOperationRecord, DoudianProgressDetail, DoudianTaskRequest } from "./domain/doudian";
+
 declare global {
   interface Window {
-    addEventListener(type: "chihu-stores-progress", listener: (event: CustomEvent<{
-      contractVersion?: string;
-      adapterVersion?: string;
-      scriptsVersion?: string;
-      phase?: "fetch" | "refresh" | "businessData" | "fundsData" | "violationsData" | "staleGoodsCleanup";
-      shopId?: string;
-      shopName?: string;
-      status?: DoudianStoreSummary["status"];
-      ok?: boolean;
-      message?: string;
-      reason?: string;
-      category?: string;
-      index?: number;
-      total?: number;
-    }>) => void, options?: boolean | AddEventListenerOptions): void;
-    removeEventListener(type: "chihu-stores-progress", listener: (event: CustomEvent<{
-      contractVersion?: string;
-      adapterVersion?: string;
-      scriptsVersion?: string;
-      phase?: "fetch" | "refresh" | "businessData" | "fundsData" | "violationsData" | "staleGoodsCleanup";
-      shopId?: string;
-      shopName?: string;
-      status?: DoudianStoreSummary["status"];
-      ok?: boolean;
-      message?: string;
-      reason?: string;
-      category?: string;
-      index?: number;
-      total?: number;
-    }>) => void, options?: boolean | EventListenerOptions): void;
-    chihu?: {
-      stores?: {
-        list?: (args?: unknown) => Promise<DoudianStoreResult>;
-        fetch?: (args?: unknown) => Promise<DoudianStoreResult>;
-        refreshStatus?: (args?: unknown) => Promise<DoudianStoreResult>;
-        businessData?: (args?: unknown) => Promise<DoudianBusinessDataResult>;
-        businessDataLatest?: (args?: unknown) => Promise<DoudianBusinessDataResult>;
-        fundsData?: (args?: unknown) => Promise<DoudianFundsDataResult>;
-        fundsDataLatest?: (args?: unknown) => Promise<DoudianFundsDataResult>;
-        violationsData?: (args?: unknown) => Promise<DoudianViolationsDataResult>;
-        violationsDataLatest?: (args?: unknown) => Promise<DoudianViolationsDataResult>;
-        staleGoodsCleanup?: (args?: unknown) => Promise<DoudianStaleGoodsCleanupResult>;
-        cancel?: (args?: unknown) => Promise<DoudianStoreResult>;
-        open?: (args?: unknown) => Promise<DoudianStoreResult>;
-        delete?: (args?: unknown) => Promise<DoudianStoreResult>;
-        updateGroup?: (args?: unknown) => Promise<DoudianStoreResult>;
-      };
-    };
     chihuBridge?: ChihuBridgeApi;
+    chihuNative?: import("./native/types").ChihuNativeApi;
+    chihuDoudianTaskRuntime?: {
+      startMock: (options?: Omit<DoudianTaskRequest, "taskType">) => Promise<DoudianOperationRecord>;
+      cancel: (operationId: string) => Promise<DoudianOperationRecord | null>;
+      getStatus: (operationId: string) => Promise<DoudianOperationRecord | null>;
+      restore: () => Promise<DoudianOperationRecord[]>;
+      repositorySelfCheck: () => Promise<{ ok: boolean; dbName: string; objectStores: string[] }>;
+      snapshot: () => { progressEvents: DoudianProgressDetail[] };
+    };
+    chihuDoudianStoreRuntime?: {
+      selfCheck: (options?: { openUrl?: string }) => Promise<{
+        ok: boolean;
+        listOk: boolean;
+        createOk: boolean;
+        updateOk: boolean;
+        renameOk: boolean;
+        openOk: boolean;
+        deleteStoreOk: boolean;
+        deleteGroupOk: boolean;
+        openedWinId: number | null;
+      }>;
+      stage5SelfCheck: (options?: { openUrl?: string }) => Promise<{
+        ok: boolean;
+        importOk: boolean;
+        refreshOk: boolean;
+        cancelOk: boolean;
+        cancelledWindowClosedOk: boolean;
+      }>;
+      businessDataSelfCheck: () => Promise<{
+        ok: boolean;
+        latestOk: boolean;
+        datePresetOk: boolean;
+        metadataOk: boolean;
+        cases: Array<Record<string, unknown>>;
+      }>;
+      fundsDataSelfCheck: () => Promise<{
+        ok: boolean;
+        latestOk: boolean;
+        datePresetOk: boolean;
+        metadataOk: boolean;
+        cases: Array<Record<string, unknown>>;
+      }>;
+      violationsDataSelfCheck: () => Promise<{
+        ok: boolean;
+        latestOk: boolean;
+        datePresetOk: boolean;
+        metadataOk: boolean;
+        cases: Array<Record<string, unknown>>;
+      }>;
+      fileImportSelfCheck: () => Promise<{
+        ok: boolean;
+        csvOk: boolean;
+        tsvOk: boolean;
+        xlsxOk: boolean;
+        count: number;
+      }>;
+      staleGoodsScanSelfCheck: () => Promise<{
+        ok: boolean;
+        scanOk: boolean;
+        candidateOk: boolean;
+        restoreOk: boolean;
+        runId: string;
+      }>;
+      staleGoodsExecuteSelfCheck: () => Promise<{
+        ok: boolean;
+        dryRunOk: boolean;
+        sourceRunOk: boolean;
+        actionOk: boolean;
+        persistedOk: boolean;
+        restoreOk: boolean;
+        scanRunId: string;
+        executeRunIds: string[];
+      }>;
+    };
     client?: Record<string, unknown> & {
       minimizeWindow?: (args?: unknown) => Promise<unknown>;
       maximizeWindow?: (args?: unknown) => Promise<unknown>;
       closeWindow?: (args?: unknown) => Promise<unknown>;
       openWindow?: (args?: unknown) => Promise<unknown>;
-      selectAndParseDelimitedFile?: (args?: unknown) => Promise<{
-        ok: boolean;
-        canceled?: boolean;
-        status?: string;
-        message?: string;
-        fileName?: string;
-        rows?: Array<Record<string, unknown>>;
-        count?: number;
-      }>;
-      storesList?: (args?: unknown) => Promise<DoudianStoreResult>;
-      storesFetch?: (args?: unknown) => Promise<DoudianStoreResult>;
-      storesRefreshStatus?: (args?: unknown) => Promise<DoudianStoreResult>;
-      storesBusinessData?: (args?: unknown) => Promise<DoudianBusinessDataResult>;
-      storesBusinessDataLatest?: (args?: unknown) => Promise<DoudianBusinessDataResult>;
-      storesFundsData?: (args?: unknown) => Promise<DoudianFundsDataResult>;
-      storesFundsDataLatest?: (args?: unknown) => Promise<DoudianFundsDataResult>;
-      storesViolationsData?: (args?: unknown) => Promise<DoudianViolationsDataResult>;
-      storesViolationsDataLatest?: (args?: unknown) => Promise<DoudianViolationsDataResult>;
-      storesStaleGoodsCleanup?: (args?: unknown) => Promise<DoudianStaleGoodsCleanupResult>;
-      storesCancel?: (args?: unknown) => Promise<DoudianStoreResult>;
-      storesOpen?: (args?: unknown) => Promise<DoudianStoreResult>;
-      storesDelete?: (args?: unknown) => Promise<DoudianStoreResult>;
-      storesUpdateGroup?: (args?: unknown) => Promise<DoudianStoreResult>;
     };
   }
 }

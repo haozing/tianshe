@@ -12,8 +12,6 @@ const baseClientMethods = [
   ["destroyBrowserWindow", "destroyBrowserWindow"],
   ["executeJavaScriptBrowserWindow", "executeJavaScriptBrowserWindow"],
   ["reloadHomeUrl", "reloadHomeUrl"],
-  ["db", "db"],
-  ["_db", "_db"],
   ["sendNotification", "send_notification"],
   ["getMainWindowInfo", "getMainWindowInfo"],
   ["resetMainWindow", "resetMainWindow"],
@@ -30,23 +28,37 @@ const baseClientMethods = [
   ["getCrashLogDir", "getCrashLogDir"],
   ["cleanCrashLogs", "cleanupOldCrashLogs"],
   ["selectDirectory", "selectDirectory"],
-  ["selectAndParseDelimitedFile", "selectAndParseDelimitedFile"],
   ["downloadFileToPath", "downloadFileToPath"],
   ["cancelDownloadFileToPath", "cancelDownloadFileToPath"],
   ["saveBufferToPath", "saveBufferToPath"],
-  ["openPathInExplorer", "openPathInExplorer"],
-  ["storesList", "stores:list"],
-  ["storesFetch", "stores:fetch"],
-  ["storesRefreshStatus", "stores:refreshStatus"],
-  ["storesBusinessData", "stores:businessData"],
-  ["storesBusinessDataLatest", "stores:businessDataLatest"],
-  ["storesCancel", "stores:cancel"],
-  ["storesOpen", "stores:open"],
-  ["storesDelete", "stores:delete"],
-  ["storesUpdateGroup", "stores:updateGroup"]
+  ["openPathInExplorer", "openPathInExplorer"]
+];
+
+const chihuNativeMethods = [
+  ["app.getInfo", "native:app:getInfo"],
+  ["windows.open", "native:windows:open"],
+  ["windows.eval", "native:windows:eval"],
+  ["windows.destroy", "native:windows:destroy"],
+  ["cookies.get", "native:cookies:get"],
+  ["cookies.set", "native:cookies:set"],
+  ["cookies.copy", "native:cookies:copy"],
+  ["cookies.getHeader", "native:cookies:getHeader"],
+  ["cookies.clear", "native:cookies:clear"],
+  ["http.request", "native:http:request"],
+  ["files.selectFile", "native:files:selectFile"],
+  ["files.readFile", "native:files:readFile"],
+  ["files.download", "native:files:download"],
+  ["notifications.send", "native:notifications:send"],
+  ["updates.start", "native:updates:start"],
+  ["updates.getVersionData", "native:updates:getVersionData"],
+  ["logs.report", "native:logs:report"],
+  ["logs.getDir", "native:logs:getDir"],
+  ["logs.clean", "native:logs:clean"],
+  ["partitions.cleanInvalid", "native:partitions:cleanInvalid"]
 ];
 
 module.exports = {
   baseClientMethods,
+  chihuNativeMethods,
   expectedClientMethods: baseClientMethods
 };

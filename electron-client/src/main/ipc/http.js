@@ -128,6 +128,72 @@ async function persistSetCookieHeaders(partition, headers, requestUrl) {
   }
 }
 
+function normalizeNativeBody(body) {
+  if (body == null) return undefined;
+  if (typeof body === "string" || Buffer.isBuffer(body)) return body;
+  return JSON.stringify(body);
+}
+
+function normalizeNativeHeaders(headers = {}, body) {
+  const nextHeaders = { ...(headers && typeof headers === "object" ? headers : {}) };
+  const hasContentType = Object.keys(nextHeaders).some((key) => key.toLowerCase() === "content-type");
+  if (!hasContentType && body != null && typeof body !== "string" && !Buffer.isBuffer(body)) {
+    nextHeaders["Content-Type"] = "application/json";
+  }
+  return nextHeaders;
+}
+
+async function nativeHttpRequest(args = {}) {
+  const url = String(args.url || "").trim();
+  if (!url) return { ok: false, status: 0, headers: {}, data: null, error: { message: "missing url" } };
+
+  const responseType = args.responseType === "arrayBuffer" || args.responseType === "base64"
+    ? "arraybuffer"
+    : args.responseType === "text"
+      ? "text"
+      : "json";
+  const requestBody = normalizeNativeBody(args.body);
+  const headers = normalizeNativeHeaders(args.headers, args.body);
+
+  try {
+    const response = await axiosInstance({
+      url,
+      method: args.method || "GET",
+      headers,
+      data: requestBody,
+      timeout: args.timeoutMs || 30000,
+      responseType,
+      validateStatus: () => true
+    });
+    if (args.persistSetCookie !== false) {
+      await persistSetCookieHeaders(args.partition, response.headers, url);
+    }
+
+    let data = response.data;
+    if (args.responseType === "base64") {
+      data = Buffer.from(data).toString("base64");
+    } else if (args.responseType === "arrayBuffer" && Buffer.isBuffer(data)) {
+      data = Array.from(data.values());
+    }
+
+    return {
+      ok: response.status >= 200 && response.status < 300,
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+      data
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: error.response ? error.response.status : 0,
+      headers: error.response ? error.response.headers : {},
+      data: error.response ? error.response.data : null,
+      error: { message: error.message || String(error) }
+    };
+  }
+}
+
 function registerHttpHandlers() {
   ipcMain.handle("http", async (_event, args = {}) => {
     const result = { data: null, error: null };
@@ -163,7 +229,10 @@ function registerHttpHandlers() {
 
     return result;
   });
+
+  ipcMain.handle("native:http:request", async (_event, args = {}) => {
+    return nativeHttpRequest(args);
+  });
 }
 
-module.exports = { registerHttpHandlers };
-
+module.exports = { nativeHttpRequest, registerHttpHandlers };

@@ -25,8 +25,6 @@ const REQUIRED_METHODS = [
   "destroyBrowserWindow",
   "executeJavaScriptBrowserWindow",
   "reloadHomeUrl",
-  "db",
-  "_db",
   "sendNotification",
   "getMainWindowInfo",
   "resetMainWindow",
@@ -46,14 +44,7 @@ const REQUIRED_METHODS = [
   "downloadFileToPath",
   "cancelDownloadFileToPath",
   "saveBufferToPath",
-  "openPathInExplorer",
-  "storesList",
-  "storesFetch",
-  "storesRefreshStatus",
-  "storesCancel",
-  "storesOpen",
-  "storesDelete",
-  "storesUpdateGroup"
+  "openPathInExplorer"
 ];
 
 function ensureDir(filePath) {

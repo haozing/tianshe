@@ -4,6 +4,13 @@ Active remote-web foundation for the readable Electron client.
 
 This is a Chihu / 赤狐管家 active runtime. 小尊宝 2.1.6 is the architecture baseline for the migration, not the product brand string retained by this repo.
 
+## Migration Route
+
+The final DouDian route is defined by
+[`../electron-client/REMOTE_BUSINESS_ORCHESTRATION_MIGRATION_PLAN.md`](../electron-client/REMOTE_BUSINESS_ORCHESTRATION_MIGRATION_PLAN.md).
+Older local-service-oriented audit notes are historical analysis when they
+conflict with that plan.
+
 ## Active Entry
 
 ```text

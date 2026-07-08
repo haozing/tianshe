@@ -63,8 +63,6 @@ const client = {
   destroyBrowserWindow: invoke("destroyBrowserWindow"),
   executeJavaScriptBrowserWindow: invoke("executeJavaScriptBrowserWindow"),
   reloadHomeUrl: invoke("reloadHomeUrl"),
-  db: invoke("db"),
-  _db: invoke("_db"),
   sendNotification: invoke("send_notification"),
   getMainWindowInfo: invoke("getMainWindowInfo"),
   resetMainWindow: invoke("resetMainWindow"),
@@ -81,53 +79,71 @@ const client = {
   getCrashLogDir: invoke("getCrashLogDir"),
   cleanCrashLogs: invoke("cleanupOldCrashLogs"),
   selectDirectory: invoke("selectDirectory"),
-  selectAndParseDelimitedFile: invoke("selectAndParseDelimitedFile"),
   downloadFileToPath: invoke("downloadFileToPath"),
   cancelDownloadFileToPath: invoke("cancelDownloadFileToPath"),
   saveBufferToPath: invoke("saveBufferToPath"),
-  openPathInExplorer: invoke("openPathInExplorer"),
-  storesList: invoke("stores:list"),
-  storesFetch: invoke("stores:fetch"),
-  storesRefreshStatus: invoke("stores:refreshStatus"),
-  storesBusinessData: invoke("stores:businessData"),
-  storesBusinessDataLatest: invoke("stores:businessDataLatest"),
-  storesFundsData: invoke("stores:fundsData"),
-  storesFundsDataLatest: invoke("stores:fundsDataLatest"),
-  storesViolationsData: invoke("stores:violationsData"),
-  storesViolationsDataLatest: invoke("stores:violationsDataLatest"),
-  storesStaleGoodsCleanup: invoke("stores:staleGoodsCleanup"),
-  storesCancel: invoke("stores:cancel"),
-  storesOpen: invoke("stores:open"),
-  storesDelete: invoke("stores:delete"),
-  storesUpdateGroup: invoke("stores:updateGroup")
+  openPathInExplorer: invoke("openPathInExplorer")
+};
+
+const chihuNative = {
+  app: {
+    getInfo: invoke("native:app:getInfo")
+  },
+  windows: {
+    open: invoke("native:windows:open"),
+    eval: invoke("native:windows:eval"),
+    destroy: invoke("native:windows:destroy"),
+    getInfo: client.getBrowserWindowInfo,
+    getAll: client.getAllBrowserWindowInfos,
+    getMainInfo: client.getMainWindowInfo,
+    resetMain: client.resetMainWindow,
+    reloadHome: client.reloadHomeUrl,
+    minimize: client.minimizeWindow,
+    maximize: client.maximizeWindow,
+    close: client.closeWindow,
+    isMaximized: client.isWindowMaximized,
+    isDestroyed: client.isWindowDestroyed
+  },
+  cookies: {
+    get: invoke("native:cookies:get"),
+    set: invoke("native:cookies:set"),
+    copy: invoke("native:cookies:copy"),
+    getHeader: invoke("native:cookies:getHeader"),
+    clear: invoke("native:cookies:clear")
+  },
+  http: {
+    request: invoke("native:http:request")
+  },
+  files: {
+    selectFile: invoke("native:files:selectFile"),
+    readFile: invoke("native:files:readFile"),
+    download: invoke("native:files:download"),
+    selectDirectory: client.selectDirectory,
+    saveBufferToPath: client.saveBufferToPath,
+    openPathInExplorer: client.openPathInExplorer,
+    cancelDownload: client.cancelDownloadFileToPath
+  },
+  notifications: {
+    send: invoke("native:notifications:send")
+  },
+  updates: {
+    start: invoke("native:updates:start"),
+    getVersionData: invoke("native:updates:getVersionData")
+  },
+  logs: {
+    report: invoke("native:logs:report"),
+    getDir: invoke("native:logs:getDir"),
+    clean: invoke("native:logs:clean")
+  },
+  partitions: {
+    cleanInvalid: invoke("native:partitions:cleanInvalid")
+  }
 };
 
 contextBridge.exposeInMainWorld("client", client);
-contextBridge.exposeInMainWorld("chihu", {
-  stores: {
-    list: client.storesList,
-    fetch: client.storesFetch,
-    refreshStatus: client.storesRefreshStatus,
-    businessData: client.storesBusinessData,
-    businessDataLatest: client.storesBusinessDataLatest,
-    fundsData: client.storesFundsData,
-    fundsDataLatest: client.storesFundsDataLatest,
-    violationsData: client.storesViolationsData,
-    violationsDataLatest: client.storesViolationsDataLatest,
-    staleGoodsCleanup: client.storesStaleGoodsCleanup,
-    cancel: client.storesCancel,
-    open: client.storesOpen,
-    delete: client.storesDelete,
-    updateGroup: client.storesUpdateGroup
-  }
-});
+contextBridge.exposeInMainWorld("chihuNative", chihuNative);
 
 ipcRenderer.on("chihu-notification", (_event, args) => {
   const customEvent = new CustomEvent(args.chihu_event_name, { detail: args });
-  window.dispatchEvent(customEvent);
-});
-
-ipcRenderer.on("chihu-stores-progress", (_event, args) => {
-  const customEvent = new CustomEvent("chihu-stores-progress", { detail: args });
   window.dispatchEvent(customEvent);
 });

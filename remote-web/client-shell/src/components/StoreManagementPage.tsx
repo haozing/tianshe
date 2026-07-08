@@ -33,6 +33,7 @@ import {
   renameDoudianStoreGroup,
   updateDoudianStoreGroup
 } from "../bridge/client";
+import { addDoudianProgressListener } from "../domain/doudian";
 import { cn } from "../lib/utils";
 import type { DoudianStoreGroup, DoudianStoreResult, DoudianStoreSummary } from "../types";
 
@@ -82,19 +83,6 @@ interface RunDetail {
   reason?: string;
   category?: string;
   diagnostic?: unknown;
-}
-
-interface StoreProgressDetail {
-  phase?: "fetch" | "refresh" | "businessData" | "fundsData" | "violationsData" | "staleGoodsCleanup";
-  shopId?: string;
-  shopName?: string;
-  status?: DoudianStoreSummary["status"];
-  ok?: boolean;
-  message?: string;
-  reason?: string;
-  category?: string;
-  index?: number;
-  total?: number;
 }
 
 interface MetricCard {
@@ -213,7 +201,7 @@ function createStoreOperationId() {
 }
 
 function hasNativeStoreBridge() {
-  return Boolean(window.chihu?.stores?.list || window.client?.storesList);
+  return Boolean(window.chihuNative && window.indexedDB);
 }
 
 function toDateTime(value?: string) {
@@ -676,23 +664,23 @@ export function StoreManagementPage() {
       }, 700);
     }
 
-    function onStoresProgress(event: CustomEvent<StoreProgressDetail>) {
+    const removeProgressListener = addDoudianProgressListener((event) => {
       const detail = event.detail || { message: "处理中" };
-      if (detail.phase === "businessData" || detail.phase === "fundsData" || detail.phase === "violationsData" || detail.phase === "staleGoodsCleanup") return;
-      const prefix = detail.index && detail.total ? `(${detail.index}/${detail.total}) ` : "";
-      if (detail.message) {
-        setNotice({ tone: detail.ok === false ? "warning" : "info", message: `${prefix}${detail.message}` });
+      if (detail.taskType !== "fetchDoudianStores" && detail.taskType !== "refreshDoudianStoreStatus") return;
+      const progress = Number.isFinite(detail.progress) ? `${Math.round(detail.progress)}%` : "";
+      const message = detail.message || detail.resultSummary || detail.error || "";
+      if (message) {
+        setNotice({ tone: detail.status === "failed" ? "warning" : "info", message: [progress, message].filter(Boolean).join(" · ") });
       }
-      if ((detail.phase === "fetch" && detail.status === "online") || (detail.phase === "refresh" && detail.status && detail.status !== "unknown")) {
+      if (detail.status === "succeeded" || detail.status === "cancelled") {
         scheduleRowsRefresh();
       }
-    }
+    });
 
-    window.addEventListener("chihu-stores-progress", onStoresProgress);
     return () => {
       disposed = true;
       if (refreshTimer) window.clearTimeout(refreshTimer);
-      window.removeEventListener("chihu-stores-progress", onStoresProgress);
+      removeProgressListener();
     };
   }, []);
 

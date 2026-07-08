@@ -13,7 +13,11 @@ const scannedRoots = [
 
 const ignoredPathFragments = [
   "/smoke/",
-  "\\smoke\\"
+  "\\smoke\\",
+  // Stage 13 removes this legacy service. Stage 12 audits that no other
+  // Electron surface leaks Doudian rules while the old service is still present.
+  "/src/main/doudian/",
+  "\\src\\main\\doudian\\"
 ];
 
 const allowedFieldNamePatterns = [

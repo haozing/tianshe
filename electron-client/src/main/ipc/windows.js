@@ -5,7 +5,7 @@ const { addDevShortcuts } = require("../utils/dev-shortcuts");
 const ENABLE_GPU = process.env.CHIHU_ENABLE_GPU === "1";
 
 function registerWindowHandlers() {
-  ipcMain.handle("openWindow", async (_event, args = {}) => {
+  const openWindow = async (args = {}) => {
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.workAreaSize;
     const defaultWidth = Math.round(width * 0.8);
@@ -15,7 +15,7 @@ function registerWindowHandlers() {
     let params = {
       width: args.width || defaultWidth,
       height: args.height || defaultHeight,
-      show: !args.isNotShow,
+      show: args.show !== undefined ? !!args.show : !args.isNotShow,
       fullscreen: args.fullscreen,
       frame: args.frame !== undefined ? args.frame : true,
       resizable: args.resizable !== undefined ? args.resizable : true,
@@ -71,36 +71,71 @@ function registerWindowHandlers() {
       setupRequestInterceptor(child, args.setupRequestInterceptorInfo);
     }
 
-    await child.loadURL(args.url);
+    const loadPromise = child.loadURL(args.url);
+    if (args.waitForLoad === false) {
+      loadPromise.catch((error) => {
+        if (!child.isDestroyed()) console.warn(`[windows] async loadURL failed: ${error.message}`);
+      });
+      if (params.show) child.show();
+      addDevShortcuts(child);
+      return child.id;
+    }
+
+    await loadPromise;
     if (params.webPreferences && params.webPreferences.devTools) child.webContents.openDevTools();
-    if (!args.isNotShow) child.show();
+    if (params.show) child.show();
     addDevShortcuts(child);
 
     return child.id;
-  });
+  };
 
-  ipcMain.handle("executeJavaScriptBrowserWindow", async (_event, args = {}) => {
+  const evalWindow = async (args = {}) => {
     try {
       const win = BrowserWindow.fromId(args.winId);
       if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return null;
 
       const timeoutMs = args.timeoutMs ?? 15000;
       const timeout = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error("executeJavaScript timeout due to window destruction")), timeoutMs);
+        setTimeout(() => {
+          const destroyed = win.isDestroyed() || win.webContents.isDestroyed();
+          reject(new Error(destroyed ? "executeJavaScript cancelled because window was destroyed" : `executeJavaScript timeout after ${timeoutMs}ms`));
+        }, timeoutMs);
       });
       return await Promise.race([
-        win.webContents.executeJavaScript(args.jsContent),
+        win.webContents.executeJavaScript(args.code || args.jsContent),
         timeout
       ]);
     } catch (error) {
-      console.error("executeJavaScriptBrowserWindow failed:", error);
+      const message = error && error.message ? error.message : String(error);
+      if (message.includes("window was destroyed")) {
+        console.warn("executeJavaScriptBrowserWindow skipped:", message);
+      } else {
+        console.error("executeJavaScriptBrowserWindow failed:", error);
+      }
       return null;
     }
-  });
+  };
 
-  ipcMain.handle("destroyBrowserWindow", async (_event, args = {}) => {
+  const destroyWindow = async (args = {}) => {
     const win = BrowserWindow.fromId(args.winId);
     if (win && !win.isDestroyed()) win.destroy();
+    return { ok: true };
+  };
+
+  ipcMain.handle("openWindow", async (_event, args = {}) => openWindow(args));
+
+  ipcMain.handle("native:windows:open", async (_event, args = {}) => openWindow(args));
+
+  ipcMain.handle("executeJavaScriptBrowserWindow", async (_event, args = {}) => evalWindow(args));
+
+  ipcMain.handle("native:windows:eval", async (_event, args = {}) => evalWindow(args));
+
+  ipcMain.handle("destroyBrowserWindow", async (_event, args = {}) => {
+    await destroyWindow(args);
+  });
+
+  ipcMain.handle("native:windows:destroy", async (_event, args = {}) => {
+    return destroyWindow(args);
   });
 
   ipcMain.handle("getBrowserWindowInfo", async (_event, args = {}) => {

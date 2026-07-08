@@ -518,13 +518,15 @@ Electron 不再保留抖店真实域名、endpoint、selector、字段映射。
 
 ### 阶段 0：文档和目标收口
 
+状态：已完成（2026-07-07）。
+
 目标：全项目只保留本文作为最终改造路线。
 
 动作：
 
-1. 以本文为准，不再保留互相冲突的旧审计结论文档。
-2. README、回归清单、迁移图后续引用本文。
-3. 把“本地增强保守路线”降级为历史分析，不再作为当前目标。
+1. [x] 以本文为准，不再保留互相冲突的旧审计结论文档。
+2. [x] README、回归清单、迁移图后续引用本文。
+3. [x] 把“本地增强保守路线”降级为历史分析，不再作为当前目标。
 
 验收：
 
@@ -536,22 +538,24 @@ rg -n "小尊宝兼容本地增强模式|不建议现在走：纯远程业务模
 
 ### 阶段 1：建立 `chihuNative`
 
+状态：已完成（2026-07-07）。
+
 目标：远程端有平台无关 native API。
 
 要改：
 
 ```text
-electron-client/src/preload/index.js
-electron-client/src/main/ipc/http.js
-electron-client/src/main/ipc/files.js
-electron-client/src/main/ipc/cookies.js
-electron-client/src/main/ipc/windows.js
-electron-client/src/main/ipc/index.js
-electron-client/scripts/check-contract.js
-electron-client/src/main/smoke/install-smoke-check.js
-remote-web/client-shell/src/types.ts
-remote-web/client-shell/src/native/types.ts
-remote-web/client-shell/src/native/client.ts
+electron-client/src/preload/index.js [x]
+electron-client/src/main/ipc/http.js [x]
+electron-client/src/main/ipc/files.js [x]
+electron-client/src/main/ipc/cookies.js [x]
+electron-client/src/main/ipc/windows.js [x]
+electron-client/src/main/ipc/index.js [x]
+electron-client/scripts/check-contract.js [x]
+electron-client/src/main/smoke/install-smoke-check.js [x]
+remote-web/client-shell/src/types.ts [x]
+remote-web/client-shell/src/native/types.ts [x]
+remote-web/client-shell/src/native/client.ts [x]
 ```
 
 验收：
@@ -576,55 +580,59 @@ npm run typecheck
 
 ### 阶段 2：建立隐藏任务运行器
 
+状态：已完成（2026-07-07）。
+
 目标：长任务不依赖可见页面组件生命周期。
 
 新增：
 
 ```text
-remote-web/client-shell/src/domain/doudian/taskClient.ts
-remote-web/client-shell/src/domain/doudian/taskRunner.ts
-remote-web/client-shell/src/domain/doudian/operation.ts
-remote-web/client-shell/src/domain/doudian/progress.ts
+remote-web/client-shell/src/domain/doudian/taskClient.ts [x]
+remote-web/client-shell/src/domain/doudian/taskRunner.ts [x]
+remote-web/client-shell/src/domain/doudian/operation.ts [x]
+remote-web/client-shell/src/domain/doudian/progress.ts [x]
 ```
 
 动作：
 
-1. 实现任务创建、取消、状态查询。
-2. 用隐藏窗口加载 task runner。
-3. 用 BroadcastChannel 转发 progress/result/error。
-4. operation 状态写入 IndexedDB。
-5. 取消任务时关闭相关平台窗口。
+1. [x] 实现任务创建、取消、状态查询。
+2. [x] 用隐藏窗口加载 task runner。
+3. [x] 用 BroadcastChannel 转发 progress/result/error。
+4. [x] operation 状态写入 IndexedDB。
+5. [x] 取消任务时关闭相关平台窗口。
 
 验收：
 
-1. 开始 mock 长任务。
-2. 切换页面任务不断。
-3. 刷新主页面后能恢复任务状态。
-4. 取消任务后隐藏窗口关闭。
-5. 进度能回到可见页面。
+1. [x] 开始 mock 长任务。
+2. [x] 切换页面任务不断。
+3. [x] 刷新主页面后能恢复任务状态。
+4. [x] 取消任务后隐藏窗口关闭。
+5. [x] 进度能回到可见页面。
 
 ### 阶段 3：远程仓库和审计规则
+
+状态：已完成（2026-07-07）。
 
 目标：remote-web 拥有受控业务仓库。
 
 新增：
 
 ```text
-remote-web/client-shell/src/domain/doudian/repository.ts
+remote-web/client-shell/src/domain/doudian/repository.ts [x]
 ```
 
 修改：
 
 ```text
-remote-web/scripts/audit-web-storage-isolation.mjs
+remote-web/scripts/audit-web-storage-isolation.mjs [x]
 ```
 
 动作：
 
-1. 建 `chihu20_doudian` IndexedDB。
-2. 建 stores/groups/latest/stale/operations stores。
-3. repository 自检支持写入、读取、删除测试记录。
-4. 审计脚本允许固定业务库，禁止散落 IndexedDB。
+1. [x] 建 `chihu20_doudian` IndexedDB。
+2. [x] 建 stores/groups/latest/stale/operations stores。
+3. [x] repository 自检支持写入、读取、删除测试记录。
+4. [x] 审计脚本允许固定业务库，禁止散落 IndexedDB。
 
 验收：
 
@@ -637,25 +645,27 @@ node .\remote-web\scripts\audit-web-storage-isolation.mjs
 
 ### 阶段 4：迁店铺台账、分组、打开店铺
 
+状态：已完成（2026-07-07）。
+
 目标：先迁不需要大量平台请求的部分。
 
 新增/修改：
 
 ```text
-remote-web/client-shell/src/domain/doudian/storeGroups.ts
-remote-web/client-shell/src/bridge/client.ts
-remote-web/client-shell/src/components/StoreManagementPage.tsx
+remote-web/client-shell/src/domain/doudian/storeGroups.ts [x]
+remote-web/client-shell/src/bridge/client.ts [x]
+remote-web/client-shell/src/components/StoreManagementPage.tsx [x]
 ```
 
 迁移能力：
 
-- `listDoudianStores`
-- `deleteDoudianStores`
-- `createDoudianStoreGroup`
-- `renameDoudianStoreGroup`
-- `deleteEmptyDoudianStoreGroup`
-- `updateGroup`
-- `openDoudianStore`
+- [x] `listDoudianStores`
+- [x] `deleteDoudianStores`
+- [x] `createDoudianStoreGroup`
+- [x] `renameDoudianStoreGroup`
+- [x] `deleteEmptyDoudianStoreGroup`
+- [x] `updateGroup`
+- [x] `openDoudianStore`
 
 验收：
 
@@ -665,29 +675,31 @@ rg -n "storesList|storesDelete|storesUpdateGroup|window\.chihu\?\.stores" remote
 
 页面验收：
 
-- 空店铺列表正常。
-- 创建/重命名/删除分组正常。
-- 删除店铺正常。
-- 打开店铺正常。
+- [x] 空店铺列表正常。
+- [x] 创建/重命名/删除分组正常。
+- [x] 删除店铺正常。
+- [x] 打开店铺正常。
 
 ### 阶段 5：迁导店和状态刷新
+
+状态：已完成（2026-07-07）。
 
 目标：远程任务运行器接管导店、修复导店、刷新登录态。
 
 新增：
 
 ```text
-remote-web/client-shell/src/domain/doudian/storeImport.ts
-remote-web/client-shell/src/domain/doudian/storeStatus.ts
-remote-web/client-shell/src/domain/doudian/requestPlan.ts
-remote-web/client-shell/src/domain/doudian/signer.ts
+remote-web/client-shell/src/domain/doudian/storeImport.ts [x]
+remote-web/client-shell/src/domain/doudian/storeStatus.ts [x]
+remote-web/client-shell/src/domain/doudian/requestPlan.ts [x]
+remote-web/client-shell/src/domain/doudian/signer.ts [x]
 ```
 
 迁移能力：
 
-- `fetchDoudianStores`
-- `refreshDoudianStoreStatus`
-- `cancelDoudianStoreOperation`
+- [x] `fetchDoudianStores`
+- [x] `refreshDoudianStoreStatus`
+- [x] `cancelDoudianStoreOperation`
 
 验收：
 
@@ -697,27 +709,29 @@ rg -n "storesFetch|storesRefreshStatus|storesOpen|storesCancel" remote-web/clien
 
 功能验收：
 
-1. 能打开登录窗口。
-2. 能导入至少一个店铺。
-3. 能刷新店铺在线状态。
-4. 能取消导店/刷新任务。
-5. 主页面刷新后任务状态可恢复。
-6. 任务取消后平台窗口被关闭。
+1. [x] 能打开登录窗口。
+2. [x] 能导入至少一个店铺。
+3. [x] 能刷新店铺在线状态。
+4. [x] 能取消导店/刷新任务。
+5. [x] 主页面刷新后任务状态可恢复。
+6. [x] 任务取消后平台窗口被关闭。
 
 ### 阶段 6：迁经营数据
+
+状态：已完成（2026-07-07）。
 
 目标：经营数据完全远程编排。
 
 新增：
 
 ```text
-remote-web/client-shell/src/domain/doudian/businessData.ts
+remote-web/client-shell/src/domain/doudian/businessData.ts [x]
 ```
 
 迁移能力：
 
-- `fetchDoudianBusinessData`
-- `fetchDoudianBusinessDataLatest`
+- [x] `fetchDoudianBusinessData`
+- [x] `fetchDoudianBusinessDataLatest`
 
 验收：
 
@@ -727,23 +741,25 @@ rg -n "storesBusinessData|storesBusinessDataLatest" remote-web/client-shell/src
 
 功能验收：
 
-- 今日/昨日/近 7 天/自定义日期可拉取。
-- 部分店铺失败可展示。
-- latest 快照可恢复。
-- adapterVersion/ruleVersion 写入快照。
+- [x] 今日/昨日/近 7 天/自定义日期可拉取。
+- [x] 部分店铺失败可展示。
+- [x] latest 快照可恢复。
+- [x] adapterVersion/ruleVersion 写入快照。
 
 ### 阶段 7：迁资金数据
+
+状态：已完成（2026-07-07）。
 
 新增：
 
 ```text
-remote-web/client-shell/src/domain/doudian/fundsData.ts
+remote-web/client-shell/src/domain/doudian/fundsData.ts [x]
 ```
 
 迁移能力：
 
-- `fetchDoudianFundsData`
-- `fetchDoudianFundsDataLatest`
+- [x] `fetchDoudianFundsData`
+- [x] `fetchDoudianFundsDataLatest`
 
 验收：
 
@@ -753,23 +769,25 @@ rg -n "storesFundsData|storesFundsDataLatest" remote-web/client-shell/src
 
 功能验收：
 
-- 资金数据可拉取。
-- 多 source 部分失败时有提示和部分数据。
-- latest 可恢复。
-- `openPlatformWindow` 已改走 `chihuNative.windows.open`。
+- [x] 资金数据可拉取。
+- [x] 多 source 部分失败时有提示和部分数据。
+- [x] latest 可恢复。
+- [x] `openPlatformWindow` 已改走 `chihuNative.windows.open`。
 
 ### 阶段 8：迁违规数据
+
+状态：已完成（2026-07-07）。
 
 新增：
 
 ```text
-remote-web/client-shell/src/domain/doudian/violationsData.ts
+remote-web/client-shell/src/domain/doudian/violationsData.ts [x]
 ```
 
 迁移能力：
 
-- `fetchDoudianViolationsData`
-- `fetchDoudianViolationsDataLatest`
+- [x] `fetchDoudianViolationsData`
+- [x] `fetchDoudianViolationsDataLatest`
 
 验收：
 
@@ -779,47 +797,51 @@ rg -n "storesViolationsData|storesViolationsDataLatest" remote-web/client-shell/
 
 功能验收：
 
-- 按状态/日期拉取正常。
-- 分页正常。
-- 商品信息 lookup 正常。
-- latest 可恢复。
+- [x] 按状态/日期拉取正常。
+- [x] 分页正常。
+- [x] 商品信息 lookup 正常。
+- [x] latest 可恢复。
 
 ### 阶段 9：迁滞销品扫描
 
 目标：先迁 scan，不迁 execute。
 
+状态：已完成（2026-07-07）。
+
 新增：
 
 ```text
-remote-web/client-shell/src/domain/doudian/staleGoods.ts
-remote-web/client-shell/src/domain/doudian/fileImport.ts
+remote-web/client-shell/src/domain/doudian/staleGoods.ts [x]
+remote-web/client-shell/src/domain/doudian/fileImport.ts [x]
 ```
 
 动作：
 
-1. `fileImport.ts` 用 `chihuNative.files.selectFile/readFile` 获取文件内容。
-2. remote-web 增加 `xlsx`，在远程解析 Excel。
-3. 字段别名、规则、评分、风险等级从 adapter policy 读取。
-4. scan run 和 candidates 写入 IndexedDB。
+1. [x] `fileImport.ts` 用 `chihuNative.files.selectFile/readFile` 获取文件内容。
+2. [x] remote-web 增加 `xlsx`，在远程解析 Excel。
+3. [x] 字段别名、规则、评分、风险等级从 adapter policy 读取。
+4. [x] scan run 和 candidates 写入 IndexedDB。
 
 验收：
 
-- CSV/TXT/XLSX 可导入。
-- 能扫描候选品。
-- scan run 可恢复。
-- 不再调用本地 `selectAndParseDelimitedFile` 做业务解析。
+- [x] CSV/TXT/XLSX 可导入。
+- [x] 能扫描候选品。
+- [x] scan run 可恢复。
+- [x] 不再调用本地 `selectAndParseDelimitedFile` 做业务解析。
 
 ### 阶段 10：迁滞销品 execute
 
 目标：最后迁平台写操作。
 
+状态：已完成（2026-07-07）。
+
 动作：
 
-1. execute plan 来自 adapter。
-2. 删除本地 `STALE_GOODS_EXECUTE_ALLOWLIST` 依赖。
-3. execute 必须引用 `sourceRunId`。
-4. dry-run 和 execute 返回结构一致。
-5. execute run 写入 IndexedDB。
+1. [x] execute plan 来自 adapter。
+2. [x] 删除本地 `STALE_GOODS_EXECUTE_ALLOWLIST` 依赖。
+3. [x] execute 必须引用 `sourceRunId`。
+4. [x] dry-run 和 execute 返回结构一致。
+5. [x] execute run 写入 IndexedDB。
 
 验收：
 
@@ -829,35 +851,37 @@ rg -n "storesStaleGoodsCleanup" remote-web/client-shell/src
 
 功能验收：
 
-- dry-run 正常。
-- 下架/删除/回收站动作正常。
-- 二次确认正常。
-- 取消任务正常。
-- execute run 和 sourceRunId 关联正确。
+- [x] dry-run 正常。
+- [x] 下架/删除/回收站动作正常。
+- [x] 二次确认正常。
+- [x] 取消任务正常。
+- [x] execute run 和 sourceRunId 关联正确。
 
 ### 阶段 11：替换进度、取消、页面桥和类型
 
 目标：remote-web 不再依赖旧业务桥。
 
+状态：已完成（2026-07-07）。
+
 删除：
 
 ```text
-window.chihu?.stores
-window.client?.stores*
-storesApi()
-chihu-stores-progress
-Window.client.stores*
-Window.chihu.stores
+window.chihu?.stores [x]
+window.client?.stores* [x]
+storesApi() [x]
+chihu-stores-progress [x]
+Window.client.stores* [x]
+Window.chihu.stores [x]
 ```
 
 替换：
 
 ```text
-domain/doudian/*
-chihuNative
-useDoudianProgress()
-chihu-doudian-progress
-BroadcastChannel("chihu-doudian-task")
+domain/doudian/* [x]
+chihuNative [x]
+useDoudianProgress() [x]
+chihu-doudian-progress [x]
+BroadcastChannel("chihu-doudian-task") [x]
 ```
 
 验收：
@@ -872,59 +896,63 @@ rg -n "storesApi|window\.chihu\?\.stores|window\.client\?\.stores|chihu-stores-p
 
 目标：检查项反映新架构。
 
+状态：已完成（2026-07-08）。
+
 修改：
 
 ```text
-electron-client/src/main/smoke/install-smoke-check.js
-electron-client/scripts/check-contract.js
-remote-web/new-remote-web/bridge.js
-remote-web/scripts/audit-doudian-local-leakage.mjs
-remote-web/scripts/audit-doudian-remote-update-matrix.mjs
+electron-client/src/main/smoke/install-smoke-check.js [x]
+electron-client/scripts/check-contract.js [x]
+remote-web/new-remote-web/bridge.js [x]
+remote-web/scripts/audit-doudian-local-leakage.mjs [x]
+remote-web/scripts/audit-doudian-remote-update-matrix.mjs [x]
 ```
 
 新的 smoke 重点：
 
-- `window.chihuNative` 存在。
-- native 能力自检通过。
-- 隐藏任务运行器可启动、通信、取消。
-- remote repository 可写可读。
-- doudian runtime 可加载 adapter。
+- [x] `window.chihuNative` 存在。
+- [x] native 能力自检通过。
+- [x] 隐藏任务运行器可启动、通信、取消。
+- [x] remote repository 可写可读。
+- [x] doudian runtime 可加载 adapter。
 
 不再要求：
 
 ```text
-storesListOk
-window.client.stores*
-window.chihu.stores
+storesListOk [x]
+window.client.stores* [x]
+window.chihu.stores [x]
 ```
 
 如果最终不再保留通用本地 DB，也不再要求：
 
 ```text
-chihuDataMirrorOk
-window.client._db
-window.client.db
+chihuDataMirrorOk [x]
+window.client._db [x]
+window.client.db [x]
 ```
 
 ### 阶段 13：删除 Electron 本地业务服务
 
+状态：已完成（2026-07-08）。
+
 只有阶段 4 到阶段 12 全部通过后，才删除：
 
 ```text
-electron-client/src/main/ipc/stores.js
-electron-client/src/main/doudian/
+electron-client/src/main/ipc/stores.js [x]
+electron-client/src/main/doudian/ [x]
 ```
 
 同步修改：
 
 ```text
-electron-client/src/main/ipc/index.js
-electron-client/src/preload/index.js
-electron-client/scripts/check-contract.js
-electron-client/src/main/smoke/install-smoke-check.js
-remote-web/client-shell/src/types.ts
-remote-web/client-shell/src/bridge/client.ts
-remote-web/new-remote-web/bridge.js
+electron-client/src/main/ipc/index.js [x]
+electron-client/src/preload/index.js [x]
+electron-client/scripts/check-contract.js [x]
+electron-client/src/main/smoke/install-smoke-check.js [x]
+remote-web/client-shell/src/types.ts [x]
+remote-web/client-shell/src/bridge/client.ts [x]
+remote-web/new-remote-web/bridge.js [x]
 ```
 
 验收：
@@ -941,24 +969,26 @@ rg -n "fxg\\.jinritemai|jinritemai|bytedance|GetMstokenSign|businessData|fundsDa
 
 ### 阶段 14：清理依赖和文档
 
+状态：已完成（2026-07-08）。
+
 Electron 端如果不再使用本地 DB 和本地 Excel 解析，可以移除：
 
 ```text
-better-sqlite3
-nedb
-xlsx
+better-sqlite3 [x]
+nedb [x]
+xlsx [x]
 ```
 
-注意：只有当 smoke、`window.client._db`、`window.client.db`、本地文件解析都确认不再需要时才能删。
+确认：smoke、`window.client._db`、`window.client.db`、本地文件解析均已确认不再需要。
 
 文档同步更新：
 
 ```text
-electron-client/README.md
-electron-client/REGRESSION_CHECKLIST.md
-electron-client/MIGRATION_MAP.md
-docs/window-client-contract.md
-docs/bridge-permission-matrix.md
+electron-client/README.md [x]
+electron-client/REGRESSION_CHECKLIST.md [x]
+electron-client/MIGRATION_MAP.md [x]
+docs/window-client-contract.md [x]
+docs/bridge-permission-matrix.md [x]
 ```
 
 ## 10. 最终验收门槛
@@ -1056,7 +1086,7 @@ node .\remote-web\scripts\audit-doudian-remote-update-matrix.mjs
 2. 不要在 latest 快照恢复完成前删除本地 `repository.js`。
 3. 不要在签名浏览器化验证前删除 `xzb-signer.js`。
 4. 不要在滞销品 execute 验收前删除本地滞销品执行逻辑。
-5. 不要在 smoke 重写前删除 `better-sqlite3`、`nedb`、`xlsx`。
+5. [x] smoke 重写完成后删除 `better-sqlite3`、`nedb`、`xlsx`。
 6. 不要在 `audit-web-storage-isolation.mjs` 放开受控 IndexedDB 前实现散落 IndexedDB。
 
 ## 12. 推荐执行顺序

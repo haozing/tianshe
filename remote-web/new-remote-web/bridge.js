@@ -15,8 +15,6 @@
     "destroyBrowserWindow",
     "executeJavaScriptBrowserWindow",
     "reloadHomeUrl",
-    "db",
-    "_db",
     "sendNotification",
     "getMainWindowInfo",
     "resetMainWindow",
@@ -36,20 +34,7 @@
     "downloadFileToPath",
     "cancelDownloadFileToPath",
     "saveBufferToPath",
-    "openPathInExplorer",
-    "storesList",
-    "storesFetch",
-    "storesRefreshStatus",
-    "storesBusinessData",
-    "storesBusinessDataLatest",
-    "storesFundsData",
-    "storesFundsDataLatest",
-    "storesViolationsData",
-    "storesViolationsDataLatest",
-    "storesCancel",
-    "storesOpen",
-    "storesDelete",
-    "storesUpdateGroup"
+    "openPathInExplorer"
   ];
 
   function nowIso() {

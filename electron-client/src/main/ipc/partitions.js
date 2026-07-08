@@ -36,7 +36,10 @@ function registerPartitionHandlers() {
   ipcMain.handle("cleanInvalidPartitions", async (_event, args = {}) => {
     return cleanInvalidPartitions(args.currentPartitons, args.prefixes);
   });
+
+  ipcMain.handle("native:partitions:cleanInvalid", async (_event, args = {}) => {
+    return cleanInvalidPartitions(args.currentPartitons || args.currentPartitions, args.prefixes);
+  });
 }
 
 module.exports = { registerPartitionHandlers };
-

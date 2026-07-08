@@ -105,6 +105,34 @@ async function clearAllSessionData(partition) {
   return err;
 }
 
+async function getCookieHeader(args = {}) {
+  const partition = String(args.partition || "").trim();
+  if (!partition) return { ok: false, cookieHeader: "", cookies: [], message: "missing partition" };
+
+  const query = {};
+  if (typeof args.url === "string" && args.url.trim()) {
+    query.url = args.url.trim();
+  } else if (typeof args.domain === "string" && args.domain.trim()) {
+    query.domain = args.domain.trim();
+  }
+
+  const names = Array.isArray(args.names)
+    ? new Set(args.names.map((name) => String(name)).filter(Boolean))
+    : null;
+  const cookies = await session.fromPartition(partition).cookies.get(query);
+  const filtered = names ? cookies.filter((cookie) => names.has(cookie.name)) : cookies;
+  return {
+    ok: true,
+    cookieHeader: filtered.map((cookie) => `${cookie.name}=${cookie.value}`).join("; "),
+    cookies: filtered.map((cookie) => ({
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      path: cookie.path
+    }))
+  };
+}
+
 function registerCookieHandlers() {
   ipcMain.handle("get_cookies", async (_event, args = {}) => {
     const ses = session.fromPartition(args.partition);
@@ -128,11 +156,39 @@ function registerCookieHandlers() {
     const err = await setCookies(args.partition, args.cookies);
     return { err };
   });
+
+  ipcMain.handle("native:cookies:get", async (_event, args = {}) => {
+    const ses = session.fromPartition(args.partition);
+    if (typeof args.url === "string" && args.url.trim()) {
+      return { ok: true, cookies: await ses.cookies.get({ url: args.url.trim() }) };
+    }
+    return { ok: true, cookies: await ses.cookies.get({ domain: args.domain }) };
+  });
+
+  ipcMain.handle("native:cookies:set", async (_event, args = {}) => {
+    const err = await setCookies(args.partition, args.cookies);
+    return { ok: !err, err };
+  });
+
+  ipcMain.handle("native:cookies:copy", async (_event, args = {}) => {
+    const err = await copyCookies(args.oldPartition || args.fromPartition, args.newPartition || args.toPartition, args);
+    return { ok: !err, err };
+  });
+
+  ipcMain.handle("native:cookies:getHeader", async (_event, args = {}) => {
+    return getCookieHeader(args);
+  });
+
+  ipcMain.handle("native:cookies:clear", async (_event, args = {}) => {
+    const err = await clearAllSessionData(args.partition);
+    return { ok: !err, err };
+  });
 }
 
 module.exports = {
   clearAllSessionData,
   copyCookies,
+  getCookieHeader,
   registerCookieHandlers,
   setCookies
 };

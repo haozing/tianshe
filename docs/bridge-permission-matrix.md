@@ -1,7 +1,7 @@
 # Bridge Permission Matrix
 
 > status: ok
-> generatedAt: 2026-07-06T03:17:34.770Z
+> generatedAt: 2026-07-07T17:54:03.383Z
 
 ## Scope
 
@@ -24,8 +24,6 @@ This audit covers only the clean foundation bridge. Historical platform-specific
 | destroyBrowserWindow | present |
 | executeJavaScriptBrowserWindow | present |
 | reloadHomeUrl | present |
-| db | present |
-| _db | present |
 | sendNotification | present |
 | getMainWindowInfo | present |
 | resetMainWindow | present |
@@ -46,16 +44,9 @@ This audit covers only the clean foundation bridge. Historical platform-specific
 | cancelDownloadFileToPath | present |
 | saveBufferToPath | present |
 | openPathInExplorer | present |
-| storesList | present |
-| storesFetch | present |
-| storesRefreshStatus | present |
-| storesCancel | present |
-| storesOpen | present |
-| storesDelete | present |
-| storesUpdateGroup | present |
 
 ## Summary
 
-- expected: 42
-- present: 42
+- expected: 33
+- present: 33
 - missing: 0

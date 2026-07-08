@@ -5,12 +5,10 @@
   "description": "Readable Electron client source for CHIHU remote web migration",
   "main": "src/main/index.js",
   "scripts": {
-    "postinstall": "npm rebuild better-sqlite3 --runtime=electron --target=31.7.7 --dist-url=https://electronjs.org/headers",
     "dev": "node scripts/run-dev.js",
     "smoke": "node scripts/run-smoke.js",
     "smoke:cookie": "node scripts/run-smoke.js cookie",
     "smoke:http": "node scripts/run-smoke.js http",
-    "smoke:db": "node scripts/run-smoke.js db",
     "smoke:files": "node scripts/run-smoke.js files",
     "smoke:logs": "node scripts/run-smoke.js logs",
     "smoke:ui-contract": "node scripts/run-smoke.js ui-contract",
@@ -25,10 +23,7 @@
   },
   "dependencies": {
     "axios": "^1.7.7",
-    "better-sqlite3": "^12.5.0",
     "electron": "^31.7.7",
-    "electron-updater": "^6.3.9",
-    "nedb": "^1.8.0",
-    "xlsx": "^0.18.5"
+    "electron-updater": "^6.3.9"
   }
 }

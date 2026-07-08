@@ -350,12 +350,11 @@ const sampleTemplates = [
 ];
 
 function hasNativeStoreBridge() {
-  return Boolean(window.chihu?.stores?.list || window.client?.storesList);
+  return Boolean(window.chihuNative && window.indexedDB);
 }
 
 function hasNativeStaleGoodsBridge() {
-  const storeApi = window.chihu?.stores as Record<string, unknown> | undefined;
-  return Boolean(storeApi?.staleGoodsCleanup || window.client?.storesStaleGoodsCleanup);
+  return Boolean(window.chihuNative && window.indexedDB);
 }
 
 function isDevPreviewRuntime() {
@@ -1361,7 +1360,7 @@ export function SlowMovingCleanupPage() {
   }
 
   async function importCompassFile() {
-    if (window.client?.selectAndParseDelimitedFile) {
+    if (window.chihuNative?.files?.selectFile) {
       const result = await selectAndParseCompassFile();
       if (result.canceled) return;
       setCompassFileName(result.fileName || "");

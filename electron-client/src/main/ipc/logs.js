@@ -51,7 +51,19 @@ function registerLogHandlers() {
   ipcMain.handle("cleanupOldCrashLogs", async (_event, payload) => {
     return cleanupOldCrashLogs(payload);
   });
+  ipcMain.handle("native:logs:report", async (event, payload) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    writeLog("RENDERER", {
+      ...(payload && typeof payload === "object" ? payload : { rawPayload: payload }),
+      browserWindowId: win ? win.id : null,
+      url: event.sender.getURL()
+    });
+    return { ok: true, logDir: getLogDir() };
+  });
+  ipcMain.handle("native:logs:getDir", async () => getLogDir());
+  ipcMain.handle("native:logs:clean", async (_event, payload) => {
+    return cleanupOldCrashLogs(payload);
+  });
 }
 
 module.exports = { registerLogHandlers };
-

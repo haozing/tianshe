@@ -23,6 +23,7 @@ import {
 import { fetchDoudianFundsData, fetchDoudianFundsDataLatest, listDoudianStores, openPlatformWindow } from "../bridge/client";
 import { loadDoudianAdapterPayload } from "../bridge/doudianAdapter";
 import { STORAGE_KEY_FUNDS_DATA_COLUMNS, storageGet, storageSet } from "../bridge/storage";
+import { addDoudianProgressListener } from "../domain/doudian";
 import { cn } from "../lib/utils";
 import type { DoudianFundsDataRow, DoudianRunDetail, DoudianStoreStatus, DoudianStoreSummary } from "../types";
 
@@ -208,7 +209,7 @@ const sampleStores: StoreOption[] = [
 ];
 
 function hasNativeStoreBridge() {
-  return Boolean(window.chihu?.stores?.list || window.client?.storesList);
+  return Boolean(window.chihuNative && window.indexedDB);
 }
 
 function normalizeStoreStatus(status: unknown): DoudianStoreStatus {
@@ -833,16 +834,13 @@ export function FundsDataPage() {
   }, [previewMode, loadState, stores.length, datePreset]);
 
   useEffect(() => {
-    const onProgress = (event: Event) => {
-      const detail = (event as CustomEvent).detail || {};
-      if (detail.phase !== "fundsData") return;
-      const index = detail.index && detail.total ? `${detail.index}/${detail.total}` : "";
-      const shopName = detail.shopName ? String(detail.shopName) : "";
-      const message = detail.message ? String(detail.message) : "";
-      setFundsProgress([index, shopName, message].filter(Boolean).join(" · "));
-    };
-    window.addEventListener("chihu-stores-progress", onProgress);
-    return () => window.removeEventListener("chihu-stores-progress", onProgress);
+    return addDoudianProgressListener((event) => {
+      const detail = event.detail || {};
+      if (detail.taskType !== "fundsData") return;
+      const progress = Number.isFinite(detail.progress) ? `${Math.round(detail.progress)}%` : "";
+      const message = detail.message || detail.resultSummary || detail.error || "";
+      setFundsProgress([progress, message].filter(Boolean).join(" · "));
+    });
   }, []);
 
   const filteredStores = useMemo(() => {

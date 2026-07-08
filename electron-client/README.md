@@ -4,6 +4,13 @@ This directory contains the readable Electron client source for Chihu.
 
 The active runtime scope is Douyin/DouDian commerce. PDD legacy workbench code is kept only as migration history outside the active runtime and is not part of new development, smoke tests, or acceptance.
 
+## Migration Route
+
+The final DouDian business orchestration route is documented in
+[`REMOTE_BUSINESS_ORCHESTRATION_MIGRATION_PLAN.md`](REMOTE_BUSINESS_ORCHESTRATION_MIGRATION_PLAN.md).
+If older audits or checklists describe a different local-business-service target,
+the migration plan is authoritative.
+
 ## Entry
 
 Default remote web entry:
@@ -44,7 +51,6 @@ Targeted smoke checks:
 ```powershell
 npm run smoke:cookie
 npm run smoke:http
-npm run smoke:db
 npm run smoke:files
 npm run smoke:logs
 npm run smoke:ui-contract

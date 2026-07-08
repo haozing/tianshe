@@ -10,7 +10,7 @@ function emitNotificationEvent(sourceWindow, args) {
 }
 
 function registerNotificationHandlers() {
-  ipcMain.handle("send_notification", async (event, args = {}) => {
+  const sendNotification = async (event, args = {}) => {
     const sourceWindow = BrowserWindow.fromWebContents(event.sender);
     const options = {
       title: args.title || APP_TITLE,
@@ -35,7 +35,10 @@ function registerNotificationHandlers() {
     notification.on("click", () => emitNotificationEvent(sourceWindow, args));
     notification.show();
     return { ok: true };
-  });
+  };
+
+  ipcMain.handle("send_notification", sendNotification);
+  ipcMain.handle("native:notifications:send", sendNotification);
 }
 
 module.exports = { registerNotificationHandlers };

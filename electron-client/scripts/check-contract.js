@@ -5,7 +5,7 @@ const root = path.join(__dirname, "..");
 const preloadPath = path.join(root, "src", "preload", "index.js");
 const ipcRoot = path.join(root, "src", "main", "ipc");
 const mainPath = path.join(root, "src", "main", "index.js");
-const { expectedClientMethods } = require("./client-contract-baseline");
+const { chihuNativeMethods, expectedClientMethods } = require("./client-contract-baseline");
 
 function read(filePath) {
   return fs.readFileSync(filePath, "utf8");
@@ -35,10 +35,24 @@ for (const [method, channel] of expectedClientMethods) {
   }
 }
 
+if (!preload.includes('contextBridge.exposeInMainWorld("chihuNative"')) {
+  failures.push("preload missing window.chihuNative exposure");
+}
+
+for (const [method, channel] of chihuNativeMethods) {
+  const methodName = method.split(".").pop();
+  if (!preload.includes(`${methodName}: invoke("${channel}")`)) {
+    failures.push(`preload missing chihuNative.${method} -> ${channel}`);
+  }
+  if (!mainAndIpc.includes(`ipcMain.handle("${channel}"`)) {
+    failures.push(`ipc missing ${channel}`);
+  }
+}
+
 if (failures.length) {
   console.error("CONTRACT_FAIL");
   for (const failure of failures) console.error(`- ${failure}`);
   process.exit(1);
 }
 
-console.log(`CONTRACT_OK ${expectedClientMethods.length} methods`);
+console.log(`CONTRACT_OK ${expectedClientMethods.length} client methods, ${chihuNativeMethods.length} chihuNative methods`);

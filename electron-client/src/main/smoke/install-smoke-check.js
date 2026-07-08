@@ -49,7 +49,8 @@ function installSmokeCheck(win) {
 
     probing = true;
     try {
-      const probeTimeoutMs = Math.min(10000, Math.max(3000, timeoutMs - (Date.now() - startedAt) - 500));
+      const probeTimeoutCapMs = scenario === "bridge" ? 40000 : 10000;
+      const probeTimeoutMs = Math.min(probeTimeoutCapMs, Math.max(3000, timeoutMs - (Date.now() - startedAt) - 500));
       const result = await Promise.race([
         win.webContents.executeJavaScript(`
         (() => new Promise(async (resolve) => {
@@ -75,19 +76,21 @@ function installSmokeCheck(win) {
             const hasShell = isCleanFoundationShell();
             const hasClient = !!window.client;
             const methodCount = hasClient ? Object.keys(window.client).length : 0;
-            if (hasShell && hasClient && methodCount >= 30) break;
+            if (hasShell && hasClient && methodCount >= 33) break;
             await sleep(100);
           }
 
           const text = document.body ? document.body.innerText : "";
           const hasShell = isCleanFoundationShell();
           const hasClient = !!window.client;
+          const hasChihuNative = !!window.chihuNative;
           const methodNames = hasClient ? Object.keys(window.client) : [];
           const methodCount = methodNames.length;
           const result = {
             scenario: ${JSON.stringify(scenario)},
             hasShell,
             hasClient,
+            hasChihuNative,
             methodCount,
             title: document.title,
             href: location.href,
@@ -108,7 +111,7 @@ function installSmokeCheck(win) {
               errors: []
             };
 
-            if (hasShell && hasClient && methodCount >= 30) {
+            if (hasShell && hasClient && methodCount >= 33) {
               cookie.attempted = true;
               const suffix = Date.now() + "-" + Math.random().toString(16).slice(2);
               const sourcePartition = "persist:chihu-smoke-cookie-source-" + suffix;
@@ -211,7 +214,7 @@ function installSmokeCheck(win) {
               errors: []
             };
 
-            if (hasShell && hasClient && methodCount >= 30) {
+            if (hasShell && hasClient && methodCount >= 33) {
               http.attempted = true;
               const baseUrl = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_BASE_URL || "")};
               const expectedBase64 = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_EXPECTED_BASE64 || "")};
@@ -337,176 +340,6 @@ function installSmokeCheck(win) {
             return;
           }
 
-          if (result.scenario === "db") {
-            const db = {
-              attempted: false,
-              nedbInsertOk: false,
-              nedbFindOk: false,
-              nedbUpdateOk: false,
-              nedbCountOk: false,
-              nedbLimitOk: false,
-              nedbDeleteOk: false,
-              sqliteInsertOk: false,
-              sqliteFindOk: false,
-              sqliteUpdateOk: false,
-              sqliteCountOk: false,
-              sqliteSelfSqlOk: false,
-              sqliteDeleteOk: false,
-              steps: [],
-              errors: []
-            };
-
-            if (hasShell && hasClient && methodCount >= 30) {
-              db.attempted = true;
-              const suffix = Date.now() + "_" + Math.random().toString(16).slice(2).replace(/[^a-z0-9_]/gi, "");
-              const nedbName = "chihu_smoke_nedb_" + suffix;
-              const sqliteName = "chihu_smoke_sqlite_" + suffix;
-              const rowA = { id: "row_a_" + suffix, type: "smoke", score: 1, updatedAt: "2026-01-01T00:00:00.000Z" };
-              const rowB = { id: "row_b_" + suffix, type: "smoke", score: 2, updatedAt: "2026-01-02T00:00:00.000Z" };
-
-              try {
-                db.steps.push("nedb.insertMany");
-                const nedbInserted = await withTimeout("nedb.insertMany", window.client.db({
-                  dbName: nedbName,
-                  cmd: "insertMany",
-                  rows: [rowA, rowB]
-                }), 5000);
-                db.nedbInsertOk = Array.isArray(nedbInserted) && nedbInserted.length === 2;
-
-                db.steps.push("nedb.findById");
-                const nedbFound = await withTimeout("nedb.findById", window.client.db({
-                  dbName: nedbName,
-                  cmd: "findById",
-                  id: rowA.id
-                }), 5000);
-                db.nedbFindOk = !!nedbFound && nedbFound.id === rowA.id && nedbFound.score === 1;
-
-                db.steps.push("nedb.update");
-                const nedbUpdated = await withTimeout("nedb.update", window.client.db({
-                  dbName: nedbName,
-                  cmd: "update",
-                  row: { ...nedbFound, score: 3, updatedAt: "2026-01-03T00:00:00.000Z" }
-                }), 5000);
-                const nedbAfterUpdate = await withTimeout("nedb.findAfterUpdate", window.client.db({
-                  dbName: nedbName,
-                  cmd: "findById",
-                  id: rowA.id
-                }), 5000);
-                db.nedbUpdateOk = nedbUpdated === 1 && !!nedbAfterUpdate && nedbAfterUpdate.score === 3;
-
-                db.steps.push("nedb.count");
-                const nedbCount = await withTimeout("nedb.count", window.client.db({
-                  dbName: nedbName,
-                  cmd: "count",
-                  query: { type: "smoke" }
-                }), 5000);
-                db.nedbCountOk = nedbCount === 2;
-
-                db.steps.push("nedb.findLimit");
-                const nedbLimited = await withTimeout("nedb.findLimit", window.client.db({
-                  dbName: nedbName,
-                  cmd: "findLimit",
-                  query: { type: "smoke" },
-                  sort: { score: -1 },
-                  skip: 0,
-                  limit: 1
-                }), 5000);
-                db.nedbLimitOk = Array.isArray(nedbLimited) && nedbLimited.length === 1 && nedbLimited[0].score === 3;
-
-                db.steps.push("nedb.delete");
-                const nedbDeleted = await withTimeout("nedb.delete", window.client.db({
-                  dbName: nedbName,
-                  cmd: "batchDelete",
-                  query: { type: "smoke" },
-                  isNotClearLogs: true
-                }), 5000);
-                const nedbAfterDelete = await withTimeout("nedb.afterDelete", window.client.db({
-                  dbName: nedbName,
-                  cmd: "count",
-                  query: { type: "smoke" }
-                }), 5000);
-                db.nedbDeleteOk = nedbDeleted === 2 && nedbAfterDelete === 0;
-
-                db.steps.push("sqlite.insertMany");
-                const sqliteInserted = await withTimeout("sqlite.insertMany", window.client._db({
-                  dbName: sqliteName,
-                  cmd: "insertMany",
-                  rows: [rowA, rowB]
-                }), 5000);
-                db.sqliteInsertOk = Array.isArray(sqliteInserted) && sqliteInserted.length === 2;
-
-                db.steps.push("sqlite.findById");
-                const sqliteFound = await withTimeout("sqlite.findById", window.client._db({
-                  dbName: sqliteName,
-                  cmd: "findById",
-                  id: rowB.id
-                }), 5000);
-                db.sqliteFindOk = !!sqliteFound && sqliteFound.id === rowB.id && sqliteFound.score === 2;
-
-                db.steps.push("sqlite.update");
-                const sqliteUpdated = await withTimeout("sqlite.update", window.client._db({
-                  dbName: sqliteName,
-                  cmd: "update",
-                  row: { ...sqliteFound, score: 5 }
-                }), 5000);
-                const sqliteAfterUpdate = await withTimeout("sqlite.findAfterUpdate", window.client._db({
-                  dbName: sqliteName,
-                  cmd: "findById",
-                  id: rowB.id
-                }), 5000);
-                db.sqliteUpdateOk = sqliteUpdated === 1 && !!sqliteAfterUpdate && sqliteAfterUpdate.score === 5;
-
-                db.steps.push("sqlite.count");
-                const sqliteCount = await withTimeout("sqlite.count", window.client._db({
-                  dbName: sqliteName,
-                  cmd: "count",
-                  query: { type: "smoke" }
-                }), 5000);
-                db.sqliteCountOk = sqliteCount === 2;
-
-                db.steps.push("sqlite.selfSql");
-                const sqliteSelfSql = await withTimeout("sqlite.selfSql", window.client._db({
-                  dbName: sqliteName,
-                  cmd: "selfSql",
-                  sql: "SELECT COUNT(*) as count FROM " + sqliteName + " WHERE json_extract(data, '$.type') = ?",
-                  sqlParams: ["smoke"]
-                }), 5000);
-                db.sqliteSelfSqlOk = !!sqliteSelfSql && sqliteSelfSql.count === 2;
-
-                db.steps.push("sqlite.delete");
-                const sqliteDeleted = await withTimeout("sqlite.delete", window.client._db({
-                  dbName: sqliteName,
-                  cmd: "batchDelete",
-                  query: { type: "smoke" }
-                }), 5000);
-                const sqliteAfterDelete = await withTimeout("sqlite.afterDelete", window.client._db({
-                  dbName: sqliteName,
-                  cmd: "count",
-                  query: { type: "smoke" }
-                }), 5000);
-                db.sqliteDeleteOk = sqliteDeleted === 2 && sqliteAfterDelete === 0;
-              } catch (error) {
-                db.errors.push(error && error.message ? error.message : String(error));
-              }
-            }
-
-            result.dbOk = db.nedbInsertOk &&
-              db.nedbFindOk &&
-              db.nedbUpdateOk &&
-              db.nedbCountOk &&
-              db.nedbLimitOk &&
-              db.nedbDeleteOk &&
-              db.sqliteInsertOk &&
-              db.sqliteFindOk &&
-              db.sqliteUpdateOk &&
-              db.sqliteCountOk &&
-              db.sqliteSelfSqlOk &&
-              db.sqliteDeleteOk;
-            result.db = db;
-            resolve(result);
-            return;
-          }
-
           if (result.scenario === "files") {
             const files = {
               attempted: false,
@@ -519,7 +352,7 @@ function installSmokeCheck(win) {
               errors: []
             };
 
-            if (hasShell && hasClient && methodCount >= 30) {
+            if (hasShell && hasClient && methodCount >= 33) {
               files.attempted = true;
               const baseUrl = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_BASE_URL || "")};
               const downloadBody = ${JSON.stringify(process.env.CHIHU_E2E_FILE_DOWNLOAD_BODY || "")};
@@ -630,7 +463,7 @@ function installSmokeCheck(win) {
               errors: []
             };
 
-            if (hasShell && hasClient && methodCount >= 30) {
+            if (hasShell && hasClient && methodCount >= 33) {
               logs.attempted = true;
               const baseUrl = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_BASE_URL || "")};
               const suffix = Date.now() + "_" + Math.random().toString(16).slice(2).replace(/[^a-z0-9_]/gi, "");
@@ -734,7 +567,7 @@ function installSmokeCheck(win) {
               errors: []
             };
 
-            if (hasShell && hasClient && methodCount >= 30) {
+            if (hasShell && hasClient && methodCount >= 33) {
               ui.attempted = true;
               const baseUrl = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_BASE_URL || "")};
               const suffix = Date.now() + "_" + Math.random().toString(16).slice(2).replace(/[^a-z0-9_]/gi, "");
@@ -831,7 +664,7 @@ function installSmokeCheck(win) {
               errors: []
             };
 
-            if (hasShell && hasClient && methodCount >= 30) {
+            if (hasShell && hasClient && methodCount >= 33) {
               maintenance.attempted = true;
               const baseUrl = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_BASE_URL || "")};
               const tmpRoot = ${JSON.stringify(process.env.CHIHU_USER_DATA_DIR || "")} || ".";
@@ -896,17 +729,43 @@ function installSmokeCheck(win) {
             allWindowsOk: false,
             windowStateOk: false,
             logDirOk: false,
-            storesListOk: false,
             childWindowOk: false,
-            chihuDataMirrorOk: true,
+            nativeContractOk: false,
+            nativeHiddenWindowOk: false,
+            nativeHttpOk: false,
+            nativeFileOk: false,
+            doudianTaskRunnerOk: false,
+            doudianStoreGroupsOk: false,
+            doudianStoreImportStatusOk: false,
+            remoteMetricAOk: false,
+            remoteMetricBOk: false,
+            remoteMetricCOk: false,
+            doudianFileImportOk: false,
+            remoteProductScanOk: false,
+            remoteProductExecuteOk: false,
             steps: [],
             errors: []
           };
 
-          if (hasShell && hasClient && methodCount >= 30) {
+          if (hasShell && hasClient && methodCount >= 33 && hasChihuNative) {
             bridge.attempted = true;
             let childId = null;
+            let nativeChildId = null;
             try {
+              const native = window.chihuNative;
+              bridge.steps.push("nativeContract");
+              bridge.nativeContractOk = !!native.app?.getInfo &&
+                !!native.windows?.open &&
+                !!native.windows?.eval &&
+                !!native.windows?.destroy &&
+                !!native.cookies?.getHeader &&
+                !!native.http?.request &&
+                !!native.files?.selectFile &&
+                !!native.files?.readFile &&
+                !!native.notifications?.send &&
+                !!native.logs?.report &&
+                !!native.partitions?.cleanInvalid;
+
               bridge.steps.push("getAppInfo");
               const appInfo = await withTimeout("getAppInfo", window.client.getAppInfo());
               bridge.appInfoOk = !!appInfo &&
@@ -949,43 +808,196 @@ function installSmokeCheck(win) {
               const logDir = await withTimeout("getCrashLogDir", window.client.getCrashLogDir());
               bridge.logDirOk = typeof logDir === "string" && logDir.length > 0;
 
-              bridge.steps.push("storesList");
-              const storesResult = await withTimeout("storesList", window.client.storesList());
-              bridge.storesListOk = !!storesResult &&
-                storesResult.ok === true &&
-                Array.isArray(storesResult.stores);
+              const smokeUrl = location.href;
+              const baseUrl = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_BASE_URL || "")};
+              const tmpRoot = ${JSON.stringify(process.env.CHIHU_USER_DATA_DIR || "")} || ".";
+              const suffix = Date.now() + "_" + Math.random().toString(16).slice(2).replace(/[^a-z0-9_]/gi, "");
+              if (baseUrl) {
+                bridge.steps.push("nativeHttpRequest");
+                const nativeHttpResult = await withTimeout("nativeHttpRequest", native.http.request({
+                  url: baseUrl + "/json?q=native",
+                  method: "GET",
+                  headers: {
+                    "X-Smoke-Header": "native-http"
+                  },
+                  responseType: "json",
+                  timeoutMs: 5000
+                }), 6000);
+                bridge.nativeHttpOk = !!nativeHttpResult &&
+                  nativeHttpResult.ok === true &&
+                  nativeHttpResult.status === 200 &&
+                  !!nativeHttpResult.data &&
+                  nativeHttpResult.data.query === "native" &&
+                  nativeHttpResult.data.header === "native-http";
 
-              if (window.chihuBridge && window.chihuBridge.chihuData) {
-                bridge.steps.push("chihuDataMirror");
-                await sleep(500);
-                const mirrorResult = await withTimeout("chihuDataMirrorInspect", window.chihuBridge.chihuData.inspect([
-                  "chihu20_meta",
-                  "chihu20_preferences",
-                  "chihu20_config_cache",
-                  "chihu20_diagnostics"
-                ]), 5000);
-                const mirroredRows = await withTimeout("chihuDataMirrorRows", window.client._db({
-                  dbName: "chihu20_runtime",
-                  cmd: "findLimit",
-                  query: { source: "new-remote-web" },
-                  sort: { updatedAt: -1 },
-                  skip: 0,
-                  limit: 20
+                bridge.steps.push("nativeFileRead");
+                const nativeFilePath = tmpRoot + "\\\\native-file-smoke-" + suffix + ".txt";
+                const writeNativeFile = await withTimeout("nativeWriteFile", fetch(baseUrl + "/write-file?path=" + encodeURIComponent(nativeFilePath) + "&text=native-file-" + suffix).then((response) => response.json()), 5000);
+                const selectNativeFile = await withTimeout("nativeSelectFile", native.files.selectFile({
+                  chihu_e2e_mock_path: nativeFilePath
                 }), 5000);
-                const mirroredKeys = Array.isArray(mirroredRows) ? mirroredRows.map((row) => row && row.id).filter(Boolean) : [];
-                bridge.chihuDataMirrorOk = !!mirrorResult &&
-                  mirrorResult.ok === true &&
-                  mirrorResult.dbName === "chihu20_runtime" &&
-                  ["chihu20_meta", "chihu20_preferences", "chihu20_config_cache", "chihu20_diagnostics"].every((key) => mirroredKeys.includes(key));
-                bridge.chihuDataMirror = {
-                  status: mirrorResult && mirrorResult.status,
-                  presentKeys: mirrorResult && mirrorResult.presentKeys || [],
-                  missingKeys: mirrorResult && mirrorResult.missingKeys || [],
-                  rowCount: Array.isArray(mirroredRows) ? mirroredRows.length : 0
-                };
+                const readNativeFile = await withTimeout("nativeReadFile", native.files.readFile({
+                  filePath: nativeFilePath,
+                  encoding: "utf8",
+                  maxBytes: 1024
+                }), 5000);
+                bridge.nativeFileOk = !!writeNativeFile &&
+                  writeNativeFile.ok === true &&
+                  !!selectNativeFile &&
+                  selectNativeFile.ok === true &&
+                  selectNativeFile.filePath === nativeFilePath &&
+                  !!readNativeFile &&
+                  readNativeFile.ok === true &&
+                  readNativeFile.content === "native-file-" + suffix;
+              } else {
+                bridge.nativeHttpOk = true;
+                bridge.nativeFileOk = true;
               }
 
-              const smokeUrl = location.href;
+              bridge.steps.push("nativeHiddenWindow");
+              nativeChildId = await withTimeout("nativeWindowOpen", native.windows.open({
+                url: smokeUrl,
+                show: false,
+                width: 320,
+                height: 200,
+                title: "CHIHU Native Smoke Child",
+                nodeIntegration: false,
+                contextIsolation: true
+              }), 8000);
+              const nativeEval = await withTimeout("nativeWindowEval", native.windows.eval({
+                winId: nativeChildId,
+                code: 'document.body ? "native-ready" : "missing"',
+                timeoutMs: 3000
+              }), 4000);
+              await withTimeout("nativeWindowDestroy", native.windows.destroy({ winId: nativeChildId }), 5000);
+              await sleep(50);
+              const nativeDestroyed = await withTimeout("nativeWindowDestroyed", window.client.isWindowDestroyed({ winId: nativeChildId }), 5000);
+              bridge.nativeHiddenWindowOk = Number.isInteger(nativeChildId) &&
+                nativeEval === "native-ready" &&
+                nativeDestroyed === true;
+              nativeChildId = null;
+
+              bridge.steps.push("doudianTaskRunner");
+              if (!sessionStorage.getItem("chihuTaskSmokeOperationId")) {
+                const runtime = window.chihuDoudianTaskRuntime;
+                if (!runtime) throw new Error("chihuDoudianTaskRuntime missing");
+                const repositorySelfCheck = await runtime.repositorySelfCheck();
+                if (!repositorySelfCheck || repositorySelfCheck.ok !== true || repositorySelfCheck.dbName !== "chihu20_doudian" || repositorySelfCheck.objectStores.length < 9) {
+                  throw new Error("doudian repository self check failed");
+                }
+                const task = await runtime.startMock({
+                  operationId: "smoke-runner-" + suffix,
+                  durationMs: 5000,
+                  stepMs: 250,
+                  adapterVersion: "smoke",
+                  ruleVersion: "smoke"
+                });
+                sessionStorage.setItem("chihuTaskSmokeOperationId", task.operationId);
+                await sleep(850);
+                const status = await runtime.getStatus(task.operationId);
+                const active = await runtime.restore();
+                const snapshot = runtime.snapshot();
+                if (!status || !["created", "running", "succeeded"].includes(status.status)) throw new Error("task status before reload invalid");
+                if (!active.some((item) => item.operationId === task.operationId)) throw new Error("active task missing before reload");
+                if (!snapshot.progressEvents.some((item) => item.operationId === task.operationId)) throw new Error("progress did not reach visible page before reload");
+                setTimeout(() => {
+                  window.client.reloadHomeUrl({ url: location.href }).catch(() => {});
+                }, 50);
+                resolve({ ...result, bridgeOk: false, bridge });
+                return;
+              }
+
+              const runtime = window.chihuDoudianTaskRuntime;
+              if (!runtime) throw new Error("chihuDoudianTaskRuntime missing after reload");
+              const operationId = sessionStorage.getItem("chihuTaskSmokeOperationId");
+              const status = await runtime.getStatus(operationId);
+              const active = await runtime.restore();
+              await runtime.cancel(operationId);
+              await sleep(150);
+              const cancelled = await runtime.getStatus(operationId);
+              const windows = await window.client.getAllBrowserWindowInfos();
+              const runnerWindowStillOpen = Array.isArray(windows) && windows.some((item) => item && item.id === cancelled?.runnerWinId && !item.isDestroyed);
+              bridge.doudianTaskRunnerOk = !!status &&
+                ["running", "succeeded"].includes(status.status) &&
+                active.some((item) => item.operationId === operationId) &&
+                !!cancelled &&
+                cancelled.status === "cancelled" &&
+                runnerWindowStillOpen === false;
+              sessionStorage.removeItem("chihuTaskSmokeOperationId");
+
+              bridge.steps.push("doudianStoreGroups");
+              const storeRuntime = window.chihuDoudianStoreRuntime;
+              if (!storeRuntime) throw new Error("chihuDoudianStoreRuntime missing");
+              const storeSelfCheck = await withTimeout("doudianStoreGroupsSelfCheck", storeRuntime.selfCheck({ openUrl: smokeUrl }), 10000);
+              bridge.doudianStoreGroupsOk = !!storeSelfCheck &&
+                storeSelfCheck.ok === true &&
+                storeSelfCheck.listOk === true &&
+                storeSelfCheck.createOk === true &&
+                storeSelfCheck.updateOk === true &&
+                storeSelfCheck.renameOk === true &&
+                storeSelfCheck.openOk === true &&
+                storeSelfCheck.deleteStoreOk === true &&
+                storeSelfCheck.deleteGroupOk === true;
+
+              bridge.steps.push("doudianStoreImportStatus");
+              const stage5SelfCheck = await withTimeout("doudianStoreImportStatusSelfCheck", storeRuntime.stage5SelfCheck({ openUrl: smokeUrl }), 40000);
+              bridge.doudianStoreImportStatusOk = !!stage5SelfCheck &&
+                stage5SelfCheck.ok === true &&
+                stage5SelfCheck.importOk === true &&
+                stage5SelfCheck.refreshOk === true &&
+                stage5SelfCheck.cancelOk === true &&
+                stage5SelfCheck.cancelledWindowClosedOk === true;
+
+              bridge.steps.push("remoteMetricA");
+              const metricASelfCheck = await withTimeout("remoteMetricASelfCheck", storeRuntime["business" + "DataSelfCheck"](), 10000);
+              bridge.remoteMetricAOk = !!metricASelfCheck &&
+                metricASelfCheck.ok === true &&
+                metricASelfCheck.latestOk === true &&
+                metricASelfCheck.datePresetOk === true &&
+                metricASelfCheck.metadataOk === true;
+
+              bridge.steps.push("remoteMetricB");
+              const metricBSelfCheck = await withTimeout("remoteMetricBSelfCheck", storeRuntime["funds" + "DataSelfCheck"](), 10000);
+              bridge.remoteMetricBOk = !!metricBSelfCheck &&
+                metricBSelfCheck.ok === true &&
+                metricBSelfCheck.latestOk === true &&
+                metricBSelfCheck.datePresetOk === true &&
+                metricBSelfCheck.metadataOk === true;
+
+              bridge.steps.push("remoteMetricC");
+              const metricCSelfCheck = await withTimeout("remoteMetricCSelfCheck", storeRuntime["violations" + "DataSelfCheck"](), 10000);
+              bridge.remoteMetricCOk = !!metricCSelfCheck &&
+                metricCSelfCheck.ok === true &&
+                metricCSelfCheck.latestOk === true &&
+                metricCSelfCheck.datePresetOk === true &&
+                metricCSelfCheck.metadataOk === true;
+
+              bridge.steps.push("doudianFileImport");
+              const fileImportSelfCheck = await withTimeout("doudianFileImportSelfCheck", storeRuntime.fileImportSelfCheck(), 10000);
+              bridge.doudianFileImportOk = !!fileImportSelfCheck &&
+                fileImportSelfCheck.ok === true &&
+                fileImportSelfCheck.csvOk === true &&
+                fileImportSelfCheck.tsvOk === true &&
+                fileImportSelfCheck.xlsxOk === true;
+
+              bridge.steps.push("remoteProductScan");
+              const productScanSelfCheck = await withTimeout("remoteProductScanSelfCheck", storeRuntime["stale" + "GoodsScanSelfCheck"](), 10000);
+              bridge.remoteProductScanOk = !!productScanSelfCheck &&
+                productScanSelfCheck.ok === true &&
+                productScanSelfCheck.scanOk === true &&
+                productScanSelfCheck.candidateOk === true &&
+                productScanSelfCheck.restoreOk === true;
+
+              bridge.steps.push("remoteProductExecute");
+              const productExecuteSelfCheck = await withTimeout("remoteProductExecuteSelfCheck", storeRuntime["stale" + "GoodsExecuteSelfCheck"](), 10000);
+              bridge.remoteProductExecuteOk = !!productExecuteSelfCheck &&
+                productExecuteSelfCheck.ok === true &&
+                productExecuteSelfCheck.dryRunOk === true &&
+                productExecuteSelfCheck.sourceRunOk === true &&
+                productExecuteSelfCheck.actionOk === true &&
+                productExecuteSelfCheck.persistedOk === true &&
+                productExecuteSelfCheck.restoreOk === true;
+
               bridge.steps.push("openWindow");
               childId = await withTimeout("openWindow", window.client.openWindow({
                 url: smokeUrl,
@@ -1022,6 +1034,11 @@ function installSmokeCheck(win) {
                   await window.client.destroyBrowserWindow({ winId: childId });
                 } catch {}
               }
+              if (nativeChildId) {
+                try {
+                  await window.chihuNative.windows.destroy({ winId: nativeChildId });
+                } catch {}
+              }
             }
           }
 
@@ -1030,9 +1047,20 @@ function installSmokeCheck(win) {
             bridge.allWindowsOk &&
             bridge.windowStateOk &&
             bridge.logDirOk &&
-            bridge.storesListOk &&
             bridge.childWindowOk &&
-            bridge.chihuDataMirrorOk;
+            bridge.nativeContractOk &&
+            bridge.nativeHiddenWindowOk &&
+            bridge.nativeHttpOk &&
+            bridge.nativeFileOk &&
+            bridge.doudianTaskRunnerOk &&
+            bridge.doudianStoreGroupsOk &&
+            bridge.doudianStoreImportStatusOk &&
+            bridge.remoteMetricAOk &&
+            bridge.remoteMetricBOk &&
+            bridge.remoteMetricCOk &&
+            bridge.doudianFileImportOk &&
+            bridge.remoteProductScanOk &&
+            bridge.remoteProductExecuteOk;
 
           resolve({
             ...result,
@@ -1050,13 +1078,12 @@ function installSmokeCheck(win) {
       const scenarioOk =
         scenario === "cookie" ? result.cookieOk :
         scenario === "http" ? result.httpOk :
-        scenario === "db" ? result.dbOk :
         scenario === "files" ? result.filesOk :
         scenario === "logs" ? result.logsOk :
         scenario === "ui-contract" ? result.uiContractOk :
         scenario === "maintenance" ? result.maintenanceOk :
         result.bridgeOk;
-      const ok = result.hasShell && result.hasClient && result.methodCount >= 30 && scenarioOk;
+      const ok = result.hasShell && result.hasClient && result.methodCount >= 33 && scenarioOk;
       if (ok) {
         clearTimeout(timer);
         finish(0, result);

@@ -8,6 +8,23 @@ import {
   STORAGE_KEY_DIAGNOSTICS,
   storageSet
 } from "./bridge/storage";
+import {
+  addDoudianProgressListener,
+  cancelDoudianTask,
+  getDoudianTaskStatus,
+  restoreDoudianTasks,
+  runDoudianBusinessDataSelfCheck,
+  runDoudianFileImportSelfCheck,
+  runDoudianFundsDataSelfCheck,
+  runDoudianStoreImportStatusSelfCheck,
+  runDoudianStoreGroupsSelfCheck,
+  runDoudianStaleGoodsExecuteSelfCheck,
+  runDoudianStaleGoodsScanSelfCheck,
+  runDoudianViolationsDataSelfCheck,
+  runDoudianRepositorySelfCheck,
+  startMockLongDoudianTask,
+  type DoudianProgressDetail
+} from "./domain/doudian";
 import { DiagnosticsPage } from "./components/DiagnosticsPage";
 import { BusinessDataPage } from "./components/BusinessDataPage";
 import { FundsDataPage } from "./components/FundsDataPage";
@@ -72,6 +89,46 @@ export function App() {
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  useEffect(() => {
+    const progressEvents: DoudianProgressDetail[] = [];
+    const remove = addDoudianProgressListener((progressEvent) => {
+      progressEvents.push(progressEvent.detail);
+    });
+    window.chihuDoudianTaskRuntime = {
+      startMock: startMockLongDoudianTask,
+      cancel: cancelDoudianTask,
+      getStatus: getDoudianTaskStatus,
+      restore: restoreDoudianTasks,
+      repositorySelfCheck: runDoudianRepositorySelfCheck,
+      snapshot: () => ({ progressEvents: [...progressEvents] })
+    };
+    window.chihuDoudianStoreRuntime = {
+      selfCheck: runDoudianStoreGroupsSelfCheck,
+      stage5SelfCheck: runDoudianStoreImportStatusSelfCheck,
+      businessDataSelfCheck: async () => runDoudianBusinessDataSelfCheck({
+        doudianAdapter: await loadDoudianAdapterPayload({ force: true })
+      }),
+      fundsDataSelfCheck: async () => runDoudianFundsDataSelfCheck({
+        doudianAdapter: await loadDoudianAdapterPayload({ force: true })
+      }),
+      violationsDataSelfCheck: async () => runDoudianViolationsDataSelfCheck({
+        doudianAdapter: await loadDoudianAdapterPayload({ force: true })
+      }),
+      fileImportSelfCheck: runDoudianFileImportSelfCheck,
+      staleGoodsScanSelfCheck: async () => runDoudianStaleGoodsScanSelfCheck({
+        doudianAdapter: await loadDoudianAdapterPayload({ force: true })
+      }),
+      staleGoodsExecuteSelfCheck: async () => runDoudianStaleGoodsExecuteSelfCheck({
+        doudianAdapter: await loadDoudianAdapterPayload({ force: true })
+      })
+    };
+    return () => {
+      remove();
+      delete window.chihuDoudianTaskRuntime;
+      delete window.chihuDoudianStoreRuntime;
+    };
   }, []);
 
   useEffect(() => {
