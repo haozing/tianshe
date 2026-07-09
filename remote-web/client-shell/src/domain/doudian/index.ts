@@ -1,4 +1,5 @@
 export * from "./businessData";
+export * from "./bulkDelete";
 export * from "./fileImport";
 export * from "./fundsData";
 export * from "./operation";

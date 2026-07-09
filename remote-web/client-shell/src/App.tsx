@@ -13,6 +13,7 @@ import {
   cancelDoudianTask,
   getDoudianTaskStatus,
   restoreDoudianTasks,
+  runDoudianBulkDeleteSelfCheck,
   runDoudianBusinessDataSelfCheck,
   runDoudianFileImportSelfCheck,
   runDoudianFundsDataSelfCheck,
@@ -27,6 +28,7 @@ import {
 } from "./domain/doudian";
 import { DiagnosticsPage } from "./components/DiagnosticsPage";
 import { BusinessDataPage } from "./components/BusinessDataPage";
+import { BulkDeletePage } from "./components/BulkDeletePage";
 import { FundsDataPage } from "./components/FundsDataPage";
 import { HomePage } from "./components/HomePage";
 import { ModulePage } from "./components/ModulePage";
@@ -121,6 +123,9 @@ export function App() {
         doudianAdapter: await loadDoudianAdapterPayload({ force: true })
       }),
       staleGoodsExecuteSelfCheck: async () => runDoudianStaleGoodsExecuteSelfCheck({
+        doudianAdapter: await loadDoudianAdapterPayload({ force: true })
+      }),
+      bulkDeleteSelfCheck: async () => runDoudianBulkDeleteSelfCheck({
         doudianAdapter: await loadDoudianAdapterPayload({ force: true })
       })
     };
@@ -253,7 +258,7 @@ export function App() {
             <span className="min-w-0 break-words">{state.manifestError}</span>
           </div>
         ) : null}
-        <div className={`min-h-0 flex-1 ${state.route === "/stores" || state.route === "/stores/business-data" || state.route === "/stores/funds" || state.route === "/warnings" || effectiveRoute === "/products/slow-moving" ? "overflow-hidden" : "overflow-auto"}`}>
+        <div className={`min-h-0 flex-1 ${state.route === "/stores" || state.route === "/stores/business-data" || state.route === "/stores/funds" || state.route === "/warnings" || effectiveRoute === "/products/slow-moving" || effectiveRoute === "/products/bulk-delete" ? "overflow-hidden" : "overflow-auto"}`}>
           {state.route === "/system/diagnostics" ? (
             <DiagnosticsPage state={state} />
           ) : state.route === "/stores" ? (
@@ -266,6 +271,8 @@ export function App() {
             <ViolationsPage />
           ) : effectiveRoute === "/products/slow-moving" ? (
             <SlowMovingCleanupPage />
+          ) : effectiveRoute === "/products/bulk-delete" ? (
+            <BulkDeletePage />
           ) : selectedModule ? (
             <ModulePage module={selectedModule} />
           ) : (

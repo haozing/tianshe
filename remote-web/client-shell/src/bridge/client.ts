@@ -1,6 +1,8 @@
 import type {
   BridgeSelfCheck,
   DoudianAdapterPayload,
+  DoudianBulkDeleteFilters,
+  DoudianBulkDeleteResult,
   DoudianBusinessDataResult,
   DoudianFundsDataResult,
   DoudianStaleGoodsCandidate,
@@ -14,6 +16,7 @@ import {
   createStoreGroup,
   deleteEmptyStoreGroup,
   deleteStoreLedger,
+  fetchBulkDeleteProducts,
   fetchBusinessData,
   fetchBusinessDataLatest,
   fetchFundsData,
@@ -287,6 +290,34 @@ export async function fetchDoudianStaleGoodsCleanup(args: {
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
   return fetchStaleGoodsCleanup(nextArgs);
+}
+
+export async function fetchDoudianBulkDeleteProducts(args: {
+  mode?: "scan" | "execute";
+  shopIds?: string[];
+  sourceMode?: "range" | "ids";
+  filters?: DoudianBulkDeleteFilters;
+  action?: "recycle" | "delete";
+  protectMode?: "includeSelling" | "skipSelling";
+  candidateIds?: string[];
+  sourceRunId?: string;
+  confirmText?: string;
+  operationId?: string;
+  forceAdapter?: boolean;
+} = {}): Promise<DoudianBulkDeleteResult> {
+  const nextArgs = await withDoudianAdapter({
+    mode: args.mode || "scan",
+    shopIds: args.shopIds || [],
+    ...(args.sourceMode ? { sourceMode: args.sourceMode } : {}),
+    ...(args.filters ? { filters: args.filters } : {}),
+    ...(args.action ? { action: args.action } : {}),
+    ...(args.protectMode ? { protectMode: args.protectMode } : {}),
+    ...(args.candidateIds?.length ? { candidateIds: args.candidateIds } : {}),
+    ...(args.sourceRunId ? { sourceRunId: args.sourceRunId } : {}),
+    ...(args.confirmText ? { confirmText: args.confirmText } : {}),
+    ...(args.operationId ? { operationId: args.operationId } : {})
+  }, { force: args.forceAdapter === true });
+  return fetchBulkDeleteProducts(nextArgs);
 }
 
 export async function selectAndParseCompassFile(): Promise<{

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "contractVersion": "doudian-adapter.v1",
   "platform": "doudian",
-  "version": "2026.07.07.remote-adapter-stale-goods-cleanup-v1-xzb-local-mstoken",
+  "version": "2026.07.08.remote-adapter-bulk-delete-v1-xzb-local-mstoken",
   "source": "remote-web",
   "capabilities": {
     "actions": [
@@ -65,7 +65,10 @@
       "staleGoodsRecommendAdmit",
       "staleGoodsBatchOffline",
       "staleGoodsBatchDelete",
-      "staleGoodsCompleteDelete"
+      "staleGoodsCompleteDelete",
+      "bulkDeleteProductList",
+      "bulkDeleteBatchDelete",
+      "bulkDeleteCompleteDelete"
     ],
     "unknownActionPolicy": "fail"
   },
@@ -285,6 +288,35 @@
           "action": "recordStoreAttempts"
         }
       ]
+    },
+    "scanBulkDeleteProducts": {
+      "version": "doudian-operation-plan.v1",
+      "actions": [
+        {
+          "action": "scanBulkDeleteProducts",
+          "requestPlans": [
+            "bulkDeleteProductList"
+          ]
+        },
+        {
+          "action": "recordStoreAttempts"
+        }
+      ]
+    },
+    "executeBulkDeleteProducts": {
+      "version": "doudian-operation-plan.v1",
+      "actions": [
+        {
+          "action": "executeBulkDeleteProducts",
+          "requestPlans": [
+            "bulkDeleteBatchDelete",
+            "bulkDeleteCompleteDelete"
+          ]
+        },
+        {
+          "action": "recordStoreAttempts"
+        }
+      ]
     }
   },
   "origin": "https://fxg.jinritemai.com",
@@ -319,7 +351,10 @@
     "staleGoodsRecommendAdmit": "/api/commop/recommend_admit/item/page",
     "staleGoodsBatchOffline": "/product/tproduct/batchOffline",
     "staleGoodsBatchDelete": "/product/tproduct/batchDelete",
-    "staleGoodsCompleteDelete": "/product/tproduct/completeDelete"
+    "staleGoodsCompleteDelete": "/product/tproduct/completeDelete",
+    "bulkDeleteProductList": "/product/tproduct/list",
+    "bulkDeleteBatchDelete": "/product/tproduct/batchDelete",
+    "bulkDeleteCompleteDelete": "/product/tproduct/completeDelete"
   },
   "selectors": {
     "headerShopName": [
@@ -1797,18 +1832,18 @@
           "sellPrice"
         ],
         "stock": [
-          "stock",
           "stock_num",
           "stockNum",
-          "inventory",
-          "sku_stock",
-          "skuStock",
           "stock_num_total",
           "stockNumTotal",
           "total_stock",
           "totalStock",
           "sku_stock_num",
-          "skuStockNum"
+          "skuStockNum",
+          "inventory",
+          "sku_stock",
+          "skuStock",
+          "stock"
         ],
         "totalSales": [
           "total_sales",
@@ -1892,6 +1927,120 @@
           "source",
           "source_name",
           "sourceName"
+        ]
+      }
+    },
+    "bulkDelete": {
+      "successCodes": [
+        0,
+        "0",
+        200,
+        "200"
+      ],
+      "listPaths": [
+        "bulkDeleteProductList.data",
+        "bulkDeleteProductList.data.list",
+        "bulkDeleteProductList.data.data",
+        "bulkDeleteProductList.data.data.list",
+        "bulkDeleteProductList.list"
+      ],
+      "totalPaths": [
+        "bulkDeleteProductList.data.total",
+        "bulkDeleteProductList.data.data.total",
+        "bulkDeleteProductList.total"
+      ],
+      "fieldScales": {
+        "price": 100
+      },
+      "fields": {
+        "productId": [
+          "product_id",
+          "productId",
+          "goods_id",
+          "goodsId",
+          "item_id",
+          "itemId",
+          "id"
+        ],
+        "title": [
+          "title",
+          "name",
+          "product_name",
+          "productName",
+          "goods_name",
+          "goodsName"
+        ],
+        "category": [
+          "category_name",
+          "categoryName",
+          "category",
+          "leaf_category_name",
+          "leafCategoryName"
+        ],
+        "status": [
+          "status_name",
+          "statusName",
+          "status",
+          "product_status",
+          "productStatus",
+          "tab"
+        ],
+        "createdAt": [
+          "create_time",
+          "createTime",
+          "created_at",
+          "createdAt",
+          "ctime"
+        ],
+        "listedAt": [
+          "audit_time",
+          "auditTime",
+          "online_time",
+          "onlineTime",
+          "listed_at",
+          "listedAt",
+          "list_time",
+          "listTime"
+        ],
+        "price": [
+          "price",
+          "min_price",
+          "minPrice",
+          "sell_price",
+          "sellPrice"
+        ],
+        "stock": [
+          "stock_num",
+          "stockNum",
+          "stock_num_total",
+          "stockNumTotal",
+          "total_stock",
+          "totalStock",
+          "sku_stock_num",
+          "skuStockNum",
+          "inventory",
+          "sku_stock",
+          "skuStock",
+          "stock"
+        ],
+        "totalSales": [
+          "total_sales",
+          "totalSales",
+          "sell_num",
+          "sellNum",
+          "sale_num",
+          "saleNum",
+          "sales",
+          "pay_num",
+          "payNum"
+        ],
+        "exposureCount": [
+          "exposure_count",
+          "exposureCount",
+          "show_count",
+          "showCount",
+          "impression_count",
+          "impressionCount"
         ]
       }
     }
@@ -2633,6 +2782,116 @@
       "retryDelayMs": 1200,
       "retryBackoff": "linear",
       "allowMissingCode": true,
+      "successPaths": []
+    },
+    "bulkDeleteProductList": {
+      "endpointKey": "bulkDeleteProductList",
+      "method": "GET",
+      "sign": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/g/list",
+      "headers": {
+        "Accept": "application/json, text/plain, */*"
+      },
+      "query": {
+        "page": "{page}",
+        "page_size": "{pageSize}",
+        "pageSize": "{pageSize}",
+        "check_status": "{checkStatus}",
+        "group_id": "",
+        "sku_type": "",
+        "is_online": "{isOnline}",
+        "is_offline": "{isOffline}",
+        "offline_type": "{offlineType}",
+        "from_mng": "1",
+        "need_auto_rectify_info": "true",
+        "need_pay_no_stock_skus": "{needPayNoStockSkus}",
+        "comment_percent": "{commentPercent}",
+        "order_field": "{orderField}",
+        "sort": "{sort}",
+        "status": "{productStatus}",
+        "draft_status": "{draftStatus}",
+        "tab": "{productTab}",
+        "business_type": "4",
+        "not_for_sale_search_type": "1",
+        "supply_status": "",
+        "keyword": "{keyword}"
+      },
+      "retryOnHttpError": true,
+      "retryOnBusinessFailure": true,
+      "maxAttempts": 4,
+      "retryDelayMs": 1200,
+      "retryBackoff": "linear",
+      "successCodes": [
+        0,
+        "0"
+      ],
+      "allowMissingCode": true,
+      "successPaths": []
+    },
+    "bulkDeleteBatchDelete": {
+      "endpointKey": "bulkDeleteBatchDelete",
+      "method": "POST",
+      "dryRunOnly": false,
+      "sign": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/g/list",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "product_ids": "{productIdList}"
+      },
+      "retryOnHttpError": true,
+      "maxAttempts": 2,
+      "retryDelayMs": 1200,
+      "retryBackoff": "linear",
+      "allowMissingCode": true,
+      "successCodes": [
+        0,
+        "0"
+      ],
+      "failureMessages": [
+        "未登录",
+        "请登录",
+        "失败",
+        "异常"
+      ],
+      "successPaths": []
+    },
+    "bulkDeleteCompleteDelete": {
+      "endpointKey": "bulkDeleteCompleteDelete",
+      "method": "POST",
+      "dryRunOnly": false,
+      "sign": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/g/list",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "product_ids": "{productIdList}"
+      },
+      "retryOnHttpError": true,
+      "maxAttempts": 2,
+      "retryDelayMs": 1200,
+      "retryBackoff": "linear",
+      "allowMissingCode": true,
+      "successCodes": [
+        0,
+        "0"
+      ],
+      "failureMessages": [
+        "未登录",
+        "请登录",
+        "失败",
+        "异常"
+      ],
       "successPaths": []
     }
   },
@@ -4093,6 +4352,37 @@
       },
       "maxProductListPages": 20,
       "pageStart": 0
+    },
+    "bulkDelete": {
+      "ruleVersion": "bulk-delete-rule.xzb-v1",
+      "concurrency": 2,
+      "pageSize": 100,
+      "maxProductListPages": 20,
+      "maxProductIdSearchPages": 2,
+      "pageStart": 0,
+      "requestPlans": [
+        "bulkDeleteProductList"
+      ],
+      "executePlans": {
+        "recycle": "bulkDeleteBatchDelete",
+        "delete": "bulkDeleteCompleteDelete"
+      },
+      "confirmText": "确认删除",
+      "messages": {
+        "scanning": "正在扫描可删除商品",
+        "scanned": "命中 {count} 个商品",
+        "noCandidateStore": "未命中符合条件的商品",
+        "failed": "批量删除商品扫描失败",
+        "partial": "已完成 {successCount} 家，{failureCount} 家失败",
+        "done": "命中 {count} 个商品",
+        "executing": "正在提交批量删除",
+        "executedStore": "已提交 {count} 个商品",
+        "executeDryRun": "批量删除当前为 dry-run，没有提交平台写请求",
+        "executeFailed": "批量删除执行失败",
+        "executePartial": "批量删除部分失败，{failureCount} 家店铺未成功",
+        "executeDone": "已提交 {count} 个商品批量删除",
+        "cancelled": "批量删除任务已取消"
+      }
     }
   }
 }

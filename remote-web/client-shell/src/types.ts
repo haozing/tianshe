@@ -625,6 +625,122 @@ export interface DoudianStaleGoodsCleanupResult extends DoudianStoreResult {
   requestPlanHash?: string;
 }
 
+export type DoudianBulkDeleteMode = "scan" | "execute";
+export type DoudianBulkDeleteSourceMode = "range" | "ids";
+export type DoudianBulkDeleteAction = "recycle" | "delete";
+export type DoudianBulkDeleteProtectMode = "includeSelling" | "skipSelling";
+export type DoudianBulkDeleteProductStatus = "selling" | "offline" | "recycle" | "unknown";
+export type DoudianBulkDeleteProductStatusFilter = "all" | "selling" | "offline";
+
+export interface DoudianBulkDeleteImportItem {
+  productId: string;
+  shopId?: string;
+  shopName?: string;
+  sourceLine?: number;
+  sourceFile?: string;
+  validationStatus?: "ok" | "missing_product_id" | "unknown_store" | string;
+  raw?: string;
+}
+
+export interface DoudianBulkDeleteFilters {
+  keyword?: string;
+  productIds?: string[];
+  importItems?: DoudianBulkDeleteImportItem[];
+  status?: DoudianBulkDeleteProductStatusFilter;
+  priceMin?: number;
+  priceMax?: number;
+  salesMin?: number;
+  salesMax?: number;
+  createdDaysMin?: number;
+  listedDaysMin?: number;
+  perStoreLimit?: number;
+}
+
+export interface DoudianBulkDeleteCandidate {
+  id: string;
+  candidateId?: string;
+  sourceRunId?: string;
+  shopId: string;
+  shopName: string;
+  group?: string;
+  productId: string;
+  title: string;
+  category?: string;
+  status: DoudianBulkDeleteProductStatus;
+  rawStatus?: string;
+  createdAt?: string;
+  listedAt?: string;
+  daysSinceCreated?: number;
+  daysSinceListed?: number;
+  price: number;
+  stock: number;
+  sales: number;
+  exposure?: number;
+  fieldSources?: Record<string, unknown>;
+  importItem?: DoudianBulkDeleteImportItem;
+  importSourceLine?: number;
+  importShopRef?: string;
+  source: "范围筛选" | "商品ID导入" | string;
+  action: DoudianBulkDeleteAction;
+  targetAction: "加入回收站" | "彻底删除" | string;
+  excludedReason?: string;
+  warning?: string;
+  ok: boolean;
+  [key: string]: unknown;
+}
+
+export interface DoudianBulkDeleteRow {
+  shopId: string;
+  shopName: string;
+  group?: string;
+  status?: DoudianStoreStatus | string;
+  productCount: number;
+  matchedCount: number;
+  executableCount: number;
+  excludedCount: number;
+  recycleCount: number;
+  deleteCount: number;
+  sellingCount: number;
+  stockCount: number;
+  stockEstimateCount?: number;
+  stockFieldAuditedCount?: number;
+  [key: string]: unknown;
+}
+
+export interface DoudianBulkDeleteExecution {
+  id?: string;
+  sourceRunId?: string;
+  shopId: string;
+  shopName: string;
+  productId: string;
+  title?: string;
+  action: DoudianBulkDeleteAction | string;
+  status: "submitted" | "failed" | "dry_run" | "skipped" | string;
+  ok: boolean;
+  message: string;
+  planKey?: string;
+  stage?: "recycle" | "delete" | string;
+}
+
+export interface DoudianBulkDeleteResult extends DoudianStoreResult {
+  mode?: DoudianBulkDeleteMode | string;
+  sourceMode?: DoudianBulkDeleteSourceMode;
+  action?: DoudianBulkDeleteAction;
+  protectMode?: DoudianBulkDeleteProtectMode;
+  sourceRunId?: string;
+  rows?: DoudianBulkDeleteRow[];
+  candidates?: DoudianBulkDeleteCandidate[];
+  executions?: DoudianBulkDeleteExecution[];
+  successCount?: number;
+  failureCount?: number;
+  partialCount?: number;
+  summary?: Record<string, number>;
+  scanSummary?: Record<string, number>;
+  sourceHealth?: Array<Record<string, unknown>>;
+  filters?: DoudianBulkDeleteFilters;
+  requestPlanHash?: string;
+}
+
 export interface ChihuBridgeApi {
   version: string;
   rawMethods: string[];
@@ -721,6 +837,17 @@ declare global {
         restoreOk: boolean;
         scanRunId: string;
         executeRunIds: string[];
+      }>;
+      bulkDeleteSelfCheck: () => Promise<{
+        ok: boolean;
+        scanOk: boolean;
+        candidateOk: boolean;
+        executeOk: boolean;
+        dryRunOk: boolean;
+        restoreScanOk: boolean;
+        restoreExecuteOk: boolean;
+        scanRunId: string;
+        execRunId: string;
       }>;
     };
     client?: Record<string, unknown> & {
