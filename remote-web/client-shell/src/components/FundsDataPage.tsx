@@ -7,7 +7,6 @@ import {
   ChevronDown,
   CircleDollarSign,
   Download,
-  ExternalLink,
   Landmark,
   Loader2,
   PanelLeftClose,
@@ -20,7 +19,7 @@ import {
   Store,
   WalletCards
 } from "lucide-react";
-import { fetchDoudianFundsData, fetchDoudianFundsDataLatest, listDoudianStores, openPlatformWindow } from "../bridge/client";
+import { fetchDoudianFundsData, fetchDoudianFundsDataLatest, listDoudianStores } from "../bridge/client";
 import { loadDoudianAdapterPayload } from "../bridge/doudianAdapter";
 import { STORAGE_KEY_FUNDS_DATA_COLUMNS, storageGet, storageSet } from "../bridge/storage";
 import { addDoudianProgressListener } from "../domain/doudian";
@@ -119,20 +118,6 @@ interface RemoteFundsFieldSchema {
     label?: string;
     direction?: "asc" | "desc";
   }>;
-}
-
-interface FundsPlatformLink {
-  key: string;
-  label: string;
-  url: string;
-  validation?: string;
-}
-
-interface FundsAdapterRuntime {
-  origin: string;
-  sourcePartition: string;
-  shopPartitionPrefix: string;
-  platformLinks: FundsPlatformLink[];
 }
 
 const datePresets: Array<{ key: DatePreset; label: string }> = [
@@ -359,65 +344,6 @@ function getFundsFieldSchema(adapter: unknown): RemoteFundsFieldSchema {
   if (!fundsData || typeof fundsData !== "object") return {};
   const schema = (fundsData as { fieldSchema?: unknown }).fieldSchema;
   return schema && typeof schema === "object" ? schema as RemoteFundsFieldSchema : {};
-}
-
-function fallbackPlatformLabel(key: string, label: string) {
-  const trimmed = label.trim();
-  if (trimmed && !/^\?+$/.test(trimmed)) return trimmed;
-  const fallback: Record<string, string> = {
-    accountCenter: "货款提现",
-    shopDeposit: "管理保证金",
-    afterSaleFundPay: "商家赔付信息",
-    unsettledBill: "待结算订单信息",
-    merchantRights: "商家补贴信息"
-  };
-  return fallback[key] || key;
-}
-
-function resolvePlatformUrl(origin: string, url: string) {
-  try {
-    return new URL(url, origin).toString();
-  } catch {
-    return "";
-  }
-}
-
-function getFundsAdapterRuntime(adapter: unknown): FundsAdapterRuntime {
-  const next = adapter && typeof adapter === "object" ? adapter as {
-    origin?: unknown;
-    sourcePartition?: unknown;
-    shopPartitionPrefix?: unknown;
-    endpoints?: Record<string, unknown>;
-    policies?: Record<string, unknown>;
-  } : {};
-  const origin = String(next.origin || "https://fxg.jinritemai.com");
-  const sourcePartition = String(next.sourcePartition || "persist:chihu_doudian_source");
-  const shopPartitionPrefix = String(next.shopPartitionPrefix || "persist:chihu_doudian_shop_");
-  const fundsData = next.policies?.fundsData && typeof next.policies.fundsData === "object"
-    ? next.policies.fundsData as { platformLinks?: unknown }
-    : {};
-  const rawLinks = Array.isArray(fundsData.platformLinks) ? fundsData.platformLinks : [];
-  const platformLinks = rawLinks.map((item) => {
-    if (!item || typeof item !== "object") return null;
-    const link = item as { key?: unknown; label?: unknown; endpointKey?: unknown; url?: unknown; validation?: unknown };
-    const key = String(link.key || "");
-    const endpointKey = String(link.endpointKey || "");
-    const configuredUrl = String(link.url || (endpointKey ? next.endpoints?.[endpointKey] || "" : ""));
-    const url = resolvePlatformUrl(origin, configuredUrl);
-    if (!key || !url) return null;
-    return {
-      key,
-      label: fallbackPlatformLabel(key, String(link.label || "")),
-      url,
-      validation: String(link.validation || "")
-    };
-  }).filter(Boolean) as FundsPlatformLink[];
-  return {
-    origin,
-    sourcePartition,
-    shopPartitionPrefix,
-    platformLinks
-  };
 }
 
 function fundsColumnStorageKey(schemaVersion?: string) {
@@ -648,7 +574,6 @@ export function FundsDataPage() {
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [adapterVersion, setAdapterVersion] = useState("");
   const [fieldSchemaVersion, setFieldSchemaVersion] = useState("");
-  const [adapterRuntime, setAdapterRuntime] = useState<FundsAdapterRuntime>(() => getFundsAdapterRuntime(null));
 
   async function refreshStores() {
     if (previewMode) {
@@ -805,7 +730,6 @@ export function FundsDataPage() {
         const schema = getFundsFieldSchema(payload.adapter);
         const columns = normalizeRemoteColumns(schema);
         setFieldSchema(schema);
-        setAdapterRuntime(getFundsAdapterRuntime(payload.adapter));
         setAdapterVersion(payload.adapter.version || "");
         setFieldSchemaVersion(schema.version || "");
         setVisibleColumnKeys((current) => {
@@ -943,27 +867,6 @@ export function FundsDataPage() {
     setVisibleColumnKeys(next);
   }
 
-  async function openFundsPlatformLink(link: FundsPlatformLink) {
-    if (bridgeMissing) {
-      setFundsState("error");
-      setFundsMessage("本地窗口桥接不可用");
-      return;
-    }
-    const selected = [...selectedIds];
-    const partition = selected.length === 1
-      ? `${adapterRuntime.shopPartitionPrefix}${selected[0].replace(/[^a-zA-Z0-9_-]/g, "_")}`
-      : adapterRuntime.sourcePartition;
-    const result = await openPlatformWindow({
-      url: link.url,
-      title: `赤狐管家 - ${link.label}`,
-      partition
-    });
-    if (!result.ok) {
-      setFundsState("error");
-      setFundsMessage(result.message || "平台页面打开失败");
-    }
-  }
-
   function toggleStore(id: string) {
     setSelectedIds((current) => {
       const next = new Set(current);
@@ -1094,19 +997,6 @@ export function FundsDataPage() {
               <CalendarDays className="size-[14px]" strokeWidth={2} />
               <span>{range.label}</span>
             </div>
-            {adapterRuntime.platformLinks.map((link) => (
-              <button
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] disabled:opacity-50"
-                disabled={previewMode || bridgeMissing}
-                key={link.key}
-                title={link.validation ? `${link.label} · ${link.validation}` : link.label}
-                type="button"
-                onClick={() => void openFundsPlatformLink(link)}
-              >
-                <ExternalLink className="size-[14px]" strokeWidth={2} />
-                {link.label}
-              </button>
-            ))}
             <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] disabled:opacity-50" type="button" disabled={syncing || !selectedIds.size} onClick={() => void refreshFundsData()}>
               <RefreshCw className={cn("size-[14px]", syncing ? "animate-spin" : "")} strokeWidth={2} />
               同步
