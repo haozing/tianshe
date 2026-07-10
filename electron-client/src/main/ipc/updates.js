@@ -33,17 +33,8 @@ function emitToMain(context, channel, payload) {
   }
 }
 
-async function startAutoUpdate(context, args = {}) {
-  const updater = getAutoUpdater();
-  if (!updater) {
-    return { ok: false, reason: "electron_updater_unavailable" };
-  }
-  if (isCheckingUpdate) {
-    return { ok: true, skipped: true, reason: "already_checking" };
-  }
-
-  isCheckingUpdate = true;
-  updater.autoDownload = false;
+function configureUpdater(updater) {
+  updater.channel = process.env.CHIHU_UPDATE_CHANNEL || "latest";
 
   const useDevUpdateConfig =
     process.env.NODE_ENV === "development" ||
@@ -57,13 +48,57 @@ async function startAutoUpdate(context, args = {}) {
       updater.updateConfigPath = configPath;
     }
   }
+}
+
+function normalizeUpdateInfo(updater, updateInfo) {
+  const currentVersion = updater && updater.currentVersion && updater.currentVersion.version
+    ? updater.currentVersion.version
+    : app.getVersion();
+  const latestVersion = updateInfo && updateInfo.version ? updateInfo.version : currentVersion;
+  const hasUpdate = updater && updater.currentVersion && typeof updater.currentVersion.compare === "function"
+    ? updater.currentVersion.compare(latestVersion) < 0
+    : latestVersion !== currentVersion;
+
+  return {
+    ok: true,
+    status: hasUpdate ? "available" : "not-available",
+    hasUpdate,
+    isNewVersion: !hasUpdate,
+    currentVersion,
+    latestVersion,
+    newVersion: latestVersion,
+    releaseDate: updateInfo && updateInfo.releaseDate || "",
+    releaseName: updateInfo && updateInfo.releaseName || "",
+    releaseNotes: updateInfo && updateInfo.releaseNotes || ""
+  };
+}
+
+async function startAutoUpdate(context, args = {}) {
+  const updater = getAutoUpdater();
+  if (!updater) {
+    return { ok: false, reason: "electron_updater_unavailable" };
+  }
+  if (isCheckingUpdate) {
+    return { ok: true, skipped: true, reason: "already_checking" };
+  }
+
+  isCheckingUpdate = true;
+  updater.autoDownload = false;
+  configureUpdater(updater);
 
   updater.once("update-available", (info) => {
     emitToMain(context, "update-available", info);
-    if (args.autoDownload) updater.downloadUpdate();
+    if (args.autoDownload) {
+      updater.downloadUpdate().catch((error) => {
+        emitToMain(context, "update-error", `更新下载失败: ${error.message}`);
+        cleanupUpdateListeners(updater);
+      });
+    } else {
+      cleanupUpdateListeners(updater);
+    }
   });
 
-  updater.once("download-progress", (progress) => {
+  updater.on("download-progress", (progress) => {
     emitToMain(context, "download-progress", progress.percent);
   });
 
@@ -75,6 +110,7 @@ async function startAutoUpdate(context, args = {}) {
   updater.once("update-downloaded", (info) => {
     emitToMain(context, "update-downloaded", info);
     if (args.quitAndInstall) {
+      cleanupUpdateListeners(updater);
       updater.quitAndInstall();
     } else {
       cleanupUpdateListeners(updater);
@@ -98,25 +134,31 @@ async function startAutoUpdate(context, args = {}) {
 async function getClientVersionData() {
   const updater = getAutoUpdater();
   if (!updater) {
-    return { isNewVersion: true, currentVersion: app.getVersion(), newVersion: app.getVersion() };
+    return {
+      ok: false,
+      status: "unavailable",
+      reason: "electron_updater_unavailable",
+      hasUpdate: false,
+      isNewVersion: true,
+      currentVersion: app.getVersion(),
+      latestVersion: app.getVersion(),
+      newVersion: app.getVersion()
+    };
   }
 
   try {
     updater.autoDownload = false;
+    configureUpdater(updater);
     const result = await updater.checkForUpdates();
-    const currentVersion = updater.currentVersion.version || app.getVersion();
-    const newVersion = result && result.updateInfo && result.updateInfo.version
-      ? result.updateInfo.version
-      : currentVersion;
-    return {
-      isNewVersion: updater.currentVersion.compare(newVersion) >= 0,
-      currentVersion,
-      newVersion
-    };
+    return normalizeUpdateInfo(updater, result && result.updateInfo);
   } catch (error) {
     return {
+      ok: false,
+      status: "error",
+      hasUpdate: false,
       isNewVersion: true,
       currentVersion: app.getVersion(),
+      latestVersion: app.getVersion(),
       newVersion: app.getVersion(),
       error: error.message
     };

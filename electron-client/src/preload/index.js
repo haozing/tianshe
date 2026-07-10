@@ -144,6 +144,19 @@ const chihuNative = {
 contextBridge.exposeInMainWorld("client", client);
 contextBridge.exposeInMainWorld("chihuNative", chihuNative);
 
+[
+  "update-available",
+  "download-progress",
+  "update-not-available",
+  "update-downloaded",
+  "update-error"
+].forEach((channel) => {
+  ipcRenderer.on(channel, (_event, payload) => {
+    window.dispatchEvent(new CustomEvent(channel, { detail: payload }));
+    window.dispatchEvent(new CustomEvent(`chihu:${channel}`, { detail: payload }));
+  });
+});
+
 ipcRenderer.on("chihu-notification", (_event, args) => {
   const customEvent = new CustomEvent(args.chihu_event_name, { detail: args });
   window.dispatchEvent(customEvent);

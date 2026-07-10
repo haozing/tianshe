@@ -81,6 +81,12 @@
       "sha256": "0aa6204c5d9b9d5ae6d41973c57a857808ff20ec387076ad782fb403020d00cd"
     },
     {
+      "path": "new-remote-web/config/update-notes.json",
+      "type": "update-notes",
+      "cache": "no-cache",
+      "required": true
+    },
+    {
       "path": "new-remote-web/config/invalid-config.json",
       "type": "chihu-config-smoke",
       "cache": "no-cache",

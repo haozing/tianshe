@@ -18,6 +18,7 @@ import type {
   DoudianStoreResult,
   DoudianViolationsDataResult
 } from "../types";
+import type { NativeUpdateStartRequest, NativeUpdateVersionData } from "../native/types";
 import { getChihuNative } from "../native/client";
 import {
   createStoreGroup,
@@ -89,6 +90,43 @@ export async function closeMainWindow() {
   if (!window.client || typeof window.client.closeWindow !== "function") return false;
   await window.client.closeWindow({});
   return true;
+}
+
+export async function getDesktopVersionData(): Promise<NativeUpdateVersionData> {
+  const native = getChihuNative();
+  if (native?.updates.getVersionData) {
+    return native.updates.getVersionData();
+  }
+
+  const legacyGetVersionData = window.client?.getClientVersionData;
+  if (typeof legacyGetVersionData === "function") {
+    return legacyGetVersionData.call(window.client, {}) as Promise<NativeUpdateVersionData>;
+  }
+
+  return {
+    ok: false,
+    status: "unavailable",
+    reason: "local_update_bridge_unavailable",
+    hasUpdate: false,
+    isNewVersion: true,
+    currentVersion: "",
+    latestVersion: "",
+    newVersion: ""
+  };
+}
+
+export async function startDesktopUpdate(args: NativeUpdateStartRequest = {}) {
+  const native = getChihuNative();
+  if (native?.updates.start) {
+    return native.updates.start(args);
+  }
+
+  const legacyStartUpdate = window.client?.startAutoUpdate;
+  if (typeof legacyStartUpdate === "function") {
+    return legacyStartUpdate.call(window.client, args);
+  }
+
+  return { ok: false, reason: "local_update_bridge_unavailable" };
 }
 
 export async function openPlatformWindow(args: {

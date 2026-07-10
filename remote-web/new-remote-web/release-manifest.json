@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "releaseId": "2026.07.04.client-shell",
-  "buildTime": "2026-07-10T05:49:43.915Z",
+  "buildTime": "2026-07-10T08:53:07.483Z",
   "entry": {
     "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
   },
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "c30cae0359bbba3aaeeaa612ad9ec6b478de60fc0ff219e9fea0a445bde527ed"
+      "sha256": "d10cd8417e779981ae1bdf42684747bc7200544fdb87f51006ad4a16ed3b102e"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,14 +36,14 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "0bbd3dc486e9a90ca3e1a7da9e54c327158b30c759e21b4dfdcffcad83f86b09"
+      "sha256": "800bc46f7dd27ee450ff452277ce27ab3b5412486d8ca2ebef15e9a324b2626c"
     },
     {
       "path": "new-remote-web/styles.css",
       "type": "remote-css",
       "cache": "short",
       "required": true,
-      "sha256": "2c88c9788aeae04de5c15b338d77b3a40ea80833d3bf84f2955a0d4c55ec5410"
+      "sha256": "0969cf576ef25aa1a1dbaad3e822c46808adbc3b04219469237c954f6fd9fd24"
     },
     {
       "path": "new-remote-web/assets/chihu-app-icon.png",
@@ -71,7 +71,7 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "5e744835341c5a70f92711f2a3370c0aa94a9b8a4c6fcb6d6a72d246ec711018"
+      "sha256": "d8290bad0a8e43eef6b8da89ece2a9c5906207c4c0186fcd056f928e1a34a573"
     },
     {
       "path": "new-remote-web/config/doudian-adapter.json",
@@ -79,6 +79,13 @@
       "cache": "no-cache",
       "required": true,
       "sha256": "73ffaf5282e3edec4e2783d2fea6dfd9d5bb4dad0bfb873c2e10cb438517c4f4"
+    },
+    {
+      "path": "new-remote-web/config/update-notes.json",
+      "type": "update-notes",
+      "cache": "no-cache",
+      "required": true,
+      "sha256": "3b8ebcbed0fd2e31f9e0f343b8908a8c89bc3d2ae8b6388844d09db4d1d2127c"
     },
     {
       "path": "new-remote-web/config/invalid-config.json",

@@ -69,6 +69,27 @@ export interface ReadFileResult {
   message?: string;
 }
 
+export interface NativeUpdateStartRequest {
+  autoDownload?: boolean;
+  quitAndInstall?: boolean;
+}
+
+export interface NativeUpdateVersionData {
+  ok?: boolean;
+  status?: "available" | "not-available" | "unavailable" | "error" | string;
+  hasUpdate?: boolean;
+  isNewVersion?: boolean;
+  currentVersion: string;
+  latestVersion?: string;
+  newVersion?: string;
+  releaseDate?: string;
+  releaseName?: string;
+  releaseNotes?: unknown;
+  reason?: string;
+  message?: string;
+  error?: string;
+}
+
 export interface ChihuNativeApi {
   app: {
     getInfo: () => Promise<unknown>;
@@ -112,8 +133,8 @@ export interface ChihuNativeApi {
     send: (args?: unknown) => Promise<unknown>;
   };
   updates: {
-    start: (args?: unknown) => Promise<unknown>;
-    getVersionData: () => Promise<unknown>;
+    start: (args?: NativeUpdateStartRequest) => Promise<unknown>;
+    getVersionData: () => Promise<NativeUpdateVersionData>;
   };
   logs: {
     report: (args?: unknown) => Promise<unknown>;

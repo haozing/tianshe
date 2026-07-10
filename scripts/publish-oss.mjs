@@ -206,6 +206,15 @@ function desktopCacheControl(filePath) {
   return "public, max-age=300, must-revalidate";
 }
 
+function desktopCompatibilityChannels() {
+  const raw = envValue(["CHIHU_DESKTOP_COMPAT_CHANNELS", "DESKTOP_COMPAT_CHANNELS"], "phase0,phase1");
+  return raw
+    .split(",")
+    .map((channel) => channel.trim())
+    .filter(Boolean)
+    .filter((channel) => /^[A-Za-z0-9._-]+$/.test(channel));
+}
+
 function buildUploadItem({ localPath, objectKey, cacheControl }) {
   const disposition = contentDisposition(localPath);
   return {
@@ -404,6 +413,18 @@ function collectDesktopItems(config) {
     objectKey: `${config.desktopPrefix}/${basename(filePath)}`,
     cacheControl: desktopCacheControl(filePath)
   }));
+
+  const itemKeys = new Set(items.map((item) => item.objectKey));
+  for (const channel of desktopCompatibilityChannels()) {
+    const objectKey = `${config.desktopPrefix}/${channel}.yml`;
+    if (itemKeys.has(objectKey)) continue;
+    items.push(buildUploadItem({
+      localPath: latestPath,
+      objectKey,
+      cacheControl: desktopCacheControl(latestPath)
+    }));
+    itemKeys.add(objectKey);
+  }
 
   return {
     items,
