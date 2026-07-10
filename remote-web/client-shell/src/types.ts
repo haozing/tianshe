@@ -13,7 +13,7 @@ export interface ChihuConfig {
   version: string;
   configTtlSeconds: number;
   entry: {
-    newRemoteOrigin: "/new-remote-web/";
+    newRemoteOrigin: string;
   };
   shell: {
     mode: "foundation";
@@ -24,7 +24,7 @@ export interface ChihuConfig {
   assets: {
     shellEntry: string;
     cssEntry: string;
-    manifestUrl: "/new-remote-web/release-manifest.json";
+    manifestUrl: string;
   };
   diagnostics: {
     enabled: boolean;
@@ -212,7 +212,6 @@ export interface WorkspaceState {
   balance: string;
   phone?: string;
   points?: string;
-  computePower?: string;
 }
 
 export interface ShellState {
@@ -741,6 +740,181 @@ export interface DoudianBulkDeleteResult extends DoudianStoreResult {
   requestPlanHash?: string;
 }
 
+export type DoudianOpportunityReportMode = "clue-scan" | "product-scan" | "product-prematch" | "clue-submit" | "product-submit" | "prematch-submit" | "collect" | "latest";
+export type DoudianOpportunitySubmitMode = "validate" | "updateTitle";
+export type DoudianOpportunityGoodsMatchType = "new" | "official";
+export type DoudianOpportunityPrematchMode = "precise" | "loose";
+export type DoudianOpportunityTitleMatchMode = "any" | "all";
+export type DoudianOpportunityTitleUpdatePosition = "head" | "tail";
+export type DoudianOpportunityProductStatus = "ready" | "matched" | "blocked" | "submitted" | "failed" | string;
+export type DoudianOpportunityClueStatus = "ready" | "collected" | "submitted" | "failed" | "partial" | string;
+
+export interface DoudianOpportunityCategoryRef {
+  id: string | number;
+  key?: string;
+  name?: string;
+  level?: number;
+}
+
+export interface DoudianOpportunityFilters {
+  keyword?: string;
+  activeKey?: string;
+  tagIdList?: number[];
+  profitIdList?: number[];
+  clueBrandExists?: boolean | null;
+  recentlyDayType?: number;
+  benefitContentType?: string | string[];
+  cluePage?: number;
+  categoryPath?: DoudianOpportunityCategoryRef[];
+  categoryLeafId?: string | number;
+  startTime?: string;
+  endTime?: string;
+  pageSize?: number;
+  maxPages?: number;
+}
+
+export interface DoudianOpportunityShopRef {
+  shopId: string;
+  shopName: string;
+  partition?: string;
+  group?: string;
+  autoSubmitId?: string;
+}
+
+export interface DoudianOpportunityClueRow {
+  id: string;
+  candidateId?: string;
+  sourceRunId?: string;
+  clueId: string;
+  name: string;
+  shortName?: string;
+  img?: string;
+  categoryName?: string;
+  firstCategoryId?: string;
+  lastCategoryId?: string;
+  lastCategoryKey?: string;
+  clueWords?: string[];
+  recommendList?: string[];
+  profitInfoList?: string[];
+  shopList: DoudianOpportunityShopRef[];
+  shopId?: string;
+  shopName?: string;
+  group?: string;
+  searchCount?: number;
+  searchCountText?: string;
+  growthRate?: number;
+  demandSupplyRate?: number;
+  onlineGoodsNum?: string;
+  onlineGoodsNumSort?: number;
+  hotCount?: string;
+  hotCountSort?: number;
+  payMoney?: string;
+  payMoneySort?: number;
+  productCount?: number;
+  autoSubmitId?: string;
+  status?: DoudianOpportunityClueStatus;
+  raw?: Record<string, unknown>;
+}
+
+export interface DoudianOpportunityProductRow {
+  id: string;
+  candidateId?: string;
+  sourceRunId?: string;
+  shopId: string;
+  shopName: string;
+  group?: string;
+  productId: string;
+  title: string;
+  img?: string;
+  category?: string;
+  categoryId?: string;
+  price?: number;
+  stock?: number;
+  sales?: number;
+  createdAt?: string;
+  listedAt?: string;
+  matchedClueId?: string;
+  matchedClueName?: string;
+  status?: DoudianOpportunityProductStatus;
+  raw?: Record<string, unknown>;
+}
+
+export interface DoudianOpportunityPrematchCandidate {
+  id: string;
+  candidateId?: string;
+  sourceRunId?: string;
+  matchRunId: string;
+  productRunId: string;
+  clueRunId: string;
+  shopId: string;
+  shopName: string;
+  group?: string;
+  productId: string;
+  title: string;
+  productCategory?: string;
+  productCategoryId?: string;
+  clueId: string;
+  clueName: string;
+  clueCategoryName?: string;
+  clueLastCategoryId?: string;
+  clueLastCategoryKey?: string;
+  clueWords: string[];
+  matchedWords: string[];
+  matchMode: DoudianOpportunityPrematchMode;
+  matchScore: number;
+  categoryScore: number;
+  wordScore: number;
+  eligible: boolean;
+  estimatedCost: number;
+  skipReason?: string;
+  status: "ready" | "skipped" | "submitted" | "failed" | string;
+  raw?: Record<string, unknown>;
+}
+
+export interface DoudianOpportunityExecution {
+  id: string;
+  sourceRunId?: string;
+  shopId: string;
+  shopName: string;
+  clueId?: string;
+  clueName?: string;
+  productId?: string;
+  title?: string;
+  action: "submit" | "collect" | "editTitle" | string;
+  stage?: string;
+  status: "submitted" | "collected" | "dry_run" | "failed" | "skipped" | string;
+  ok: boolean;
+  message: string;
+  planKey?: string;
+  diagnostic?: Record<string, unknown>;
+}
+
+export interface DoudianOpportunityReportResult extends DoudianStoreResult {
+  mode?: DoudianOpportunityReportMode | string;
+  submitMode?: DoudianOpportunitySubmitMode;
+  goodsMatchType?: DoudianOpportunityGoodsMatchType;
+  sourceRunId?: string;
+  rows?: DoudianOpportunityClueRow[];
+  clues?: DoudianOpportunityClueRow[];
+  products?: DoudianOpportunityProductRow[];
+  prematches?: DoudianOpportunityPrematchCandidate[];
+  executions?: DoudianOpportunityExecution[];
+  successCount?: number;
+  failureCount?: number;
+  partialCount?: number;
+  summary?: Record<string, number>;
+  scanSummary?: Record<string, number>;
+  sourceHealth?: Array<Record<string, unknown>>;
+  filters?: DoudianOpportunityFilters;
+  requestPlanHash?: string;
+  productRunId?: string;
+  clueRunId?: string;
+  matchRunId?: string;
+  dailyAttemptLimit?: number;
+  dailyAttemptUsed?: number;
+  dailyAttemptRemaining?: number;
+}
+
 export interface ChihuBridgeApi {
   version: string;
   rawMethods: string[];
@@ -848,6 +1022,17 @@ declare global {
         restoreExecuteOk: boolean;
         scanRunId: string;
         execRunId: string;
+      }>;
+      opportunityReportSelfCheck: () => Promise<{
+        ok: boolean;
+        clueScanOk: boolean;
+        productScanOk: boolean;
+        submitDryRunOk: boolean;
+        collectDryRunOk: boolean;
+        restoreOk: boolean;
+        clueRunId: string;
+        productRunId: string;
+        executeRunIds: string[];
       }>;
     };
     client?: Record<string, unknown> & {

@@ -2,7 +2,7 @@ import type { ChihuConfig, ReleaseManifest } from "../types";
 import { STORAGE_KEY_CONFIG_CACHE, storageSet } from "./storage";
 
 export const CONFIG_URL = "./config/chihu-config.json";
-export const RELEASE_MANIFEST_URL = "/new-remote-web/release-manifest.json";
+export const RELEASE_MANIFEST_URL = "./release-manifest.json";
 
 export function defaultConfig(): ChihuConfig {
   return {
@@ -10,7 +10,7 @@ export function defaultConfig(): ChihuConfig {
     version: "local-client-shell",
     configTtlSeconds: 300,
     entry: {
-      newRemoteOrigin: "/new-remote-web/"
+      newRemoteOrigin: "./"
     },
     shell: {
       mode: "foundation",
@@ -24,8 +24,8 @@ export function defaultConfig(): ChihuConfig {
       businessSlot: { enabled: true }
     },
     assets: {
-      shellEntry: "/new-remote-web/app.js",
-      cssEntry: "/new-remote-web/styles.css",
+      shellEntry: "./app.js",
+      cssEntry: "./styles.css",
       manifestUrl: RELEASE_MANIFEST_URL
     },
     diagnostics: {
@@ -48,7 +48,7 @@ export function validateConfig(input: unknown): ChihuConfig {
   assertConfig(config && typeof config === "object", "config must be object");
   assertConfig(config.schemaVersion === 1, "schemaVersion must be 1");
   assertConfig(typeof config.version === "string" && config.version, "version is required");
-  assertConfig(config.entry?.newRemoteOrigin === "/new-remote-web/", "entry.newRemoteOrigin must be /new-remote-web/");
+  assertConfig(typeof config.entry?.newRemoteOrigin === "string" && config.entry.newRemoteOrigin, "entry.newRemoteOrigin is required");
   assertConfig(config.shell?.mode === "foundation", "shell.mode must be foundation");
   assertConfig(config.shell.enabled === true, "shell.enabled must be true");
   assertConfig(config.assets?.manifestUrl === RELEASE_MANIFEST_URL, "assets.manifestUrl is invalid");
@@ -80,5 +80,6 @@ export async function loadConfig() {
 }
 
 export async function loadManifest() {
-  return loadJson<ReleaseManifest>(RELEASE_MANIFEST_URL);
+  const config = await loadConfig().catch(() => null);
+  return loadJson<ReleaseManifest>(config?.config.assets?.manifestUrl || RELEASE_MANIFEST_URL);
 }

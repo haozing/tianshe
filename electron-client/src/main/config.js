@@ -15,12 +15,12 @@ const APP_WINDOW = {
   resizable: process.env.CHIHU_WINDOW_RESIZABLE === "0" ? false : true
 };
 
-const LOCAL_REMOTE_WEB_URL = "http://127.0.0.1:4173/new-remote-web/";
+const DEFAULT_REMOTE_WEB_URL = "http://chihu.facaishe.cn/remote-web/current/new-remote-web/index.html";
 
 const HOME_INDEX_URL =
   process.env.CHIHU_HOME_URL ||
   process.env.CHIHU_REMOTE_WEB_URL ||
-  LOCAL_REMOTE_WEB_URL;
+  DEFAULT_REMOTE_WEB_URL;
 
 const HOME_PRELOAD = path.join(SRC_ROOT, "preload", "index.js");
 const ICON_PATH = path.join(ROOT, "assets", "icon-chihu.png");
@@ -35,5 +35,5 @@ module.exports = {
   HOME_INDEX_URL,
   HOME_PRELOAD,
   ICON_PATH,
-  LOCAL_REMOTE_WEB_URL
+  DEFAULT_REMOTE_WEB_URL
 };

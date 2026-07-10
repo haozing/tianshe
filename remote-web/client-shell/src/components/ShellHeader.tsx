@@ -15,12 +15,14 @@ import {
   Settings,
   ShieldAlert,
   ShoppingBag,
+  Target,
   Trash2,
   X
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { WorkspaceState } from "../types";
 import { cn, isActiveRoute } from "../lib/utils";
+import { remoteAsset } from "../lib/assets";
 import { closeMainWindow, minimizeMainWindow, toggleMaximizeMainWindow } from "../bridge/client";
 
 type SecondaryRoute = {
@@ -47,7 +49,8 @@ const warningSubRoutes: SecondaryRoute[] = [
 ];
 
 const opportunitySubRoutes: SecondaryRoute[] = [
-  { label: "商机提报", route: "/opportunities", Icon: Megaphone }
+  { label: "商机提报", route: "/opportunities", Icon: Megaphone },
+  { label: "商品预匹配提报", route: "/opportunities/product-prematch", Icon: Target }
 ];
 
 const productSubRoutes: SecondaryRoute[] = [
@@ -77,7 +80,6 @@ function ProfileMenu({ workspace }: { workspace: WorkspaceState }) {
   const avatarText = userName.trim().slice(0, 1).toLowerCase() || "h";
   const phone = workspace.phone || "18906311658";
   const points = workspace.points || "0.1";
-  const computePower = workspace.computePower || "8.00";
 
   const menuItems = [
     { label: "卡密兑换", Icon: CreditCard, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} /> },
@@ -104,15 +106,10 @@ function ProfileMenu({ workspace }: { workspace: WorkspaceState }) {
               </div>
             </div>
 
-            <div className="mt-5 grid grid-cols-[1fr_1px_1fr] items-center">
-              <div className="text-center">
+            <div className="mt-5 flex items-center justify-center">
+              <div className="min-w-[92px] text-center">
                 <div className="text-[19px] font-bold leading-6 text-[#3346e8]">{points}</div>
                 <div className="mt-1 text-[12px] text-[#344054]">积分</div>
-              </div>
-              <span className="h-4 bg-[#d8dee8]" />
-              <div className="text-center">
-                <div className="text-[19px] font-bold leading-6 text-[#3346e8]">{computePower}</div>
-                <div className="mt-1 text-[12px] text-[#344054]">算力</div>
               </div>
             </div>
           </div>
@@ -161,7 +158,7 @@ export function ShellHeader({ route, workspace }: { route: string; workspace: Wo
         <img
           alt="赤狐管家"
           className="h-12 w-[172px] object-contain object-left"
-          src="/new-remote-web/assets/chihu-logo-horizontal.png"
+          src={remoteAsset("assets/chihu-logo-horizontal.png")}
         />
       </aside>
 

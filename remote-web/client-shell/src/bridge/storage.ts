@@ -31,8 +31,7 @@ export const defaultWorkspace: WorkspaceState = {
   operator: "hhhhh123",
   balance: "200.00",
   phone: "18906311658",
-  points: "0.1",
-  computePower: "8.00"
+  points: "0.1"
 };
 
 export function isChihuStorageKey(key: string) {

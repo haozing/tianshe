@@ -1,0 +1,47 @@
+appId: com.chihu.guanjia
+productName: 赤狐管家
+copyright: Copyright © 2026 赤狐管家
+
+directories:
+  output: release
+  buildResources: assets
+
+asar: true
+electronDist: node_modules/electron/dist
+electronVersion: 31.7.7
+
+files:
+  - src/**/*
+  - assets/**/*
+  - package.json
+  - "!artifacts/**"
+  - "!scripts/**"
+  - "!release/**"
+  - "!dist/**"
+  - "!out/**"
+
+win:
+  icon: assets/icon-chihu.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: 赤狐管家
+  artifactName: "chihu-guanjia-${version}-setup.${ext}"
+
+portable:
+  artifactName: "chihu-guanjia-${version}-portable.${ext}"
+
+publish:
+  provider: generic
+  url: https://chihu-1434132228.cos.ap-shanghai.myqcloud.com/desktop/win/

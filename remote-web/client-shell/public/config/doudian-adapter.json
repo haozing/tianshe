@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "contractVersion": "doudian-adapter.v1",
   "platform": "doudian",
-  "version": "2026.07.08.remote-adapter-bulk-delete-v1-xzb-local-mstoken",
+  "version": "2026.07.09.remote-adapter-opportunity-report-v1-xzb-local-mstoken",
   "source": "remote-web",
   "capabilities": {
     "actions": [
@@ -29,7 +29,11 @@
       "collectFundsData",
       "collectViolationsData",
       "collectStaleGoodsCandidates",
-      "executeStaleGoodsCleanup"
+      "executeStaleGoodsCleanup",
+      "scanOpportunityClues",
+      "scanOpportunityProducts",
+      "executeOpportunitySubmit",
+      "executeOpportunityCollect"
     ],
     "scriptKeys": [
       "collectRoleShopNames",
@@ -68,7 +72,15 @@
       "staleGoodsCompleteDelete",
       "bulkDeleteProductList",
       "bulkDeleteBatchDelete",
-      "bulkDeleteCompleteDelete"
+      "bulkDeleteCompleteDelete",
+      "opportunityClueRealtimeList",
+      "opportunitySubmitClue",
+      "opportunityClueWords",
+      "opportunityEditGoodsTitle",
+      "opportunityCategoryList",
+      "opportunityClueGoodsList",
+      "opportunityProductList",
+      "opportunityCollectClue"
     ],
     "unknownActionPolicy": "fail"
   },
@@ -317,6 +329,67 @@
           "action": "recordStoreAttempts"
         }
       ]
+    },
+    "scanOpportunityClues": {
+      "version": "doudian-operation-plan.v1",
+      "actions": [
+        {
+          "action": "scanOpportunityClues",
+          "requestPlans": [
+            "opportunityClueRealtimeList"
+          ]
+        },
+        {
+          "action": "recordStoreAttempts"
+        }
+      ]
+    },
+    "scanOpportunityProducts": {
+      "version": "doudian-operation-plan.v1",
+      "actions": [
+        {
+          "action": "scanOpportunityProducts",
+          "requestPlans": [
+            "opportunityProductList"
+          ]
+        },
+        {
+          "action": "recordStoreAttempts"
+        }
+      ]
+    },
+    "executeOpportunitySubmit": {
+      "version": "doudian-operation-plan.v1",
+      "actions": [
+        {
+          "action": "executeOpportunitySubmit",
+          "requestPlans": [
+            "opportunityClueRealtimeList",
+            "opportunityClueWords",
+            "opportunityProductList",
+            "opportunityClueGoodsList",
+            "opportunityEditGoodsTitle",
+            "opportunitySubmitClue"
+          ]
+        },
+        {
+          "action": "recordStoreAttempts"
+        }
+      ]
+    },
+    "executeOpportunityCollect": {
+      "version": "doudian-operation-plan.v1",
+      "actions": [
+        {
+          "action": "executeOpportunityCollect",
+          "requestPlans": [
+            "opportunityCollectClue"
+          ]
+        },
+        {
+          "action": "recordStoreAttempts"
+        }
+      ]
     }
   },
   "origin": "https://fxg.jinritemai.com",
@@ -354,7 +427,15 @@
     "staleGoodsCompleteDelete": "/product/tproduct/completeDelete",
     "bulkDeleteProductList": "/product/tproduct/list",
     "bulkDeleteBatchDelete": "/product/tproduct/batchDelete",
-    "bulkDeleteCompleteDelete": "/product/tproduct/completeDelete"
+    "bulkDeleteCompleteDelete": "/product/tproduct/completeDelete",
+    "opportunityClueRealtimeList": "/api/commop/business_chance_center/clue/common/real_time_list",
+    "opportunitySubmitClue": "/api/commop/business_chance_center/multiple_item_submit/submit",
+    "opportunityClueWords": "/api/commop/business_chance_center/clue/query_participle",
+    "opportunityEditGoodsTitle": "/api/commop/business_chance_center/product/batch/edit",
+    "opportunityCategoryList": "/api/commop/business_chance_center/shop_full_category/list",
+    "opportunityClueGoodsList": "/api/commop/business_chance_center/product/list",
+    "opportunityProductList": "/product/tproduct/list",
+    "opportunityCollectClue": "/api/commop/business_chance_center/clue/auto_submit/open"
   },
   "selectors": {
     "headerShopName": [
@@ -1758,6 +1839,130 @@
         }
       }
     },
+    "opportunityReport": {
+      "successCodes": [
+        0,
+        "0",
+        200,
+        "200"
+      ],
+      "clueListPaths": [
+        "opportunityClueRealtimeList.data",
+        "opportunityClueRealtimeList.data.data",
+        "opportunityClueRealtimeList.list"
+      ],
+      "clueTotalPaths": [
+        "opportunityClueRealtimeList.total",
+        "opportunityClueRealtimeList.data.total",
+        "opportunityClueRealtimeList.data.data.total"
+      ],
+      "productListPaths": [
+        "opportunityProductList.data",
+        "opportunityProductList.data.list",
+        "opportunityProductList.data.data",
+        "opportunityProductList.data.data.list",
+        "opportunityProductList.list"
+      ],
+      "productTotalPaths": [
+        "opportunityProductList.data.total",
+        "opportunityProductList.data.data.total",
+        "opportunityProductList.total"
+      ],
+      "clueGoodsListPaths": [
+        "opportunityClueGoodsList.data",
+        "opportunityClueGoodsList.data.data",
+        "opportunityClueGoodsList.data.list",
+        "opportunityClueGoodsList.list"
+      ],
+      "clueGoodsTotalPaths": [
+        "opportunityClueGoodsList.data.total",
+        "opportunityClueGoodsList.data.data.total",
+        "opportunityClueGoodsList.total"
+      ],
+      "fieldScales": {
+        "price": 100
+      },
+      "fields": {
+        "productId": [
+          "product_id",
+          "productId",
+          "goods_id",
+          "goodsId",
+          "item_id",
+          "itemId",
+          "id"
+        ],
+        "title": [
+          "title",
+          "name",
+          "product_name",
+          "productName",
+          "goods_name",
+          "goodsName"
+        ],
+        "img": [
+          "pic_url",
+          "picUrl",
+          "img",
+          "image",
+          "cover",
+          "main_image",
+          "mainImage"
+        ],
+        "category": [
+          "category_name",
+          "categoryName",
+          "category_path",
+          "categoryPath",
+          "category"
+        ],
+        "categoryId": [
+          "category_id",
+          "categoryId",
+          "leaf_category_id",
+          "leafCategoryId"
+        ],
+        "createdAt": [
+          "create_time",
+          "createTime",
+          "created_at",
+          "createdAt",
+          "ctime"
+        ],
+        "listedAt": [
+          "audit_time",
+          "auditTime",
+          "online_time",
+          "onlineTime",
+          "listed_at",
+          "listedAt"
+        ],
+        "price": [
+          "price",
+          "min_price",
+          "minPrice",
+          "sell_price",
+          "sellPrice"
+        ],
+        "stock": [
+          "stock_num",
+          "stockNum",
+          "stock",
+          "inventory",
+          "total_stock",
+          "totalStock"
+        ],
+        "sales": [
+          "sell_num",
+          "sellNum",
+          "sale_num",
+          "saleNum",
+          "sales",
+          "pay_num",
+          "payNum"
+        ]
+      }
+    },
     "staleGoodsCleanup": {
       "successCodes": [
         0,
@@ -2893,6 +3098,302 @@
         "异常"
       ],
       "successPaths": []
+    },
+    "opportunityClueRealtimeList": {
+      "endpointKey": "opportunityClueRealtimeList",
+      "method": "POST",
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter/search",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "prepareBeforeRequest": true,
+      "prepareWaitMs": 1500,
+      "signQuery": "",
+      "signBody": "{bodyJson}",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,th;q=0.8,en;q=0.7",
+        "Content-Type": "application/json",
+        "Origin": "https://fxg.jinritemai.com"
+      },
+      "body": "{bodyJson}",
+      "retryOnHttpError": false,
+      "retryOnBusinessFailure": false,
+      "maxAttempts": 1,
+      "retryDelayMs": 1200,
+      "retryBackoff": "linear",
+      "successCodes": [
+        0,
+        "0"
+      ],
+      "successPaths": [
+        "data"
+      ],
+      "failureMessages": [
+        "未登录",
+        "请登录",
+        "环境存在风险",
+        "访问过于频繁"
+      ]
+    },
+    "opportunitySubmitClue": {
+      "endpointKey": "opportunitySubmitClue",
+      "method": "POST",
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "signQuery": "",
+      "signBody": "{bodyJson}",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,th;q=0.8,en;q=0.7",
+        "Content-Type": "application/json",
+        "Origin": "https://fxg.jinritemai.com"
+      },
+      "body": "{bodyJson}",
+      "retryOnHttpError": true,
+      "maxAttempts": 2,
+      "retryDelayMs": 1200,
+      "retryBackoff": "linear",
+      "allowMissingCode": true,
+      "successCodes": [
+        0,
+        "0",
+        200,
+        "200"
+      ],
+      "successPaths": [
+        "base_resp.status_code",
+        "data.base_resp.status_code"
+      ],
+      "failureMessages": [
+        "未登录",
+        "请登录",
+        "环境存在风险",
+        "访问过于频繁",
+        "滑块"
+      ]
+    },
+    "opportunityClueWords": {
+      "endpointKey": "opportunityClueWords",
+      "method": "POST",
+      "sign": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json"
+      },
+      "body": "{bodyJson}",
+      "retryOnHttpError": false,
+      "maxAttempts": 1,
+      "retryDelayMs": 1000,
+      "allowMissingCode": true,
+      "successPaths": [
+        "data",
+        "data.data"
+      ]
+    },
+    "opportunityEditGoodsTitle": {
+      "endpointKey": "opportunityEditGoodsTitle",
+      "method": "POST",
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "signQuery": "",
+      "signBody": "{bodyJson}",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,th;q=0.8,en;q=0.7",
+        "Content-Type": "application/json",
+        "Origin": "https://fxg.jinritemai.com"
+      },
+      "body": "{bodyJson}",
+      "retryOnHttpError": true,
+      "maxAttempts": 2,
+      "retryDelayMs": 1200,
+      "successCodes": [
+        0,
+        "0"
+      ],
+      "successPaths": [
+        "data"
+      ]
+    },
+    "opportunityCategoryList": {
+      "endpointKey": "opportunityCategoryList",
+      "method": "GET",
+      "sign": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "headers": {
+        "Accept": "application/json, text/plain, */*"
+      },
+      "query": {
+        "source_channel_code": "",
+        "clue_type_new": "11"
+      },
+      "retryOnHttpError": true,
+      "maxAttempts": 2,
+      "allowMissingCode": true,
+      "successPaths": [
+        "data"
+      ]
+    },
+    "opportunityClueGoodsList": {
+      "endpointKey": "opportunityClueGoodsList",
+      "method": "POST",
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "signQuery": "",
+      "signBody": "{bodyJson}",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,th;q=0.8,en;q=0.7",
+        "Content-Type": "application/json",
+        "Origin": "https://fxg.jinritemai.com"
+      },
+      "body": "{bodyJson}",
+      "retryOnHttpError": true,
+      "retryOnBusinessFailure": true,
+      "maxAttempts": 3,
+      "retryDelayMs": 1200,
+      "retryBackoff": "linear",
+      "allowMissingCode": true,
+      "successCodes": [
+        0,
+        "0",
+        200,
+        "200"
+      ],
+      "successPaths": [
+        "data",
+        "data.data"
+      ]
+    },
+    "opportunityProductList": {
+      "endpointKey": "opportunityProductList",
+      "method": "GET",
+      "sign": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/g/list",
+      "headers": {
+        "Accept": "application/json, text/plain, */*"
+      },
+      "query": {
+        "page": "{page}",
+        "page_size": "{pageSize}",
+        "pageSize": "{pageSize}",
+        "draft_status": "0",
+        "comment_percent": "",
+        "sku_type": "",
+        "business_type": "4",
+        "is_online": "1",
+        "not_for_sale_search_type": "1",
+        "check_status": "3",
+        "status": "0",
+        "supply_status": "",
+        "order_field": "audit_time",
+        "sort": "desc",
+        "id_name_code": "{keyword}",
+        "category_leaf_id": "{categoryLeafId}",
+        "start_time": "{startTime}",
+        "end_time": "{endTime}"
+      },
+      "retryOnHttpError": true,
+      "retryOnBusinessFailure": true,
+      "maxAttempts": 4,
+      "retryDelayMs": 1200,
+      "retryBackoff": "linear",
+      "successCodes": [
+        0,
+        "0"
+      ],
+      "allowMissingCode": true,
+      "successPaths": []
+    },
+    "opportunityCollectClue": {
+      "endpointKey": "opportunityCollectClue",
+      "method": "POST",
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "signQuery": "",
+      "signBody": "{bodyJson}",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,th;q=0.8,en;q=0.7",
+        "Content-Type": "application/json",
+        "Origin": "https://fxg.jinritemai.com"
+      },
+      "body": "{bodyJson}",
+      "retryOnHttpError": true,
+      "maxAttempts": 2,
+      "retryDelayMs": 1200,
+      "successCodes": [
+        0,
+        "0"
+      ],
+      "successPaths": [
+        "data"
+      ]
     }
   },
   "policies": {
@@ -4382,6 +4883,129 @@
         "executePartial": "批量删除部分失败，{failureCount} 家店铺未成功",
         "executeDone": "已提交 {count} 个商品批量删除",
         "cancelled": "批量删除任务已取消"
+      }
+    },
+    "opportunityReport": {
+      "ruleVersion": "opportunity-report-rule.xzb-v1",
+      "fieldSchemaVersion": "opportunity-report-fields.xzb-v1",
+      "cluePageSize": 72,
+      "maxCluePages": 2,
+      "productPageSize": 100,
+      "maxProductListPages": 10,
+      "productPageStart": 0,
+      "officialProductPageSize": 100,
+      "maxOfficialProductPages": 20,
+      "submitBatchSize": 40,
+      "submitBatchDelayMs": 1900,
+      "submitRetryLimit": 3,
+      "submitRetryDelayMs": 5900,
+      "maxTitleLength": 60,
+      "enableRemoteClueWords": false,
+      "titleAppendSeparator": " ",
+      "requestPlans": [
+        "opportunityClueRealtimeList",
+        "opportunitySubmitClue",
+        "opportunityClueWords",
+        "opportunityEditGoodsTitle",
+        "opportunityCategoryList",
+        "opportunityClueGoodsList",
+        "opportunityProductList",
+        "opportunityCollectClue"
+      ],
+      "sortTabs": [
+        {
+          "value": "11,MATCH_DEGREE",
+          "label": "智选搜索词"
+        },
+        {
+          "value": "11,PAY_AMOUNT_RATE",
+          "label": "高增速搜索词"
+        },
+        {
+          "value": "11,DEMAND_SUPPLY_RATE",
+          "label": "高需供比搜索词"
+        },
+        {
+          "value": "11,HEAT_OF_DEMAND",
+          "label": "高热度搜索词"
+        },
+        {
+          "value": "11,ONLINE_PRODUCT_NUMSO",
+          "label": "少竞品搜索词"
+        }
+      ],
+      "tagOptions": [
+        {
+          "value": 35,
+          "label": "全网热卖"
+        },
+        {
+          "value": 14,
+          "label": "应季爆发"
+        },
+        {
+          "value": 31,
+          "label": "热度高"
+        },
+        {
+          "value": 34,
+          "label": "销量高"
+        },
+        {
+          "value": 32,
+          "label": "成交增速快"
+        },
+        {
+          "value": 33,
+          "label": "平台缺货"
+        }
+      ],
+      "profitOptions": [
+        {
+          "value": 1,
+          "label": "搜索扶持"
+        },
+        {
+          "value": 3,
+          "label": "上新扶持"
+        },
+        {
+          "value": 16,
+          "label": "新品成长激励"
+        },
+        {
+          "value": 22,
+          "label": "猜喜冷启权益"
+        },
+        {
+          "value": 23,
+          "label": "猜喜热卖权益"
+        },
+        {
+          "value": 24,
+          "label": "新奇好物标签"
+        },
+        {
+          "value": 26,
+          "label": "新潮新品扶持"
+        },
+        {
+          "value": 29,
+          "label": "商品卡扶持"
+        }
+      ],
+      "messages": {
+        "clueScannedStore": "已扫描 {count} 条商机",
+        "clueScanFailed": "商机扫描失败",
+        "clueScanPartial": "已完成 {successCount} 家，{failureCount} 家失败",
+        "clueScanDone": "已加载 {count} 条商机",
+        "productScannedStore": "已扫描 {count} 个商品",
+        "productScanFailed": "商品扫描失败",
+        "productScanPartial": "已完成 {successCount} 家，{failureCount} 家失败",
+        "productScanDone": "已加载 {count} 个商品",
+        "executeDryRun": "商机提报 dry-run 完成，未提交平台写请求",
+        "executePartial": "商机提报部分失败，{failureCount} 项未成功",
+        "executeDone": "商机提报执行完成，共处理 {count} 项"
       }
     }
   }

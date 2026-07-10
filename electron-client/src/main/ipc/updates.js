@@ -43,10 +43,15 @@ async function startAutoUpdate(context, args = {}) {
   }
 
   isCheckingUpdate = true;
-  updater.forceDevUpdateConfig = true;
   updater.autoDownload = false;
 
-  if (process.env.NODE_ENV === "development" || process.env.CHIHU_DEV_UPDATE_CONFIG) {
+  const useDevUpdateConfig =
+    process.env.NODE_ENV === "development" ||
+    !app.isPackaged ||
+    Boolean(process.env.CHIHU_DEV_UPDATE_CONFIG);
+  updater.forceDevUpdateConfig = useDevUpdateConfig;
+
+  if (useDevUpdateConfig) {
     const configPath = process.env.CHIHU_DEV_UPDATE_CONFIG || path.join(__dirname, "..", "dev-update-config.json");
     if (fs.existsSync(configPath)) {
       updater.updateConfigPath = configPath;

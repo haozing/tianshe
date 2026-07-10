@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "releaseId": "2026.07.04.client-shell",
-  "buildTime": "2026-07-04T00:00:00+08:00",
+  "buildTime": "2026-07-10T04:33:46.053Z",
   "entry": {
-    "remoteWebOrigin": "NEW_REMOTE_WEB_ORIGIN_PROD"
+    "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
   },
   "cachePolicy": {
     "html": "no-cache",
@@ -22,61 +22,77 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "5e7868790f80fab35bbbd1aa94b43763053be7f8e62ccc686471b248b0d2333a"
+      "sha256": "8496d93634e464db6237eeec239d8d92887eb94b5f859ab3280f78d5c83f75e5"
     },
     {
       "path": "new-remote-web/bridge.js",
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "95ba251bcbc510f25ca8d12d45cb3d71a6114ade724f627b28468455a5c3c7c0"
+      "sha256": "1b5c0c9c919d94e76bf96bb32b1fb3879f0733d1b86b977adbdc8f593cf4ceb1"
     },
     {
       "path": "new-remote-web/app.js",
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "f9ede0eaea3eb0950319d942b410632c90be119db4218fe231bda4d808c48191"
+      "sha256": "2f1995c0e222c3dbd793b886ab8f0d05847981a7600c3c157208e6083ba4fc11"
     },
     {
       "path": "new-remote-web/styles.css",
       "type": "remote-css",
       "cache": "short",
       "required": true,
-      "sha256": "8068f0c5bcf70a6b9b6f5d425b6c199468f6e9b11d018e701b9648a7facffd63"
+      "sha256": "2c88c9788aeae04de5c15b338d77b3a40ea80833d3bf84f2955a0d4c55ec5410"
     },
     {
-      "path": "new-remote-web/assets/chihu-client-shell.png",
+      "path": "new-remote-web/assets/chihu-app-icon.png",
       "type": "remote-asset",
       "cache": "immutable-after-hash-build",
       "required": true,
-      "sha256": "b427e8958c66fff52ec4f33c1076ac86dd3d73f00cfad7567fd524f7b4b41cab"
+      "sha256": "037595b78fd84a72393bcb254af11349bb07ac248654dfccfe1d20860753298b"
+    },
+    {
+      "path": "new-remote-web/assets/chihu-logo-horizontal.png",
+      "type": "remote-asset",
+      "cache": "immutable-after-hash-build",
+      "required": true,
+      "sha256": "b83cf3e72c85ccf7a60ef65a8e941c790478288a1601d540f42c65031c6edd30"
+    },
+    {
+      "path": "new-remote-web/assets/chihu-logo-mark.png",
+      "type": "remote-asset",
+      "cache": "immutable-after-hash-build",
+      "required": true,
+      "sha256": "216c79b9e0046b0afaafd145e51e396a3f557629fba0f9fc7fc253036ec99968"
     },
     {
       "path": "new-remote-web/config/chihu-config.json",
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "df78fe59f9e26ac4277ba09ee5247097bedd5b623dc50cade09d7ce3d31e7680"
+      "sha256": "e6304ee12cd577bb78f403198d742eff4e33af55de4cb5d55f56272f5e59165a"
     },
     {
       "path": "new-remote-web/config/doudian-adapter.json",
       "type": "doudian-adapter",
       "cache": "no-cache",
       "required": true,
-      "sha256": "0aa6204c5d9b9d5ae6d41973c57a857808ff20ec387076ad782fb403020d00cd"
+      "sha256": "73ffaf5282e3edec4e2783d2fea6dfd9d5bb4dad0bfb873c2e10cb438517c4f4"
     },
     {
       "path": "new-remote-web/config/invalid-config.json",
       "type": "chihu-config-smoke",
       "cache": "no-cache",
-      "required": false
+      "required": false,
+      "sha256": "fb3ca9a7d22dad5afe7b1eef0de5e371af24fb9e8b08fec065ebce120733124c"
     },
     {
       "path": "new-remote-web/config/upload-config.json",
       "type": "chihu-config-smoke",
       "cache": "no-cache",
-      "required": false
+      "required": false,
+      "sha256": "db81c4ab0204b76b803cd87838a9b5312555b5a5d80d674af24b8670a1fa0d27"
     },
     {
       "path": "new-remote-web/release-manifest.json",

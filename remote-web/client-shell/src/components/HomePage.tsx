@@ -1,4 +1,5 @@
 import { quickTasks } from "../data/modules";
+import { remoteAsset } from "../lib/assets";
 
 const statusCards = [
   { label: "已接入店铺", value: "0", detail: "等待获取", href: "#/stores" },
@@ -18,7 +19,7 @@ export function HomePage() {
             <img
               alt="赤狐管家"
               className="size-[68px] shrink-0 rounded-lg object-contain shadow-[0_10px_24px_rgba(255,80,32,0.14)]"
-              src="/new-remote-web/assets/chihu-logo-mark.png"
+              src={remoteAsset("assets/chihu-logo-mark.png")}
             />
             <div className="min-w-0">
               <span className="mb-1 inline-flex text-xs font-bold text-brand-fox">赤狐工作台</span>

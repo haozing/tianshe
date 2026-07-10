@@ -10,5 +10,9 @@ electron-client/.npm-cache/
 electron-client/out/
 electron-client/dist/
 electron-client/release/
+node_modules/
+.env
+.env.*
+!.env.oss.example
 archive
 docs

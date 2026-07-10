@@ -46,7 +46,21 @@
       "sha256": "8068f0c5bcf70a6b9b6f5d425b6c199468f6e9b11d018e701b9648a7facffd63"
     },
     {
-      "path": "new-remote-web/assets/chihu-client-shell.png",
+      "path": "new-remote-web/assets/chihu-app-icon.png",
+      "type": "remote-asset",
+      "cache": "immutable-after-hash-build",
+      "required": true,
+      "sha256": "b427e8958c66fff52ec4f33c1076ac86dd3d73f00cfad7567fd524f7b4b41cab"
+    },
+    {
+      "path": "new-remote-web/assets/chihu-logo-horizontal.png",
+      "type": "remote-asset",
+      "cache": "immutable-after-hash-build",
+      "required": true,
+      "sha256": "b427e8958c66fff52ec4f33c1076ac86dd3d73f00cfad7567fd524f7b4b41cab"
+    },
+    {
+      "path": "new-remote-web/assets/chihu-logo-mark.png",
       "type": "remote-asset",
       "cache": "immutable-after-hash-build",
       "required": true,

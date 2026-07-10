@@ -239,6 +239,15 @@ for (const artifact of manifest.artifacts || []) {
   mkdirSync(dirname(destination), { recursive: true });
   copyFileSync(source, destination);
 
+  if (isHashBuiltArtifact(artifact)) {
+    const aliasDestination = join(deployDir, artifact.path);
+    assertInside(aliasDestination, deployDir, "deploy artifact alias destination");
+    if (aliasDestination !== destination) {
+      mkdirSync(dirname(aliasDestination), { recursive: true });
+      copyFileSync(source, aliasDestination);
+    }
+  }
+
   const destinationSize = statSync(destination).size;
   const destinationHash = sha256(destination);
   const checked = releaseCheckByPath.get(artifact.path);

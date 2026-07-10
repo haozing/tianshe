@@ -209,8 +209,15 @@ export function buildDoudianScripts(adapter: DoudianAdapterConfig): DoudianAdapt
 
             try {
               const fp = readCookie("s_v_web_id") || readCookie("MONITOR_WEB_ID") || randomFp();
-              const msToken = readCookie("msToken");
-              const queryBase = targetQuery + (targetQuery ? "&" : "") + "fp=" + encodeURIComponent(fp) + "&verifyFp=" + encodeURIComponent(fp) + "&msToken=" + encodeURIComponent(msToken);
+              const useMsToken = plan.signUseMsToken !== false && plan.useMsToken !== false;
+              const includeMsTokenParam = useMsToken || plan.signIncludeEmptyMsToken === true || plan.signIncludeMsTokenParam === true;
+              const msToken = useMsToken ? readCookie("msToken") : "";
+              const queryBase = [
+                targetQuery,
+                "fp=" + encodeURIComponent(fp),
+                "verifyFp=" + encodeURIComponent(fp),
+                includeMsTokenParam ? "msToken=" + (msToken ? encodeURIComponent(msToken) : "") : ""
+              ].filter(Boolean).join("&");
               const aBogus = callABogus(signer, queryBase, plan.signBody || "", navigator.userAgent);
               if (aBogus) {
                 const myargs = queryBase + "&a_bogus=" + encodeURIComponent(aBogus);

@@ -7,7 +7,7 @@ const entryBuildStamp =
   new Date().toISOString().replace(/\D/g, "").slice(0, 14);
 
 export default defineConfig({
-  base: "/new-remote-web/",
+  base: process.env.CHIHU_REMOTE_BASE || "./",
   plugins: [
     react(),
     {
@@ -16,7 +16,7 @@ export default defineConfig({
         order: "post",
         handler(html) {
           return html
-            .replace(/(src|href)="(\/new-remote-web\/(?:app\.js|styles\.css))"/g, `$1="$2?v=${entryBuildStamp}"`)
+            .replace(/(src|href)="((?:\.\/|\/new-remote-web\/)(?:app\.js|styles\.css))"/g, `$1="$2?v=${entryBuildStamp}"`)
             .replace(/src="\.\/bridge\.js"/g, `src="./bridge.js?v=${entryBuildStamp}"`);
         }
       }

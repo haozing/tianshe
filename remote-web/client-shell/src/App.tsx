@@ -17,6 +17,7 @@ import {
   runDoudianBusinessDataSelfCheck,
   runDoudianFileImportSelfCheck,
   runDoudianFundsDataSelfCheck,
+  runDoudianOpportunityReportSelfCheck,
   runDoudianStoreImportStatusSelfCheck,
   runDoudianStoreGroupsSelfCheck,
   runDoudianStaleGoodsExecuteSelfCheck,
@@ -32,6 +33,8 @@ import { BulkDeletePage } from "./components/BulkDeletePage";
 import { FundsDataPage } from "./components/FundsDataPage";
 import { HomePage } from "./components/HomePage";
 import { ModulePage } from "./components/ModulePage";
+import { OpportunityProductPrematchPage } from "./components/OpportunityProductPrematchPage";
+import { OpportunityReportPage } from "./components/OpportunityReportPage";
 import { ShellHeader } from "./components/ShellHeader";
 import { SlowMovingCleanupPage } from "./components/SlowMovingCleanupPage";
 import { StoreManagementPage } from "./components/StoreManagementPage";
@@ -126,6 +129,9 @@ export function App() {
         doudianAdapter: await loadDoudianAdapterPayload({ force: true })
       }),
       bulkDeleteSelfCheck: async () => runDoudianBulkDeleteSelfCheck({
+        doudianAdapter: await loadDoudianAdapterPayload({ force: true })
+      }),
+      opportunityReportSelfCheck: async () => runDoudianOpportunityReportSelfCheck({
         doudianAdapter: await loadDoudianAdapterPayload({ force: true })
       })
     };
@@ -258,7 +264,7 @@ export function App() {
             <span className="min-w-0 break-words">{state.manifestError}</span>
           </div>
         ) : null}
-        <div className={`min-h-0 flex-1 ${state.route === "/stores" || state.route === "/stores/business-data" || state.route === "/stores/funds" || state.route === "/warnings" || effectiveRoute === "/products/slow-moving" || effectiveRoute === "/products/bulk-delete" ? "overflow-hidden" : "overflow-auto"}`}>
+        <div className={`min-h-0 flex-1 ${state.route === "/stores" || state.route === "/stores/business-data" || state.route === "/stores/funds" || state.route === "/warnings" || state.route === "/opportunities" || state.route === "/opportunities/product-prematch" || effectiveRoute === "/products/slow-moving" || effectiveRoute === "/products/bulk-delete" ? "overflow-hidden" : "overflow-auto"}`}>
           {state.route === "/system/diagnostics" ? (
             <DiagnosticsPage state={state} />
           ) : state.route === "/stores" ? (
@@ -269,6 +275,10 @@ export function App() {
             <FundsDataPage />
           ) : state.route === "/warnings" ? (
             <ViolationsPage />
+          ) : state.route === "/opportunities" ? (
+            <OpportunityReportPage />
+          ) : state.route === "/opportunities/product-prematch" ? (
+            <OpportunityProductPrematchPage />
           ) : effectiveRoute === "/products/slow-moving" ? (
             <SlowMovingCleanupPage />
           ) : effectiveRoute === "/products/bulk-delete" ? (

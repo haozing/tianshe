@@ -118,8 +118,8 @@ assert(typeof manifest.releaseId === "string" && manifest.releaseId, "releaseId 
 assert(Array.isArray(manifest.artifacts) && manifest.artifacts.length > 0, "release artifacts are required");
 assert(manifest.rollback && manifest.rollback.config && manifest.rollback.resource && manifest.rollback.shell, "rollback matrix is incomplete");
 
-assert(chihuConfig.assets && chihuConfig.assets.manifestUrl === "/new-remote-web/release-manifest.json", "chihu config must reference release manifest");
-assert(chihuConfig.entry && chihuConfig.entry.newRemoteOrigin === "/new-remote-web/", "chihu config must point to /new-remote-web/");
+assert(chihuConfig.assets && typeof chihuConfig.assets.manifestUrl === "string" && chihuConfig.assets.manifestUrl.endsWith("release-manifest.json"), "chihu config must reference release manifest");
+assert(chihuConfig.entry && typeof chihuConfig.entry.newRemoteOrigin === "string" && chihuConfig.entry.newRemoteOrigin, "chihu config newRemoteOrigin is required");
 assert(chihuConfig.release && chihuConfig.release.gitCommit, "chihu config release.gitCommit is required");
 assert(chihuConfig.release && chihuConfig.release.buildTime, "chihu config release.buildTime is required");
 assertDoudianAdapter(doudianAdapter);

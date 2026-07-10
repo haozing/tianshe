@@ -33,7 +33,11 @@ function interpolate(value: unknown, context: Record<string, unknown>) {
 }
 
 function interpolateDeep(value: unknown, context: Record<string, unknown>): unknown {
-  if (typeof value === "string") return interpolate(value, context);
+  if (typeof value === "string") {
+    const exact = value.match(/^\{([^}]+)\}$/);
+    if (exact) return context[exact[1]] ?? "";
+    return interpolate(value, context);
+  }
   if (Array.isArray(value)) return value.map((item) => interpolateDeep(item, context));
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, next]) => [key, interpolateDeep(next, context)]));
@@ -61,7 +65,14 @@ function pickSignQuery(targetUrl: string, plan: Record<string, unknown>, context
 }
 
 function pickSignBody(plan: Record<string, unknown>, context: Record<string, unknown>) {
-  if (typeof plan.signBody === "string") return interpolate(plan.signBody, context);
+  if (typeof plan.signBody === "string") {
+    const exact = plan.signBody.match(/^\{([^}]+)\}$/);
+    if (exact) {
+      const value = context[exact[1]];
+      return typeof value === "string" ? value : JSON.stringify(value ?? "");
+    }
+    return interpolate(plan.signBody, context);
+  }
   if (plan.signBody != null) return JSON.stringify(interpolateDeep(plan.signBody, context));
 
   const method = String(plan.method || "GET").toUpperCase();
@@ -97,44 +108,6 @@ async function readCookieValue(partition: string, name: string, candidates: Arra
     if (cookie?.value) return cookie.value;
   }
   return "";
-}
-
-async function readWindowToken(payload: DoudianAdapterPayload, request: XzbSignRequest, partition: string) {
-  const native = requireChihuNative();
-  const plan = request.plan || {};
-  const signerUrl = text(plan.signerUrl) || payload.adapter.homeUrl || payload.adapter.origin;
-  const waitMs = Math.max(0, Math.min(3000, Number(plan.signerWaitMs || 1500)));
-  let winId: number | null = null;
-  try {
-    winId = await native.windows.open({
-      url: signerUrl,
-      partition,
-      show: false,
-      waitForLoad: false,
-      width: 480,
-      height: 360,
-      title: "Chihu Doudian Token",
-      nodeIntegration: false,
-      contextIsolation: true
-    });
-    if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
-    const value = await native.windows.eval({
-      winId,
-      timeoutMs: 3000,
-      code: `
-        (() => {
-          try {
-            return localStorage.getItem("xmst") || localStorage.getItem("msToken") || "";
-          } catch {
-            return "";
-          }
-        })();
-      `
-    }).catch(() => "");
-    return text(value);
-  } finally {
-    if (winId != null) await native.windows.destroy({ winId }).catch(() => undefined);
-  }
 }
 
 function domainCandidates(targetUrl: string, signDomain: string, name: "fp" | "msToken") {
@@ -184,12 +157,32 @@ export async function signWithXzbMstoken(payload: DoudianAdapterPayload, request
     const fp = await readCookieValue(partition, "s_v_web_id", domainCandidates(targetUrl, signDomain, "fp"))
       || await readCookieValue(partition, "MONITOR_WEB_ID", domainCandidates(targetUrl, signDomain, "fp"))
       || randomFp();
-    const useWindowTokenFallback = plan.signWindowTokenFallback !== false;
-    const msToken = await readCookieValue(partition, "msToken", domainCandidates(targetUrl, signDomain, "msToken"))
-      || text(plan.signToken)
-      || text(plan.signFallbackToken)
-      || (useWindowTokenFallback ? await readWindowToken(payload, request, partition) : "");
-    const queryBase = `${query}${query ? "&" : ""}fp=${fp}&verifyFp=${fp}&msToken=${msToken}`;
+    const useMsToken = plan.signUseMsToken !== false && plan.useMsToken !== false;
+    const includeMsTokenParam = useMsToken || plan.signIncludeEmptyMsToken === true || plan.signIncludeMsTokenParam === true;
+    const msToken = useMsToken
+      ? await readCookieValue(partition, "msToken", domainCandidates(targetUrl, signDomain, "msToken"))
+        || text(plan.signToken)
+        || text(plan.signFallbackToken)
+      : "";
+    if (useMsToken && (plan.signRequireMsToken === true || plan.requireMsToken === true) && !msToken) {
+      return {
+        ok: false,
+        reason: "missing-msToken",
+        targetUrl,
+        query: "",
+        signature: "",
+        source: "xzb-local",
+        mode: "mstoken-myargs",
+        userAgent,
+        detail: { hasFp: !!fp, hasMsToken: false, queryLength: query.length, bodyLength: body.length }
+      };
+    }
+    const queryBase = [
+      query,
+      `fp=${encodeURIComponent(fp)}`,
+      `verifyFp=${encodeURIComponent(fp)}`,
+      includeMsTokenParam ? `msToken=${msToken ? encodeURIComponent(msToken) : ""}` : ""
+    ].filter(Boolean).join("&");
     const aBogus = getABougsSign(queryBase, body, userAgent);
     if (!aBogus) {
       return {

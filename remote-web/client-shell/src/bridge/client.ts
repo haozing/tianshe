@@ -5,6 +5,13 @@ import type {
   DoudianBulkDeleteResult,
   DoudianBusinessDataResult,
   DoudianFundsDataResult,
+  DoudianOpportunityFilters,
+  DoudianOpportunityGoodsMatchType,
+  DoudianOpportunityPrematchMode,
+  DoudianOpportunityReportResult,
+  DoudianOpportunitySubmitMode,
+  DoudianOpportunityTitleMatchMode,
+  DoudianOpportunityTitleUpdatePosition,
   DoudianStaleGoodsCandidate,
   DoudianStaleGoodsCleanupResult,
   DoudianStaleGoodsRules,
@@ -21,6 +28,8 @@ import {
   fetchBusinessDataLatest,
   fetchFundsData,
   fetchFundsDataLatest,
+  fetchOpportunityReport,
+  fetchOpportunityReportLatest,
   fetchStaleGoodsCleanup,
   fetchViolationsData,
   fetchViolationsDataLatest,
@@ -318,6 +327,65 @@ export async function fetchDoudianBulkDeleteProducts(args: {
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
   return fetchBulkDeleteProducts(nextArgs);
+}
+
+export async function fetchDoudianOpportunityReport(args: {
+  mode?: "clue-scan" | "product-scan" | "product-prematch" | "clue-submit" | "product-submit" | "prematch-submit" | "collect" | "latest";
+  shopIds?: string[];
+  filters?: DoudianOpportunityFilters;
+  submitMode?: DoudianOpportunitySubmitMode;
+  goodsMatchType?: DoudianOpportunityGoodsMatchType;
+  matchMode?: DoudianOpportunityPrematchMode;
+  titleMatchMode?: DoudianOpportunityTitleMatchMode;
+  titleUpdatePosition?: DoudianOpportunityTitleUpdatePosition;
+  clueIds?: string[];
+  productIds?: string[];
+  candidateIds?: string[];
+  sourceRunId?: string;
+  productRunId?: string;
+  clueRunId?: string;
+  matchRunId?: string;
+  dailyAttemptLimit?: number;
+  skipSubmittedClueCategory?: boolean;
+  skipSubmittedClue?: boolean;
+  skipSubmittedProductInSameClue?: boolean;
+  operationId?: string;
+  forceAdapter?: boolean;
+} = {}): Promise<DoudianOpportunityReportResult> {
+  const nextArgs = await withDoudianAdapter({
+    mode: args.mode || "clue-scan",
+    shopIds: args.shopIds || [],
+    ...(args.filters ? { filters: args.filters } : {}),
+    ...(args.submitMode ? { submitMode: args.submitMode } : {}),
+    ...(args.goodsMatchType ? { goodsMatchType: args.goodsMatchType } : {}),
+    ...(args.matchMode ? { matchMode: args.matchMode } : {}),
+    ...(args.titleMatchMode ? { titleMatchMode: args.titleMatchMode } : {}),
+    ...(args.titleUpdatePosition ? { titleUpdatePosition: args.titleUpdatePosition } : {}),
+    ...(args.clueIds?.length ? { clueIds: args.clueIds } : {}),
+    ...(args.productIds?.length ? { productIds: args.productIds } : {}),
+    ...(args.candidateIds?.length ? { candidateIds: args.candidateIds } : {}),
+    ...(args.sourceRunId ? { sourceRunId: args.sourceRunId } : {}),
+    ...(args.productRunId ? { productRunId: args.productRunId } : {}),
+    ...(args.clueRunId ? { clueRunId: args.clueRunId } : {}),
+    ...(args.matchRunId ? { matchRunId: args.matchRunId } : {}),
+    ...(args.dailyAttemptLimit ? { dailyAttemptLimit: args.dailyAttemptLimit } : {}),
+    ...(args.skipSubmittedClueCategory !== undefined ? { skipSubmittedClueCategory: args.skipSubmittedClueCategory } : {}),
+    ...(args.skipSubmittedClue !== undefined ? { skipSubmittedClue: args.skipSubmittedClue } : {}),
+    ...(args.skipSubmittedProductInSameClue !== undefined ? { skipSubmittedProductInSameClue: args.skipSubmittedProductInSameClue } : {}),
+    ...(args.operationId ? { operationId: args.operationId } : {})
+  }, { force: args.forceAdapter === true });
+  return fetchOpportunityReport(nextArgs);
+}
+
+export async function fetchDoudianOpportunityReportLatest(args: {
+  filters?: DoudianOpportunityFilters;
+  forceAdapter?: boolean;
+} = {}): Promise<DoudianOpportunityReportResult> {
+  const nextArgs = await withDoudianAdapter({
+    mode: "latest",
+    ...(args.filters ? { filters: args.filters } : {})
+  }, { force: args.forceAdapter === true });
+  return fetchOpportunityReportLatest(nextArgs);
 }
 
 export async function selectAndParseCompassFile(): Promise<{

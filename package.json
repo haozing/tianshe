@@ -1,0 +1,16 @@
+{
+  "name": "chihu-release-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "release:cos": "node scripts/publish-oss.mjs",
+    "release:cos:remote": "node scripts/publish-oss.mjs --remote",
+    "release:cos:desktop": "node scripts/publish-oss.mjs --desktop",
+    "release:oss": "node scripts/publish-oss.mjs",
+    "release:oss:remote": "node scripts/publish-oss.mjs --remote",
+    "release:oss:desktop": "node scripts/publish-oss.mjs --desktop"
+  },
+  "dependencies": {
+    "cos-nodejs-sdk-v5": "^2.15.4"
+  }
+}

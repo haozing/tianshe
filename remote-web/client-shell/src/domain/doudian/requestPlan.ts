@@ -13,7 +13,10 @@ export interface RequestPlanResult {
   openUrl?: string;
   pageHref?: string;
   pageTitle?: string;
+  nonRetryable?: boolean;
+  signFailureReason?: string;
   requestCookieState?: Record<string, unknown>;
+  requestDiagnostic?: Record<string, unknown>;
 }
 
 function endpointUrl(adapter: DoudianAdapterConfig, endpoint: string) {
@@ -111,7 +114,16 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
           await reportPlanSummary(args.planKey, args.partition, attempt, result, adapter, plan);
           return result;
         } else {
-          result = { ok: false, status: 0, data: null, error: "sign failed", source: args.planKey, url };
+          result = {
+            ok: false,
+            status: 0,
+            data: null,
+            error: `sign failed${sign.reason ? `: ${sign.reason}` : ""}`,
+            source: args.planKey,
+            url,
+            nonRetryable: true,
+            signFailureReason: sign.reason
+          };
           await reportPlanSummary(args.planKey, args.partition, attempt, result, adapter, plan);
           return result;
         }
@@ -127,6 +139,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   };
 
   let response = await runRequest();
+  if (response.nonRetryable) return response;
   const prepareMessages = arrayText(plan.prepareOnMessages);
   const prepareAttempts = Math.max(0, Math.min(3, Math.floor(Number(plan.prepareRetryAttempts || (prepareMessages.length ? 1 : 0)))));
   for (let attempt = 0; attempt < prepareAttempts && responseMatches(response, prepareMessages); attempt += 1) {
@@ -135,6 +148,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
     if (delayMs) await delay(delayMs);
     await prepareRequestPlanContext(args.partition, args.planKey, plan, adapter, context, url);
     response = await runRequest(`prepare-${attempt + 1}`);
+    if (response.nonRetryable) return response;
   }
 
   const maxAttempts = Math.max(1, Math.min(8, Math.floor(Number(plan.maxAttempts || 1))));
@@ -144,6 +158,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
       const delayMs = retryDelayMs(plan, attempt, "retryDelayMs", "retryBackoff", 1000);
       if (delayMs) await delay(delayMs);
       response = await runRequest(attempt);
+      if (response.nonRetryable) return response;
     }
   }
 
@@ -153,6 +168,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
       const delayMs = retryDelayMs(plan, attempt, "retryDelayMs", "retryBackoff", 1000);
       if (delayMs) await delay(delayMs);
       response = await runRequest(`business-${attempt}`);
+      if (response.nonRetryable) return response;
     }
   }
 
@@ -263,6 +279,41 @@ function shortHash(value: string) {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
+}
+
+function requestQueryKeys(url: string) {
+  try {
+    return Array.from(new URL(url).searchParams.keys()).sort();
+  } catch {
+    return [];
+  }
+}
+
+function requestBodyKeys(body: unknown) {
+  if (body == null) return [];
+  const value = typeof body === "string"
+    ? (() => {
+        try {
+          return JSON.parse(body);
+        } catch {
+          return null;
+        }
+      })()
+    : body;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? Object.keys(value as Record<string, unknown>).sort()
+    : [];
+}
+
+function requestDiagnostic(method: string, url: string, body: unknown) {
+  const bodyText = body == null ? "" : typeof body === "string" ? body : JSON.stringify(body);
+  return {
+    method,
+    requestQueryKeys: requestQueryKeys(url),
+    requestBodyLength: bodyText.length,
+    requestBodyHash: bodyText ? shortHash(bodyText) : "",
+    requestBodyKeys: requestBodyKeys(body)
+  };
 }
 
 async function removePlanCookies(
@@ -509,7 +560,10 @@ async function reportPlanSummary(
     openUrl: response.openUrl,
     pageHref: response.pageHref,
     pageTitle: response.pageTitle,
+    ...(response.requestDiagnostic ? { requestDiagnostic: response.requestDiagnostic } : {}),
     ...(response.requestCookieState ? { requestCookieState: response.requestCookieState } : {}),
+    ...(response.nonRetryable ? { nonRetryable: true } : {}),
+    ...(response.signFailureReason ? { signFailureReason: response.signFailureReason } : {}),
     ...cookieState
   }).catch(() => undefined);
 }
@@ -528,7 +582,9 @@ async function reportPlanRetry(planKey: string, partition: string, kind: string,
     targetUrl: response.url,
     openUrl: response.openUrl,
     pageHref: response.pageHref,
-    pageTitle: response.pageTitle
+    pageTitle: response.pageTitle,
+    ...(response.nonRetryable ? { nonRetryable: true } : {}),
+    ...(response.signFailureReason ? { signFailureReason: response.signFailureReason } : {})
   }).catch(() => undefined);
 }
 
@@ -585,7 +641,8 @@ async function requestJson(partition: string, url: string, headers: Record<strin
     data: result.data ?? null,
     error: typeof result.error === "string" ? result.error : result.error?.message || "",
     source,
-    url
+    url,
+    requestDiagnostic: requestDiagnostic(method, url, body)
   };
 }
 
@@ -666,7 +723,8 @@ async function pageFetchJson(partition: string, url: string, source: string, pla
         error: "page fetch eval returned no result",
         source,
         url,
-        openUrl
+        openUrl,
+        requestDiagnostic: requestDiagnostic(method, url, body)
       };
     }
     return {
@@ -678,7 +736,8 @@ async function pageFetchJson(partition: string, url: string, source: string, pla
       url: String(result?.url || url),
       openUrl,
       pageHref: String(result?.pageHref || ""),
-      pageTitle: String(result?.pageTitle || "")
+      pageTitle: String(result?.pageTitle || ""),
+      requestDiagnostic: requestDiagnostic(method, url, body)
     };
   } finally {
     if (winId != null) await native.windows.destroy({ winId }).catch(() => undefined);

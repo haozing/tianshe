@@ -3,6 +3,7 @@ const path = require("node:path");
 
 const root = path.join(__dirname, "..");
 const appIconPng = path.join(root, "assets", "icon-chihu.png");
+const appIconIco = path.join(root, "assets", "icon-chihu.ico");
 
 function fail(message) {
   console.error(`[check-assets] ${message}`);
@@ -31,6 +32,14 @@ try {
     const { width, height } = readPngSize(appIconPng);
     if (width !== height || width < 256) {
       fail(`assets/icon-chihu.png must be a square PNG of at least 256px, got ${width}x${height}`);
+    }
+  }
+  if (!fs.existsSync(appIconIco)) {
+    fail("assets/icon-chihu.ico is missing; run npm run prepare:icons");
+  } else {
+    const icon = fs.readFileSync(appIconIco);
+    if (icon.length < 22 || icon.readUInt16LE(0) !== 0 || icon.readUInt16LE(2) !== 1 || icon.readUInt16LE(4) < 1) {
+      fail("assets/icon-chihu.ico is not a valid ICO file");
     }
   }
 } catch (error) {

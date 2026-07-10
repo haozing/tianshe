@@ -6,6 +6,7 @@ const electronBin = require("electron");
 
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
+env.CHIHU_HOME_URL = env.CHIHU_HOME_URL || env.CHIHU_REMOTE_WEB_URL || "http://127.0.0.1:4173/new-remote-web/";
 
 const child = spawn(electronBin, ["."], {
   cwd: root,

@@ -3,7 +3,7 @@
   "version": "2026.07.04.client-shell",
   "configTtlSeconds": 300,
   "entry": {
-    "newRemoteOrigin": "/new-remote-web/"
+    "newRemoteOrigin": "./"
   },
   "shell": {
     "mode": "foundation",
@@ -11,22 +11,30 @@
     "shellVersion": "client-shell"
   },
   "features": {
-    "diagnostics": { "enabled": true },
-    "bridgeSelfCheck": { "enabled": true },
-    "storageHealth": { "enabled": true },
-    "businessSlot": { "enabled": true }
+    "diagnostics": {
+      "enabled": true
+    },
+    "bridgeSelfCheck": {
+      "enabled": true
+    },
+    "storageHealth": {
+      "enabled": true
+    },
+    "businessSlot": {
+      "enabled": true
+    }
   },
   "assets": {
-    "shellEntry": "/new-remote-web/app.js",
-    "cssEntry": "/new-remote-web/styles.css",
-    "manifestUrl": "/new-remote-web/release-manifest.json"
+    "shellEntry": "./app.js",
+    "cssEntry": "./styles.css",
+    "manifestUrl": "./release-manifest.json"
   },
   "diagnostics": {
     "enabled": true,
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "local-client-shell",
-    "buildTime": "2026-07-04T00:00:00+08:00"
+    "gitCommit": "013ba27-dirty",
+    "buildTime": "2026-07-10T04:33:46.053Z"
   }
 }

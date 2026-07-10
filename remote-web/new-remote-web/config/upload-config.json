@@ -3,7 +3,7 @@
   "version": "2026.07.03.clean-foundation-upload-smoke",
   "configTtlSeconds": 300,
   "entry": {
-    "newRemoteOrigin": "/new-remote-web/"
+    "newRemoteOrigin": "./"
   },
   "shell": {
     "mode": "foundation",
@@ -17,9 +17,9 @@
     "businessSlot": { "enabled": true }
   },
   "assets": {
-    "shellEntry": "/new-remote-web/app.js",
-    "cssEntry": "/new-remote-web/styles.css",
-    "manifestUrl": "/new-remote-web/release-manifest.json"
+    "shellEntry": "./app.js",
+    "cssEntry": "./styles.css",
+    "manifestUrl": "./release-manifest.json"
   },
   "diagnostics": {
     "enabled": true,

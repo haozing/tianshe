@@ -1,5 +1,5 @@
 export const DOUDIAN_DB_NAME = "chihu20_doudian";
-export const DOUDIAN_DB_VERSION = 4;
+export const DOUDIAN_DB_VERSION = 6;
 
 export const DOUDIAN_OBJECT_STORES = [
   "stores",
@@ -14,6 +14,14 @@ export const DOUDIAN_OBJECT_STORES = [
   "bulk_delete_candidates_v1",
   "bulk_delete_execute_runs_v1",
   "bulk_delete_operation_events_v1",
+  "opportunity_clue_scan_runs_v1",
+  "opportunity_clue_candidates_v1",
+  "opportunity_product_scan_runs_v1",
+  "opportunity_product_candidates_v1",
+  "opportunity_prematch_runs_v1",
+  "opportunity_prematch_candidates_v1",
+  "opportunity_execute_runs_v1",
+  "opportunity_submit_attempts_v1",
   "operations",
   "runtime_meta"
 ] as const;

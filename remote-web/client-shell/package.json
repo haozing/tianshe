@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
+    "build:release": "npm run build && npm run release:sync",
     "preview": "vite preview --host 127.0.0.1",
+    "release:sync": "node ../scripts/update-release-manifest.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
