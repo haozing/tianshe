@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "releaseId": "2026.07.04.client-shell",
-  "buildTime": "2026-07-12T03:27:33.196Z",
+  "buildTime": "2026-07-12T03:54:08.011Z",
   "entry": {
     "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
   },
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "8328b690f982deb99da18eba0caaece6e57d6ad23c730b499ca05f0363ec7177"
+      "sha256": "8ae83d1318306632cf843598bb21bd9ab87e6e21f6942b6e2d50e1525c466eb7"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,14 +36,14 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "c9b2aacb81e0494713bfe9102dcb2c12be45849036935771c48ab5c4699a4ded"
+      "sha256": "4967db0d5940f388a7d92d87b91490fb0635a8f1595e90fbda7b0fe88fb2b68f"
     },
     {
       "path": "new-remote-web/styles.css",
       "type": "remote-css",
       "cache": "short",
       "required": true,
-      "sha256": "b40a66a2df85be5548e8f57d40878ace8f3b3281981edbb510afc1f1a8107123"
+      "sha256": "0e32692f88646d2468be9e397f8b92712baca7e7e0257ebd85358a21bf7767e1"
     },
     {
       "path": "new-remote-web/assets/chihu-app-icon.png",
@@ -71,7 +71,7 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "dff32092b4262b52436ef823c368ecef185949c0a1ed1e8705676e72c003e46c"
+      "sha256": "181eae3b6059a180b99fa3053a6a88b0ed26105db5c6d61a36013ba02601a9de"
     },
     {
       "path": "new-remote-web/config/doudian-adapter.json",

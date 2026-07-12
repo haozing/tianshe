@@ -428,7 +428,6 @@ export async function fetchDoudianOpportunityReport(args: {
   productRunId?: string;
   clueRunId?: string;
   matchRunId?: string;
-  dailyAttemptLimit?: number;
   skipSubmittedClueCategory?: boolean;
   skipSubmittedClue?: boolean;
   skipSubmittedProductInSameClue?: boolean;
@@ -451,7 +450,6 @@ export async function fetchDoudianOpportunityReport(args: {
     ...(args.productRunId ? { productRunId: args.productRunId } : {}),
     ...(args.clueRunId ? { clueRunId: args.clueRunId } : {}),
     ...(args.matchRunId ? { matchRunId: args.matchRunId } : {}),
-    ...(args.dailyAttemptLimit ? { dailyAttemptLimit: args.dailyAttemptLimit } : {}),
     ...(args.skipSubmittedClueCategory !== undefined ? { skipSubmittedClueCategory: args.skipSubmittedClueCategory } : {}),
     ...(args.skipSubmittedClue !== undefined ? { skipSubmittedClue: args.skipSubmittedClue } : {}),
     ...(args.skipSubmittedProductInSameClue !== undefined ? { skipSubmittedProductInSameClue: args.skipSubmittedProductInSameClue } : {}),

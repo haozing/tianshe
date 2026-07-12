@@ -101,7 +101,7 @@ export const secondaryModules: BusinessModule[] = [
     route: "/opportunities/product-prematch",
     summary: "先同步商品和商机，生成商品与商机词匹配池后再提报。",
     status: "壳已就绪",
-    metrics: [["可提报候选", "0"], ["今日剩余额度", "1000"], ["已尝试", "0"]],
+    metrics: [["可提报候选", "0"], ["待匹配商品", "0"], ["提报记录", "0"]],
     actions: ["同步商品", "生成预匹配", "执行提报"]
   },
   {

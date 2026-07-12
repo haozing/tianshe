@@ -274,9 +274,6 @@ export function OpportunityProductPrematchPage() {
   const [skipSubmittedClueCategory, setSkipSubmittedClueCategory] = useState(false);
   const [skipSubmittedClue, setSkipSubmittedClue] = useState(false);
   const [skipSubmittedProductInSameClue, setSkipSubmittedProductInSameClue] = useState(true);
-  const [dailyAttemptLimit, setDailyAttemptLimit] = useState(1000);
-  const [dailyAttemptUsed, setDailyAttemptUsed] = useState(0);
-  const [dailyAttemptRemaining, setDailyAttemptRemaining] = useState(1000);
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState("等待操作");
   const [loading, setLoading] = useState<"" | "stores" | "latest" | "products" | "clues" | "match" | "submit">("");
@@ -321,15 +318,14 @@ export function OpportunityProductPrematchPage() {
       `${new Date().toLocaleString("zh-CN", { hour12: false })} --- ${message}`,
       productRunId ? `商品快照：${productRunId}` : "商品快照：未同步",
       clueRunId ? `商机快照：${clueRunId}` : "商机快照：未扫描",
-      matchRunId ? `预匹配批次：${matchRunId}` : "预匹配批次：未生成",
-      `今日额度：${formatNumber(dailyAttemptUsed)} / ${formatNumber(dailyAttemptLimit)}，剩余 ${formatNumber(dailyAttemptRemaining)}`
+      matchRunId ? `预匹配批次：${matchRunId}` : "预匹配批次：未生成"
     ];
     for (const item of executions.slice(0, 40)) {
       const name = item.title || item.clueName || item.productId || item.clueId || item.id;
       lines.push(`${item.ok ? "成功" : "失败"} | ${item.shopName || "--"} | ${name} | ${item.message}`);
     }
     return lines;
-  }, [clueRunId, dailyAttemptLimit, dailyAttemptRemaining, dailyAttemptUsed, executions, matchRunId, message, productRunId]);
+  }, [clueRunId, executions, matchRunId, message, productRunId]);
 
   useEffect(() => {
     void refreshStores();
@@ -359,8 +355,6 @@ export function OpportunityProductPrematchPage() {
       setProductRunId(result.productRunId || "");
       setClueRunId(result.clueRunId || "");
       setMatchRunId(result.matchRunId || "");
-      setDailyAttemptUsed(Number(result.dailyAttemptUsed || 0));
-      setDailyAttemptRemaining(Number(result.dailyAttemptRemaining ?? dailyAttemptLimit));
       setMessage(result.message || "已恢复最近数据");
       const ready = (result.prematches || []).filter((item) => item.eligible && item.status === "ready").map((item) => item.id);
       setSelectedCandidateIds(new Set(ready));
@@ -479,7 +473,6 @@ export function OpportunityProductPrematchPage() {
         productRunId,
         clueRunId,
         matchMode,
-        dailyAttemptLimit,
         skipSubmittedClueCategory,
         skipSubmittedClue,
         skipSubmittedProductInSameClue,
@@ -488,8 +481,6 @@ export function OpportunityProductPrematchPage() {
       const next = result.prematches || [];
       setCandidates(next);
       setMatchRunId(result.matchRunId || result.runId || "");
-      setDailyAttemptUsed(Number(result.dailyAttemptUsed || 0));
-      setDailyAttemptRemaining(Number(result.dailyAttemptRemaining ?? Math.max(0, dailyAttemptLimit - Number(result.dailyAttemptUsed || 0))));
       setSelectedCandidateIds(new Set(next.filter((item) => item.eligible && item.status === "ready").map((item) => item.id)));
       setMessage(result.message || "预匹配完成");
     } catch (error) {
@@ -522,7 +513,6 @@ export function OpportunityProductPrematchPage() {
         submitMode: defaultSubmitMode,
         titleMatchMode: defaultTitleMatchMode,
         titleUpdatePosition: defaultTitleUpdatePosition,
-        dailyAttemptLimit,
         skipSubmittedClueCategory,
         skipSubmittedClue,
         skipSubmittedProductInSameClue,
@@ -531,8 +521,6 @@ export function OpportunityProductPrematchPage() {
       const updated = new Map((result.prematches || []).map((item) => [item.id, item]));
       setCandidates((current) => current.map((item) => updated.get(item.id) || item));
       setExecutions(result.executions || []);
-      setDailyAttemptUsed(Number(result.dailyAttemptUsed || dailyAttemptUsed));
-      setDailyAttemptRemaining(Number(result.dailyAttemptRemaining ?? dailyAttemptRemaining));
       setSelectedCandidateIds(new Set());
       setMessage(result.message || "预匹配提报完成");
     } catch (error) {
@@ -545,13 +533,11 @@ export function OpportunityProductPrematchPage() {
 
   return (
     <section className="flex h-full min-h-0 flex-col gap-3 text-[#101828]" data-business-slot="ready">
-      <div className="grid grid-cols-6 gap-3 max-[1280px]:grid-cols-3 max-[720px]:grid-cols-1">
+      <div className="grid grid-cols-4 gap-3 max-[1280px]:grid-cols-2 max-[720px]:grid-cols-1">
         <Metric label="同步商品数" value={formatNumber(products.length)} detail={`${selectedShopIds.size} 家店铺`} tone="blue" />
         <Metric label="扫描商机数" value={formatNumber(clues.length)} detail={activeRank.split(",")[1] || "MATCH"} />
         <Metric label="可提报候选数" value={formatNumber(eligibleCandidates.length)} detail={matchMode === "precise" ? "精准模式" : "宽松模式"} tone="green" />
         <Metric label="已选提报数" value={formatNumber(selectedCandidates.length)} detail={`预计 ${formatNumber(estimatedCost)} 次`} />
-        <Metric label="今日已尝试" value={formatNumber(dailyAttemptUsed)} detail={`上限 ${formatNumber(dailyAttemptLimit)}`} tone="warn" />
-        <Metric label="今日剩余" value={formatNumber(dailyAttemptRemaining)} detail="本地尝试台账" tone="green" />
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto pr-1 max-[760px]:overflow-visible max-[760px]:pr-0">
@@ -646,13 +632,9 @@ export function OpportunityProductPrematchPage() {
 
               <div className="grid gap-3 rounded-md border border-[#edf1f6] bg-white p-3">
                 <strong className="text-[14px] text-brand-navy">2. 筛选规则</strong>
-                <div className="grid grid-cols-[150px_150px_minmax(0,1fr)] gap-3 max-[1180px]:grid-cols-2 max-[760px]:grid-cols-1">
+                <div className="grid grid-cols-[150px_150px] gap-3 max-[760px]:grid-cols-1">
                   <SelectField label="店铺类目" value="all" options={[{ value: "all", label: "全部-0" }]} onChange={() => undefined} />
                   <SelectField label="上新时间" value={recentlyDayType} options={recentlyOptions} onChange={setRecentlyDayType} />
-                  <label className="grid gap-1.5">
-                    <span className="text-[13px] font-semibold text-[#475467]">今日提报上限</span>
-                    <input className="h-9 rounded-md border border-[#dbe5f2] px-2.5 text-[13px] font-semibold text-[#1d2939] outline-none focus:border-brand-fox" min={1} max={10000} type="number" value={dailyAttemptLimit} onChange={(event) => setDailyAttemptLimit(Math.max(1, Number(event.target.value || 1)))} />
-                  </label>
                 </div>
                 <div className="grid gap-2">
                   <span className="text-[13px] font-semibold text-[#475467]">匹配模式</span>
