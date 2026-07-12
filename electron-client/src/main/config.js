@@ -4,7 +4,23 @@ const { app } = require("electron");
 const ROOT = path.resolve(__dirname, "../..");
 const SRC_ROOT = path.join(ROOT, "src");
 
-const APP_NAME = "赤狐管家";
+function readPackageMetadata() {
+  try {
+    return require(path.join(ROOT, "package.json"));
+  } catch {
+    return {};
+  }
+}
+
+const packageMetadata = readPackageMetadata();
+const DEFAULT_RELEASE_CHANNEL =
+  process.env.CHIHU_RELEASE_CHANNEL ||
+  packageMetadata.chihuReleaseChannel ||
+  "stable";
+const APP_NAME =
+  process.env.CHIHU_APP_NAME ||
+  packageMetadata.productName ||
+  (DEFAULT_RELEASE_CHANNEL === "beta" ? "赤狐管家内测" : "赤狐管家");
 const APP_TITLE = `${APP_NAME} V${app.getVersion()}`;
 const DEFAULT_PARTITION = "persist:chihu-default";
 const APP_WINDOW = {
@@ -16,11 +32,13 @@ const APP_WINDOW = {
 };
 
 const DEFAULT_REMOTE_WEB_URL = "http://chihu.facaishe.cn/remote-web/current/new-remote-web/index.html";
+const BETA_REMOTE_WEB_URL = "http://chihu.facaishe.cn/remote-web/beta/new-remote-web/index.html";
+const DEFAULT_UPDATE_CHANNEL = process.env.CHIHU_UPDATE_CHANNEL || (DEFAULT_RELEASE_CHANNEL === "beta" ? "beta" : "latest");
 
 const HOME_INDEX_URL =
   process.env.CHIHU_HOME_URL ||
   process.env.CHIHU_REMOTE_WEB_URL ||
-  DEFAULT_REMOTE_WEB_URL;
+  (DEFAULT_RELEASE_CHANNEL === "beta" ? BETA_REMOTE_WEB_URL : DEFAULT_REMOTE_WEB_URL);
 
 const HOME_PRELOAD = path.join(SRC_ROOT, "preload", "index.js");
 const ICON_PATH = path.join(ROOT, "assets", "icon-chihu.png");
@@ -35,5 +53,8 @@ module.exports = {
   HOME_INDEX_URL,
   HOME_PRELOAD,
   ICON_PATH,
-  DEFAULT_REMOTE_WEB_URL
+  DEFAULT_REMOTE_WEB_URL,
+  BETA_REMOTE_WEB_URL,
+  DEFAULT_RELEASE_CHANNEL,
+  DEFAULT_UPDATE_CHANNEL
 };

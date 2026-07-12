@@ -722,6 +722,562 @@ function installSmokeCheck(win) {
             return;
           }
 
+          if (result.scenario === "sqlite") {
+            const sqlite = {
+              attempted: false,
+              exposedOk: false,
+              healthOk: false,
+              quickCheckOk: false,
+              backupOk: false,
+              schemaOk: false,
+              recordApiOk: false,
+              featureApiOk: false,
+              storeIdentityOk: false,
+              coverageKeyOk: false,
+              jobAcquireOk: false,
+              jobReuseOk: false,
+              pageCommitOk: false,
+              pageReplayOk: false,
+              jobHeartbeatOk: false,
+              finishOk: false,
+              headReadOk: false,
+              latestReadOk: false,
+              byIdReadOk: false,
+              liveObservationOk: false,
+              mutationRecordOk: false,
+              mutationConfirmOk: false,
+              supersedeOk: false,
+              oldOwnerRejectedOk: false,
+              recoveryOk: false,
+              recoveredOwnerRejectedOk: false,
+              tombstoneOk: false,
+              steps: [],
+              errors: []
+            };
+
+            const nativeData = window.nativeData || (window.chihuNative && window.chihuNative.nativeData);
+            if (hasShell && hasClient && methodCount >= 33 && nativeData) {
+              sqlite.attempted = true;
+              sqlite.exposedOk = !!nativeData.maintenance && !!nativeData.catalogJobs && !!nativeData.catalog;
+              const suffix = Date.now() + "_" + Math.random().toString(16).slice(2).replace(/[^a-z0-9_]/gi, "");
+              const tenantId = "tenant-smoke-" + suffix;
+              const shopId = "shop-smoke-" + suffix;
+              let coverageKey = "";
+
+              try {
+                sqlite.steps.push("getHealth");
+                const health = await withTimeout("nativeDataHealth", nativeData.maintenance.getHealth(), 12000);
+                sqlite.healthOk = !!health && health.ok === true &&
+                  health.schemaVersion === 1 &&
+                  Number(health.userVersion) === 1 &&
+                  typeof health.sqliteVersion === "string" &&
+                  health.sqliteVersion.length > 0 &&
+                  typeof health.databasePath === "string" &&
+                  health.databasePath.includes("chihu-business.sqlite3") &&
+                  String(health.journalMode).toLowerCase() === "wal" &&
+                  Number(health.foreignKeys) === 1;
+
+                sqlite.steps.push("quickCheck");
+                const quick = await withTimeout("nativeDataQuickCheck", nativeData.maintenance.quickCheck(), 8000);
+                sqlite.quickCheckOk = !!quick && quick.ok === true && Array.isArray(quick.foreignKeyViolations) && quick.foreignKeyViolations.length === 0;
+
+                sqlite.steps.push("listTables");
+                const tables = await withTimeout("nativeDataListTables", nativeData.maintenance.listTables(), 5000);
+                sqlite.schemaOk = Array.isArray(tables) &&
+                  tables.includes("native_records") &&
+                  tables.includes("catalog_jobs") &&
+                  tables.includes("catalog_runs") &&
+                  tables.includes("catalog_latest_fields") &&
+                  tables.includes("opportunity_submit_attempts_v2");
+
+                sqlite.steps.push("createBackup");
+                const backup = await withTimeout("nativeDataCreateBackup", nativeData.maintenance.createBackup({ reason: "sqlite-smoke" }), 12000);
+                sqlite.backupOk = !!backup && backup.ok === true && typeof backup.backupPath === "string" && Number(backup.sizeBytes) > 0;
+
+                sqlite.steps.push("recordsApi");
+                const recordId = "record-smoke-" + suffix;
+                const putRecord = await withTimeout("nativeDataRecordPut", nativeData.records.put({
+                  storeName: "runtime_meta",
+                  record: { id: recordId, kind: "sqlite-smoke", updatedAt: new Date().toISOString() }
+                }), 5000);
+                const gotRecord = await withTimeout("nativeDataRecordGet", nativeData.records.get({ storeName: "runtime_meta", id: recordId }), 5000);
+                const listedRecords = await withTimeout("nativeDataRecordList", nativeData.records.list({ storeName: "runtime_meta", limit: 5 }), 5000);
+                const deletedRecord = await withTimeout("nativeDataRecordDelete", nativeData.records.delete({ storeName: "runtime_meta", id: recordId }), 5000);
+                sqlite.recordApiOk = !!putRecord && putRecord.ok === true && gotRecord?.id === recordId && Array.isArray(listedRecords.items) && deletedRecord?.ok === true;
+
+                sqlite.steps.push("largeRecordApi");
+                const largeRecordId = "large-record-smoke-" + suffix;
+                const largePayload = "x".repeat(6 * 1024 * 1024);
+                const putLargeRecord = await withTimeout("nativeDataLargeRecordPut", nativeData.records.put({
+                  storeName: "runtime_meta",
+                  record: { id: largeRecordId, kind: "sqlite-large-record-smoke", payload: largePayload, updatedAt: new Date().toISOString() }
+                }), 20000);
+                const gotLargeRecord = await withTimeout("nativeDataLargeRecordGet", nativeData.records.get({ storeName: "runtime_meta", id: largeRecordId }), 20000);
+                const deletedLargeRecord = await withTimeout("nativeDataLargeRecordDelete", nativeData.records.delete({ storeName: "runtime_meta", id: largeRecordId }), 10000);
+                sqlite.largeRecordApiOk = !!putLargeRecord &&
+                  putLargeRecord.ok === true &&
+                  putLargeRecord.largePayload === true &&
+                  Number(putLargeRecord.payloadBytes) > 6 * 1024 * 1024 &&
+                  gotLargeRecord?.id === largeRecordId &&
+                  gotLargeRecord?.payload?.length === largePayload.length &&
+                  deletedLargeRecord?.ok === true;
+
+                sqlite.steps.push("featureApi");
+                const staleRunId = "feature-smoke-run-" + suffix;
+                const staleCandidateId = "feature-smoke-candidate-" + suffix;
+                await withTimeout("nativeDataFeatureSaveStaleRun", nativeData.features.saveStaleRun({
+                  mode: "scan",
+                  record: { id: staleRunId, runId: staleRunId, status: "ok", updatedAt: new Date().toISOString() }
+                }), 5000);
+                await withTimeout("nativeDataFeatureCandidatePut", nativeData.records.put({
+                  storeName: "stale_candidates",
+                  record: { id: staleCandidateId, candidateId: staleCandidateId, sourceRunId: staleRunId, shopId, productId: "feature-product-1" }
+                }), 5000);
+                const featureCandidates = await withTimeout("nativeDataFeatureLoadStaleCandidates", nativeData.features.loadStaleCandidates({ sourceRunId: staleRunId, candidateIds: [staleCandidateId] }), 5000);
+                sqlite.featureApiOk = Array.isArray(featureCandidates) && featureCandidates.length === 1 && featureCandidates[0].id === staleCandidateId;
+
+                sqlite.steps.push("upsertIdentity");
+                const identity = await withTimeout("nativeDataStoreIdentity", nativeData.stores.upsertIdentity({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  identityContractVersion: "smoke-v1",
+                  namespace: { scenario: "sqlite" }
+                }), 5000);
+                sqlite.storeIdentityOk = !!identity && identity.ok === true && identity.tenantId === tenantId && identity.shopId === shopId;
+
+                sqlite.steps.push("acquireJob");
+                const job = await withTimeout("nativeDataAcquireJob", nativeData.catalogJobs.acquire({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  profile: "sqlite-smoke",
+                  queryKind: "range",
+                  scope: { lifecycleStatuses: ["selling", "selling"], productIds: ["10002", "10001"], checkStatuses: [] },
+                  readRequirement: { requiredFields: ["productId", "title"] },
+                  completeness: "prefer-exhausted",
+                  reason: "sqlite-smoke",
+                  catalogContractHash: "sqlite-smoke-contract-v1"
+                }), 5000);
+                coverageKey = job && job.activeCoverageKey;
+                sqlite.coverageKeyOk = typeof coverageKey === "string" &&
+                  coverageKey.startsWith("doudian::" + tenantId + "::" + shopId + "::1::range::") &&
+                  coverageKey.endsWith("::sqlite-smoke-contract-v1") &&
+                  Array.isArray(job.scope?.productIds) &&
+                  job.scope.productIds.join(",") === "10001,10002" &&
+                  !("checkStatuses" in job.scope);
+                sqlite.jobAcquireOk = !!job && typeof job.jobId === "string" && sqlite.coverageKeyOk && Number(job.jobGeneration) === 1;
+
+                sqlite.steps.push("reuseActiveJob");
+                const reused = await withTimeout("nativeDataReuseActiveJob", nativeData.catalogJobs.acquire({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  profile: "sqlite-smoke",
+                  queryKind: "range",
+                  scope: { productIds: ["10001", "10002"], lifecycleStatuses: ["selling"] },
+                  readRequirement: { requiredFields: ["productId", "title"] },
+                  completeness: "prefer-exhausted",
+                  reason: "sqlite-smoke-reuse",
+                  catalogContractHash: "sqlite-smoke-contract-v1"
+                }), 5000);
+                sqlite.jobReuseOk = !!reused && reused.reused === true && reused.jobId === job.jobId && reused.runId === job.runId;
+
+                const commitToken = "commit-smoke-" + suffix;
+                const requestStartedAt = new Date(Date.now() - 1000).toISOString();
+                const observedAt = new Date().toISOString();
+                const products = [
+                  {
+                    productId: "10001",
+                    title: "Smoke Product A",
+                    imageUrl: "https://example.test/a.jpg",
+                    categoryId: "cat-a",
+                    categoryName: "Smoke Category",
+                    lifecycleStatus: "selling",
+                    priceMinMinor: "1299",
+                    priceMaxMinor: "1599",
+                    currency: "CNY",
+                    stock: 8,
+                    totalSales: 21,
+                    listedAt: "2026-07-10T00:00:00.000Z",
+                    fieldState: {
+                      title: { state: "present", sourcePath: "title" },
+                      lifecycleStatus: { state: "present", sourcePath: "status" },
+                      stock: { state: "present", sourcePath: "stock" },
+                      totalSales: { state: "present", sourcePath: "totalSales" },
+                      listedAt: { state: "present", sourcePath: "listedAt" }
+                    }
+                  },
+                  {
+                    productId: "10002",
+                    title: "Smoke Product B",
+                    categoryId: "cat-b",
+                    categoryName: "Smoke Category",
+                    lifecycleStatus: "offline",
+                    priceMinMinor: "999",
+                    priceMaxMinor: "999",
+                    currency: "CNY",
+                    stock: 0,
+                    totalSales: 3,
+                    listedAt: "2026-07-09T00:00:00.000Z",
+                    fieldState: {
+                      title: { state: "present", sourcePath: "title" },
+                      lifecycleStatus: { state: "present", sourcePath: "status" },
+                      stock: { state: "present", sourcePath: "stock" },
+                      totalSales: { state: "present", sourcePath: "totalSales" },
+                      listedAt: { state: "present", sourcePath: "listedAt" }
+                    }
+                  }
+                ];
+
+                sqlite.steps.push("reportPage");
+                const pageCommit = await withTimeout("nativeDataReportPage", nativeData.catalogJobs.reportPage({
+                  jobId: job.jobId,
+                  runId: job.runId,
+                  jobGeneration: job.jobGeneration,
+                  ownerEpoch: job.ownerEpoch,
+                  commitToken,
+                  segmentIndex: 0,
+                  pageNo: 1,
+                  sourceRequestKey: "sqlite-smoke-page-1",
+                  requestStartedAt,
+                  observedAt,
+                  requestFingerprint: "sqlite-smoke-fingerprint",
+                  remoteTotal: 2,
+                  elapsedMs: 12,
+                  products
+                }), 8000);
+                sqlite.pageCommitOk = !!pageCommit && pageCommit.ok === true && pageCommit.firstCommit === true && pageCommit.committedCount === 2 && pageCommit.runId === job.runId;
+
+                sqlite.steps.push("replayPage");
+                const pageReplay = await withTimeout("nativeDataReplayPage", nativeData.catalogJobs.reportPage({
+                  jobId: job.jobId,
+                  runId: job.runId,
+                  jobGeneration: job.jobGeneration,
+                  ownerEpoch: job.ownerEpoch,
+                  commitToken,
+                  segmentIndex: 0,
+                  pageNo: 1,
+                  sourceRequestKey: "sqlite-smoke-page-1",
+                  requestStartedAt,
+                  observedAt,
+                  remoteTotal: 2,
+                  products
+                }), 8000);
+                sqlite.pageReplayOk = !!pageReplay && pageReplay.ok === true && pageReplay.firstCommit === false && pageReplay.committedCount === 2 && pageReplay.transactionId === pageCommit.transactionId;
+
+                sqlite.steps.push("heartbeatJob");
+                const heartbeat = await withTimeout("nativeDataHeartbeatJob", nativeData.catalogJobs.heartbeat({
+                  jobId: job.jobId,
+                  jobGeneration: job.jobGeneration,
+                  ownerEpoch: job.ownerEpoch
+                }), 5000);
+                sqlite.jobHeartbeatOk = !!heartbeat && heartbeat.ok === true && typeof heartbeat.heartbeatAt === "string";
+
+                sqlite.steps.push("finishJob");
+                const finish = await withTimeout("nativeDataFinishJob", nativeData.catalogJobs.finish({
+                  jobId: job.jobId,
+                  runId: job.runId,
+                  jobGeneration: job.jobGeneration,
+                  ownerEpoch: job.ownerEpoch,
+                  status: "exhausted",
+                  terminationReason: "has-more-false"
+                }), 8000);
+                sqlite.finishOk = !!finish && finish.ok === true && finish.status === "exhausted" && finish.headChanged === 1;
+
+                sqlite.steps.push("headMembers");
+                const headPage = await withTimeout("nativeDataHeadMembers", nativeData.catalog.queryHeadMembersPage({ coverageKey, limit: 10 }), 5000);
+                sqlite.headReadOk = !!headPage && Array.isArray(headPage.items) && headPage.items.length === 2 && headPage.hasMore === false &&
+                  headPage.items.some((item) => item.productId === "10001" && item.mergedFields && item.mergedFields.title === "Smoke Product A");
+
+                sqlite.steps.push("latestPage");
+                const latestPage = await withTimeout("nativeDataLatestPage", nativeData.catalog.queryLastObservedPage({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  limit: 10
+                }), 5000);
+                sqlite.latestReadOk = !!latestPage && Array.isArray(latestPage.items) && latestPage.items.length === 2 &&
+                  latestPage.items.every((item) => item.latestObservationId && item.latestObservedProductVersionId && item.mergedFields && item.mergedFields.title);
+
+                sqlite.steps.push("productsByIds");
+                const byIds = await withTimeout("nativeDataProductsByIds", nativeData.catalog.getProductsByIds({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  productIds: ["10001", "10002"]
+                }), 5000);
+                sqlite.byIdReadOk = Array.isArray(byIds) && byIds.length === 2 &&
+                  byIds.some((item) => item.productId === "10002" && item.mergedFields.lifecycleStatus === "offline");
+
+                sqlite.steps.push("recordLiveObservations");
+                const liveRecord = await withTimeout("nativeDataRecordLiveObservations", nativeData.catalog.recordLiveObservations({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  profile: "sqlite-smoke-live",
+                  purpose: "sqlite-smoke-live-lookup",
+                  catalogContractHash: "sqlite-smoke-live-contract-v1",
+                  products: [{
+                    productId: "10001",
+                    lifecycleStatus: "offline",
+                    stock: 7,
+                    fieldState: {
+                      title: { state: "missing", sourcePath: "title" },
+                      lifecycleStatus: { state: "present", sourcePath: "status" },
+                      stock: { state: "present", sourcePath: "stock" }
+                    }
+                  }]
+                }), 8000);
+                const liveLatest = await withTimeout("nativeDataLiveLatest", nativeData.catalog.getProductsByIds({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  productIds: ["10001"]
+                }), 5000);
+                sqlite.liveObservationOk = !!liveRecord &&
+                  liveRecord.ok === true &&
+                  liveRecord.committedCount === 1 &&
+                  Array.isArray(liveRecord.observations) &&
+                  liveRecord.observations.length === 1 &&
+                  Array.isArray(liveLatest) &&
+                  liveLatest[0]?.mergedFields?.title === "Smoke Product A" &&
+                  liveLatest[0]?.mergedFields?.lifecycleStatus === "offline" &&
+                  liveLatest[0]?.mergedFields?.stock === 7;
+
+                sqlite.steps.push("recordMutationResults");
+                const mutationKey = "mutation-smoke-" + suffix;
+                const mutationRecord = await withTimeout("nativeDataRecordMutationResults", nativeData.catalog.recordMutationResults({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  mutations: [{
+                    mutationKey,
+                    productId: "10001",
+                    action: "offline",
+                    status: "acknowledged",
+                    requestHash: "request-hash-" + suffix,
+                    idempotencyKey: "idempotency-" + suffix,
+                    lookupObservationId: liveRecord.observations[0].observationId,
+                    result: { scenario: "sqlite-smoke", acknowledged: true }
+                  }]
+                }), 8000);
+                sqlite.mutationRecordOk = !!mutationRecord &&
+                  mutationRecord.ok === true &&
+                  mutationRecord.changed === 1 &&
+                  mutationRecord.mutations?.[0]?.mutationKey === mutationKey &&
+                  mutationRecord.mutations?.[0]?.status === "acknowledged";
+
+                sqlite.steps.push("confirmMutations");
+                const mutationConfirm = await withTimeout("nativeDataConfirmMutations", nativeData.catalog.confirmMutations({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  profile: "sqlite-smoke-confirm",
+                  catalogContractHash: "sqlite-smoke-confirm-contract-v1",
+                  confirmations: [{
+                    mutationKey,
+                    status: "confirmed",
+                    observation: {
+                      productId: "10001",
+                      lifecycleStatus: "offline",
+                      fieldState: {
+                        title: { state: "missing", sourcePath: "title" },
+                        lifecycleStatus: { state: "present", sourcePath: "status" }
+                      }
+                    },
+                    result: { confirmed: true }
+                  }]
+                }), 8000);
+                sqlite.mutationConfirmOk = !!mutationConfirm &&
+                  mutationConfirm.ok === true &&
+                  mutationConfirm.changed === 1 &&
+                  mutationConfirm.confirmations?.[0]?.status === "confirmed" &&
+                  typeof mutationConfirm.confirmations?.[0]?.confirmObservationId === "string";
+
+                sqlite.steps.push("forceRefreshSupersede");
+                const oldOwner = await withTimeout("nativeDataSupersedeOldOwner", nativeData.catalogJobs.acquire({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  profile: "sqlite-smoke",
+                  queryKind: "range",
+                  scope: { lifecycleStatuses: ["selling"], keyword: "supersede" },
+                  readRequirement: { requiredFields: ["productId", "title"] },
+                  completeness: "prefer-exhausted",
+                  reason: "sqlite-smoke-supersede",
+                  catalogContractHash: "sqlite-smoke-contract-v1"
+                }), 5000);
+                const newOwner = await withTimeout("nativeDataSupersedeNewOwner", nativeData.catalogJobs.acquire({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  profile: "sqlite-smoke",
+                  queryKind: "range",
+                  scope: { lifecycleStatuses: ["selling"], keyword: "supersede" },
+                  readRequirement: { requiredFields: ["productId", "title"] },
+                  completeness: "force-refresh",
+                  reason: "sqlite-smoke-force-refresh",
+                  catalogContractHash: "sqlite-smoke-contract-v1"
+                }), 5000);
+                const oldState = await withTimeout("nativeDataSupersededOldState", nativeData.catalogJobs.get({ jobId: oldOwner.jobId }), 5000);
+                sqlite.supersedeOk = !!newOwner && !!oldState && newOwner.activeCoverageKey === oldOwner.activeCoverageKey && newOwner.jobId !== oldOwner.jobId && Number(newOwner.jobGeneration) === Number(oldOwner.jobGeneration) + 1 && oldState.status === "superseded" && oldState.runStatus === "superseded";
+                let oldHeartbeatRejected = false;
+                let oldPageRejected = false;
+                try {
+                  await withTimeout("nativeDataOldHeartbeatRejected", nativeData.catalogJobs.heartbeat({
+                    jobId: oldOwner.jobId,
+                    jobGeneration: oldOwner.jobGeneration,
+                    ownerEpoch: oldOwner.ownerEpoch
+                  }), 5000);
+                } catch {
+                  oldHeartbeatRejected = true;
+                }
+                try {
+                  await withTimeout("nativeDataOldReportRejected", nativeData.catalogJobs.reportPage({
+                    jobId: oldOwner.jobId,
+                    runId: oldOwner.runId,
+                    jobGeneration: oldOwner.jobGeneration,
+                    ownerEpoch: oldOwner.ownerEpoch,
+                    commitToken: "old-owner-commit-" + suffix,
+                    sourceRequestKey: "old-owner-page",
+                    products: [products[0]]
+                  }), 5000);
+                } catch {
+                  oldPageRejected = true;
+                }
+                sqlite.oldOwnerRejectedOk = oldHeartbeatRejected && oldPageRejected;
+
+                sqlite.steps.push("recoverOpenJobs");
+                const recoverOwner = await withTimeout("nativeDataRecoverOwner", nativeData.catalogJobs.acquire({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  profile: "sqlite-smoke",
+                  queryKind: "range",
+                  scope: { lifecycleStatuses: ["selling"], keyword: "recover" },
+                  readRequirement: { requiredFields: ["productId", "title"] },
+                  completeness: "prefer-exhausted",
+                  reason: "sqlite-smoke-recover",
+                  catalogContractHash: "sqlite-smoke-contract-v1"
+                }), 5000);
+                const recovery = await withTimeout("nativeDataRecoverOpenJobs", nativeData.maintenance.recoverOpenJobs({ reason: "sqlite-smoke" }), 8000);
+                const recoveredState = await withTimeout("nativeDataRecoveredState", nativeData.catalogJobs.get({ jobId: recoverOwner.jobId }), 5000);
+                sqlite.recoveryOk = !!recovery && recovery.ok === true && Number(recovery.abandonedJobs) >= 1 && !!recoveredState && recoveredState.status === "abandoned" && recoveredState.runStatus === "abandoned";
+                try {
+                  await withTimeout("nativeDataRecoveredHeartbeatRejected", nativeData.catalogJobs.heartbeat({
+                    jobId: recoverOwner.jobId,
+                    jobGeneration: recoverOwner.jobGeneration,
+                    ownerEpoch: recoverOwner.ownerEpoch
+                  }), 5000);
+                } catch {
+                  sqlite.recoveredOwnerRejectedOk = true;
+                }
+
+                sqlite.steps.push("tombstoneIdentity");
+                const tombstone = await withTimeout("nativeDataTombstoneIdentity", nativeData.stores.tombstoneIdentity({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  reason: "sqlite-smoke-tombstone"
+                }), 8000);
+                const afterTombstoneLatest = await withTimeout("nativeDataAfterTombstoneLatest", nativeData.catalog.queryLastObservedPage({
+                  platform: "doudian",
+                  tenantId,
+                  shopId,
+                  storeGeneration: 1,
+                  limit: 10
+                }), 5000);
+                let acquireRejectedAfterTombstone = false;
+                let upsertRejectedAfterTombstone = false;
+                try {
+                  await withTimeout("nativeDataAcquireAfterTombstone", nativeData.catalogJobs.acquire({
+                    platform: "doudian",
+                    tenantId,
+                    shopId,
+                    storeGeneration: 1,
+                    profile: "sqlite-smoke-after-tombstone",
+                    queryKind: "range",
+                    scope: { lifecycleStatuses: ["selling"] },
+                    readRequirement: { requiredFields: ["productId"] },
+                    completeness: "prefer-exhausted",
+                    reason: "sqlite-smoke-after-tombstone",
+                    catalogContractHash: "sqlite-smoke-contract-v1"
+                  }), 5000);
+                } catch {
+                  acquireRejectedAfterTombstone = true;
+                }
+                try {
+                  await withTimeout("nativeDataUpsertAfterTombstone", nativeData.stores.upsertIdentity({
+                    platform: "doudian",
+                    tenantId,
+                    shopId,
+                    storeGeneration: 1,
+                    identityContractVersion: "smoke-v1",
+                    namespace: { scenario: "sqlite-after-tombstone" }
+                  }), 5000);
+                } catch {
+                  upsertRejectedAfterTombstone = true;
+                }
+                sqlite.tombstoneOk = !!tombstone &&
+                  tombstone.ok === true &&
+                  tombstone.changed === 1 &&
+                  tombstone.nextGeneration === 2 &&
+                  Array.isArray(afterTombstoneLatest.items) &&
+                  afterTombstoneLatest.items.length === 0 &&
+                  afterTombstoneLatest.storeLifecycle === "tombstoned" &&
+                  acquireRejectedAfterTombstone &&
+                  upsertRejectedAfterTombstone;
+              } catch (error) {
+                sqlite.errors.push(error && error.message ? error.message : String(error));
+              }
+            }
+
+            result.sqliteOk = sqlite.exposedOk &&
+              sqlite.healthOk &&
+              sqlite.quickCheckOk &&
+              sqlite.backupOk &&
+              sqlite.schemaOk &&
+              sqlite.recordApiOk &&
+              sqlite.largeRecordApiOk &&
+              sqlite.featureApiOk &&
+              sqlite.storeIdentityOk &&
+              sqlite.coverageKeyOk &&
+              sqlite.jobAcquireOk &&
+              sqlite.jobReuseOk &&
+              sqlite.pageCommitOk &&
+              sqlite.pageReplayOk &&
+              sqlite.jobHeartbeatOk &&
+              sqlite.finishOk &&
+              sqlite.headReadOk &&
+              sqlite.latestReadOk &&
+              sqlite.byIdReadOk &&
+              sqlite.liveObservationOk &&
+              sqlite.mutationRecordOk &&
+              sqlite.mutationConfirmOk &&
+              sqlite.supersedeOk &&
+              sqlite.oldOwnerRejectedOk &&
+              sqlite.recoveryOk &&
+              sqlite.recoveredOwnerRejectedOk &&
+              sqlite.tombstoneOk;
+            result.sqlite = sqlite;
+            resolve(result);
+            return;
+          }
+
           const bridge = {
             attempted: false,
             appInfoOk: false,
@@ -1082,6 +1638,7 @@ function installSmokeCheck(win) {
         scenario === "logs" ? result.logsOk :
         scenario === "ui-contract" ? result.uiContractOk :
         scenario === "maintenance" ? result.maintenanceOk :
+        scenario === "sqlite" ? result.sqliteOk :
         result.bridgeOk;
       const ok = result.hasShell && result.hasClient && result.methodCount >= 33 && scenarioOk;
       if (ok) {

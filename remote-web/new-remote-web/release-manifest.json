@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "releaseId": "2026.07.04.client-shell",
-  "buildTime": "2026-07-10T08:53:07.483Z",
+  "buildTime": "2026-07-04T00:00:00+08:00",
   "entry": {
-    "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
+    "remoteWebOrigin": "NEW_REMOTE_WEB_ORIGIN_PROD"
   },
   "cachePolicy": {
     "html": "no-cache",
@@ -22,84 +22,81 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "d10cd8417e779981ae1bdf42684747bc7200544fdb87f51006ad4a16ed3b102e"
+      "sha256": "5e7868790f80fab35bbbd1aa94b43763053be7f8e62ccc686471b248b0d2333a"
     },
     {
       "path": "new-remote-web/bridge.js",
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "1b5c0c9c919d94e76bf96bb32b1fb3879f0733d1b86b977adbdc8f593cf4ceb1"
+      "sha256": "95ba251bcbc510f25ca8d12d45cb3d71a6114ade724f627b28468455a5c3c7c0"
     },
     {
       "path": "new-remote-web/app.js",
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "800bc46f7dd27ee450ff452277ce27ab3b5412486d8ca2ebef15e9a324b2626c"
+      "sha256": "f9ede0eaea3eb0950319d942b410632c90be119db4218fe231bda4d808c48191"
     },
     {
       "path": "new-remote-web/styles.css",
       "type": "remote-css",
       "cache": "short",
       "required": true,
-      "sha256": "0969cf576ef25aa1a1dbaad3e822c46808adbc3b04219469237c954f6fd9fd24"
+      "sha256": "8068f0c5bcf70a6b9b6f5d425b6c199468f6e9b11d018e701b9648a7facffd63"
     },
     {
       "path": "new-remote-web/assets/chihu-app-icon.png",
       "type": "remote-asset",
       "cache": "immutable-after-hash-build",
       "required": true,
-      "sha256": "037595b78fd84a72393bcb254af11349bb07ac248654dfccfe1d20860753298b"
+      "sha256": "b427e8958c66fff52ec4f33c1076ac86dd3d73f00cfad7567fd524f7b4b41cab"
     },
     {
       "path": "new-remote-web/assets/chihu-logo-horizontal.png",
       "type": "remote-asset",
       "cache": "immutable-after-hash-build",
       "required": true,
-      "sha256": "b83cf3e72c85ccf7a60ef65a8e941c790478288a1601d540f42c65031c6edd30"
+      "sha256": "b427e8958c66fff52ec4f33c1076ac86dd3d73f00cfad7567fd524f7b4b41cab"
     },
     {
       "path": "new-remote-web/assets/chihu-logo-mark.png",
       "type": "remote-asset",
       "cache": "immutable-after-hash-build",
       "required": true,
-      "sha256": "216c79b9e0046b0afaafd145e51e396a3f557629fba0f9fc7fc253036ec99968"
+      "sha256": "b427e8958c66fff52ec4f33c1076ac86dd3d73f00cfad7567fd524f7b4b41cab"
     },
     {
       "path": "new-remote-web/config/chihu-config.json",
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "d8290bad0a8e43eef6b8da89ece2a9c5906207c4c0186fcd056f928e1a34a573"
+      "sha256": "df78fe59f9e26ac4277ba09ee5247097bedd5b623dc50cade09d7ce3d31e7680"
     },
     {
       "path": "new-remote-web/config/doudian-adapter.json",
       "type": "doudian-adapter",
       "cache": "no-cache",
       "required": true,
-      "sha256": "73ffaf5282e3edec4e2783d2fea6dfd9d5bb4dad0bfb873c2e10cb438517c4f4"
+      "sha256": "0aa6204c5d9b9d5ae6d41973c57a857808ff20ec387076ad782fb403020d00cd"
     },
     {
       "path": "new-remote-web/config/update-notes.json",
       "type": "update-notes",
       "cache": "no-cache",
-      "required": true,
-      "sha256": "3b8ebcbed0fd2e31f9e0f343b8908a8c89bc3d2ae8b6388844d09db4d1d2127c"
+      "required": true
     },
     {
       "path": "new-remote-web/config/invalid-config.json",
       "type": "chihu-config-smoke",
       "cache": "no-cache",
-      "required": false,
-      "sha256": "fb3ca9a7d22dad5afe7b1eef0de5e371af24fb9e8b08fec065ebce120733124c"
+      "required": false
     },
     {
       "path": "new-remote-web/config/upload-config.json",
       "type": "chihu-config-smoke",
       "cache": "no-cache",
-      "required": false,
-      "sha256": "db81c4ab0204b76b803cd87838a9b5312555b5a5d80d674af24b8670a1fa0d27"
+      "required": false
     },
     {
       "path": "new-remote-web/release-manifest.json",

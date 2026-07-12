@@ -1,3 +1,5 @@
+import type { NativeDataApi } from "../nativeData/types";
+
 export interface NativeOpenWindowRequest {
   url: string;
   title?: string;
@@ -72,11 +74,17 @@ export interface ReadFileResult {
 export interface NativeUpdateStartRequest {
   autoDownload?: boolean;
   quitAndInstall?: boolean;
+  channel?: string;
+}
+
+export interface NativeUpdateVersionRequest {
+  channel?: string;
 }
 
 export interface NativeUpdateVersionData {
   ok?: boolean;
   status?: "available" | "not-available" | "unavailable" | "error" | string;
+  channel?: string;
   hasUpdate?: boolean;
   isNewVersion?: boolean;
   currentVersion: string;
@@ -134,7 +142,7 @@ export interface ChihuNativeApi {
   };
   updates: {
     start: (args?: NativeUpdateStartRequest) => Promise<unknown>;
-    getVersionData: () => Promise<NativeUpdateVersionData>;
+    getVersionData: (args?: NativeUpdateVersionRequest) => Promise<NativeUpdateVersionData>;
   };
   logs: {
     report: (args?: unknown) => Promise<unknown>;
@@ -144,4 +152,5 @@ export interface ChihuNativeApi {
   partitions: {
     cleanInvalid: (args?: unknown) => Promise<unknown>;
   };
+  nativeData: NativeDataApi;
 }

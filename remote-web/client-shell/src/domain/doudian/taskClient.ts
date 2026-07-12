@@ -1,4 +1,5 @@
 import { getChihuNative } from "../../native/client";
+import { getPreferences } from "../../bridge/storage";
 import {
   createOperation,
   getOperation,
@@ -23,6 +24,7 @@ import type { DoudianStoreResult } from "../../types";
 const runnerWindows = new Map<string, number>();
 let channel: BroadcastChannel | null = null;
 const DEFAULT_RUNNER_PARTITION = "persist:chihu-default";
+type OperationLogPhase = "started" | "succeeded" | "failed" | "cancelled";
 
 type TaskWaiter = {
   resolve: (record: DoudianOperationRecord | null) => void;
@@ -31,6 +33,33 @@ type TaskWaiter = {
 };
 
 const waiters = new Map<string, TaskWaiter[]>();
+
+function operationLogPayload(record: DoudianOperationRecord | null | undefined) {
+  if (!record) return {};
+  return {
+    operationId: record.operationId,
+    taskType: record.taskType,
+    status: record.status,
+    progress: record.progress,
+    adapterVersion: record.adapterVersion || "",
+    ruleVersion: record.ruleVersion || "",
+    hasResult: record.result !== undefined,
+    resultSummary: record.resultSummary || ""
+  };
+}
+
+async function reportOperationLog(phase: OperationLogPhase, record: DoudianOperationRecord | null | undefined, detail: Record<string, unknown> = {}) {
+  if (!getPreferences().autoOperationLog) return;
+  const native = getChihuNative();
+  if (!native?.logs?.report) return;
+  await native.logs.report({
+    category: "doudian-task",
+    event: `operation-${phase}`,
+    phase,
+    ...operationLogPayload(record),
+    detail
+  }).catch(() => undefined);
+}
 
 function isTerminal(record?: DoudianOperationRecord | null) {
   return !!record && ["succeeded", "failed", "cancelled"].includes(record.status);
@@ -99,6 +128,9 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
       progress: record?.progress ?? 100,
       resultSummary: message.resultSummary
     });
+    void reportOperationLog(record?.status === "cancelled" ? "cancelled" : "succeeded", record || null, {
+      resultSummary: message.resultSummary || ""
+    });
     await destroyRunnerWindow(message.operationId);
     resolveWaiters(message.operationId, record || null);
   }
@@ -116,6 +148,7 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
       progress: record?.progress ?? 0,
       error: message.error
     });
+    void reportOperationLog("failed", record || null, { error: message.error });
     await destroyRunnerWindow(message.operationId);
     resolveWaiters(message.operationId, record || null);
   }
@@ -184,6 +217,9 @@ export async function startDoudianTask(task: DoudianTaskRequest): Promise<Doudia
     progress: 0,
     message: "task started"
   });
+  void reportOperationLog("started", runningOperation, {
+    metadata: task.metadata || null
+  });
   const startMessage: DoudianTaskMessage = {
     type: "task:start",
     operation: runningOperation,
@@ -223,6 +259,7 @@ export async function cancelDoudianTask(operationId: string) {
     progress: record?.progress ?? 0,
     resultSummary: "cancelled"
   });
+  void reportOperationLog("cancelled", record || null);
   resolveWaiters(operationId, record || null);
   return record;
 }
@@ -267,6 +304,7 @@ export async function runDoudianStoreTask(task: DoudianTaskRequest, timeoutMs = 
       progress: failed?.progress ?? 0,
       error: message
     });
+    void reportOperationLog("failed", failed || null, { error: message, source: "wait-result" });
     await stopRunnerWindow(operation.operationId).catch(() => null);
     return failed || getOperation(operation.operationId);
   });

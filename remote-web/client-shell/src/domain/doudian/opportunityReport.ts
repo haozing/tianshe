@@ -18,6 +18,7 @@ import type {
 import { repositoryDelete, repositoryGetAll, repositoryPut } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
+import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
 
 const clueScanStore = "opportunity_clue_scan_runs_v1" as const;
 const clueCandidateStore = "opportunity_clue_candidates_v1" as const;
@@ -1524,7 +1525,7 @@ function executionForProducts(args: {
   sourceRunId?: string;
   store: DoudianStoreSummary;
   clue: DoudianOpportunityClueRow;
-  products: DoudianOpportunityProductRow[];
+  products: Array<DoudianOpportunityProductRow & { mutationKey?: string; liveLifecycleStatus?: string }>;
   action?: string;
   status: string;
   ok: boolean;
@@ -1535,6 +1536,9 @@ function executionForProducts(args: {
   return args.products.map((product) => ({
     id: `${args.runId}-${args.store.shopId}-${args.clue.clueId}-${product.productId}-${args.stage || args.status}`,
     sourceRunId: args.sourceRunId,
+    mutationKey: product.mutationKey,
+    mutationStatus: args.status === "submitted" ? "acknowledged" : args.status,
+    liveLifecycleStatus: product.liveLifecycleStatus,
     shopId: args.store.shopId,
     shopName: args.store.shopName,
     clueId: args.clue.clueId,
@@ -1678,6 +1682,45 @@ async function submitProductsForClue(args: {
       stage: "match"
     }));
   }
+  const safety = await prepareMutationSafety({
+    payload: args.payload,
+    store: args.store,
+    candidates: filtered.selected,
+    feature: "opportunity-submit",
+    runId: args.runId,
+    sourceRunId: args.sourceRunId,
+    operationId: args.runId,
+    action: "submit",
+    stage: "submit",
+    planKey: "opportunitySubmitClue",
+    dryRun: args.dryRun
+  });
+  if (safety.rejected.length) {
+    executions.push(...safety.rejected.map((entry) => ({
+      id: `${args.runId}-${args.store.shopId}-${args.clue.clueId}-${entry.item.productId}-blocked`,
+      sourceRunId: args.sourceRunId,
+      mutationKey: entry.mutationKey,
+      mutationStatus: entry.status,
+      liveLifecycleStatus: entry.liveLifecycleStatus,
+      shopId: args.store.shopId,
+      shopName: args.store.shopName,
+      clueId: args.clue.clueId,
+      clueName: args.clue.name,
+      productId: entry.item.productId,
+      title: entry.item.title || "",
+      action: "submit",
+      stage: "submit",
+      status: entry.status,
+      ok: entry.ok,
+      message: entry.message,
+      planKey: entry.planKey || "opportunitySubmitClue"
+    })));
+  }
+  const safeProducts = safety.allowed.map((entry) => ({
+    ...entry.item,
+    mutationKey: entry.mutationKey,
+    liveLifecycleStatus: entry.liveLifecycleStatus
+  }));
   if (!filtered.selected.length) {
     executions.push({
       id: `${args.runId}-${args.store.shopId}-${args.clue.clueId}-empty`,
@@ -1692,16 +1735,21 @@ async function submitProductsForClue(args: {
       ok: true,
       message: "店铺内暂无适配的相同类目商品"
     });
+    await recordExecutionMutationResults({ store: args.store, executions, defaultAction: "submit" }).catch(() => undefined);
     return executions;
   }
-  const edit = await editTitles(args.payload, args.store, filtered.selected, filtered.nextTitles, args.dryRun);
+  if (!safeProducts.length) {
+    await recordExecutionMutationResults({ store: args.store, executions, defaultAction: "submit" }).catch(() => undefined);
+    return executions;
+  }
+  const edit = await editTitles(args.payload, args.store, safeProducts, filtered.nextTitles, args.dryRun);
   if (!edit.ok) {
     executions.push(...executionForProducts({
       runId: args.runId,
       sourceRunId: args.sourceRunId,
       store: args.store,
       clue: args.clue,
-      products: filtered.selected,
+      products: safeProducts,
       action: "editTitle",
       status: "failed",
       ok: false,
@@ -1709,12 +1757,13 @@ async function submitProductsForClue(args: {
       planKey: "opportunityEditGoodsTitle",
       stage: "editTitle"
     }));
+    await recordExecutionMutationResults({ store: args.store, executions, defaultAction: "submit" }).catch(() => undefined);
     return executions;
   }
 
   const batchSize = policyNumber(args.payload.adapter, "opportunityReport.submitBatchSize", submitBatchSizeFallback, 1, 100);
   const delayMs = policyNumber(args.payload.adapter, "opportunityReport.submitBatchDelayMs", 1900, 0, 30000);
-  const batches = chunk(filtered.selected, batchSize);
+  const batches = chunk(safeProducts, batchSize);
   for (const [batchIndex, batch] of batches.entries()) {
     if (args.dryRun) {
       executions.push(...executionForProducts({
@@ -1785,6 +1834,7 @@ async function submitProductsForClue(args: {
     }
     if (batchIndex < batches.length - 1 && delayMs && !args.dryRun) await wait(delayMs);
   }
+  await recordExecutionMutationResults({ store: args.store, executions, defaultAction: "submit" }).catch(() => undefined);
   return executions;
 }
 

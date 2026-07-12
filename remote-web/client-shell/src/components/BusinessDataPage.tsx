@@ -210,7 +210,7 @@ const columnFormatSet = new Set<string>(["money", "number", "percent", "score"])
 const toneSet = new Set<string>(["default", "blue", "green", "warning", "danger"]);
 
 function hasNativeStoreBridge() {
-  return Boolean(window.chihuNative && window.indexedDB);
+  return Boolean(window.chihuNative && (window.nativeData || window.chihuNative.nativeData));
 }
 
 function normalizeStoreStatus(status: unknown): DoudianStoreStatus {

@@ -1,7 +1,7 @@
 {
   "name": "chihu-electron-client",
   "private": true,
-  "version": "2.1.7-phase2",
+  "version": "2.1.8-phase2",
   "description": "Readable Electron client source for CHIHU remote web migration",
   "author": "赤狐管家",
   "main": "src/main/index.js",
@@ -10,12 +10,15 @@
     "prepare:icons": "node scripts/create-windows-icon.js",
     "pack:win": "npm run prepare:icons && electron-builder --win --x64 --dir",
     "dist:win": "npm run prepare:icons && electron-builder --win --x64",
+    "dist:win:beta": "npm run prepare:icons && electron-builder --config electron-builder.beta.yml --win --x64",
     "dist:win:portable": "npm run prepare:icons && electron-builder --win portable --x64",
+    "dist:win:beta:portable": "npm run prepare:icons && electron-builder --config electron-builder.beta.yml --win portable --x64",
     "smoke": "node scripts/run-smoke.js",
     "smoke:cookie": "node scripts/run-smoke.js cookie",
     "smoke:http": "node scripts/run-smoke.js http",
     "smoke:files": "node scripts/run-smoke.js files",
     "smoke:logs": "node scripts/run-smoke.js logs",
+    "smoke:sqlite": "node scripts/run-smoke.js sqlite",
     "smoke:ui-contract": "node scripts/run-smoke.js ui-contract",
     "smoke:maintenance": "node scripts/run-smoke.js maintenance",
     "check:desktop-ui-manual-evidence": "node scripts/check-desktop-ui-manual-evidence.js",
@@ -31,7 +34,7 @@
     "electron-updater": "^6.3.9"
   },
   "devDependencies": {
-    "electron": "^31.7.7",
+    "electron": "43.1.0",
     "electron-builder": "^25.1.8"
   }
 }

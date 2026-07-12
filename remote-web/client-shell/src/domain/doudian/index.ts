@@ -5,6 +5,7 @@ export * from "./fundsData";
 export * from "./operation";
 export * from "./opportunityReport";
 export * from "./progress";
+export * from "./productCatalog";
 export * from "./repository";
 export * from "./requestPlan";
 export * from "./signer";

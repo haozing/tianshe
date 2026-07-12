@@ -14,6 +14,7 @@ import { repositoryDelete, repositoryGetAll, repositoryPut } from "./repository"
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { requireChihuNative } from "../../native/client";
+import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
 
 interface StaleGoodsArgs {
   doudianAdapter?: DoudianAdapterPayload;
@@ -483,9 +484,33 @@ function executeSummary(executions: DoudianStaleGoodsExecution[]) {
   };
 }
 
-async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, candidates: DoudianStaleGoodsCandidate[], action: string, planKey: string, index: number, total: number) {
+function staleExecutionsFromRejected(
+  store: DoudianStoreSummary,
+  rejected: Array<{ item: DoudianStaleGoodsCandidate; mutationKey: string; status: string; ok: boolean; message: string; liveLifecycleStatus?: string }>,
+  action: string,
+  planKey: string
+): DoudianStaleGoodsExecution[] {
+  return rejected.map((entry) => ({
+    id: entry.item.id,
+    sourceRunId: entry.item.sourceRunId,
+    mutationKey: entry.mutationKey,
+    mutationStatus: entry.status,
+    liveLifecycleStatus: entry.liveLifecycleStatus,
+    shopId: store.shopId,
+    shopName: store.shopName,
+    productId: entry.item.productId,
+    title: entry.item.title || "",
+    action,
+    status: entry.status,
+    ok: entry.ok,
+    message: entry.message,
+    planKey
+  }));
+}
+
+async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, candidates: DoudianStaleGoodsCandidate[], action: string, planKey: string, index: number, total: number, runId: string) {
   const guard = executePlanGuard(payload.adapter, action, planKey);
-  const productIds = candidates.map((item) => item.productId).filter(Boolean);
+  let productIds = candidates.map((item) => item.productId).filter(Boolean);
   const requestContext = {
     productIds: productIds.join(","),
     productIdList: productIds,
@@ -556,15 +581,57 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
       } as DoudianRunDetail
     };
   }
-  const response = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context: requestContext });
+  const safety = await prepareMutationSafety({
+    payload,
+    store,
+    candidates,
+    feature: "stale-goods",
+    runId,
+    sourceRunId: candidates.find((item) => item.sourceRunId)?.sourceRunId,
+    operationId: runId,
+    action,
+    stage: action,
+    planKey
+  });
+  const rejectedExecutions = staleExecutionsFromRejected(store, safety.rejected, action, planKey);
+  const safeCandidates = safety.allowed;
+  if (!safeCandidates.length) {
+    return {
+      executions: rejectedExecutions,
+      detail: {
+        shopId: store.shopId,
+        shopName: store.shopName,
+        status: rejectedExecutions.some((item) => item.ok === false) ? "failed" : "skipped",
+        ok: rejectedExecutions.length > 0 && rejectedExecutions.every((item) => item.ok !== false),
+        message: rejectedExecutions.find((item) => item.ok === false)?.message || rejectedExecutions[0]?.message || "stale goods execute blocked by live lookup",
+        reason: "stale-goods-live-lookup-blocked",
+        category: "catalog-mutation-safety",
+        diagnostic: { guard, mutationSafety: safety.audit, productCount: productIds.length },
+        index,
+        total
+      } as DoudianRunDetail
+    };
+  }
+  productIds = safeCandidates.map((item) => item.productId).filter(Boolean);
+  const safeRequestContext = {
+    ...requestContext,
+    productIds: productIds.join(","),
+    productIdList: productIds,
+    productCount: productIds.length
+  };
+  const response = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context: safeRequestContext });
   const ok = requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter));
   const message = ok
     ? policyMessage(payload.adapter, "staleGoodsCleanup.messages.executedStore", "Stale goods cleanup executed", { count: productIds.length })
     : response.error || policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeFailed", "Stale goods cleanup failed");
-  return {
-    executions: candidates.map((item) => ({
+  const executions: DoudianStaleGoodsExecution[] = [
+    ...rejectedExecutions,
+    ...safeCandidates.map((item) => ({
       id: item.id,
       sourceRunId: item.sourceRunId,
+      mutationKey: item.mutationKey,
+      mutationStatus: ok ? "acknowledged" : "failed",
+      liveLifecycleStatus: item.liveLifecycleStatus,
       shopId: store.shopId,
       shopName: store.shopName,
       productId: item.productId,
@@ -574,7 +641,11 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
       ok,
       message,
       planKey
-    })),
+    }))
+  ];
+  await recordExecutionMutationResults({ store, executions, defaultAction: action }).catch(() => undefined);
+  return {
+    executions,
     detail: {
       shopId: store.shopId,
       shopName: store.shopName,
@@ -583,7 +654,7 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
       message,
       reason: ok ? "" : "stale-goods-execute-request-failed",
       category: ok ? "" : "api",
-      diagnostic: { guard, response: { status: response.status, ok: response.ok, source: response.source }, productCount: productIds.length },
+      diagnostic: { guard, mutationSafety: safety.audit, response: { status: response.status, ok: response.ok, source: response.source }, productCount: productIds.length, requestContext: safeRequestContext },
       index,
       total
     } as DoudianRunDetail
@@ -796,7 +867,7 @@ async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: Stal
   const details: DoudianRunDetail[] = [];
   for (const [index, group] of groups.entries()) {
     try {
-      const result = await executeStore(payload, group.store, group.candidates, action, planKey, index + 1, groups.length);
+      const result = await executeStore(payload, group.store, group.candidates, action, planKey, index + 1, groups.length, runId);
       executions.push(...result.executions);
       details.push(result.detail);
     } catch (error) {

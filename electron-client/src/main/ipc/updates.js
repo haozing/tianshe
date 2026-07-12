@@ -1,6 +1,7 @@
 const { app, ipcMain } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
+const { DEFAULT_UPDATE_CHANNEL } = require("../config");
 
 let autoUpdater = null;
 let isCheckingUpdate = false;
@@ -33,8 +34,15 @@ function emitToMain(context, channel, payload) {
   }
 }
 
-function configureUpdater(updater) {
-  updater.channel = process.env.CHIHU_UPDATE_CHANNEL || "latest";
+function normalizeUpdateChannel(value) {
+  const requested = typeof value === "string" && value.trim() ? value.trim() : "";
+  if (requested === "stable" || requested === "official") return "latest";
+  if (/^[A-Za-z0-9._-]+$/.test(requested)) return requested;
+  return "latest";
+}
+
+function configureUpdater(updater, args = {}) {
+  updater.channel = normalizeUpdateChannel(args.channel || DEFAULT_UPDATE_CHANNEL);
 
   const useDevUpdateConfig =
     process.env.NODE_ENV === "development" ||
@@ -62,6 +70,7 @@ function normalizeUpdateInfo(updater, updateInfo) {
   return {
     ok: true,
     status: hasUpdate ? "available" : "not-available",
+    channel: updater.channel || "latest",
     hasUpdate,
     isNewVersion: !hasUpdate,
     currentVersion,
@@ -84,7 +93,7 @@ async function startAutoUpdate(context, args = {}) {
 
   isCheckingUpdate = true;
   updater.autoDownload = false;
-  configureUpdater(updater);
+  configureUpdater(updater, args);
 
   updater.once("update-available", (info) => {
     emitToMain(context, "update-available", info);
@@ -131,12 +140,14 @@ async function startAutoUpdate(context, args = {}) {
   }
 }
 
-async function getClientVersionData() {
+async function getClientVersionData(args = {}) {
   const updater = getAutoUpdater();
   if (!updater) {
+    const channel = normalizeUpdateChannel(args.channel || DEFAULT_UPDATE_CHANNEL);
     return {
       ok: false,
       status: "unavailable",
+      channel,
       reason: "electron_updater_unavailable",
       hasUpdate: false,
       isNewVersion: true,
@@ -148,13 +159,14 @@ async function getClientVersionData() {
 
   try {
     updater.autoDownload = false;
-    configureUpdater(updater);
+    configureUpdater(updater, args);
     const result = await updater.checkForUpdates();
     return normalizeUpdateInfo(updater, result && result.updateInfo);
   } catch (error) {
     return {
       ok: false,
       status: "error",
+      channel: updater.channel || normalizeUpdateChannel(args.channel || DEFAULT_UPDATE_CHANNEL),
       hasUpdate: false,
       isNewVersion: true,
       currentVersion: app.getVersion(),
@@ -170,16 +182,16 @@ function registerUpdateHandlers(context) {
     return startAutoUpdate(context, args);
   });
 
-  ipcMain.handle("getClientVersionData", async () => {
-    return getClientVersionData();
+  ipcMain.handle("getClientVersionData", async (_event, args = {}) => {
+    return getClientVersionData(args);
   });
 
   ipcMain.handle("native:updates:start", async (_event, args = {}) => {
     return startAutoUpdate(context, args);
   });
 
-  ipcMain.handle("native:updates:getVersionData", async () => {
-    return getClientVersionData();
+  ipcMain.handle("native:updates:getVersionData", async (_event, args = {}) => {
+    return getClientVersionData(args);
   });
 }
 

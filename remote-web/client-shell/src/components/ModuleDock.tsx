@@ -47,7 +47,7 @@ export function ModuleDock({ route, workspace }: ModuleDockProps) {
             ))}
           </nav>
 
-          <nav className="grid min-h-12 grid-cols-7 items-center overflow-hidden rounded-lg border border-shell-line bg-white/90 max-[1050px]:grid-cols-3 max-[760px]:grid-cols-1" aria-label="业务功能">
+          <nav className="grid min-h-12 grid-cols-8 items-center overflow-hidden rounded-lg border border-shell-line bg-white/90 max-[1050px]:grid-cols-3 max-[760px]:grid-cols-1" aria-label="业务功能">
             {secondaryModules.map((item) => (
               <a
                 key={item.id}

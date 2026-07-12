@@ -7,6 +7,14 @@ const path = require("node:path");
 
 const root = path.join(__dirname, "..");
 const artifactsDir = path.join(root, "artifacts");
+
+if (!process.env.ELECTRON_MIRROR && !process.env.npm_config_electron_mirror && process.env.CHIHU_ELECTRON_MIRROR_FALLBACK !== "0") {
+  process.env.ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/";
+}
+if (!process.env.ELECTRON_GET_NO_PROGRESS) {
+  process.env.ELECTRON_GET_NO_PROGRESS = "1";
+}
+
 const electronBin = require("electron");
 const scenario = process.argv[2] || process.env.CHIHU_E2E_SMOKE_SCENARIO || "bridge";
 
@@ -218,7 +226,7 @@ async function main() {
     ...process.env,
     CHIHU_E2E_SMOKE: "1",
     CHIHU_E2E_SMOKE_SCENARIO: scenario,
-    CHIHU_E2E_TIMEOUT_MS: process.env.CHIHU_E2E_TIMEOUT_MS || (scenario === "bridge" ? "45000" : "15000"),
+    CHIHU_E2E_TIMEOUT_MS: process.env.CHIHU_E2E_TIMEOUT_MS || (scenario === "bridge" ? "45000" : scenario === "sqlite" ? "30000" : "15000"),
     CHIHU_USER_DATA_DIR: userDataDir,
     CHIHU_HOME_URL: process.env.CHIHU_HOME_URL || process.env.CHIHU_REMOTE_WEB_URL || "http://chihu-remote.localhost:4173/new-remote-web/"
   };

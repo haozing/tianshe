@@ -14,6 +14,7 @@ const { addDevShortcuts } = require("./utils/dev-shortcuts");
 const { installSchemeBlocker } = require("./window/scheme-blocker");
 const { installSmokeCheck } = require("./smoke/install-smoke-check");
 const { registerIpcHandlers } = require("./ipc");
+const { stopNativeDataService } = require("./database");
 
 app.commandLine.appendSwitch("ignore-certificate-errors", "true");
 if (process.env.CHIHU_ENABLE_GPU === "1") {
@@ -195,5 +196,11 @@ if (!gotLock) {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  stopNativeDataService().catch((error) => {
+    console.warn("[native-data] stop failed:", error && error.message ? error.message : error);
+  });
 });
 

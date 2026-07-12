@@ -350,11 +350,11 @@ const sampleTemplates = [
 ];
 
 function hasNativeStoreBridge() {
-  return Boolean(window.chihuNative && window.indexedDB);
+  return Boolean(window.chihuNative && (window.nativeData || window.chihuNative.nativeData));
 }
 
 function hasNativeStaleGoodsBridge() {
-  return Boolean(window.chihuNative && window.indexedDB);
+  return Boolean(window.chihuNative && (window.nativeData || window.chihuNative.nativeData));
 }
 
 function isDevPreviewRuntime() {

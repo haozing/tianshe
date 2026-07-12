@@ -1,7 +1,81 @@
 const { contextBridge, ipcRenderer } = require("electron");
+const { createHash, randomUUID } = require("node:crypto");
 
 function invoke(channel) {
   return (message) => ipcRenderer.invoke(channel, message);
+}
+
+const INLINE_NATIVE_RECORD_BYTES = 5 * 1024 * 1024;
+const LARGE_NATIVE_RECORD_CHUNK_CHARS = 512 * 1024;
+
+function utf8ByteLength(value) {
+  return Buffer.byteLength(String(value), "utf8");
+}
+
+function nativeRecordIdFor(recordOrId) {
+  if (recordOrId && typeof recordOrId === "object") {
+    return String(
+      recordOrId.id ||
+      recordOrId.recordId ||
+      recordOrId.runId ||
+      recordOrId.operationId ||
+      recordOrId.attemptId ||
+      recordOrId.candidateId ||
+      recordOrId.shopId ||
+      recordOrId.groupId ||
+      ""
+    ).trim();
+  }
+  return String(recordOrId || "").trim();
+}
+
+async function putNativeDataRecord(args = {}) {
+  const inlinePut = invoke("native:data:records:put");
+  const record = args.record || args.payload || args.value;
+  let payloadJson = "";
+  try {
+    payloadJson = JSON.stringify(record);
+  } catch {
+    return inlinePut(args);
+  }
+
+  if (!payloadJson || utf8ByteLength(payloadJson) <= INLINE_NATIVE_RECORD_BYTES) {
+    return inlinePut(args);
+  }
+
+  const storeName = String(args.storeName || args.store || "").trim();
+  const recordId = nativeRecordIdFor(record);
+  if (!storeName || !recordId) return inlinePut(args);
+
+  const chunks = [];
+  for (let index = 0; index < payloadJson.length; index += LARGE_NATIVE_RECORD_CHUNK_CHARS) {
+    chunks.push(payloadJson.slice(index, index + LARGE_NATIVE_RECORD_CHUNK_CHARS));
+  }
+
+  const sessionId = randomUUID();
+  const expectedBytes = utf8ByteLength(payloadJson);
+  const expectedHash = createHash("sha256").update(payloadJson, "utf8").digest("hex");
+  const start = invoke("native:data:records:putLarge:start");
+  const writeChunk = invoke("native:data:records:putLarge:chunk");
+  const commit = invoke("native:data:records:putLarge:commit");
+  const abort = invoke("native:data:records:putLarge:abort");
+
+  let started = false;
+  try {
+    await start({ sessionId, storeName, recordId, expectedBytes, expectedChunks: chunks.length, expectedHash });
+    started = true;
+    for (let index = 0; index < chunks.length; index += 1) {
+      await writeChunk({ sessionId, index, chunk: chunks[index] });
+    }
+    return await commit({ sessionId });
+  } catch (error) {
+    if (started) {
+      try {
+        await abort({ sessionId });
+      } catch {}
+    }
+    throw error;
+  }
 }
 
 function configuredBlockedSchemes() {
@@ -85,6 +159,51 @@ const client = {
   openPathInExplorer: invoke("openPathInExplorer")
 };
 
+const nativeData = {
+  maintenance: {
+    getHealth: invoke("native:data:maintenance:getHealth"),
+    quickCheck: invoke("native:data:maintenance:quickCheck"),
+    listTables: invoke("native:data:maintenance:listTables"),
+    createBackup: invoke("native:data:maintenance:createBackup"),
+    recoverOpenJobs: invoke("native:data:maintenance:recoverOpenJobs")
+  },
+  stores: {
+    upsertIdentity: invoke("native:data:stores:upsertIdentity"),
+    tombstoneIdentity: invoke("native:data:stores:tombstoneIdentity")
+  },
+  records: {
+    put: putNativeDataRecord,
+    get: invoke("native:data:records:get"),
+    list: invoke("native:data:records:list"),
+    delete: invoke("native:data:records:delete")
+  },
+  catalogJobs: {
+    acquire: invoke("native:data:catalogJobs:acquire"),
+    reportPage: invoke("native:data:catalogJobs:reportPage"),
+    finish: invoke("native:data:catalogJobs:finish"),
+    cancel: invoke("native:data:catalogJobs:cancel"),
+    get: invoke("native:data:catalogJobs:get"),
+    heartbeat: invoke("native:data:catalogJobs:heartbeat")
+  },
+  catalog: {
+    queryHeadMembersPage: invoke("native:data:catalog:queryHeadMembersPage"),
+    queryLastObservedPage: invoke("native:data:catalog:queryLastObservedPage"),
+    getProductsByIds: invoke("native:data:catalog:getProductsByIds"),
+    recordLiveObservations: invoke("native:data:catalog:recordLiveObservations"),
+    recordMutationResults: invoke("native:data:catalog:recordMutationResults"),
+    confirmMutations: invoke("native:data:catalog:confirmMutations"),
+    invalidateCoverage: invoke("native:data:catalog:invalidateCoverage")
+  },
+  features: {
+    saveStaleRun: invoke("native:data:features:saveStaleRun"),
+    loadStaleCandidates: invoke("native:data:features:loadStaleCandidates"),
+    saveBulkRun: invoke("native:data:features:saveBulkRun"),
+    loadBulkCandidates: invoke("native:data:features:loadBulkCandidates"),
+    saveOpportunityRun: invoke("native:data:features:saveOpportunityRun"),
+    loadOpportunityCandidates: invoke("native:data:features:loadOpportunityCandidates")
+  }
+};
+
 const chihuNative = {
   app: {
     getInfo: invoke("native:app:getInfo")
@@ -138,11 +257,13 @@ const chihuNative = {
   },
   partitions: {
     cleanInvalid: invoke("native:partitions:cleanInvalid")
-  }
+  },
+  nativeData
 };
 
 contextBridge.exposeInMainWorld("client", client);
 contextBridge.exposeInMainWorld("chihuNative", chihuNative);
+contextBridge.exposeInMainWorld("nativeData", nativeData);
 
 [
   "update-available",

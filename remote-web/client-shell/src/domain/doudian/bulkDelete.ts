@@ -19,6 +19,7 @@ import { requireChihuNative } from "../../native/client";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { repositoryDelete, repositoryGetAll, repositoryPut } from "./repository";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
+import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
 
 interface BulkDeleteArgs {
   doudianAdapter?: DoudianAdapterPayload;
@@ -847,10 +848,13 @@ const executeBatchSize = 100;
 const executeBatchDelayMs = 3000;
 const executeTransientRetryLimit = 3;
 
-function executionFor(candidates: DoudianBulkDeleteCandidate[], store: DoudianStoreSummary, action: DoudianBulkDeleteAction, status: string, ok: boolean, message: string, planKey: string, stage: string): DoudianBulkDeleteExecution[] {
+function executionFor(candidates: Array<DoudianBulkDeleteCandidate & { mutationKey?: string; liveLifecycleStatus?: string }>, store: DoudianStoreSummary, action: DoudianBulkDeleteAction, status: string, ok: boolean, message: string, planKey: string, stage: string): DoudianBulkDeleteExecution[] {
   return candidates.map((item) => ({
     id: item.id,
     sourceRunId: item.sourceRunId,
+    mutationKey: item.mutationKey,
+    mutationStatus: status === "submitted" ? "acknowledged" : status,
+    liveLifecycleStatus: item.liveLifecycleStatus,
     shopId: store.shopId,
     shopName: store.shopName,
     productId: item.productId,
@@ -859,6 +863,32 @@ function executionFor(candidates: DoudianBulkDeleteCandidate[], store: DoudianSt
     status,
     ok,
     message,
+    planKey,
+    stage
+  }));
+}
+
+function bulkExecutionsFromRejected(
+  store: DoudianStoreSummary,
+  rejected: Array<{ item: DoudianBulkDeleteCandidate; mutationKey: string; status: string; ok: boolean; message: string; liveLifecycleStatus?: string }>,
+  action: DoudianBulkDeleteAction,
+  planKey: string,
+  stage: string
+): DoudianBulkDeleteExecution[] {
+  return rejected.map((entry) => ({
+    id: entry.item.id,
+    sourceRunId: entry.item.sourceRunId,
+    mutationKey: entry.mutationKey,
+    mutationStatus: entry.status,
+    liveLifecycleStatus: entry.liveLifecycleStatus,
+    shopId: store.shopId,
+    shopName: store.shopName,
+    productId: entry.item.productId,
+    title: entry.item.title || "",
+    action,
+    status: entry.status,
+    ok: entry.ok,
+    message: entry.message,
     planKey,
     stage
   }));
@@ -980,9 +1010,9 @@ function stageExecutionsFromResponse(args: {
   return { topLevelOk, itemResultCount: rows.length, successfulCandidates, transientCandidates, executions };
 }
 
-async function executeRequestStage(payload: DoudianAdapterPayload, store: DoudianStoreSummary, candidates: DoudianBulkDeleteCandidate[], action: DoudianBulkDeleteAction, planKey: string, stage: string, forceDryRun: boolean) {
+async function executeRequestStage(payload: DoudianAdapterPayload, store: DoudianStoreSummary, candidates: DoudianBulkDeleteCandidate[], action: DoudianBulkDeleteAction, planKey: string, stage: string, forceDryRun: boolean, runId: string) {
   const guard = executePlanGuard(payload.adapter, action, planKey);
-  const productIds = candidates.map((item) => item.productId).filter(Boolean);
+  let productIds = candidates.map((item) => item.productId).filter(Boolean);
   const candidateKey = (candidate: DoudianBulkDeleteCandidate) => candidate.id || `${candidate.shopId}-${candidate.productId}`;
   const buildRequestContext = (items: DoudianBulkDeleteCandidate[]) => {
     const currentProductIds = items.map((item) => item.productId).filter(Boolean);
@@ -1018,7 +1048,33 @@ async function executeRequestStage(payload: DoudianAdapterPayload, store: Doudia
       diagnostic: { guard, requestContext: buildRequestContext(candidates) }
     };
   }
-  let pending = candidates;
+  const auditAction = stage === "delete" ? "delete" : "recycle";
+  const safety = await prepareMutationSafety({
+    payload,
+    store,
+    candidates,
+    feature: "bulk-delete",
+    runId,
+    sourceRunId: candidates.find((item) => item.sourceRunId)?.sourceRunId,
+    operationId: runId,
+    action: auditAction,
+    stage,
+    planKey
+  });
+  const rejectedExecutions = bulkExecutionsFromRejected(store, safety.rejected, auditAction as DoudianBulkDeleteAction, planKey, stage);
+  const safeCandidates = safety.allowed;
+  if (!safeCandidates.length) {
+    await recordExecutionMutationResults({ store, executions: rejectedExecutions.map((item) => ({ ...item, action: auditAction })), defaultAction: auditAction }).catch(() => undefined);
+    return {
+      ok: rejectedExecutions.length > 0 && rejectedExecutions.every((item) => item.ok !== false),
+      dryRun: false,
+      executions: rejectedExecutions,
+      successfulCandidates: [] as DoudianBulkDeleteCandidate[],
+      diagnostic: { guard, mutationSafety: safety.audit, productCount: productIds.length }
+    };
+  }
+  productIds = safeCandidates.map((item) => item.productId).filter(Boolean);
+  let pending: Array<DoudianBulkDeleteCandidate & { mutationKey?: string; liveLifecycleStatus?: string }> = safeCandidates;
   let transientAttempts = 0;
   let lastResponse: RequestPlanResult | undefined;
   let lastItemResultCount = 0;
@@ -1066,20 +1122,22 @@ async function executeRequestStage(payload: DoudianAdapterPayload, store: Doudia
     await wait(1000 * transientAttempts);
     pending = retryCandidates;
   }
-  const executions = candidates
+  const executions = safeCandidates
     .map((candidate) => executionsById.get(candidateKey(candidate)))
     .filter((item): item is DoudianBulkDeleteExecution => Boolean(item));
-  const missingCandidates = candidates.filter((candidate) => !executionsById.has(candidateKey(candidate)));
+  const missingCandidates = safeCandidates.filter((candidate) => !executionsById.has(candidateKey(candidate)));
   if (missingCandidates.length) {
     executions.push(...executionFor(missingCandidates, store, action, "failed", false, "bulk delete execution result missing", planKey, stage));
   }
-  const ok = executions.length === candidates.length && executions.every((item) => item.ok);
+  const allExecutions = [...rejectedExecutions, ...executions];
+  await recordExecutionMutationResults({ store, executions: allExecutions.map((item) => ({ ...item, action: auditAction })), defaultAction: auditAction }).catch(() => undefined);
+  const ok = executions.length === safeCandidates.length && executions.every((item) => item.ok) && rejectedExecutions.every((item) => item.ok !== false);
   return {
     ok,
     dryRun: false,
-    executions,
-    successfulCandidates: candidates.filter((candidate) => successfulById.has(candidateKey(candidate))),
-    diagnostic: { guard, response: lastResponse ? { status: lastResponse.status, ok: lastResponse.ok, source: lastResponse.source } : null, productCount: productIds.length, itemResultCount: lastItemResultCount, transientAttempts, attempts }
+    executions: allExecutions,
+    successfulCandidates: safeCandidates.filter((candidate) => successfulById.has(candidateKey(candidate))),
+    diagnostic: { guard, mutationSafety: safety.audit, response: lastResponse ? { status: lastResponse.status, ok: lastResponse.ok, source: lastResponse.source } : null, productCount: productIds.length, itemResultCount: lastItemResultCount, transientAttempts, attempts }
   };
 }
 
@@ -1092,7 +1150,7 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
   let dryRun = false;
 
   for (const [batchIndex, batch] of batches.entries()) {
-    const firstStage = await executeRequestStage(payload, store, batch, action, recycleKey, "recycle", forceDryRun);
+    const firstStage = await executeRequestStage(payload, store, batch, action, recycleKey, "recycle", forceDryRun, runId);
     executions.push(...firstStage.executions);
     dryRun = dryRun || firstStage.dryRun;
     const diagnostic: Record<string, unknown> = { index: batchIndex + 1, total: batches.length, recycle: firstStage.diagnostic };
@@ -1110,7 +1168,7 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
     });
 
     if (action === "delete" && firstStage.successfulCandidates.length && !firstStage.dryRun) {
-      const secondStage = await executeRequestStage(payload, store, firstStage.successfulCandidates, action, finalKey, "delete", forceDryRun);
+      const secondStage = await executeRequestStage(payload, store, firstStage.successfulCandidates, action, finalKey, "delete", forceDryRun, runId);
       executions.push(...secondStage.executions);
       dryRun = dryRun || secondStage.dryRun;
       diagnostic.delete = secondStage.diagnostic;

@@ -317,11 +317,11 @@ const sampleRecords: ViolationRecord[] = [
 ];
 
 function hasNativeStoreBridge() {
-  return Boolean(window.chihuNative && window.indexedDB);
+  return Boolean(window.chihuNative && (window.nativeData || window.chihuNative.nativeData));
 }
 
 function hasNativeViolationsBridge() {
-  return Boolean(window.chihuNative && window.indexedDB);
+  return Boolean(window.chihuNative && (window.nativeData || window.chihuNative.nativeData));
 }
 
 function isDevPreviewRuntime() {

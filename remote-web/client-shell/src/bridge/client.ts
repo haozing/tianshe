@@ -18,7 +18,7 @@ import type {
   DoudianStoreResult,
   DoudianViolationsDataResult
 } from "../types";
-import type { NativeUpdateStartRequest, NativeUpdateVersionData } from "../native/types";
+import type { NativeUpdateStartRequest, NativeUpdateVersionData, NativeUpdateVersionRequest } from "../native/types";
 import { getChihuNative } from "../native/client";
 import {
   createStoreGroup,
@@ -39,6 +39,7 @@ import {
   runDoudianStoreTask,
   cancelDoudianTask,
   renameStoreGroup,
+  runProductCatalogSyncTask,
   updateStoreGroup
 } from "../domain/doudian";
 import { selectAndParseCompassFile as selectAndParseCompassFileRemote } from "../domain/doudian/fileImport";
@@ -92,20 +93,36 @@ export async function closeMainWindow() {
   return true;
 }
 
-export async function getDesktopVersionData(): Promise<NativeUpdateVersionData> {
+export async function reloadMainWindowUrl(url?: string) {
+  const args = url ? { url } : {};
+  const native = getChihuNative();
+  if (native?.windows.reloadHome) {
+    await native.windows.reloadHome(args);
+    return true;
+  }
+  const legacyReloadHome = window.client?.reloadHomeUrl;
+  if (typeof legacyReloadHome === "function") {
+    await legacyReloadHome.call(window.client, args);
+    return true;
+  }
+  return false;
+}
+
+export async function getDesktopVersionData(args: NativeUpdateVersionRequest = {}): Promise<NativeUpdateVersionData> {
   const native = getChihuNative();
   if (native?.updates.getVersionData) {
-    return native.updates.getVersionData();
+    return native.updates.getVersionData(args);
   }
 
   const legacyGetVersionData = window.client?.getClientVersionData;
   if (typeof legacyGetVersionData === "function") {
-    return legacyGetVersionData.call(window.client, {}) as Promise<NativeUpdateVersionData>;
+    return legacyGetVersionData.call(window.client, args) as Promise<NativeUpdateVersionData>;
   }
 
   return {
     ok: false,
     status: "unavailable",
+    channel: args.channel || "",
     reason: "local_update_bridge_unavailable",
     hasUpdate: false,
     isNewVersion: true,
@@ -201,6 +218,34 @@ export async function refreshDoudianStoreStatus(shopIds?: string[], operationId?
       shopIds: shopIds || []
     }
   }, 180000);
+}
+
+export async function syncDoudianProductCatalog(args: {
+  shopIds?: string[];
+  tenantId?: string;
+  storeGeneration?: number;
+  operationId?: string;
+  forceRefresh?: boolean;
+  forceAdapter?: boolean;
+} = {}): Promise<DoudianStoreResult & { coverageKeys?: string[] }> {
+  const nextArgs = await withDoudianAdapter({
+    shopIds: args.shopIds || [],
+    ...(args.tenantId ? { tenantId: args.tenantId } : {}),
+    ...(args.storeGeneration ? { storeGeneration: args.storeGeneration } : {}),
+    ...(args.operationId ? { operationId: args.operationId } : {}),
+    ...(args.forceRefresh ? { forceRefresh: args.forceRefresh } : {})
+  }, { force: args.forceAdapter === true });
+  return runDoudianStoreTask({
+    taskType: "syncProductCatalog",
+    operationId: args.operationId,
+    adapterVersion: nextArgs.doudianAdapter.adapter.version,
+    ruleVersion: nextArgs.doudianAdapter.scripts?.version || "",
+    payload: nextArgs
+  }, 600000) as Promise<DoudianStoreResult & { coverageKeys?: string[] }>;
+}
+
+export async function syncDoudianProductCatalogInline(args: Parameters<typeof runProductCatalogSyncTask>[0]) {
+  return runProductCatalogSyncTask(args);
 }
 
 export async function fetchDoudianBusinessData(args: {

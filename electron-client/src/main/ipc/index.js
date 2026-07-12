@@ -7,6 +7,7 @@ const { registerFileHandlers } = require("./files");
 const { registerPartitionHandlers } = require("./partitions");
 const { registerLogHandlers } = require("./logs");
 const { registerUpdateHandlers } = require("./updates");
+const { registerBusinessDatabaseHandlers } = require("./business-database");
 
 function registerIpcHandlers(context) {
   registerAppInfoHandlers(context);
@@ -18,6 +19,7 @@ function registerIpcHandlers(context) {
   registerPartitionHandlers(context);
   registerLogHandlers(context);
   registerUpdateHandlers(context);
+  registerBusinessDatabaseHandlers(context);
 }
 
 module.exports = { registerIpcHandlers };

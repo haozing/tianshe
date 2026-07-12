@@ -6,6 +6,7 @@ import {
   type DoudianTaskRequest
 } from "./progress";
 import { runFetchDoudianStoresTask } from "./storeImport";
+import { runProductCatalogSyncTask } from "./productCatalog";
 import { runRefreshDoudianStoreStatusTask } from "./storeStatus";
 
 interface RunningTask {
@@ -117,6 +118,11 @@ async function runDomainTask(channel: BroadcastChannel, operationId: string, tas
         operationId,
         ...payload
       } as unknown as Parameters<typeof runRefreshDoudianStoreStatusTask>[0]);
+    } else if (task.taskType === "syncProductCatalog") {
+      result = await runProductCatalogSyncTask({
+        operationId,
+        ...payload
+      } as unknown as Parameters<typeof runProductCatalogSyncTask>[0]);
     } else {
       throw new Error(`unsupported task type: ${task.taskType}`);
     }

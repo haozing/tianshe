@@ -18,6 +18,7 @@ import {
   runDoudianFileImportSelfCheck,
   runDoudianFundsDataSelfCheck,
   runDoudianOpportunityReportSelfCheck,
+  runProductCatalogSyncSelfCheck,
   runDoudianStoreImportStatusSelfCheck,
   runDoudianStoreGroupsSelfCheck,
   runDoudianStaleGoodsExecuteSelfCheck,
@@ -132,6 +133,9 @@ export function App() {
         doudianAdapter: await loadDoudianAdapterPayload({ force: true })
       }),
       opportunityReportSelfCheck: async () => runDoudianOpportunityReportSelfCheck({
+        doudianAdapter: await loadDoudianAdapterPayload({ force: true })
+      }),
+      productCatalogSelfCheck: async () => runProductCatalogSyncSelfCheck({
         doudianAdapter: await loadDoudianAdapterPayload({ force: true })
       })
     };

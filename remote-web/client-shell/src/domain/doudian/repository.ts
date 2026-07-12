@@ -1,5 +1,8 @@
-export const DOUDIAN_DB_NAME = "chihu20_doudian";
-export const DOUDIAN_DB_VERSION = 6;
+import { requireNativeData } from "../../nativeData/client";
+import type { CursorPage, NativeDataRecordStoreName } from "../../nativeData/types";
+
+export const DOUDIAN_DB_NAME = "chihu-business.sqlite3";
+export const DOUDIAN_DB_VERSION = 1;
 
 export const DOUDIAN_OBJECT_STORES = [
   "stores",
@@ -24,75 +27,36 @@ export const DOUDIAN_OBJECT_STORES = [
   "opportunity_submit_attempts_v1",
   "operations",
   "runtime_meta"
-] as const;
+] as const satisfies readonly NativeDataRecordStoreName[];
 
 export type DoudianObjectStoreName = typeof DOUDIAN_OBJECT_STORES[number];
 
-let dbPromise: Promise<IDBDatabase> | null = null;
-
-function createStore(db: IDBDatabase, name: DoudianObjectStoreName) {
-  if (db.objectStoreNames.contains(name)) return;
-  const store = db.createObjectStore(name, { keyPath: "id" });
-  if (name === "operations") {
-    store.createIndex("operationId", "operationId", { unique: false });
-    store.createIndex("status", "status", { unique: false });
-    store.createIndex("updatedAt", "updatedAt", { unique: false });
-  }
-}
-
-export function openDoudianRepository(): Promise<IDBDatabase> {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
-    const request = window.indexedDB.open(DOUDIAN_DB_NAME, DOUDIAN_DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      for (const storeName of DOUDIAN_OBJECT_STORES) createStore(db, storeName);
-    };
-    request.onerror = () => reject(request.error || new Error("failed to open doudian repository"));
-    request.onsuccess = () => resolve(request.result);
-  });
-  return dbPromise;
-}
-
 export async function repositoryPut<T extends { id: string }>(storeName: DoudianObjectStoreName, record: T): Promise<T> {
-  const db = await openDoudianRepository();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, "readwrite");
-    const store = tx.objectStore(storeName);
-    store.put(record);
-    tx.oncomplete = () => resolve(record);
-    tx.onerror = () => reject(tx.error || new Error(`failed to write ${storeName}`));
-    tx.onabort = () => reject(tx.error || new Error(`write ${storeName} aborted`));
-  });
+  const result = await requireNativeData().records.put({ storeName, record: record as unknown as Record<string, unknown> });
+  return (result.record || record) as T;
 }
 
 export async function repositoryGet<T>(storeName: DoudianObjectStoreName, id: string): Promise<T | null> {
-  const db = await openDoudianRepository();
-  return new Promise((resolve, reject) => {
-    const request = db.transaction(storeName, "readonly").objectStore(storeName).get(id);
-    request.onerror = () => reject(request.error || new Error(`failed to read ${storeName}`));
-    request.onsuccess = () => resolve(request.result || null);
-  });
+  return requireNativeData().records.get<T & Record<string, unknown>>({ storeName, id }) as Promise<T | null>;
 }
 
 export async function repositoryGetAll<T>(storeName: DoudianObjectStoreName): Promise<T[]> {
-  const db = await openDoudianRepository();
-  return new Promise((resolve, reject) => {
-    const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-    request.onerror = () => reject(request.error || new Error(`failed to list ${storeName}`));
-    request.onsuccess = () => resolve(request.result || []);
-  });
+  const output: T[] = [];
+  let cursor: string | null = null;
+  for (;;) {
+    const page: CursorPage<T & Record<string, unknown>> = await requireNativeData().records.list<T & Record<string, unknown>>({
+      storeName,
+      cursor: cursor || undefined,
+      limit: 10000
+    });
+    output.push(...(page.items as T[]));
+    if (!page.hasMore || !page.nextCursor) return output;
+    cursor = page.nextCursor;
+  }
 }
 
 export async function repositoryDelete(storeName: DoudianObjectStoreName, id: string): Promise<void> {
-  const db = await openDoudianRepository();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, "readwrite");
-    tx.objectStore(storeName).delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error || new Error(`failed to delete ${storeName}`));
-    tx.onabort = () => reject(tx.error || new Error(`delete ${storeName} aborted`));
-  });
+  await requireNativeData().records.delete({ storeName, id });
 }
 
 export async function runDoudianRepositorySelfCheck() {

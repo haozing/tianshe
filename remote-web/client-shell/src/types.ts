@@ -265,6 +265,8 @@ export interface DoudianStoreGroup {
 }
 
 export interface DoudianStoreSummary {
+  tenantId?: string;
+  storeGeneration?: number;
   shopId: string;
   shopName: string;
   platform: "doudian";
@@ -595,6 +597,9 @@ export interface DoudianStaleGoodsRow {
 export interface DoudianStaleGoodsExecution {
   id?: string;
   sourceRunId?: string;
+  mutationKey?: string;
+  mutationStatus?: string;
+  liveLifecycleStatus?: string;
   shopId: string;
   shopName: string;
   productId: string;
@@ -709,6 +714,9 @@ export interface DoudianBulkDeleteRow {
 export interface DoudianBulkDeleteExecution {
   id?: string;
   sourceRunId?: string;
+  mutationKey?: string;
+  mutationStatus?: string;
+  liveLifecycleStatus?: string;
   shopId: string;
   shopName: string;
   productId: string;
@@ -874,6 +882,9 @@ export interface DoudianOpportunityPrematchCandidate {
 export interface DoudianOpportunityExecution {
   id: string;
   sourceRunId?: string;
+  mutationKey?: string;
+  mutationStatus?: string;
+  liveLifecycleStatus?: string;
   shopId: string;
   shopName: string;
   clueId?: string;
@@ -934,12 +945,14 @@ export interface ChihuBridgeApi {
 }
 
 export type { ChihuNativeApi } from "./native/types";
+export type { NativeDataApi } from "./nativeData/types";
 import type { DoudianOperationRecord, DoudianProgressDetail, DoudianTaskRequest } from "./domain/doudian";
 
 declare global {
   interface Window {
     chihuBridge?: ChihuBridgeApi;
     chihuNative?: import("./native/types").ChihuNativeApi;
+    nativeData?: import("./nativeData/types").NativeDataApi;
     chihuDoudianTaskRuntime?: {
       startMock: (options?: Omit<DoudianTaskRequest, "taskType">) => Promise<DoudianOperationRecord>;
       cancel: (operationId: string) => Promise<DoudianOperationRecord | null>;
@@ -1033,6 +1046,11 @@ declare global {
         clueRunId: string;
         productRunId: string;
         executeRunIds: string[];
+      }>;
+      productCatalogSelfCheck: () => Promise<{
+        ok: boolean;
+        coverageKey: string;
+        status: string;
       }>;
     };
     client?: Record<string, unknown> & {

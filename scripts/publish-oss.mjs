@@ -362,7 +362,6 @@ function buildDesktop(skipBuild) {
 
 function ensureDesktopLatestYml() {
   const latestPath = join(electronReleaseRoot, "latest.yml");
-  if (existsSync(latestPath)) return latestPath;
 
   const setupFiles = readdirSync(electronReleaseRoot, { withFileTypes: true })
     .filter((entry) => entry.isFile() && /-setup\.exe$/i.test(entry.name))

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   AlertCircle,
@@ -29,7 +29,9 @@ import type { LucideIcon } from "lucide-react";
 import type { WorkspaceState } from "../types";
 import { cn, isActiveRoute } from "../lib/utils";
 import { remoteAsset } from "../lib/assets";
-import { closeMainWindow, getDesktopVersionData, minimizeMainWindow, startDesktopUpdate, toggleMaximizeMainWindow } from "../bridge/client";
+import { closeMainWindow, getDesktopVersionData, minimizeMainWindow, reloadMainWindowUrl, startDesktopUpdate, toggleMaximizeMainWindow } from "../bridge/client";
+import { addPreferencesListener, getPreferences, releaseChannelLabel, releaseChannelToUpdateChannel, savePreferences } from "../bridge/storage";
+import type { ChihuPreferences, ReleaseChannel } from "../bridge/storage";
 import type { NativeUpdateVersionData } from "../native/types";
 
 type SecondaryRoute = {
@@ -105,6 +107,7 @@ interface UpdateNotesDocument {
 }
 
 const UPDATE_NOTES_URL = "./config/update-notes.json";
+const REMOTE_RELEASE_PATH_PATTERN = /\/remote-web\/(current|beta)\//;
 
 const fallbackUpdateNotes: UpdateNotesDocument = {
   schemaVersion: 1,
@@ -176,6 +179,29 @@ function updateStateCopy(state: UpdateCheckState, data: NativeUpdateVersionData 
   if (state === "unsupported") return "暂不支持检查";
   if (state === "error") return "检查失败";
   return "检查更新";
+}
+
+function remoteUrlForReleaseChannel(channel: ReleaseChannel, href = window.location.href) {
+  try {
+    const url = new URL(href);
+    if (!REMOTE_RELEASE_PATH_PATTERN.test(url.pathname)) return "";
+    url.pathname = url.pathname.replace(REMOTE_RELEASE_PATH_PATTERN, `/remote-web/${channel === "beta" ? "beta" : "current"}/`);
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+async function remoteEntryAvailable(url: string) {
+  try {
+    let response = await fetch(url, { method: "HEAD", cache: "no-store" });
+    if (response.ok) return true;
+    if (response.status === 405) {
+      response = await fetch(url, { method: "GET", cache: "no-store" });
+      return response.ok;
+    }
+  } catch {}
+  return false;
 }
 
 function UpdateNotesDialog({
@@ -354,75 +380,168 @@ function VersionCheckDialog({
   );
 }
 
-function ProfileMenu({ workspace }: { workspace: WorkspaceState }) {
-  const userName = workspace.operator || "hhhhh123";
-  const avatarText = userName.trim().slice(0, 1).toLowerCase() || "h";
-  const phone = workspace.phone || "18906311658";
-  const points = workspace.points || "0.1";
+const INVITE_CODE_PATTERN = /^[A-Za-z0-9]{8}$/;
 
-  const menuItems = [
-    { label: "卡密兑换", Icon: CreditCard, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} /> },
-    { label: "消耗日志", Icon: FileClock, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} /> },
-    { label: "更新说明", Icon: Mail, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} /> },
-    { label: "检查更新", Icon: RefreshCcw, suffix: <span className="ml-auto text-[12px] text-[#98a2b3]">暂无版本更新</span> }
-  ];
+function SettingsDialog({
+  open,
+  preferences,
+  onOpenChange,
+  onSaved,
+  onReloadChannel
+}: {
+  open: boolean;
+  preferences: ChihuPreferences;
+  onOpenChange: (open: boolean) => void;
+  onSaved: (preferences: ChihuPreferences) => void;
+  onReloadChannel: (channel: ReleaseChannel) => Promise<"reloaded" | "same" | "unsupported" | "unavailable" | "error">;
+}) {
+  const [draft, setDraft] = useState<ChihuPreferences>(preferences);
+  const [inviteCode, setInviteCode] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const isBeta = draft.releaseChannel === "beta";
+
+  useEffect(() => {
+    if (!open) return;
+    setDraft(preferences);
+    setInviteCode("");
+    setMessage("");
+    setError("");
+  }, [open]);
+
+  function persist(patch: Partial<ChihuPreferences>) {
+    const next = savePreferences(patch);
+    setDraft(next);
+    onSaved(next);
+    return next;
+  }
+
+  async function switchReleaseChannel() {
+    setError("");
+    setMessage("");
+
+    if (isBeta) {
+      const next = persist({
+        releaseChannel: "stable",
+        autoOperationLog: draft.autoOperationLog
+      });
+      const reloadStatus = await onReloadChannel(next.releaseChannel);
+      setMessage(reloadStatus === "reloaded" ? "正在切回正式功能版本。" : "已切回正式功能版本。");
+      return;
+    }
+
+    const normalizedCode = inviteCode.trim().toUpperCase();
+    if (!INVITE_CODE_PATTERN.test(normalizedCode)) {
+      setError("请输入 8 位邀请码。");
+      return;
+    }
+
+    const next = persist({
+      releaseChannel: "beta",
+      betaInviteVerifiedAt: new Date().toISOString(),
+      betaInviteCodeHint: normalizedCode.slice(-4),
+      autoOperationLog: draft.autoOperationLog
+    });
+    setInviteCode("");
+    const reloadStatus = await onReloadChannel(next.releaseChannel);
+    if (reloadStatus === "reloaded") {
+      setMessage("正在切换到内测功能版本。");
+    } else if (reloadStatus === "unavailable") {
+      setMessage("已保存内测功能版本；内测远程包未发布，当前页面保持不变。");
+    } else if (reloadStatus === "unsupported") {
+      setMessage("已保存内测功能版本；当前运行地址不支持远程版本跳转。");
+    } else {
+      setMessage("已切换到内测功能版本。");
+    }
+  }
+
+  function confirm() {
+    persist({ autoOperationLog: draft.autoOperationLog });
+    onOpenChange(false);
+  }
 
   return (
-    <div className="group relative">
-      <button className="inline-flex h-8 items-center gap-2 px-2 font-medium text-[#101828]" type="button">
-        <span className="grid size-5 place-items-center rounded-full bg-brand-navy text-[12px] font-bold text-white">{avatarText}</span>
-        <span>{userName}</span>
-      </button>
-
-      <div className="pointer-events-none absolute right-0 top-[30px] z-50 w-[250px] translate-y-1 opacity-0 transition duration-150 group-focus-within:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100">
-        <div className="mt-2 overflow-hidden rounded-md border border-[#e4eaf3] bg-white text-[#344054] shadow-[0_18px_42px_rgba(15,23,42,0.18)]">
-          <div className="px-5 pb-3 pt-5">
-            <div className="flex min-w-0 items-center gap-3">
-              <span className="grid size-[46px] shrink-0 place-items-center rounded-full bg-[#3d43e9] text-[17px] font-semibold text-white">{avatarText}</span>
-              <div className="min-w-0">
-                <div className="truncate text-[15px] font-semibold leading-5 text-[#1d2939]">{userName}</div>
-                <div className="mt-1 truncate text-[12px] text-[#98a2b3]">手机号： {phone}</div>
-              </div>
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[90] bg-slate-950/24" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[91] flex max-h-[min(680px,calc(100vh-36px))] w-[min(632px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-[#dbe5f2] bg-white shadow-[0_24px_70px_rgba(15,23,42,0.22)]">
+          <div className="flex items-center justify-between gap-4 border-b border-[#edf1f6] px-5 py-4">
+            <div className="min-w-0">
+              <Dialog.Title className="m-0 text-[18px] font-semibold text-[#101828]">设置</Dialog.Title>
+              <Dialog.Description className="mt-1 text-[13px] leading-5 text-[#667085]">版本体验和异常排查配置</Dialog.Description>
             </div>
+            <Dialog.Close className="grid size-8 shrink-0 place-items-center rounded-md border border-[#dbe5f2] text-[#667085] hover:bg-[#f6f8fc]" type="button" aria-label="关闭设置">
+              <X className="size-[15px]" strokeWidth={2} />
+            </Dialog.Close>
+          </div>
 
-            <div className="mt-5 flex items-center justify-center">
-              <div className="min-w-[92px] text-center">
-                <div className="text-[19px] font-bold leading-6 text-[#3346e8]">{points}</div>
-                <div className="mt-1 text-[12px] text-[#344054]">积分</div>
+          <div className="min-h-0 flex-1 overflow-auto px-5 py-5">
+            <section>
+              <h3 className="m-0 text-[16px] font-semibold text-[#101828]">内测体验</h3>
+              <div className="mt-4 grid grid-cols-[48px_minmax(0,234px)_auto] items-center gap-3 max-[560px]:grid-cols-1">
+                <label className="text-[14px] font-medium text-[#344054]" htmlFor="chihu-beta-invite">邀请码</label>
+                <input
+                  id="chihu-beta-invite"
+                  className="h-9 min-w-0 rounded-md border border-[#dbe5f2] bg-white px-3 text-[14px] text-[#101828] outline-none transition-colors placeholder:text-[#98a2b3] focus:border-[#3346e8] focus:ring-2 focus:ring-[#3346e8]/12 disabled:bg-[#f6f8fc] disabled:text-[#98a2b3]"
+                  value={inviteCode}
+                  maxLength={8}
+                  placeholder={isBeta ? `已验证 ****${draft.betaInviteCodeHint || "****"}` : "请输入8位邀请码"}
+                  disabled={isBeta}
+                  onChange={(event) => {
+                    setInviteCode(event.target.value.replace(/\s/g, "").slice(0, 8));
+                    setError("");
+                  }}
+                />
+                <button
+                  className={cn(
+                    "inline-flex h-9 shrink-0 items-center justify-center rounded-md px-4 text-[14px] font-semibold text-white transition-colors max-[560px]:w-full",
+                    isBeta ? "bg-[#475467] hover:bg-[#344054]" : "bg-[#3346e8] hover:bg-[#2738d6]"
+                  )}
+                  type="button"
+                  onClick={() => void switchReleaseChannel()}
+                >
+                  {isBeta ? "切回正式" : "切换版本"}
+                </button>
               </div>
-            </div>
+              <div className="mt-3 text-[14px] leading-6 text-[#344054]">
+                当前环境：<span className="font-semibold text-[#3346e8]">{releaseChannelLabel(draft.releaseChannel)}</span>
+              </div>
+              {message ? <div className="mt-2 text-[13px] leading-5 text-[#087443]">{message}</div> : null}
+              {error ? <div className="mt-2 text-[13px] leading-5 text-[#d92d20]">{error}</div> : null}
+            </section>
+
+            <div className="my-6 h-px bg-[#edf1f6]" />
+
+            <section>
+              <h3 className="m-0 text-[16px] font-semibold text-[#101828]">异常排查</h3>
+              <label className="mt-4 flex cursor-pointer items-center gap-3 text-[14px] font-medium text-[#344054]">
+                <span>功能运行时自动生成操作日志</span>
+                <input
+                  className="peer sr-only"
+                  type="checkbox"
+                  role="switch"
+                  checked={draft.autoOperationLog}
+                  onChange={(event) => {
+                    setDraft((current) => ({ ...current, autoOperationLog: event.target.checked }));
+                    setMessage("");
+                  }}
+                />
+                <span className="relative inline-flex h-5 w-9 shrink-0 rounded-full bg-[#c7ced8] transition-colors peer-checked:bg-[#3346e8] after:absolute after:left-0.5 after:top-0.5 after:size-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:after:translate-x-4" />
+              </label>
+              <p className="m-0 mt-2 max-w-[560px] text-[13px] leading-6 text-[#667085]">
+                店铺同步、经营/资金/违规数据、商品清理或商机提报出现异常时可启用。开启后会记录关键操作状态，便于定位问题。
+              </p>
+            </section>
           </div>
 
-          <div className="px-3 pb-2">
-            {menuItems.map((item, index) => {
-              const Icon = item.Icon;
-              return (
-                <div key={item.label}>
-                  {index === 2 ? <div className="my-1 h-px bg-[#edf1f6]" /> : null}
-                  <button className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] font-medium text-[#475467] transition-colors hover:bg-[#f6f8fc] hover:text-brand-navy" type="button">
-                    <Icon className="size-[16px] shrink-0 text-[#52627a]" strokeWidth={1.9} />
-                    <span>{item.label}</span>
-                    <span className="ml-auto inline-flex items-center">{item.suffix}</span>
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="grid h-11 grid-cols-[1fr_1px_1fr] items-center border-t border-[#edf1f6]">
-            <button className="inline-flex h-full items-center justify-center gap-1.5 text-[13px] font-medium text-[#3346e8] transition-colors hover:bg-[#f6f8fc]" type="button">
-              <Settings className="size-[15px]" strokeWidth={1.9} />
-              <span>设置</span>
-            </button>
-            <span className="h-4 bg-[#d8dee8]" />
-            <button className="inline-flex h-full items-center justify-center gap-1.5 text-[13px] font-medium text-[#f04438] transition-colors hover:bg-[#fff1f0]" type="button">
-              <LogOut className="size-[15px]" strokeWidth={1.9} />
-              <span>退出登录</span>
+          <div className="flex justify-end border-t border-[#edf1f6] bg-[#fbfcff] px-4 py-3">
+            <button className="h-9 rounded-md bg-[#3346e8] px-4 text-[14px] font-semibold text-white hover:bg-[#2738d6]" type="button" onClick={confirm}>
+              确认
             </button>
           </div>
-        </div>
-      </div>
-    </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
@@ -440,6 +559,24 @@ function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
   const [versionData, setVersionData] = useState<NativeUpdateVersionData | null>(null);
   const [updateMessage, setUpdateMessage] = useState("");
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [preferences, setPreferences] = useState<ChihuPreferences>(() => getPreferences());
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement | null>(null);
+  const updateChannel = releaseChannelToUpdateChannel(preferences.releaseChannel);
+
+  async function reloadReleaseChannel(channel: ReleaseChannel): Promise<"reloaded" | "same" | "unsupported" | "unavailable" | "error"> {
+    const targetUrl = remoteUrlForReleaseChannel(channel);
+    if (!targetUrl) return "unsupported";
+    if (targetUrl === window.location.href) return "same";
+    if (!(await remoteEntryAvailable(targetUrl))) return "unavailable";
+    try {
+      window.sessionStorage.setItem(`chihu20_release_redirect:${channel}:${targetUrl}`, "1");
+      return await reloadMainWindowUrl(targetUrl) ? "reloaded" : "error";
+    } catch {
+      return "error";
+    }
+  }
 
   async function checkForUpdate(manual: boolean, isCancelled: boolean | (() => boolean) = false) {
     const cancelled = () => typeof isCancelled === "function" ? isCancelled() : isCancelled;
@@ -449,7 +586,7 @@ function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
     setUpdateMessage(manual ? "正在连接更新源，请稍候。" : "");
 
     try {
-      const data = await getDesktopVersionData();
+      const data = await getDesktopVersionData({ channel: updateChannel });
       if (cancelled()) return;
       setVersionData(data);
       if (data.status === "unavailable" || data.reason === "local_update_bridge_unavailable") {
@@ -493,7 +630,7 @@ function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
     setUpdateMessage("正在准备下载更新包，请不要关闭应用。");
 
     try {
-      const result = await startDesktopUpdate({ autoDownload: true, quitAndInstall: true }) as { ok?: boolean; skipped?: boolean; reason?: string; message?: string };
+      const result = await startDesktopUpdate({ autoDownload: true, quitAndInstall: true, channel: updateChannel }) as { ok?: boolean; skipped?: boolean; reason?: string; message?: string };
       if (result?.skipped) {
         setUpdateMessage("已有更新任务正在进行，请稍候。");
         return;
@@ -508,6 +645,48 @@ function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
       setUpdateMessage(message);
     }
   }
+
+  useEffect(() => {
+    return addPreferencesListener(setPreferences);
+  }, []);
+
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const root = profileMenuRef.current;
+      if (!root || root.contains(event.target as Node)) return;
+      setProfileMenuOpen(false);
+    };
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setProfileMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [profileMenuOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function alignRemoteEntry() {
+      const targetUrl = remoteUrlForReleaseChannel(preferences.releaseChannel);
+      if (!targetUrl || targetUrl === window.location.href) return;
+      const redirectKey = `chihu20_release_redirect:${preferences.releaseChannel}:${targetUrl}`;
+      if (window.sessionStorage.getItem(redirectKey)) return;
+      if (!(await remoteEntryAvailable(targetUrl)) || cancelled) return;
+      window.sessionStorage.setItem(redirectKey, "1");
+      await reloadMainWindowUrl(targetUrl).catch(() => undefined);
+    }
+    void alignRemoteEntry();
+    return () => {
+      cancelled = true;
+    };
+  }, [preferences.releaseChannel]);
 
   useEffect(() => {
     const onUpdateAvailable = (event: Event) => {
@@ -632,19 +811,36 @@ function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
   const menuItems = [
     { key: "license", label: "卡密兑换", Icon: CreditCard, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} /> },
     { key: "logs", label: "消费日志", Icon: FileClock, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} /> },
-    { key: "notes", label: "更新说明", Icon: Mail, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} />, onClick: () => setNotesOpen(true) },
-    { key: "update", label: "检查更新", Icon: RefreshCcw, suffix: versionSuffix, onClick: () => void checkForUpdate(true), disabled: isUpdateBusy(updateState) }
+    { key: "notes", label: "更新说明", Icon: Mail, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} />, onClick: () => {
+      setProfileMenuOpen(false);
+      setNotesOpen(true);
+    } },
+    { key: "update", label: "检查更新", Icon: RefreshCcw, suffix: versionSuffix, onClick: () => {
+      setProfileMenuOpen(false);
+      void checkForUpdate(true);
+    }, disabled: isUpdateBusy(updateState) }
   ];
 
   return (
     <>
-      <div className="group relative">
-        <button className="inline-flex h-8 items-center gap-2 px-2 font-medium text-[#101828]" type="button">
+      <div className="relative" ref={profileMenuRef}>
+        <button
+          className={cn("inline-flex h-8 items-center gap-2 rounded-md px-2 font-medium text-[#101828] transition-colors", profileMenuOpen ? "bg-[#eef3ff]" : "hover:bg-[#f6f8fc]")}
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={profileMenuOpen}
+          onClick={() => setProfileMenuOpen((open) => !open)}
+        >
           <span className="grid size-5 place-items-center rounded-full bg-brand-navy text-[12px] font-bold text-white">{avatarText}</span>
           <span>{userName}</span>
         </button>
 
-        <div className="pointer-events-none absolute right-0 top-[30px] z-50 w-[250px] translate-y-1 opacity-0 transition duration-150 group-focus-within:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100">
+        <div
+          className={cn(
+            "absolute right-0 top-[30px] z-50 w-[250px] transition duration-150",
+            profileMenuOpen ? "pointer-events-auto translate-y-0 opacity-100" : "pointer-events-none translate-y-1 opacity-0"
+          )}
+        >
           <div className="mt-2 overflow-hidden rounded-md border border-[#e4eaf3] bg-white text-[#344054] shadow-[0_18px_42px_rgba(15,23,42,0.18)]">
             <div className="px-5 pb-3 pt-5">
               <div className="flex min-w-0 items-center gap-3">
@@ -685,7 +881,14 @@ function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
             </div>
 
             <div className="grid h-11 grid-cols-[1fr_1px_1fr] items-center border-t border-[#edf1f6]">
-              <button className="inline-flex h-full items-center justify-center gap-1.5 text-[13px] font-medium text-[#3346e8] transition-colors hover:bg-[#f6f8fc]" type="button">
+              <button
+                className="inline-flex h-full items-center justify-center gap-1.5 text-[13px] font-medium text-[#3346e8] transition-colors hover:bg-[#f6f8fc]"
+                type="button"
+                onClick={() => {
+                  setProfileMenuOpen(false);
+                  setSettingsOpen(true);
+                }}
+              >
                 <Settings className="size-[15px]" strokeWidth={1.9} />
                 <span>设置</span>
               </button>
@@ -714,6 +917,13 @@ function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
         onOpenChange={setVersionDialogOpen}
         onRecheck={() => void checkForUpdate(true)}
         onInstall={() => void installUpdate()}
+      />
+      <SettingsDialog
+        open={settingsOpen}
+        preferences={preferences}
+        onOpenChange={setSettingsOpen}
+        onSaved={setPreferences}
+        onReloadChannel={reloadReleaseChannel}
       />
     </>
   );

@@ -1,5 +1,5 @@
-appId: com.chihu.guanjia
-productName: 赤狐管家
+appId: com.chihu.guanjia.beta
+productName: 赤狐管家内测
 copyright: Copyright © 2026 赤狐管家
 
 directories:
@@ -9,6 +9,10 @@ directories:
 asar: true
 electronDist: node_modules/electron/dist
 electronVersion: 43.1.0
+
+extraMetadata:
+  productName: 赤狐管家内测
+  chihuReleaseChannel: beta
 
 files:
   - src/**/*
@@ -36,11 +40,11 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: always
   createStartMenuShortcut: true
-  shortcutName: 赤狐管家
-  artifactName: "chihu-guanjia-${version}-setup.${ext}"
+  shortcutName: 赤狐管家内测
+  artifactName: "chihu-guanjia-beta-${version}-setup.${ext}"
 
 portable:
-  artifactName: "chihu-guanjia-${version}-portable.${ext}"
+  artifactName: "chihu-guanjia-beta-${version}-portable.${ext}"
 
 publish:
   provider: generic

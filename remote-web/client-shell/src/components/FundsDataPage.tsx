@@ -194,7 +194,7 @@ const sampleStores: StoreOption[] = [
 ];
 
 function hasNativeStoreBridge() {
-  return Boolean(window.chihuNative && window.indexedDB);
+  return Boolean(window.chihuNative && (window.nativeData || window.chihuNative.nativeData));
 }
 
 function normalizeStoreStatus(status: unknown): DoudianStoreStatus {

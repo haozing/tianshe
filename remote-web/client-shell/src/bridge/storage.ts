@@ -34,6 +34,30 @@ export const defaultWorkspace: WorkspaceState = {
   points: "0.1"
 };
 
+export type ReleaseChannel = "stable" | "beta";
+
+export interface ChihuPreferences {
+  density: "comfortable" | "compact";
+  routeOpenMode: "same-window" | "new-window";
+  navPlacement: "bottom" | "top";
+  releaseChannel: ReleaseChannel;
+  betaInviteVerifiedAt: string;
+  betaInviteCodeHint: string;
+  autoOperationLog: boolean;
+}
+
+export const PREFERENCES_CHANGED_EVENT = "chihu:preferences-changed";
+
+export const defaultPreferences: ChihuPreferences = {
+  density: "comfortable",
+  routeOpenMode: "same-window",
+  navPlacement: "bottom",
+  releaseChannel: "stable",
+  betaInviteVerifiedAt: "",
+  betaInviteCodeHint: "",
+  autoOperationLog: false
+};
+
 export function isChihuStorageKey(key: string) {
   return key.startsWith("chihu20_") && /^chihu20_[a-z0-9_]+$/.test(key);
 }
@@ -53,6 +77,57 @@ export function storageSet<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
 
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function preferenceString<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof value === "string" && allowed.includes(value as T) ? value as T : fallback;
+}
+
+export function normalizePreferences(value: unknown): ChihuPreferences {
+  const record = objectRecord(value);
+  return {
+    density: preferenceString(record.density, ["comfortable", "compact"], defaultPreferences.density),
+    routeOpenMode: preferenceString(record.routeOpenMode, ["same-window", "new-window"], defaultPreferences.routeOpenMode),
+    navPlacement: preferenceString(record.navPlacement, ["bottom", "top"], defaultPreferences.navPlacement),
+    releaseChannel: preferenceString(record.releaseChannel, ["stable", "beta"], defaultPreferences.releaseChannel),
+    betaInviteVerifiedAt: typeof record.betaInviteVerifiedAt === "string" ? record.betaInviteVerifiedAt : "",
+    betaInviteCodeHint: typeof record.betaInviteCodeHint === "string" ? record.betaInviteCodeHint : "",
+    autoOperationLog: record.autoOperationLog === true
+  };
+}
+
+export function getPreferences(): ChihuPreferences {
+  return normalizePreferences(storageGet(STORAGE_KEY_PREFERENCES, defaultPreferences));
+}
+
+export function savePreferences(patch: Partial<ChihuPreferences>): ChihuPreferences {
+  const next = normalizePreferences({
+    ...getPreferences(),
+    ...patch
+  });
+  storageSet(STORAGE_KEY_PREFERENCES, next);
+  window.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED_EVENT, { detail: next }));
+  return next;
+}
+
+export function addPreferencesListener(listener: (preferences: ChihuPreferences) => void) {
+  const onChange = (event: Event) => {
+    listener(normalizePreferences((event as CustomEvent<ChihuPreferences>).detail));
+  };
+  window.addEventListener(PREFERENCES_CHANGED_EVENT, onChange);
+  return () => window.removeEventListener(PREFERENCES_CHANGED_EVENT, onChange);
+}
+
+export function releaseChannelLabel(channel: ReleaseChannel) {
+  return channel === "beta" ? "内测功能版本" : "正式功能版本";
+}
+
+export function releaseChannelToUpdateChannel(channel: ReleaseChannel) {
+  return channel === "beta" ? "beta" : "latest";
+}
+
 export function initStorage() {
   const now = new Date().toISOString();
   const meta = storageGet<{ initializedAt?: string }>(STORAGE_KEY_META, {});
@@ -62,11 +137,7 @@ export function initStorage() {
     updatedAt: now,
     foundation: "client-shell"
   });
-  storageSet(STORAGE_KEY_PREFERENCES, storageGet(STORAGE_KEY_PREFERENCES, {
-    density: "comfortable",
-    routeOpenMode: "same-window",
-    navPlacement: "bottom"
-  }));
+  storageSet(STORAGE_KEY_PREFERENCES, getPreferences());
   storageSet(STORAGE_KEY_DIAGNOSTICS, storageGet(STORAGE_KEY_DIAGNOSTICS, []));
   storageSet(STORAGE_KEY_DOUDIAN_ADAPTER_LKG, storageGet(STORAGE_KEY_DOUDIAN_ADAPTER_LKG, {
     schemaVersion: 1,
