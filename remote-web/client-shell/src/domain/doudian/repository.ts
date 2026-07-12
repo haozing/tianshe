@@ -31,9 +31,65 @@ export const DOUDIAN_OBJECT_STORES = [
 
 export type DoudianObjectStoreName = typeof DOUDIAN_OBJECT_STORES[number];
 
+const REPOSITORY_WRITE_CONCURRENCY = 16;
+
+function normalizeRepositoryWriteConcurrency(value?: number) {
+  const numeric = Number(value || REPOSITORY_WRITE_CONCURRENCY);
+  if (!Number.isFinite(numeric)) return REPOSITORY_WRITE_CONCURRENCY;
+  return Math.max(1, Math.min(64, Math.floor(numeric)));
+}
+
+function arrayLength(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function withoutDuplicatedArray<T extends { id: string }>(record: T, key: string, countKey: string, refStoreName: DoudianObjectStoreName) {
+  if (!Array.isArray((record as Record<string, unknown>)[key])) return record;
+  return {
+    ...record,
+    [key]: [],
+    [countKey]: arrayLength(record as Record<string, unknown>, key),
+    largeArrayRef: {
+      storeName: refStoreName,
+      sourceRunId: String((record as Record<string, unknown>).runId || record.id || "")
+    }
+  } as T;
+}
+
+function compactRunRecordForNativeStore<T extends { id: string }>(storeName: DoudianObjectStoreName, record: T): T {
+  if (storeName === "stale_scan_runs") return withoutDuplicatedArray(record, "candidates", "candidateCount", "stale_candidates");
+  if (storeName === "bulk_delete_scan_runs_v1") return withoutDuplicatedArray(record, "candidates", "candidateCount", "bulk_delete_candidates_v1");
+  if (storeName === "opportunity_clue_scan_runs_v1") return withoutDuplicatedArray(record, "rows", "rowCount", "opportunity_clue_candidates_v1");
+  if (storeName === "opportunity_product_scan_runs_v1") return withoutDuplicatedArray(record, "products", "productCount", "opportunity_product_candidates_v1");
+  if (storeName === "opportunity_prematch_runs_v1") return withoutDuplicatedArray(record, "candidates", "candidateCount", "opportunity_prematch_candidates_v1");
+  return record;
+}
+
 export async function repositoryPut<T extends { id: string }>(storeName: DoudianObjectStoreName, record: T): Promise<T> {
-  const result = await requireNativeData().records.put({ storeName, record: record as unknown as Record<string, unknown> });
+  const storedRecord = compactRunRecordForNativeStore(storeName, record);
+  const result = await requireNativeData().records.put({ storeName, record: storedRecord as unknown as Record<string, unknown> });
   return (result.record || record) as T;
+}
+
+export async function repositoryPutMany<T extends { id: string }>(
+  storeName: DoudianObjectStoreName,
+  records: T[],
+  options: { concurrency?: number } = {}
+): Promise<T[]> {
+  if (!records.length) return [];
+  const concurrency = Math.min(records.length, normalizeRepositoryWriteConcurrency(options.concurrency));
+  const output = new Array<T>(records.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= records.length) return;
+      output[index] = await repositoryPut(storeName, records[index]);
+    }
+  }));
+  return output;
 }
 
 export async function repositoryGet<T>(storeName: DoudianObjectStoreName, id: string): Promise<T | null> {

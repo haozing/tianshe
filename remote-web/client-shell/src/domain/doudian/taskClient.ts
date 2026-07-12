@@ -24,6 +24,7 @@ import type { DoudianStoreResult } from "../../types";
 const runnerWindows = new Map<string, number>();
 let channel: BroadcastChannel | null = null;
 const DEFAULT_RUNNER_PARTITION = "persist:chihu-default";
+const MAX_OPERATION_RESULT_RECORD_BYTES = 4 * 1024 * 1024;
 type OperationLogPhase = "started" | "succeeded" | "failed" | "cancelled";
 
 type TaskWaiter = {
@@ -33,6 +34,18 @@ type TaskWaiter = {
 };
 
 const waiters = new Map<string, TaskWaiter[]>();
+
+function estimateJsonBytes(value: unknown) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function shouldPersistOperationResult(value: unknown) {
+  return estimateJsonBytes(value) <= MAX_OPERATION_RESULT_RECORD_BYTES;
+}
 
 function operationLogPayload(record: DoudianOperationRecord | null | undefined) {
   if (!record) return {};
@@ -114,13 +127,19 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
     const resultStatus = message.result && typeof message.result === "object"
       ? String((message.result as { status?: unknown }).status || "")
       : "";
+    const persistResult = message.result === undefined || shouldPersistOperationResult(message.result);
     const record = existing?.status === "cancelled"
       ? existing
       : message.resultSummary === "cancelled" || resultStatus === "cancelled"
         ? await markOperationCancelled(message.operationId)
       : message.result !== undefined
-        ? await markOperationFullResult(message.operationId, message.resultSummary || "completed", message.result)
+        ? persistResult
+          ? await markOperationFullResult(message.operationId, message.resultSummary || "completed", message.result)
+          : await markOperationResult(message.operationId, message.resultSummary || "completed")
         : await markOperationResult(message.operationId, message.resultSummary || "completed");
+    const waiterRecord = record && message.result !== undefined && !persistResult
+      ? { ...record, result: message.result }
+      : record;
     dispatchDoudianProgress({
       operationId: message.operationId,
       taskType: record?.taskType,
@@ -129,10 +148,11 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
       resultSummary: message.resultSummary
     });
     void reportOperationLog(record?.status === "cancelled" ? "cancelled" : "succeeded", record || null, {
-      resultSummary: message.resultSummary || ""
+      resultSummary: message.resultSummary || "",
+      resultPersisted: persistResult
     });
     await destroyRunnerWindow(message.operationId);
-    resolveWaiters(message.operationId, record || null);
+    resolveWaiters(message.operationId, waiterRecord || null);
   }
   if (message.type === "task:error") {
     const existing = await getOperation(message.operationId);

@@ -1,6 +1,6 @@
 import type { DoudianAdapterPayload, DoudianStoreGroup, DoudianStoreResult, DoudianStoreSummary } from "../../types";
 import { getChihuNative } from "../../native/client";
-import { repositoryDelete, repositoryGet, repositoryGetAll, repositoryPut } from "./repository";
+import { repositoryDelete, repositoryGet, repositoryGetAll, repositoryPut, repositoryPutMany } from "./repository";
 
 const DEFAULT_GROUP_NAME = "未分组";
 const ALL_GROUP_NAME = "全部分组";
@@ -259,7 +259,7 @@ export async function renameStoreGroup(oldGroupName: string, nextGroupName: stri
   const normalizedNextName = normalizeGroupName(nextName);
 
   if (normalizedNextName) await ensureGroup(normalizedNextName, normalizedNextName);
-  await Promise.all(changed.map((store) => repositoryPut("stores", {
+  await repositoryPutMany("stores", changed.map((store) => ({
     ...store,
     groupId: normalizedNextName ? normalizedNextName : "",
     groupName: normalizedNextName,
@@ -317,7 +317,7 @@ export async function updateStoreGroup(shopIds: string[], groupName: string): Pr
   if (normalizedGroupName) await ensureGroup(normalizedGroupName, normalizedGroupName);
 
   const existing = (await Promise.all(ids.map((id) => repositoryGet<StoreRecord>("stores", id)))).filter((store): store is StoreRecord => !!store);
-  await Promise.all(existing.map((store) => repositoryPut("stores", {
+  await repositoryPutMany("stores", existing.map((store) => ({
     ...store,
     groupId: normalizedGroupName ? normalizedGroupName : "",
     groupName: normalizedGroupName,

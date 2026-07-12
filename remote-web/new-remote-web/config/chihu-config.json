@@ -11,10 +11,18 @@
     "shellVersion": "client-shell"
   },
   "features": {
-    "diagnostics": { "enabled": true },
-    "bridgeSelfCheck": { "enabled": true },
-    "storageHealth": { "enabled": true },
-    "businessSlot": { "enabled": true }
+    "diagnostics": {
+      "enabled": true
+    },
+    "bridgeSelfCheck": {
+      "enabled": true
+    },
+    "storageHealth": {
+      "enabled": true
+    },
+    "businessSlot": {
+      "enabled": true
+    }
   },
   "assets": {
     "shellEntry": "./app.js",
@@ -26,7 +34,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "local-client-shell",
-    "buildTime": "2026-07-04T00:00:00+08:00"
+    "gitCommit": "4feeb84-dirty",
+    "buildTime": "2026-07-12T03:27:33.196Z"
   }
 }

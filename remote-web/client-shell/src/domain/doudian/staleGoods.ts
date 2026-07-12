@@ -10,7 +10,7 @@ import type {
   DoudianStaleGoodsRules,
   DoudianStoreSummary
 } from "../../types";
-import { repositoryDelete, repositoryGetAll, repositoryPut } from "./repository";
+import { repositoryDelete, repositoryGetAll, repositoryPut, repositoryPutMany } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { requireChihuNative } from "../../native/client";
@@ -814,9 +814,7 @@ async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSumm
 
 async function saveScanRun(record: ScanRunRecord) {
   await repositoryPut("stale_scan_runs", record);
-  for (const candidate of record.candidates) {
-    await repositoryPut("stale_candidates", { ...candidate, id: candidate.id });
-  }
+  await repositoryPutMany("stale_candidates", record.candidates.map((candidate) => ({ ...candidate, id: candidate.id })));
 }
 
 function scanSummary(rows: DoudianStaleGoodsRow[], candidates: DoudianStaleGoodsCandidate[], details: DoudianRunDetail[], sourceHealth: Array<Record<string, unknown>>) {
@@ -1041,7 +1039,14 @@ export async function fetchStaleGoodsCleanup(args: StaleGoodsArgs = {}): Promise
 
 export async function restoreLatestStaleGoodsScan() {
   const runs = await repositoryGetAll<ScanRunRecord>("stale_scan_runs");
-  return runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  const latest = runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  if (!latest) return null;
+  if (latest.candidates?.length) return latest;
+  const candidates = await repositoryGetAll<DoudianStaleGoodsCandidate>("stale_candidates").catch(() => []);
+  return {
+    ...latest,
+    candidates: candidates.filter((candidate) => candidate.sourceRunId === latest.runId || candidate.sourceRunId === latest.id)
+  };
 }
 
 export async function restoreLatestStaleGoodsExecute() {

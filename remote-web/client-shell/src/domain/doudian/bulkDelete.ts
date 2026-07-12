@@ -17,7 +17,7 @@ import type {
 } from "../../types";
 import { requireChihuNative } from "../../native/client";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
-import { repositoryDelete, repositoryGetAll, repositoryPut } from "./repository";
+import { repositoryDelete, repositoryGetAll, repositoryPut, repositoryPutMany } from "./repository";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
 
@@ -745,9 +745,7 @@ async function scanStoresWithConcurrency(payload: DoudianAdapterPayload, targets
 
 async function saveScanRun(record: ScanRunRecord) {
   await repositoryPut(bulkDeleteScanStore, record);
-  for (const candidate of record.candidates) {
-    await repositoryPut(bulkDeleteCandidateStore, { ...candidate, id: candidate.id });
-  }
+  await repositoryPutMany(bulkDeleteCandidateStore, record.candidates.map((candidate) => ({ ...candidate, id: candidate.id })));
 }
 
 function scanSummary(rows: DoudianBulkDeleteRow[], candidates: DoudianBulkDeleteCandidate[], details: DoudianRunDetail[], sourceHealth: Array<Record<string, unknown>>) {
@@ -1415,7 +1413,14 @@ export async function fetchBulkDeleteProducts(args: BulkDeleteArgs = {}): Promis
 
 export async function restoreLatestBulkDeleteScan() {
   const runs = await repositoryGetAll<ScanRunRecord>(bulkDeleteScanStore);
-  return runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  const latest = runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  if (!latest) return null;
+  if (latest.candidates?.length) return latest;
+  const candidates = await repositoryGetAll<DoudianBulkDeleteCandidate>(bulkDeleteCandidateStore).catch(() => []);
+  return {
+    ...latest,
+    candidates: candidates.filter((candidate) => candidate.sourceRunId === latest.runId || candidate.sourceRunId === latest.id)
+  };
 }
 
 export async function restoreLatestBulkDeleteExecute() {

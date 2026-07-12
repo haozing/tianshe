@@ -15,7 +15,7 @@ import type {
   DoudianRunDetail,
   DoudianStoreSummary
 } from "../../types";
-import { repositoryDelete, repositoryGetAll, repositoryPut } from "./repository";
+import { repositoryDelete, repositoryGetAll, repositoryPut, repositoryPutMany } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
@@ -694,17 +694,17 @@ function scanSummary(details: DoudianRunDetail[], clueRows: DoudianOpportunityCl
 
 async function saveClueScan(record: ClueScanRunRecord) {
   await repositoryPut(clueScanStore, record);
-  await Promise.all(record.rows.map((row) => repositoryPut(clueCandidateStore, { ...row, id: row.id })));
+  await repositoryPutMany(clueCandidateStore, record.rows.map((row) => ({ ...row, id: row.id })));
 }
 
 async function saveProductScan(record: ProductScanRunRecord) {
   await repositoryPut(productScanStore, record);
-  await Promise.all(record.products.map((row) => repositoryPut(productCandidateStore, { ...row, id: row.id })));
+  await repositoryPutMany(productCandidateStore, record.products.map((row) => ({ ...row, id: row.id })));
 }
 
 async function savePrematchRun(record: PrematchRunRecord) {
   await repositoryPut(prematchRunStore, record);
-  await Promise.all(record.candidates.map((row) => repositoryPut(prematchCandidateStore, { ...row, id: row.id })));
+  await repositoryPutMany(prematchCandidateStore, record.candidates.map((row) => ({ ...row, id: row.id })));
 }
 
 function prematchMode(args: OpportunityArgs): DoudianOpportunityPrematchMode {
@@ -985,6 +985,12 @@ async function loadPrematchCandidates(args: OpportunityArgs) {
     if (!selected.size) return true;
     return selected.has(row.id) || selected.has(row.candidateId || "");
   });
+}
+
+async function loadPrematchesForRun(runId: string) {
+  if (!runId) return [];
+  const stored = await repositoryGetAll<DoudianOpportunityPrematchCandidate>(prematchCandidateStore).catch(() => []);
+  return stored.filter((row) => row.matchRunId === runId || row.sourceRunId === runId);
 }
 
 async function latestRunId<T extends { updatedAt: string; runId: string }>(storeName: typeof productScanStore | typeof clueScanStore) {
@@ -2093,7 +2099,7 @@ async function recordSubmitAttempts(args: {
   const date = todayKey();
   const now = nowIso();
   const submitExecutions = args.executions.filter((item) => item.stage === "submit" && item.planKey === "opportunitySubmitClue");
-  await Promise.all(submitExecutions.map((item) => repositoryPut(submitAttemptStore, {
+  await repositoryPutMany(submitAttemptStore, submitExecutions.map((item) => ({
     id: `${date}-${args.runId}-${args.candidate.id}-${item.productId || args.candidate.productId}`,
     date,
     runId: args.runId,
@@ -2287,7 +2293,7 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
     });
   }
 
-  await Promise.all(updatedCandidates.map((candidate) => repositoryPut(prematchCandidateStore, candidate)));
+  await repositoryPutMany(prematchCandidateStore, updatedCandidates);
   const failedCount = executions.filter((item) => item.ok === false).length;
   const result = await saveExecuteResult(payload, ledger, {
     runId,
@@ -2540,6 +2546,9 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
   const latestProduct = productRuns.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
   const latestPrematch = prematchRuns.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
   const latestExecute = executeRuns.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  const latestClues = latestClue?.rows?.length ? latestClue.rows : await loadCluesForRun(latestClue?.runId || "");
+  const latestProducts = latestProduct?.products?.length ? latestProduct.products : await loadProductsForRun(latestProduct?.runId || "");
+  const latestPrematches = latestPrematch?.candidates?.length ? latestPrematch.candidates : await loadPrematchesForRun(latestPrematch?.runId || "");
   const limit = dailyAttemptLimit(args, adapterPayload(args).adapter);
   const used = (await listSubmitAttempts()).length;
   return {
@@ -2553,10 +2562,10 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
     productRunId: latestPrematch?.productRunId || latestProduct?.runId,
     clueRunId: latestPrematch?.clueRunId || latestClue?.runId,
     matchRunId: latestPrematch?.runId,
-    rows: latestClue?.rows || [],
-    clues: latestClue?.rows || [],
-    products: latestProduct?.products || [],
-    prematches: latestPrematch?.candidates || [],
+    rows: latestClues,
+    clues: latestClues,
+    products: latestProducts,
+    prematches: latestPrematches,
     executions: latestExecute?.executions || [],
     details: latestExecute?.details || latestClue?.details || latestProduct?.details || [],
     summary: latestExecute?.summary || latestPrematch?.summary || latestClue?.scanSummary || latestProduct?.scanSummary || {},
@@ -2572,12 +2581,18 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
 
 export async function restoreLatestOpportunityClueScan() {
   const runs = await repositoryGetAll<ClueScanRunRecord>(clueScanStore);
-  return runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  const latest = runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  if (!latest) return null;
+  if (latest.rows?.length) return latest;
+  return { ...latest, rows: await loadCluesForRun(latest.runId) };
 }
 
 export async function restoreLatestOpportunityProductScan() {
   const runs = await repositoryGetAll<ProductScanRunRecord>(productScanStore);
-  return runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  const latest = runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  if (!latest) return null;
+  if (latest.products?.length) return latest;
+  return { ...latest, products: await loadProductsForRun(latest.runId) };
 }
 
 export async function restoreLatestOpportunityExecute() {

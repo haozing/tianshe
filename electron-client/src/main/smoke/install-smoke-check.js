@@ -1438,7 +1438,7 @@ function installSmokeCheck(win) {
                 const runtime = window.chihuDoudianTaskRuntime;
                 if (!runtime) throw new Error("chihuDoudianTaskRuntime missing");
                 const repositorySelfCheck = await runtime.repositorySelfCheck();
-                if (!repositorySelfCheck || repositorySelfCheck.ok !== true || repositorySelfCheck.dbName !== "chihu20_doudian" || repositorySelfCheck.objectStores.length < 9) {
+                if (!repositorySelfCheck || repositorySelfCheck.ok !== true || !["chihu20_doudian", "chihu-business.sqlite3"].includes(repositorySelfCheck.dbName) || repositorySelfCheck.objectStores.length < 9) {
                   throw new Error("doudian repository self check failed");
                 }
                 const task = await runtime.startMock({
