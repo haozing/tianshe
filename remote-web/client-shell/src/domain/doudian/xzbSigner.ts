@@ -7,6 +7,7 @@ export const XZB_SIGN_USER_AGENT =
 export interface XzbSignRequest {
   targetUrl: string;
   partition?: string;
+  planKey?: string;
   plan?: Record<string, unknown>;
   context?: Record<string, unknown>;
 }

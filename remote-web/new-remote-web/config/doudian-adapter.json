@@ -1879,6 +1879,14 @@
         "opportunityClueGoodsList.data.data.total",
         "opportunityClueGoodsList.total"
       ],
+      "clueWordPaths": [
+        "data.data",
+        "data",
+        "data.words",
+        "data.list",
+        "words",
+        "list"
+      ],
       "fieldScales": {
         "price": 100
       },
@@ -1921,6 +1929,58 @@
           "categoryId",
           "leaf_category_id",
           "leafCategoryId"
+        ],
+        "productCategoryPath": [
+          "category_path",
+          "categoryPath",
+          "category_name",
+          "categoryName",
+          "category"
+        ],
+        "productCategoryName": [
+          "category_name",
+          "categoryName",
+          "category"
+        ],
+        "productCategoryId": [
+          "category_id",
+          "categoryId",
+          "leaf_category_id",
+          "leafCategoryId",
+          "category_leaf_id",
+          "categoryLeafId",
+          "category_detail.leaf_cid",
+          "categoryDetail.leafCid",
+          "category_detail.fourth_cid",
+          "categoryDetail.fourthCid",
+          "category_detail.third_cid",
+          "categoryDetail.thirdCid",
+          "category_detail.second_cid",
+          "categoryDetail.secondCid",
+          "category_detail.first_cid",
+          "categoryDetail.firstCid"
+        ],
+        "productLastCategoryKey": [
+          "levelKey",
+          "level_key",
+          "lastCategoryKey",
+          "last_category_key"
+        ],
+        "clueCategoryPath": [
+          "clue_detail.category_path",
+          "clue_detail.categoryPath",
+          "clueDetail.category_path",
+          "clueDetail.categoryPath",
+          "category_path",
+          "categoryPath"
+        ],
+        "clueCategoryId": [
+          "clue_detail.fourth_cid",
+          "clue_detail.third_cid",
+          "clue_detail.second_cid",
+          "clue_detail.first_cid",
+          "clue_detail.leaf_category_id",
+          "clue_detail.category_id"
         ],
         "createdAt": [
           "create_time",
@@ -4901,6 +4961,8 @@
       "submitRetryDelayMs": 5900,
       "maxTitleLength": 60,
       "enableRemoteClueWords": false,
+      "pipelineCacheScope": "shop",
+      "enableGlobalPipelineCache": false,
       "titleAppendSeparator": " ",
       "requestPlans": [
         "opportunityClueRealtimeList",

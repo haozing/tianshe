@@ -98,6 +98,24 @@ export interface NativeUpdateVersionData {
   error?: string;
 }
 
+export interface NativeTextSegmentRequest {
+  texts: string[];
+  mode?: "search" | "default";
+  stopwordVersion?: string;
+  minTokenLength?: number;
+}
+
+export interface NativeTextSegmentResult {
+  tokenizerVersion: string;
+  stopwordVersion: string;
+  tokenizerFallback?: boolean;
+  fallbackReason?: string;
+  items: Array<{
+    source: string;
+    tokens: string[];
+  }>;
+}
+
 export interface ChihuNativeApi {
   app: {
     getInfo: () => Promise<unknown>;
@@ -151,6 +169,9 @@ export interface ChihuNativeApi {
   };
   partitions: {
     cleanInvalid: (args?: unknown) => Promise<unknown>;
+  };
+  text: {
+    segment: (args: NativeTextSegmentRequest) => Promise<NativeTextSegmentResult>;
   };
   nativeData: NativeDataApi;
 }

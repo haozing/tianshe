@@ -731,6 +731,7 @@ function installSmokeCheck(win) {
               backupOk: false,
               schemaOk: false,
               recordApiOk: false,
+              pipelineV2StoreOk: false,
               featureApiOk: false,
               storeIdentityOk: false,
               coverageKeyOk: false,
@@ -804,6 +805,23 @@ function installSmokeCheck(win) {
                 const listedRecords = await withTimeout("nativeDataRecordList", nativeData.records.list({ storeName: "runtime_meta", limit: 5 }), 5000);
                 const deletedRecord = await withTimeout("nativeDataRecordDelete", nativeData.records.delete({ storeName: "runtime_meta", id: recordId }), 5000);
                 sqlite.recordApiOk = !!putRecord && putRecord.ok === true && gotRecord?.id === recordId && Array.isArray(listedRecords.items) && deletedRecord?.ok === true;
+
+                sqlite.steps.push("pipelineV2RecordStore");
+                const pipelineRecordId = "pipeline-v2-store-smoke-" + suffix;
+                const putPipelineRecord = await withTimeout("nativeDataPipelineV2RecordPut", nativeData.records.put({
+                  storeName: "opportunity_pipeline_runs_v2",
+                  record: { id: pipelineRecordId, kind: "pipeline-v2-store-smoke", updatedAt: new Date().toISOString() }
+                }), 5000);
+                const listedPipelineRecords = await withTimeout("nativeDataPipelineV2RecordList", nativeData.records.list({ storeName: "opportunity_pipeline_runs_v2", limit: 5 }), 5000);
+                const deletedPipelineRecord = await withTimeout("nativeDataPipelineV2RecordDelete", nativeData.records.delete({
+                  storeName: "opportunity_pipeline_runs_v2",
+                  id: pipelineRecordId
+                }), 5000);
+                sqlite.pipelineV2StoreOk = !!putPipelineRecord &&
+                  putPipelineRecord.ok === true &&
+                  Array.isArray(listedPipelineRecords.items) &&
+                  listedPipelineRecords.items.some((item) => item && item.id === pipelineRecordId) &&
+                  deletedPipelineRecord?.ok === true;
 
                 sqlite.steps.push("largeRecordApi");
                 const largeRecordId = "large-record-smoke-" + suffix;
@@ -1252,6 +1270,7 @@ function installSmokeCheck(win) {
               sqlite.backupOk &&
               sqlite.schemaOk &&
               sqlite.recordApiOk &&
+              sqlite.pipelineV2StoreOk &&
               sqlite.largeRecordApiOk &&
               sqlite.featureApiOk &&
               sqlite.storeIdentityOk &&
@@ -1287,6 +1306,7 @@ function installSmokeCheck(win) {
             logDirOk: false,
             childWindowOk: false,
             nativeContractOk: false,
+            nativeTextSegmentOk: false,
             nativeHiddenWindowOk: false,
             nativeHttpOk: false,
             nativeFileOk: false,
@@ -1297,6 +1317,7 @@ function installSmokeCheck(win) {
             remoteMetricBOk: false,
             remoteMetricCOk: false,
             doudianFileImportOk: false,
+            doudianOpportunityReportOk: false,
             remoteProductScanOk: false,
             remoteProductExecuteOk: false,
             steps: [],
@@ -1320,7 +1341,22 @@ function installSmokeCheck(win) {
                 !!native.files?.readFile &&
                 !!native.notifications?.send &&
                 !!native.logs?.report &&
-                !!native.partitions?.cleanInvalid;
+                !!native.partitions?.cleanInvalid &&
+                !!native.text?.segment;
+
+              bridge.steps.push("nativeTextSegment");
+              const segmentResult = await withTimeout("nativeTextSegment", native.text.segment({
+                texts: ["\u8d64\u72d0\u5546\u673a\u63d0\u62a5\u5206\u8bcd smoke", "keyword match"],
+                mode: "search",
+                minTokenLength: 2
+              }), 5000);
+              bridge.nativeTextSegmentOk = !!segmentResult &&
+                typeof segmentResult.tokenizerVersion === "string" &&
+                segmentResult.tokenizerVersion.length > 0 &&
+                segmentResult.tokenizerFallback !== true &&
+                Array.isArray(segmentResult.items) &&
+                segmentResult.items.length === 2 &&
+                segmentResult.items.some((item) => Array.isArray(item.tokens) && item.tokens.length > 0);
 
               bridge.steps.push("getAppInfo");
               const appInfo = await withTimeout("getAppInfo", window.client.getAppInfo());
@@ -1536,6 +1572,18 @@ function installSmokeCheck(win) {
                 fileImportSelfCheck.tsvOk === true &&
                 fileImportSelfCheck.xlsxOk === true;
 
+              bridge.steps.push("doudianOpportunityReport");
+              const opportunityReportSelfCheck = await withTimeout("doudianOpportunityReportSelfCheck", storeRuntime["opportunity" + "ReportSelfCheck"](), 20000);
+              bridge.doudianOpportunityReportOk = !!opportunityReportSelfCheck &&
+                opportunityReportSelfCheck.ok === true &&
+                opportunityReportSelfCheck.clueScanOk === true &&
+                opportunityReportSelfCheck.productScanOk === true &&
+                opportunityReportSelfCheck.submitDryRunOk === true &&
+                opportunityReportSelfCheck.collectDryRunOk === true &&
+                opportunityReportSelfCheck.pipelineDryRunOk === true &&
+                opportunityReportSelfCheck.pipelineRestoreOk === true &&
+                opportunityReportSelfCheck.restoreOk === true;
+
               bridge.steps.push("remoteProductScan");
               const productScanSelfCheck = await withTimeout("remoteProductScanSelfCheck", storeRuntime["stale" + "GoodsScanSelfCheck"](), 10000);
               bridge.remoteProductScanOk = !!productScanSelfCheck &&
@@ -1605,6 +1653,7 @@ function installSmokeCheck(win) {
             bridge.logDirOk &&
             bridge.childWindowOk &&
             bridge.nativeContractOk &&
+            bridge.nativeTextSegmentOk &&
             bridge.nativeHiddenWindowOk &&
             bridge.nativeHttpOk &&
             bridge.nativeFileOk &&
@@ -1615,6 +1664,7 @@ function installSmokeCheck(win) {
             bridge.remoteMetricBOk &&
             bridge.remoteMetricCOk &&
             bridge.doudianFileImportOk &&
+            bridge.doudianOpportunityReportOk &&
             bridge.remoteProductScanOk &&
             bridge.remoteProductExecuteOk;
 

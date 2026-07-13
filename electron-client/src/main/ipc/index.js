@@ -8,6 +8,7 @@ const { registerPartitionHandlers } = require("./partitions");
 const { registerLogHandlers } = require("./logs");
 const { registerUpdateHandlers } = require("./updates");
 const { registerBusinessDatabaseHandlers } = require("./business-database");
+const { registerTextSegmentationHandlers } = require("./text-segmentation");
 
 function registerIpcHandlers(context) {
   registerAppInfoHandlers(context);
@@ -20,6 +21,7 @@ function registerIpcHandlers(context) {
   registerLogHandlers(context);
   registerUpdateHandlers(context);
   registerBusinessDatabaseHandlers(context);
+  registerTextSegmentationHandlers(context);
 }
 
 module.exports = { registerIpcHandlers };

@@ -98,6 +98,17 @@ export type NativeDataRecordStoreName =
   | "opportunity_prematch_candidates_v1"
   | "opportunity_execute_runs_v1"
   | "opportunity_submit_attempts_v1"
+  | "opportunity_pipeline_runs_v2"
+  | "opportunity_pipeline_store_runs_v2"
+  | "opportunity_store_category_snapshots_v2"
+  | "opportunity_store_category_ledger_v2"
+  | "opportunity_clue_cache_v2"
+  | "opportunity_clue_cache_shards_v2"
+  | "opportunity_clue_word_cache_v2"
+  | "opportunity_clue_word_cache_shards_v2"
+  | "opportunity_pipeline_candidates_v2"
+  | "opportunity_pipeline_submit_tasks_v2"
+  | "opportunity_pipeline_operation_events_v2"
   | "operations"
   | "runtime_meta";
 

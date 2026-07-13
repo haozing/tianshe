@@ -35,7 +35,6 @@ import { FundsDataPage } from "./components/FundsDataPage";
 import { HomePage } from "./components/HomePage";
 import { ModulePage } from "./components/ModulePage";
 import { OpportunityProductPrematchPage } from "./components/OpportunityProductPrematchPage";
-import { OpportunityReportPage } from "./components/OpportunityReportPage";
 import { ShellHeader } from "./components/ShellHeader";
 import { SlowMovingCleanupPage } from "./components/SlowMovingCleanupPage";
 import { StoreManagementPage } from "./components/StoreManagementPage";
@@ -279,9 +278,7 @@ export function App() {
             <FundsDataPage />
           ) : state.route === "/warnings" ? (
             <ViolationsPage />
-          ) : state.route === "/opportunities" ? (
-            <OpportunityReportPage />
-          ) : state.route === "/opportunities/product-prematch" ? (
+          ) : state.route === "/opportunities" || state.route === "/opportunities/product-prematch" ? (
             <OpportunityProductPrematchPage />
           ) : effectiveRoute === "/products/slow-moving" ? (
             <SlowMovingCleanupPage />

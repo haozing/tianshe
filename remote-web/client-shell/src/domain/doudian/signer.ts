@@ -5,6 +5,7 @@ import { signWithXzbMstoken } from "./xzbSigner";
 export interface SignRequest {
   targetUrl: string;
   partition?: string;
+  planKey?: string;
   plan?: Record<string, unknown>;
   context?: Record<string, unknown>;
 }
@@ -49,6 +50,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
       await requireChihuNative().logs.report({
         category: "doudian-request-plan",
         event: "signed",
+        planKey: request.planKey,
         partition: request.partition || payload.adapter.signerPartition || payload.adapter.sourcePartition,
         openUrl: text(plan.signerUrl),
         targetUrl: request.targetUrl,
@@ -66,6 +68,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
     await requireChihuNative().logs.report({
       category: "doudian-request-plan",
       event: "sign-failed",
+      planKey: request.planKey,
       partition: request.partition || payload.adapter.signerPartition || payload.adapter.sourcePartition,
       openUrl: text(plan.signerUrl),
       targetUrl: request.targetUrl,
@@ -128,6 +131,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
       await native.logs.report({
         category: "doudian-request-plan",
         event: "signed",
+        planKey: request.planKey,
         partition,
         openUrl: signerUrl,
         targetUrl: request.targetUrl,
@@ -148,6 +152,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
     await native.logs.report({
       category: "doudian-request-plan",
       event: "sign-failed",
+      planKey: request.planKey,
       partition,
       openUrl: signerUrl,
       targetUrl: request.targetUrl,
@@ -167,6 +172,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
     await native.logs.report({
       category: "doudian-request-plan",
       event: "sign-failed",
+      planKey: request.planKey,
       partition,
       openUrl: signerUrl,
       targetUrl: request.targetUrl,

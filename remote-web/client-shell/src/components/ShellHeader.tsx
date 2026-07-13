@@ -14,7 +14,6 @@ import {
   LogOut,
   Mail,
   Maximize2,
-  Megaphone,
   Minus,
   Loader2,
   RefreshCcw,
@@ -58,8 +57,7 @@ const warningSubRoutes: SecondaryRoute[] = [
 ];
 
 const opportunitySubRoutes: SecondaryRoute[] = [
-  { label: "商机提报", route: "/opportunities", Icon: Megaphone },
-  { label: "商品预匹配提报", route: "/opportunities/product-prematch", Icon: Target }
+  { label: "商机提报", route: "/opportunities/product-prematch", Icon: Target }
 ];
 
 const productSubRoutes: SecondaryRoute[] = [
@@ -70,7 +68,7 @@ const productSubRoutes: SecondaryRoute[] = [
 const topRoutes: TopRoute[] = [
   { label: "店铺管理", route: "/stores", href: "/stores", subRoutes: storeSubRoutes },
   { label: "预警/违规", route: "/warnings", href: "/warnings", subRoutes: warningSubRoutes },
-  { label: "商机中心", route: "/opportunities", href: "/opportunities", subRoutes: opportunitySubRoutes },
+  { label: "商机中心", route: "/opportunities", href: "/opportunities/product-prematch", subRoutes: opportunitySubRoutes },
   { label: "商品管理", route: "/products", href: "/products/slow-moving", subRoutes: productSubRoutes }
 ];
 

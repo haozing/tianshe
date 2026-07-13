@@ -258,6 +258,9 @@ const chihuNative = {
   partitions: {
     cleanInvalid: invoke("native:partitions:cleanInvalid")
   },
+  text: {
+    segment: invoke("native:text:segment")
+  },
   nativeData
 };
 

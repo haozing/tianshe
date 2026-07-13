@@ -5,20 +5,23 @@ import type {
   DoudianOpportunityExecution,
   DoudianOpportunityFilters,
   DoudianOpportunityGoodsMatchType,
+  DoudianOpportunityMatchRules,
   DoudianOpportunityPrematchCandidate,
   DoudianOpportunityPrematchMode,
   DoudianOpportunityProductRow,
   DoudianOpportunityReportResult,
+  DoudianOpportunityStoreCategoryLedger,
   DoudianOpportunitySubmitMode,
   DoudianOpportunityTitleMatchMode,
   DoudianOpportunityTitleUpdatePosition,
   DoudianRunDetail,
   DoudianStoreSummary
 } from "../../types";
-import { repositoryDelete, repositoryGetAll, repositoryPut, repositoryPutMany } from "./repository";
+import { repositoryDelete, repositoryGet, repositoryGetAll, repositoryGetAllByPrefix, repositoryGetMany, repositoryPut, repositoryPutMany } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
+import { getChihuNative } from "../../native/client";
 
 const clueScanStore = "opportunity_clue_scan_runs_v1" as const;
 const clueCandidateStore = "opportunity_clue_candidates_v1" as const;
@@ -28,15 +31,47 @@ const prematchRunStore = "opportunity_prematch_runs_v1" as const;
 const prematchCandidateStore = "opportunity_prematch_candidates_v1" as const;
 const opportunityExecuteStore = "opportunity_execute_runs_v1" as const;
 const submitAttemptStore = "opportunity_submit_attempts_v1" as const;
+const pipelineRunStore = "opportunity_pipeline_runs_v2" as const;
+const pipelineStoreRunStore = "opportunity_pipeline_store_runs_v2" as const;
+const storeCategorySnapshotStore = "opportunity_store_category_snapshots_v2" as const;
+const storeCategoryLedgerStore = "opportunity_store_category_ledger_v2" as const;
+const clueCacheStore = "opportunity_clue_cache_v2" as const;
+const clueCacheShardStore = "opportunity_clue_cache_shards_v2" as const;
+const clueWordCacheStore = "opportunity_clue_word_cache_v2" as const;
+const clueWordCacheShardStore = "opportunity_clue_word_cache_shards_v2" as const;
+const pipelineCandidateStore = "opportunity_pipeline_candidates_v2" as const;
+const pipelineSubmitTaskStore = "opportunity_pipeline_submit_tasks_v2" as const;
+const pipelineOperationEventStore = "opportunity_pipeline_operation_events_v2" as const;
 
 const defaultActiveKey = "11,MATCH_DEGREE";
 const submitBatchSizeFallback = 40;
+const latestPipelineCandidatePreviewLimit = 200;
+const productCategoryIdFallbackPaths = [
+  "category_id",
+  "categoryId",
+  "leaf_category_id",
+  "leafCategoryId",
+  "category_leaf_id",
+  "categoryLeafId",
+  "category_detail.leaf_cid",
+  "categoryDetail.leafCid",
+  "category_detail.fourth_cid",
+  "categoryDetail.fourthCid",
+  "category_detail.third_cid",
+  "categoryDetail.thirdCid",
+  "category_detail.second_cid",
+  "categoryDetail.secondCid",
+  "category_detail.first_cid",
+  "categoryDetail.firstCid"
+];
+let pipelineSubmitWorkerRunning = false;
 
 interface OpportunityArgs {
   doudianAdapter?: DoudianAdapterPayload;
   mode?: string;
   shopIds?: string[];
   filters?: DoudianOpportunityFilters;
+  matchRules?: DoudianOpportunityMatchRules;
   submitMode?: DoudianOpportunitySubmitMode | string;
   goodsMatchType?: DoudianOpportunityGoodsMatchType | string;
   matchMode?: DoudianOpportunityPrematchMode | string;
@@ -158,8 +193,206 @@ interface ExecuteRunRecord {
   updatedAt: string;
 }
 
+interface PipelineStoreIdentity {
+  tenantId: string;
+  shopId: string;
+  shopName: string;
+  storeGeneration: number;
+  partition?: string;
+  group?: string;
+}
+
+interface StoreCategorySummary {
+  categoryId: string;
+  categoryName: string;
+  categoryPath: string[];
+  lastCategoryKey: string;
+  categoryKey: string;
+  productCount: number;
+  sampleProductIds: string[];
+}
+
+interface PipelineRunRecord {
+  id: string;
+  runId: string;
+  operationId?: string;
+  mode: "pipeline-submit";
+  filters: DoudianOpportunityFilters;
+  matchRules: DoudianOpportunityMatchRules;
+  shopIds: string[];
+  tenantId: string;
+  clientCapability: Record<string, unknown>;
+  status: "running" | "partial" | "ok" | "failed" | "cancelled";
+  totalStoreCount: number;
+  processedStoreCount: number;
+  submittedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  summary: Record<string, number>;
+  adapterVersion: string;
+  scriptsVersion: string;
+  requestPlanHash: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface PipelineStoreRunRecord extends PipelineStoreIdentity {
+  id: string;
+  runId: string;
+  status: string;
+  phase: "product-scan" | "category-ledger" | "clue-load" | "tokenize" | "match" | "submit-queued" | "submitting" | "finished";
+  productCount: number;
+  currentCategoryCount: number;
+  effectiveCategoryCount: number;
+  clueCount: number;
+  tokenCount: number;
+  candidateCount: number;
+  eligibleCandidateCount?: number;
+  submittedCount: number;
+  failedCount: number;
+  skipReason?: string;
+  sourceHealth?: Array<Record<string, unknown>>;
+  startedAt: string;
+  updatedAt: string;
+  finishedAt?: string;
+}
+
+interface StoreCategorySnapshotRecord extends PipelineStoreIdentity {
+  id: string;
+  runId: string;
+  categories: StoreCategorySummary[];
+  productCount: number;
+  missingCategoryProductCount: number;
+  createdAt: string;
+}
+
+interface StoreCategoryLedgerRecord extends PipelineStoreIdentity {
+  id: string;
+  categoryId: string;
+  categoryName: string;
+  categoryPath: string[];
+  lastCategoryKey: string;
+  categoryKey: string;
+  productCount: number;
+  seenCount: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  sampleProductIds: string[];
+}
+
+interface PipelineSubmitTaskRecord extends PipelineStoreIdentity {
+  id: string;
+  runId: string;
+  storeRunId: string;
+  status: "queued" | "running" | "ok" | "partial" | "failed" | "cancelled";
+  concurrencyKey: string;
+  ownerRunId?: string;
+  candidateIds: string[];
+  candidateCount: number;
+  submittedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  startedAt?: string;
+  leaseExpiresAt?: string;
+  finishedAt?: string;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface PipelineOperationEventRecord {
+  id: string;
+  runId: string;
+  storeRunId?: string;
+  shopId?: string;
+  level: "info" | "warn" | "error";
+  event: string;
+  message: string;
+  detail?: Record<string, unknown>;
+  createdAt: string;
+}
+
+interface ClueCacheRecord extends PipelineStoreIdentity {
+  id: string;
+  categoryKey: string;
+  filterHash: string;
+  requestPlanHash: string;
+  adapterVersion: string;
+  cacheScope: "shop" | "global";
+  scopeId: string;
+  shardCount: number;
+  rowCount: number;
+  remoteTotal: number;
+  sourceHealth: Array<Record<string, unknown>>;
+  sourceShopId: string;
+  shopScoped: boolean;
+  clueWordsSource: "realtime" | "clueWordsApi" | "mixed";
+  clueWordsRequestHash: string;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ClueCacheShardRecord {
+  id: string;
+  clueCacheKey: string;
+  categoryKey: string;
+  filterHash: string;
+  cacheScope: "shop" | "global";
+  scopeId: string;
+  shardNo: number;
+  rows: DoudianOpportunityClueRow[];
+  rowCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ClueWordCacheRecord {
+  id: string;
+  clueCacheKey: string;
+  tokenizerVersion: string;
+  stopwordVersion: string;
+  categoryKey: string;
+  filterHash: string;
+  cacheScope: "shop" | "global";
+  scopeId: string;
+  shardCount: number;
+  tokenCount: number;
+  clueCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ClueWordCacheShardRecord {
+  id: string;
+  wordCacheKey: string;
+  clueCacheKey: string;
+  shardNo: number;
+  tokens: string[];
+  tokenToClueIds: Record<string, string[]>;
+  clueTokens: Record<string, string[]>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface TokenIndex {
+  wordCacheKey: string;
+  tokenizerVersion: string;
+  stopwordVersion: string;
+  tokens: string[];
+  tokenToClueIds: Record<string, string[]>;
+  clueTokens: Record<string, string[]>;
+}
+
 function text(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function platformIntId(value: unknown) {
+  const raw = text(value);
+  if (!/^\d+$/.test(raw)) return raw;
+  const next = Number(raw);
+  return Number.isSafeInteger(next) ? next : raw;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {
@@ -292,9 +525,134 @@ function readText(record: unknown, adapter: DoudianAdapterConfig, field: string,
   return text(readField(record, adapter, field, fallbackPaths)) || fallback;
 }
 
+function readNonZeroText(record: unknown, adapter: DoudianAdapterConfig, field: string, fallbackPaths: string[] = []) {
+  for (const path of fieldPaths(adapter, field, fallbackPaths)) {
+    const value = text(path ? getPathValue(record, path) : record);
+    if (value && value !== "0") return value;
+  }
+  return "";
+}
+
 function readNumber(record: unknown, adapter: DoudianAdapterConfig, field: string, fallback = 0, fallbackPaths: string[] = []) {
   const value = coerceNumber(readField(record, adapter, field, fallbackPaths));
   return value === undefined ? fallback : value / fieldScale(adapter, field);
+}
+
+function compactDiagnosticValue(value: unknown, depth = 0): unknown {
+  if (value == null || typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "string") return value.length > 180 ? `${value.slice(0, 180)}...` : value;
+  if (Array.isArray(value)) return value.slice(0, 6).map((item) => compactDiagnosticValue(item, depth + 1));
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const entries = Object.entries(record).slice(0, depth >= 2 ? 8 : 16);
+    return Object.fromEntries(entries.map(([key, next]) => [key, compactDiagnosticValue(next, depth + 1)]));
+  }
+  return text(value).slice(0, 180);
+}
+
+function diagnosticPathLooksUseful(path: string) {
+  const lower = path.toLocaleLowerCase();
+  return /category|cate|cid|类目|first|second|third|fourth|leaf/.test(lower);
+}
+
+function collectDiagnosticPathValues(record: unknown, maxDepth = 5, maxItems = 80) {
+  const rows: Array<{ path: string; value: unknown }> = [];
+  const visit = (value: unknown, path: string, depth: number) => {
+    if (rows.length >= maxItems || depth > maxDepth || value == null) return;
+    if (Array.isArray(value)) {
+      value.slice(0, 4).forEach((item, index) => visit(item, `${path}[${index}]`, depth + 1));
+      return;
+    }
+    if (typeof value !== "object") return;
+    for (const [key, next] of Object.entries(value as Record<string, unknown>)) {
+      const nextPath = path ? `${path}.${key}` : key;
+      if (diagnosticPathLooksUseful(nextPath)) {
+        rows.push({ path: nextPath, value: compactDiagnosticValue(next) });
+        if (rows.length >= maxItems) return;
+      }
+      visit(next, nextPath, depth + 1);
+      if (rows.length >= maxItems) return;
+    }
+  };
+  visit(record, "", 0);
+  return rows;
+}
+
+function configuredFieldDiagnostic(record: Record<string, unknown>, adapter: DoudianAdapterConfig, field: string, fallbackPaths: string[] = []) {
+  return fieldPaths(adapter, field, fallbackPaths).map((path) => {
+    const value = path ? getPathValue(record, path) : record;
+    return {
+      path,
+      present: value !== undefined && value !== null && text(value) !== "",
+      value: compactDiagnosticValue(value)
+    };
+  });
+}
+
+function productCategoryParseDiagnostic(
+  rawRows: Record<string, unknown>[],
+  products: DoudianOpportunityProductRow[],
+  adapter: DoudianAdapterConfig,
+  remoteTotal: number,
+  sourceHealth: Array<Record<string, unknown>>
+) {
+  const byRawIndex = new Map<number, DoudianOpportunityProductRow>();
+  for (const product of products) {
+    const index = Number(objectRecord(product.raw).__row_index);
+    if (Number.isInteger(index)) byRawIndex.set(index, product);
+  }
+  const missingIdIndexes = products
+    .filter((product) => !text(product.categoryId) && (text(product.categoryName) || product.categoryPath?.length))
+    .map((product) => Number(objectRecord(product.raw).__row_index))
+    .filter((index) => Number.isInteger(index));
+  const sampleIndexes = uniqueText([...missingIdIndexes, 0, 1, 2, 3].map((index) => String(index))).slice(0, 4).map((index) => Number(index));
+  const samples = sampleIndexes
+    .filter((index) => rawRows[index])
+    .map((index) => {
+      const raw = rawRows[index];
+      const product = byRawIndex.get(index);
+      return {
+        rowIndex: index,
+        topLevelKeys: Object.keys(raw).slice(0, 80),
+        configuredFields: {
+          productId: configuredFieldDiagnostic(raw, adapter, "productId", ["product_id", "productId", "goods_id", "goodsId", "id"]),
+          productCategoryId: configuredFieldDiagnostic(raw, adapter, "productCategoryId", productCategoryIdFallbackPaths),
+          productCategoryPath: configuredFieldDiagnostic(raw, adapter, "productCategoryPath", ["category_path", "categoryPath", "category_name", "categoryName", "category"]),
+          productCategoryName: configuredFieldDiagnostic(raw, adapter, "productCategoryName", ["category_name", "categoryName", "category"]),
+          productLastCategoryKey: configuredFieldDiagnostic(raw, adapter, "productLastCategoryKey", ["levelKey", "level_key", "lastCategoryKey", "last_category_key"])
+        },
+        usefulRawPaths: collectDiagnosticPathValues(raw),
+        normalized: product ? {
+          productId: product.productId,
+          title: compactDiagnosticValue(product.title),
+          categoryId: product.categoryId,
+          categoryName: product.categoryName,
+          categoryPath: product.categoryPath,
+          lastCategoryKey: product.lastCategoryKey
+        } : null
+      };
+    });
+  return {
+    rawRowCount: rawRows.length,
+    productCount: products.length,
+    remoteTotal,
+    sourceHealth,
+    categoryIdCount: products.filter((product) => text(product.categoryId)).length,
+    categoryNameCount: products.filter((product) => text(product.categoryName)).length,
+    categoryPathCount: products.filter((product) => product.categoryPath?.length).length,
+    missingCategoryIdWithCategoryCount: products.filter((product) => !text(product.categoryId) && (text(product.categoryName) || product.categoryPath?.length)).length,
+    samples
+  };
+}
+
+async function reportOpportunityPipelineDiagnostic(event: string, detail: Record<string, unknown>) {
+  const native = getChihuNative();
+  if (!native?.logs?.report) return;
+  await native.logs.report({
+    category: "opportunity-pipeline-diagnostic",
+    event,
+    ...detail
+  }).catch(() => undefined);
 }
 
 function normalizeDate(value: unknown) {
@@ -321,6 +679,46 @@ function categoryLevelKey(level: number) {
   return "fourth_cid";
 }
 
+function isCategoryLevelKey(key: string) {
+  return key === "first_cid" || key === "second_cid" || key === "third_cid" || key === "fourth_cid";
+}
+
+function categoryDetailValue(detail: Record<string, unknown>, key: string) {
+  if (key === "first_cid") return text(detail.first_cid || detail.firstCid);
+  if (key === "second_cid") return text(detail.second_cid || detail.secondCid);
+  if (key === "third_cid") return text(detail.third_cid || detail.thirdCid);
+  if (key === "fourth_cid") return text(detail.fourth_cid || detail.fourthCid);
+  return "";
+}
+
+function inferProductCategoryLevelKey(raw: Record<string, unknown>, leafId: string, fallbackPathLength = 0) {
+  const detail = objectRecord(raw.category_detail || raw.categoryDetail);
+  const leaf = text(
+    leafId ||
+    raw.category_leaf_id ||
+    raw.categoryLeafId ||
+    raw.leaf_category_id ||
+    raw.leafCategoryId ||
+    detail.leaf_cid ||
+    detail.leafCid
+  );
+  const keys = ["fourth_cid", "third_cid", "second_cid", "first_cid"];
+  if (leaf) {
+    const matched = keys.find((key) => {
+      const value = categoryDetailValue(detail, key);
+      return value && value !== "0" && value === leaf;
+    });
+    if (matched) return matched;
+  }
+  const deepest = keys.find((key) => {
+    const value = categoryDetailValue(detail, key);
+    return value && value !== "0";
+  });
+  if (deepest) return deepest;
+  if (fallbackPathLength) return categoryLevelKey(fallbackPathLength);
+  return "";
+}
+
 function categoryPathNames(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => {
@@ -328,6 +726,36 @@ function categoryPathNames(value: unknown) {
     const record = objectRecord(item);
     return text(record.name || record.label || record.category_name || record.categoryName || record.title);
   }).filter(Boolean);
+}
+
+function normalizeCategoryPath(value: unknown) {
+  if (Array.isArray(value)) return categoryPathNames(value);
+  const source = text(value);
+  if (!source) return [];
+  return source.split(/[>／/]/).map((part) => part.trim()).filter(Boolean);
+}
+
+function categoryKeyOf(value: { categoryId?: string; categoryPath?: string[]; categoryName?: string; lastCategoryKey?: string }) {
+  const id = text(value.categoryId);
+  const path = (value.categoryPath || []).map(text).filter(Boolean).join(">");
+  const name = text(value.categoryName);
+  const configuredKey = text(value.lastCategoryKey);
+  const key = isCategoryLevelKey(configuredKey)
+    ? configuredKey
+    : (value.categoryPath?.length ? categoryLevelKey(value.categoryPath.length) : "");
+  if (!id && !path && !name) return "";
+  return [key || "category_id", id || path || name].filter(Boolean).join(":");
+}
+
+function normalizePipelineStoreIdentity(store: DoudianStoreSummary): PipelineStoreIdentity {
+  return {
+    tenantId: text(store.tenantId) || "local-user",
+    shopId: store.shopId,
+    shopName: store.shopName,
+    storeGeneration: Math.max(1, Math.floor(Number(store.storeGeneration || 1))),
+    partition: store.partition,
+    group: store.groupName || ""
+  };
 }
 
 function labelNames(value: unknown, key: string) {
@@ -427,6 +855,30 @@ function normalizeProduct(
   const productId = readText(raw, adapter, "productId", "", ["product_id", "productId", "goods_id", "goodsId", "id"]);
   if (!productId) return null;
   const title = readText(raw, adapter, "title", productId, ["title", "name", "product_name", "productName", "goods_name"]);
+  const categoryPath = normalizeCategoryPath(readField(raw, adapter, "productCategoryPath", [
+    "category_path",
+    "categoryPath",
+    "category_name",
+    "categoryName",
+    "category"
+  ]));
+  const categoryName = readText(raw, adapter, "productCategoryName", "", [
+    "category_name",
+    "categoryName",
+    "category"
+  ]) || categoryPath[categoryPath.length - 1] || "";
+  const category = categoryPath.length ? categoryPath.join(">") : categoryName;
+  const categoryId = readNonZeroText(raw, adapter, "productCategoryId", productCategoryIdFallbackPaths);
+  const configuredLastCategoryKey = readText(raw, adapter, "productLastCategoryKey", "", [
+    "levelKey",
+    "level_key",
+    "lastCategoryKey",
+    "last_category_key"
+  ]);
+  const inferredLastCategoryKey = inferProductCategoryLevelKey(raw, categoryId, categoryPath.length);
+  const lastCategoryKey = isCategoryLevelKey(configuredLastCategoryKey)
+    ? configuredLastCategoryKey
+    : inferredLastCategoryKey || (categoryPath.length ? categoryLevelKey(categoryPath.length) : "");
   return {
     id: `${runId}-${store.shopId}-${productId}`,
     candidateId: `${store.shopId}-${productId}`,
@@ -437,8 +889,11 @@ function normalizeProduct(
     productId,
     title,
     img: readText(raw, adapter, "img", "", ["pic_url", "img", "image", "cover", "main_image", "mainImage"]),
-    category: readText(raw, adapter, "category", "", ["category_name", "categoryName", "category_path", "categoryPath"]),
-    categoryId: readText(raw, adapter, "categoryId", "", ["category_id", "categoryId", "leaf_category_id", "leafCategoryId"]),
+    category,
+    categoryId,
+    categoryName,
+    categoryPath,
+    lastCategoryKey,
     price: readNumber(raw, adapter, "price", 0, ["price", "min_price", "minPrice"]),
     stock: readNumber(raw, adapter, "stock", 0, ["stock_num", "stockNum", "stock", "inventory"]),
     sales: readNumber(raw, adapter, "sales", 0, ["sell_num", "sellNum", "sale_num", "saleNum", "sales"]),
@@ -480,17 +935,133 @@ function planOk(response: RequestPlanResult | undefined, adapter: DoudianAdapter
   return requestPlanResponseOk(response, adapter, planKey, mappings(adapter));
 }
 
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (!value || typeof value !== "object") return JSON.stringify(value);
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(",")}}`;
+}
+
+function stableHash(value: unknown) {
+  const textValue = typeof value === "string" ? value : stableStringify(value);
+  let hash = 0;
+  for (let index = 0; index < textValue.length; index += 1) hash = ((hash << 5) - hash + textValue.charCodeAt(index)) | 0;
+  return Math.abs(hash).toString(16).padStart(8, "0");
+}
+
 function requestPlanHash(adapter: DoudianAdapterConfig) {
-  return `${adapter.version || ""}:${policyText(adapter, "opportunityReport.fieldSchemaVersion", "")}:${policyArray(adapter, "opportunityReport.requestPlans").join("|")}`;
+  const planKeys = ["opportunityClueRealtimeList", "opportunityClueWords", "opportunitySubmitClue", "opportunityProductList"];
+  return stableHash({
+    adapterVersion: adapter.version || "",
+    fieldSchemaVersion: policyText(adapter, "opportunityReport.fieldSchemaVersion", ""),
+    plans: planKeys.map((key) => ({
+      key,
+      endpoint: adapter.endpoints?.[text(objectRecord(adapter.requestPlans?.[key]).endpointKey || key)] || "",
+      plan: adapter.requestPlans?.[key] || {}
+    })),
+    mappings: {
+      clueListPaths: mappingArray(adapter, "clueListPaths"),
+      clueTotalPaths: mappingArray(adapter, "clueTotalPaths"),
+      productListPaths: mappingArray(adapter, "productListPaths"),
+      productTotalPaths: mappingArray(adapter, "productTotalPaths"),
+      fields: objectRecord(mappings(adapter).fields)
+    },
+    policies: {
+      cluePageSize: policy(adapter, "opportunityReport.cluePageSize"),
+      maxCluePages: policy(adapter, "opportunityReport.maxCluePages"),
+      productPageSize: policy(adapter, "opportunityReport.productPageSize"),
+      maxProductListPages: policy(adapter, "opportunityReport.maxProductListPages"),
+      enableRemoteClueWords: policy(adapter, "opportunityReport.enableRemoteClueWords")
+    }
+  });
+}
+
+function normalizedClueFilter(filters: DoudianOpportunityFilters = {}, adapter: DoudianAdapterConfig) {
+  const activeKey = text(filters.activeKey || defaultActiveKey);
+  const [, sortField] = activeKey.split(",");
+  return {
+    activeKey,
+    keyword: text(filters.keyword),
+    tagIdList: [...(filters.tagIdList || [])].map(Number).filter(Number.isFinite).sort((a, b) => a - b),
+    profitIdList: [...(filters.profitIdList || [])].map(Number).filter(Number.isFinite).sort((a, b) => a - b),
+    benefitContentType: benefitContentTypeFilter(filters.benefitContentType).sort(),
+    recentlyDayType: Number(filters.recentlyDayType ?? 3),
+    clueBrandExists: filters.clueBrandExists === undefined ? null : filters.clueBrandExists,
+    cluePage: Number(filters.cluePage || 2),
+    pageSize: Math.max(10, Math.min(100, Math.floor(Number(filters.pageSize || policyNumber(adapter, "opportunityReport.cluePageSize", 72, 10, 100))))),
+    maxPages: Math.max(1, Math.min(10, Math.floor(Number(filters.maxPages || filters.cluePage || policyNumber(adapter, "opportunityReport.maxCluePages", 2, 1, 10))))),
+    sortField: sortField || "MATCH_DEGREE",
+    sortDirection: 1
+  };
+}
+
+function stableFilterHash(filters: DoudianOpportunityFilters = {}, adapter: DoudianAdapterConfig) {
+  return stableHash(normalizedClueFilter(filters, adapter));
+}
+
+function stableMatchRulesHash(args: OpportunityArgs) {
+  const rules = normalizeOpportunityMatchRules(args.matchRules);
+  return stableHash({
+    storeCategoryKeys: [...(rules.storeCategoryKeys || [])].sort(),
+    minTokenHitRatio: rules.minTokenHitRatio,
+    matchMode: prematchMode(args),
+    skipSubmittedClueCategory: args.skipSubmittedClueCategory === true,
+    skipSubmittedClue: args.skipSubmittedClue === true,
+    skipSubmittedProductInSameClue: args.skipSubmittedProductInSameClue !== false
+  });
+}
+
+function assertOpportunityPipelineContract(adapter: DoudianAdapterConfig) {
+  const missing: string[] = [];
+  const requiredPlans = [
+    "opportunityProductList",
+    "opportunityClueRealtimeList",
+    "opportunityClueWords",
+    "opportunitySubmitClue"
+  ];
+  for (const planKey of requiredPlans) {
+    const plan = objectRecord(adapter.requestPlans?.[planKey]);
+    const endpointKey = text(plan.endpointKey || planKey);
+    if (!Object.keys(plan).length) missing.push(`requestPlans.${planKey}`);
+    if (!endpointKey || !adapter.endpoints?.[endpointKey]) missing.push(`endpoints.${endpointKey || planKey}`);
+  }
+  const requiredListMappings: Array<[string, string[]]> = [
+    ["clueListPaths", ["opportunityClueRealtimeList.data", "opportunityClueRealtimeList.data.data", "opportunityClueRealtimeList.list"]],
+    ["productListPaths", ["opportunityProductList.data", "opportunityProductList.data.list", "opportunityProductList.list"]],
+    ["productTotalPaths", ["opportunityProductList.data.total", "opportunityProductList.total"]]
+  ];
+  for (const [key, fallback] of requiredListMappings) {
+    if (!mappingArray(adapter, key, fallback).length) missing.push(`responseMappings.opportunityReport.${key}`);
+  }
+  if (!mappingArray(adapter, "clueWordPaths", ["data.data", "data", "data.words", "data.list", "words", "list"]).length) {
+    missing.push("responseMappings.opportunityReport.clueWordPaths");
+  }
+  const requiredFields: Array<[string, string[]]> = [
+    ["productId", ["product_id", "productId", "goods_id", "goodsId", "id"]],
+    ["title", ["title", "name", "product_name", "productName", "goods_name"]],
+    ["productCategoryId", productCategoryIdFallbackPaths],
+    ["productCategoryPath", ["category_path", "categoryPath", "category_name", "categoryName", "category"]],
+    ["productCategoryName", ["category_name", "categoryName", "category"]],
+    ["productLastCategoryKey", ["levelKey", "level_key", "lastCategoryKey", "last_category_key"]]
+  ];
+  for (const [field, fallback] of requiredFields) {
+    if (!fieldPaths(adapter, field, fallback).length) missing.push(`responseMappings.opportunityReport.fields.${field}`);
+  }
+  if (missing.length) throw new Error(`opportunity pipeline adapter contract missing: ${uniqueText(missing).join(", ")}`);
 }
 
 function categoryFilter(filters: DoudianOpportunityFilters = {}) {
   const path = filters.categoryPath || [];
   const last = path[path.length - 1];
   if (last?.id != null && last.id !== "") {
-    return [{ [last.key || categoryLevelKey(Number(last.level || path.length || 3))]: last.id }];
+    const key = isCategoryLevelKey(text(last.key))
+      ? text(last.key)
+      : categoryLevelKey(Number(last.level || path.length || 3));
+    return [{ [key]: platformIntId(last.id) }];
   }
-  if (filters.categoryLeafId != null && filters.categoryLeafId !== "") return [{ third_cid: filters.categoryLeafId }];
+  if (filters.categoryLeafId != null && filters.categoryLeafId !== "") {
+    return [{ third_cid: platformIntId(filters.categoryLeafId) }];
+  }
   return undefined;
 }
 
@@ -653,6 +1224,17 @@ async function scanProductsForStore(
   const products = rawRows
     .map((row, rowIndex) => normalizeProduct(store, row, payload.adapter, runId, rowIndex, extra))
     .filter((row): row is DoudianOpportunityProductRow => Boolean(row));
+  const categoryDiagnostic = productCategoryParseDiagnostic(rawRows, products, payload.adapter, remoteTotal, sourceHealth);
+  if (categoryDiagnostic.missingCategoryIdWithCategoryCount > 0 || (products.length > 0 && categoryDiagnostic.categoryIdCount === 0)) {
+    await reportOpportunityPipelineDiagnostic("product-category-id-scan", {
+      runId,
+      shopId: store.shopId,
+      shopName: store.shopName,
+      partition: store.partition,
+      categoryLeafId,
+      diagnostic: categoryDiagnostic
+    });
+  }
   const ok = args.mockProducts?.length ? true : sourceHealth.some((item) => item.ok === true);
   const detail: DoudianRunDetail = {
     shopId: store.shopId,
@@ -673,6 +1255,863 @@ async function scanProductsForStore(
     total
   };
   return { products, detail, sourceHealth, remoteTotal };
+}
+
+function extractCurrentStoreCategories(products: DoudianOpportunityProductRow[]) {
+  const byKey = new Map<string, StoreCategorySummary>();
+  let missingCategoryProductCount = 0;
+  for (const product of products) {
+    const categoryKey = categoryKeyOf(product);
+    if (!categoryKey || (!product.categoryId && !product.categoryName && !product.categoryPath?.length)) {
+      missingCategoryProductCount += 1;
+      continue;
+    }
+    const current = byKey.get(categoryKey) || {
+      categoryId: text(product.categoryId),
+      categoryName: text(product.categoryName || product.category),
+      categoryPath: (product.categoryPath || normalizeCategoryPath(product.category)).map(text).filter(Boolean),
+      lastCategoryKey: isCategoryLevelKey(text(product.lastCategoryKey))
+        ? text(product.lastCategoryKey)
+        : (product.categoryPath?.length ? categoryLevelKey(product.categoryPath.length) : "third_cid"),
+      categoryKey,
+      productCount: 0,
+      sampleProductIds: []
+    };
+    current.productCount += 1;
+    if (current.sampleProductIds.length < 10 && product.productId) current.sampleProductIds.push(product.productId);
+    byKey.set(categoryKey, current);
+  }
+  return {
+    categories: Array.from(byKey.values()),
+    missingCategoryProductCount
+  };
+}
+
+function effectiveStoreCategories(categories: StoreCategorySummary[], matchRules: DoudianOpportunityMatchRules = {}) {
+  const selected = new Set((matchRules.storeCategoryKeys || []).map(text).filter(Boolean));
+  return selected.size ? categories.filter((category) => selected.has(category.categoryKey)) : categories;
+}
+
+function storeScopeId(identity: PipelineStoreIdentity) {
+  return `${identity.tenantId}-${identity.shopId}-${identity.storeGeneration}`;
+}
+
+function pipelineCacheScope(adapter: DoudianAdapterConfig): "shop" | "global" {
+  const requested = policyText(adapter, "opportunityReport.pipelineCacheScope", "shop").toLocaleLowerCase();
+  const globalEnabled = policyBoolean(adapter, "opportunityReport.enableGlobalPipelineCache", false);
+  return requested === "global" && globalEnabled ? "global" : "shop";
+}
+
+function pipelineScopeId(cacheScope: "shop" | "global", identity: PipelineStoreIdentity) {
+  return cacheScope === "global" ? "global" : storeScopeId(identity);
+}
+
+function storeRunId(runId: string, identity: PipelineStoreIdentity) {
+  return `${runId}-${storeScopeId(identity)}`;
+}
+
+function pipelineRunRecordPrefix(runId: string) {
+  return `${runId}-`;
+}
+
+async function loadPipelineStoreRunsForRun(runId: string, maxItems = 10000) {
+  const id = text(runId);
+  if (!id) return [];
+  return repositoryGetAllByPrefix<PipelineStoreRunRecord>(
+    pipelineStoreRunStore,
+    pipelineRunRecordPrefix(id),
+    { pageSize: 500, maxItems }
+  ).catch(() => []);
+}
+
+async function loadPipelineSubmitTasksForRun(runId: string, maxItems = 10000) {
+  const id = text(runId);
+  if (!id) return [];
+  return repositoryGetAllByPrefix<PipelineSubmitTaskRecord>(
+    pipelineSubmitTaskStore,
+    pipelineRunRecordPrefix(id),
+    { pageSize: 500, maxItems }
+  ).catch(() => []);
+}
+
+async function loadPipelineCandidatesForRun(runId: string, maxItems = latestPipelineCandidatePreviewLimit) {
+  const id = text(runId);
+  if (!id) return [];
+  return repositoryGetAllByPrefix<DoudianOpportunityPrematchCandidate>(
+    pipelineCandidateStore,
+    pipelineRunRecordPrefix(id),
+    { pageSize: Math.min(100, maxItems), maxItems }
+  ).catch(() => []);
+}
+
+async function saveStoreCategorySnapshot(args: {
+  runId: string;
+  identity: PipelineStoreIdentity;
+  categories: StoreCategorySummary[];
+  productCount: number;
+  missingCategoryProductCount: number;
+  createdAt: string;
+}) {
+  await repositoryPut(storeCategorySnapshotStore, {
+    id: storeRunId(args.runId, args.identity),
+    runId: args.runId,
+    ...args.identity,
+    categories: args.categories,
+    productCount: args.productCount,
+    missingCategoryProductCount: args.missingCategoryProductCount,
+    createdAt: args.createdAt
+  } satisfies StoreCategorySnapshotRecord);
+}
+
+async function upsertStoreCategoryLedger(args: {
+  identity: PipelineStoreIdentity;
+  categories: StoreCategorySummary[];
+  seenAt: string;
+}) {
+  const records: StoreCategoryLedgerRecord[] = [];
+  for (const category of args.categories) {
+    const id = `${storeScopeId(args.identity)}-${category.categoryKey}`;
+    const existing = await repositoryGet<StoreCategoryLedgerRecord>(storeCategoryLedgerStore, id).catch(() => null);
+    records.push({
+      id,
+      ...args.identity,
+      categoryId: category.categoryId,
+      categoryName: category.categoryName,
+      categoryPath: category.categoryPath,
+      lastCategoryKey: category.lastCategoryKey,
+      categoryKey: category.categoryKey,
+      productCount: category.productCount,
+      seenCount: Number(existing?.seenCount || 0) + 1,
+      firstSeenAt: existing?.firstSeenAt || args.seenAt,
+      lastSeenAt: args.seenAt,
+      sampleProductIds: uniqueText([...(existing?.sampleProductIds || []), ...category.sampleProductIds]).slice(0, 20)
+    });
+  }
+  await repositoryPutMany(storeCategoryLedgerStore, records, { concurrency: 2 });
+  return records;
+}
+
+function categoryLevelFromKey(key: string) {
+  if (key === "first_cid") return 1;
+  if (key === "second_cid") return 2;
+  if (key === "third_cid") return 3;
+  if (key === "fourth_cid") return 4;
+  return undefined;
+}
+
+function cacheCategoryKey(category: { categoryId?: string; categoryName?: string; categoryPath?: string[]; lastCategoryKey?: string }) {
+  const id = text(category.categoryId);
+  if (!id) return "";
+  const key = isCategoryLevelKey(text(category.lastCategoryKey))
+    ? text(category.lastCategoryKey)
+    : (category.categoryPath?.length ? categoryLevelKey(category.categoryPath.length) : "third_cid");
+  return `${key}:${id}`;
+}
+
+function filtersForStoreCategory(filters: DoudianOpportunityFilters, category: StoreCategorySummary): DoudianOpportunityFilters {
+  const level = categoryLevelFromKey(category.lastCategoryKey) || (category.categoryPath?.length ? category.categoryPath.length : 3);
+  const key = isCategoryLevelKey(text(category.lastCategoryKey))
+    ? text(category.lastCategoryKey)
+    : categoryLevelKey(level);
+  return {
+    ...filters,
+    categoryLeafId: undefined,
+    categoryPath: [{
+      id: category.categoryId,
+      key,
+      name: category.categoryName,
+      level
+    }]
+  };
+}
+
+function clueCacheKey(args: {
+  cacheScope: "shop" | "global";
+  scopeId: string;
+  adapterVersion: string;
+  requestPlanHash: string;
+  categoryKey: string;
+  filterHash: string;
+}) {
+  return stableHash(["clue-v2", args.cacheScope, args.scopeId, args.adapterVersion, args.requestPlanHash, args.categoryKey, args.filterHash].join("|"));
+}
+
+function wordCacheKey(clueCacheKeyValue: string, tokenizerVersion: string, stopwordVersion: string) {
+  return stableHash(["word-v2", clueCacheKeyValue, tokenizerVersion, stopwordVersion].join("|"));
+}
+
+function cacheableClueRow(clue: DoudianOpportunityClueRow): DoudianOpportunityClueRow {
+  return {
+    id: clue.clueId,
+    candidateId: clue.clueId,
+    sourceRunId: clue.sourceRunId,
+    clueId: clue.clueId,
+    name: clue.name,
+    shortName: clue.shortName,
+    img: clue.img,
+    categoryName: clue.categoryName,
+    firstCategoryId: clue.firstCategoryId,
+    lastCategoryId: clue.lastCategoryId,
+    lastCategoryKey: clue.lastCategoryKey,
+    clueWords: uniqueText(clue.clueWords || []),
+    recommendList: uniqueText(clue.recommendList || []),
+    profitInfoList: uniqueText(clue.profitInfoList || []),
+    shopList: [],
+    searchCount: clue.searchCount,
+    searchCountText: clue.searchCountText,
+    growthRate: clue.growthRate,
+    demandSupplyRate: clue.demandSupplyRate,
+    onlineGoodsNum: clue.onlineGoodsNum,
+    onlineGoodsNumSort: clue.onlineGoodsNumSort,
+    hotCount: clue.hotCount,
+    hotCountSort: clue.hotCountSort,
+    payMoney: clue.payMoney,
+    payMoneySort: clue.payMoneySort,
+    productCount: clue.productCount,
+    status: "ready"
+  };
+}
+
+function materializeCachedClue(row: DoudianOpportunityClueRow, store: DoudianStoreSummary, runId: string, index: number): DoudianOpportunityClueRow {
+  return {
+    ...row,
+    id: `${runId}-${row.clueId}`,
+    candidateId: `${store.shopId}-${row.clueId}`,
+    sourceRunId: runId,
+    shopList: [{
+      shopId: store.shopId,
+      shopName: store.shopName,
+      partition: store.partition,
+      group: store.groupName || ""
+    }],
+    shopId: store.shopId,
+    shopName: store.shopName,
+    group: store.groupName || "",
+    status: "ready",
+    raw: { __cache_hit: true, __row_index: index }
+  };
+}
+
+async function loadClueCacheRows(cacheKey: string, store: DoudianStoreSummary, runId: string) {
+  const shards = (await repositoryGetAll<ClueCacheShardRecord>(clueCacheShardStore).catch(() => []))
+    .filter((item) => item.clueCacheKey === cacheKey)
+    .sort((left, right) => left.shardNo - right.shardNo);
+  return shards.flatMap((shard) => shard.rows || []).map((row, index) => materializeCachedClue(row, store, runId, index));
+}
+
+function sourceHealthSucceeded(sourceHealth: Array<Record<string, unknown>> = []) {
+  return sourceHealth.some((item) => {
+    const status = Number(item.status || 0);
+    return item.ok === true && (!status || (status >= 200 && status < 400));
+  });
+}
+
+function sourceHealthFailed(sourceHealth: Array<Record<string, unknown>> = []) {
+  return sourceHealth.some((item) => {
+    const status = Number(item.status || 0);
+    return item.ok === false || status >= 400;
+  });
+}
+
+async function loadClueWordsForCache(payload: DoudianAdapterPayload, store: DoudianStoreSummary, clue: DoudianOpportunityClueRow, dryRun = false) {
+  const base = baseClueWords(clue);
+  const words = await queryClueWords(payload, store, clue, dryRun).catch(() => []);
+  return uniqueText([...base, ...words, ...(clue.recommendList || []), ...(clue.profitInfoList || [])]).filter((word) => word.length > 1);
+}
+
+async function fetchCluesForCategory(args: {
+  payload: DoudianAdapterPayload;
+  store: DoudianStoreSummary;
+  runId: string;
+  filters: DoudianOpportunityFilters;
+  category: StoreCategorySummary;
+  dryRun?: boolean;
+  mockClues?: Array<Record<string, unknown>>;
+}) {
+  const planKey = "opportunityClueRealtimeList";
+  const normalized = normalizedClueFilter(args.filters, args.payload.adapter);
+  const pageSize = normalized.pageSize;
+  const maxPages = normalized.maxPages;
+  const rawRows: Record<string, unknown>[] = [];
+  const sourceHealth: Array<Record<string, unknown>> = [];
+  let remoteTotal = 0;
+  if (args.mockClues?.length) {
+    rawRows.push(...args.mockClues);
+    remoteTotal = args.mockClues.length;
+    sourceHealth.push({ key: `${planKey}:${args.category.categoryKey}:mock`, status: 200, ok: true, count: args.mockClues.length, categoryKey: args.category.categoryKey });
+  } else {
+    for (let page = 1; page <= maxPages; page += 1) {
+    const body = buildClueSearchBody(filtersForStoreCategory(args.filters, args.category), page, pageSize);
+    const response = await runDoudianRequestPlan(args.payload, { partition: args.store.partition, planKey, context: bodyContext(body) });
+    const responseKey = page === 1 ? `${planKey}:${args.category.categoryKey}` : `${planKey}:${args.category.categoryKey}:page:${page}`;
+    const wrapped = { [planKey]: response.data };
+    const rows = firstArray(wrapped, mappingArray(args.payload.adapter, "clueListPaths", [
+      "opportunityClueRealtimeList.data",
+      "opportunityClueRealtimeList.data.data",
+      "opportunityClueRealtimeList.list"
+    ])).map(objectRecord);
+    rawRows.push(...rows);
+    remoteTotal = readTotal(wrapped, args.payload.adapter, "clueTotalPaths") || remoteTotal;
+    const ok = planOk(response, args.payload.adapter, planKey);
+    sourceHealth.push({ key: responseKey, status: response.status, ok, count: rows.length, categoryKey: args.category.categoryKey });
+    if (!ok || !rows.length) break;
+    if (remoteTotal && rawRows.length >= remoteTotal) break;
+    }
+  }
+  const rows = rawRows
+    .map((row, rowIndex) => normalizeClue(args.store, row, args.payload.adapter, args.runId, rowIndex))
+    .filter((row): row is DoudianOpportunityClueRow => Boolean(row));
+  return { rows: mergeClues(rows), sourceHealth, remoteTotal };
+}
+
+async function loadCluesByCategoryWithCache(args: {
+  payload: DoudianAdapterPayload;
+  store: DoudianStoreSummary;
+  identity: PipelineStoreIdentity;
+  runId: string;
+  filters: DoudianOpportunityFilters;
+  category: StoreCategorySummary;
+  dryRun?: boolean;
+  mockClues?: Array<Record<string, unknown>>;
+}) {
+  const categoryKey = cacheCategoryKey(args.category);
+  const cacheScope = pipelineCacheScope(args.payload.adapter);
+  const scopeId = pipelineScopeId(cacheScope, args.identity);
+  if (!categoryKey) {
+    return { cacheKey: "", cacheScope, scopeId, rows: [] as DoudianOpportunityClueRow[], sourceHealth: [], remoteTotal: 0, cacheHit: false, skipReason: "missing-category-id" };
+  }
+  const filterHash = stableFilterHash(args.filters, args.payload.adapter);
+  const planHash = requestPlanHash(args.payload.adapter);
+  const key = clueCacheKey({
+    cacheScope,
+    scopeId,
+    adapterVersion: args.payload.adapter.version || "",
+    requestPlanHash: planHash,
+    categoryKey,
+    filterHash
+  });
+  const now = nowIso();
+  const cached = await repositoryGet<ClueCacheRecord>(clueCacheStore, key).catch(() => null);
+  if (cached && (!cached.expiresAt || String(cached.expiresAt) > now)) {
+    const cachedRows = await loadClueCacheRows(key, args.store, args.runId);
+    const allowEmptyCacheHit = policyBoolean(args.payload.adapter, "opportunityReport.allowEmptyClueCacheHit", false);
+    if (!sourceHealthFailed(cached.sourceHealth) && (cachedRows.length || allowEmptyCacheHit)) {
+      return {
+        cacheKey: key,
+        cacheScope,
+        scopeId,
+        rows: cachedRows,
+        sourceHealth: [{ key: "opportunityClueCache", ok: true, cacheHit: true, categoryKey, cacheScope, scopeId, rowCount: cachedRows.length }],
+        remoteTotal: cached.remoteTotal,
+        cacheHit: true
+      };
+    }
+  }
+
+  const fetched = await fetchCluesForCategory({
+    payload: args.payload,
+    store: args.store,
+    runId: args.runId,
+    filters: args.filters,
+    category: args.category,
+    dryRun: args.dryRun,
+    mockClues: args.mockClues
+  });
+  const fetchedSourceOk = args.mockClues?.length ? true : sourceHealthSucceeded(fetched.sourceHealth);
+  if (!fetchedSourceOk) {
+    return { cacheKey: key, cacheScope, scopeId, rows: [], sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, cacheHit: false };
+  }
+  const rows: DoudianOpportunityClueRow[] = [];
+  let clueWordsApiCount = 0;
+  for (const [index, clue] of fetched.rows.entries()) {
+    const words = await loadClueWordsForCache(args.payload, args.store, clue, args.dryRun);
+    if (words.length) clueWordsApiCount += 1;
+    rows.push({
+      ...clue,
+      id: `${args.runId}-${clue.clueId}`,
+      clueWords: words,
+      raw: { ...(clue.raw || {}), __cache_miss: true, __row_index: index }
+    });
+  }
+  const allowEmptyCacheWrite = policyBoolean(args.payload.adapter, "opportunityReport.allowEmptyClueCacheWrite", false);
+  if (!rows.length && !allowEmptyCacheWrite) {
+    return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, cacheHit: false };
+  }
+  const cacheRows = rows.map(cacheableClueRow);
+  const shards = chunk(cacheRows, 100).map((items, index) => ({
+    id: `${key}-${index + 1}`,
+    clueCacheKey: key,
+    categoryKey,
+    filterHash,
+    cacheScope,
+    scopeId,
+    shardNo: index + 1,
+    rows: items,
+    rowCount: items.length,
+    createdAt: now,
+    updatedAt: now
+  } satisfies ClueCacheShardRecord));
+  const ttlHours = policyNumber(args.payload.adapter, "opportunityReport.clueCacheTtlHours", 24, 1, 168);
+  await repositoryPut(clueCacheStore, {
+    id: key,
+    ...args.identity,
+    categoryKey,
+    filterHash,
+    requestPlanHash: planHash,
+    adapterVersion: args.payload.adapter.version || "",
+    cacheScope,
+    scopeId,
+    shardCount: shards.length,
+    rowCount: rows.length,
+    remoteTotal: fetched.remoteTotal,
+    sourceHealth: fetched.sourceHealth,
+    sourceShopId: args.identity.shopId,
+    shopScoped: cacheScope === "shop",
+    clueWordsSource: clueWordsApiCount ? "mixed" : "realtime",
+    clueWordsRequestHash: stableHash({
+      adapterVersion: args.payload.adapter.version || "",
+      plan: args.payload.adapter.requestPlans?.opportunityClueWords || {},
+      endpoint: args.payload.adapter.endpoints?.[text(objectRecord(args.payload.adapter.requestPlans?.opportunityClueWords).endpointKey || "opportunityClueWords")] || ""
+    }),
+    expiresAt: new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString(),
+    createdAt: now,
+    updatedAt: now
+  } satisfies ClueCacheRecord);
+  await repositoryPutMany(clueCacheShardStore, shards, { concurrency: 2 });
+  return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, cacheHit: false };
+}
+
+function clueTokenSources(clue: DoudianOpportunityClueRow) {
+  return uniqueText([
+    clue.name,
+    clue.shortName || "",
+    ...(clue.clueWords || []),
+    ...(clue.recommendList || []),
+    ...(clue.profitInfoList || [])
+  ]).filter((item) => item.length > 1);
+}
+
+async function segmentTextsWithNative(
+  texts: string[],
+  options: { mode?: "search" | "default"; minTokenLength?: number; stopwordVersion?: string; allowFallback?: boolean } = {}
+) {
+  const native = window.chihuNative;
+  if (!native?.text?.segment) throw new Error("window.chihuNative.text.segment is unavailable");
+  const items: Array<{ source: string; tokens: string[] }> = [];
+  let tokenizerVersion = "";
+  let stopwordVersion = options.stopwordVersion || "chihu-stopwords-v1";
+  for (const batch of chunk(texts, 200)) {
+    const result = await native.text.segment({
+      texts: batch,
+      mode: options.mode || "search",
+      minTokenLength: options.minTokenLength || 2,
+      stopwordVersion
+    });
+    tokenizerVersion = tokenizerVersion || result.tokenizerVersion;
+    stopwordVersion = result.stopwordVersion || stopwordVersion;
+    if (result.tokenizerFallback && !options.allowFallback) {
+      throw new Error(`native tokenizer fallback is not allowed: ${result.fallbackReason || result.tokenizerVersion}`);
+    }
+    items.push(...(result.items || []));
+  }
+  return { tokenizerVersion, stopwordVersion, items };
+}
+
+async function loadTokenIndexFromCache(wordCacheKeyValue: string): Promise<TokenIndex | null> {
+  const record = await repositoryGet<ClueWordCacheRecord>(clueWordCacheStore, wordCacheKeyValue).catch(() => null);
+  if (!record) return null;
+  const shards = (await repositoryGetAll<ClueWordCacheShardRecord>(clueWordCacheShardStore).catch(() => []))
+    .filter((item) => item.wordCacheKey === wordCacheKeyValue)
+    .sort((left, right) => left.shardNo - right.shardNo);
+  const tokenToClueIds: Record<string, string[]> = {};
+  const clueTokens: Record<string, string[]> = {};
+  const tokens: string[] = [];
+  for (const shard of shards) {
+    for (const token of shard.tokens || []) tokens.push(token);
+    Object.assign(tokenToClueIds, shard.tokenToClueIds || {});
+    Object.assign(clueTokens, shard.clueTokens || {});
+  }
+  return {
+    wordCacheKey: wordCacheKeyValue,
+    tokenizerVersion: record.tokenizerVersion,
+    stopwordVersion: record.stopwordVersion,
+    tokens: uniqueText(tokens),
+    tokenToClueIds,
+    clueTokens
+  };
+}
+
+async function tokenizeCluesWithCache(args: {
+  clues: DoudianOpportunityClueRow[];
+  clueCacheKey: string;
+  categoryKey: string;
+  filterHash: string;
+  cacheScope: "shop" | "global";
+  scopeId: string;
+  allowTokenizerFallback?: boolean;
+}) {
+  const existing = (await repositoryGetAll<ClueWordCacheRecord>(clueWordCacheStore).catch(() => []))
+    .filter((item) => item.clueCacheKey === args.clueCacheKey)
+    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0];
+  if (existing) {
+    const cached = await loadTokenIndexFromCache(existing.id);
+    if (cached) return cached;
+  }
+
+  const clueIds: string[] = [];
+  const texts: string[] = [];
+  for (const clue of args.clues) {
+    clueIds.push(clue.clueId);
+    texts.push(clueTokenSources(clue).join(" "));
+  }
+  const segmented = await segmentTextsWithNative(texts, {
+    mode: "search",
+    minTokenLength: 2,
+    allowFallback: args.allowTokenizerFallback
+  });
+  const tokenToClueIds = new Map<string, Set<string>>();
+  const clueTokens: Record<string, string[]> = {};
+  for (const [index, item] of segmented.items.entries()) {
+    const clueId = clueIds[index];
+    if (!clueId) continue;
+    const tokens = uniqueText(item.tokens || []);
+    clueTokens[clueId] = tokens;
+    for (const token of tokens) {
+      const clueSet = tokenToClueIds.get(token) || new Set<string>();
+      clueSet.add(clueId);
+      tokenToClueIds.set(token, clueSet);
+    }
+  }
+  const tokens = Array.from(tokenToClueIds.keys()).sort();
+  const tokenIndex: TokenIndex = {
+    wordCacheKey: wordCacheKey(args.clueCacheKey, segmented.tokenizerVersion, segmented.stopwordVersion),
+    tokenizerVersion: segmented.tokenizerVersion,
+    stopwordVersion: segmented.stopwordVersion,
+    tokens,
+    tokenToClueIds: Object.fromEntries(Array.from(tokenToClueIds.entries()).map(([token, clueSet]) => [token, Array.from(clueSet)])),
+    clueTokens
+  };
+  const now = nowIso();
+  const tokenShards = chunk(tokens, 500);
+  const shards = tokenShards.map((tokenList, index) => {
+    const shardTokenToClueIds = Object.fromEntries(tokenList.map((token) => [token, tokenIndex.tokenToClueIds[token] || []]));
+    const shardClueTokens: Record<string, string[]> = {};
+    const clueIdsInShard = new Set(Object.values(shardTokenToClueIds).flat());
+    for (const clueId of clueIdsInShard) shardClueTokens[clueId] = tokenIndex.clueTokens[clueId] || [];
+    return {
+      id: `${tokenIndex.wordCacheKey}-${index + 1}`,
+      wordCacheKey: tokenIndex.wordCacheKey,
+      clueCacheKey: args.clueCacheKey,
+      shardNo: index + 1,
+      tokens: tokenList,
+      tokenToClueIds: shardTokenToClueIds,
+      clueTokens: shardClueTokens,
+      createdAt: now,
+      updatedAt: now
+    } satisfies ClueWordCacheShardRecord;
+  });
+  await repositoryPut(clueWordCacheStore, {
+    id: tokenIndex.wordCacheKey,
+    clueCacheKey: args.clueCacheKey,
+    tokenizerVersion: tokenIndex.tokenizerVersion,
+    stopwordVersion: tokenIndex.stopwordVersion,
+    categoryKey: args.categoryKey,
+    filterHash: args.filterHash,
+    cacheScope: args.cacheScope,
+    scopeId: args.scopeId,
+    shardCount: shards.length,
+    tokenCount: tokens.length,
+    clueCount: Object.keys(clueTokens).length,
+    createdAt: now,
+    updatedAt: now
+  } satisfies ClueWordCacheRecord);
+  await repositoryPutMany(clueWordCacheShardStore, shards, { concurrency: 2 });
+  return tokenIndex;
+}
+
+function tokenMatchesTitle(title: string, token: string) {
+  return text(title).toLocaleLowerCase().includes(text(token).toLocaleLowerCase());
+}
+
+function matchStoreProductsByTokens(args: {
+  runId: string;
+  storeRunId: string;
+  clueCacheKey: string;
+  wordCacheKey: string;
+  effectiveCategoryKey: string;
+  products: DoudianOpportunityProductRow[];
+  clues: DoudianOpportunityClueRow[];
+  tokenIndex: TokenIndex;
+  minTokenHitRatio: number;
+  matchRulesHash: string;
+  opportunityArgs: OpportunityArgs;
+  dedupeIndex: SubmitDedupeIndex;
+}) {
+  const clueById = new Map(args.clues.map((clue) => [clue.clueId, clue]));
+  const candidates: DoudianOpportunityPrematchCandidate[] = [];
+  const productCategoryKeys = new Set([args.effectiveCategoryKey]);
+  for (const product of args.products) {
+    if (!productCategoryKeys.has(cacheCategoryKey({
+      categoryId: text(product.categoryId),
+      categoryName: text(product.categoryName || product.category),
+      categoryPath: product.categoryPath || normalizeCategoryPath(product.category),
+      lastCategoryKey: text(product.lastCategoryKey)
+    }))) continue;
+    const hitTokens = args.tokenIndex.tokens.filter((token) => tokenMatchesTitle(product.title, token));
+    if (!hitTokens.length) continue;
+    const matchedByClue = new Map<string, Set<string>>();
+    for (const token of hitTokens) {
+      for (const clueId of args.tokenIndex.tokenToClueIds[token] || []) {
+        const set = matchedByClue.get(clueId) || new Set<string>();
+        set.add(token);
+        matchedByClue.set(clueId, set);
+      }
+    }
+    for (const [clueId, tokenSet] of matchedByClue.entries()) {
+      const clue = clueById.get(clueId);
+      if (!clue) continue;
+      const clueTokens = uniqueText(args.tokenIndex.clueTokens[clueId] || []);
+      const effectiveTokenCount = clueTokens.length;
+      if (effectiveTokenCount <= 0) continue;
+      const matchedTokens = Array.from(tokenSet);
+      const matchedTokenCount = matchedTokens.length;
+      const requiredTokenHits = Math.max(1, Math.ceil(effectiveTokenCount * args.minTokenHitRatio));
+      if (matchedTokenCount < requiredTokenHits) continue;
+      const tokenHitRatio = matchedTokenCount / effectiveTokenCount;
+      const categoryScore = 32;
+      const wordScore = Math.round(Math.min(1, tokenHitRatio) * 58);
+      const nameScore = clue.name && tokenMatchesTitle(product.title, clue.name) ? 10 : 0;
+      const matchScore = Math.min(100, categoryScore + wordScore + nameScore);
+      const submittedSkipReason = shouldSkipSubmittedCandidate(args.opportunityArgs, args.dedupeIndex, {
+        shopId: product.shopId,
+        clueId: clue.clueId,
+        productId: product.productId,
+        clueLastCategoryId: clue.lastCategoryId
+      });
+      const eligible = !submittedSkipReason;
+      const id = `${args.runId}-${product.shopId}-${product.productId}-${clue.clueId}`;
+      candidates.push({
+        id,
+        candidateId: `${product.shopId}-${product.productId}-${clue.clueId}`,
+        sourceRunId: args.runId,
+        matchRunId: args.runId,
+        productRunId: args.runId,
+        clueRunId: args.clueCacheKey,
+        pipelineRunId: args.runId,
+        storeRunId: args.storeRunId,
+        clueCacheKey: args.clueCacheKey,
+        wordCacheKey: args.wordCacheKey,
+        effectiveCategoryKey: args.effectiveCategoryKey,
+        shopId: product.shopId,
+        shopName: product.shopName,
+        group: product.group,
+        productId: product.productId,
+        title: product.title,
+        productCategory: product.category,
+        productCategoryId: product.categoryId,
+        clueId: clue.clueId,
+        clueName: clue.name,
+        clueCategoryName: clue.categoryName,
+        clueLastCategoryId: clue.lastCategoryId,
+        clueLastCategoryKey: clue.lastCategoryKey,
+        clueWords: clueTokens,
+        matchedWords: matchedTokens,
+        matchedTokens,
+        effectiveTokenCount,
+        matchedTokenCount,
+        requiredTokenHits,
+        tokenHitRatio,
+        minTokenHitRatio: args.minTokenHitRatio,
+        matchRulesHash: args.matchRulesHash,
+        matchMode: prematchMode(args.opportunityArgs),
+        matchScore,
+        categoryScore,
+        wordScore,
+        eligible,
+        estimatedCost: eligible ? 1 : 0,
+        skipReason: submittedSkipReason,
+        status: eligible ? "ready" : "skipped",
+        raw: {
+          product,
+          productRaw: product.raw || {},
+          clue,
+          clueRaw: clue.raw || {},
+          matchRulesHash: args.matchRulesHash
+        }
+      });
+    }
+  }
+  const sorted = candidates.sort((left, right) => right.matchScore - left.matchScore);
+  const bestByProduct = new Set<string>();
+  return sorted.map((candidate) => {
+    if (!candidate.eligible) return candidate;
+    const key = `${candidate.shopId}::${candidate.productId}`;
+    if (!bestByProduct.has(key)) {
+      bestByProduct.add(key);
+      return candidate;
+    }
+    return {
+      ...candidate,
+      eligible: false,
+      estimatedCost: 0,
+      status: "skipped",
+      skipReason: "同商品已有更高分商机"
+    };
+  });
+}
+
+async function enqueueStoreSubmit(args: {
+  runId: string;
+  storeRunId: string;
+  identity: PipelineStoreIdentity;
+  candidates: DoudianOpportunityPrematchCandidate[];
+}) {
+  const candidateIds = args.candidates.filter((item) => item.eligible && item.status === "ready").map((item) => item.id);
+  if (!candidateIds.length) return null;
+  const concurrencyKey = storeScopeId(args.identity);
+  const active = (await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []))
+    .find((task) => task.concurrencyKey === concurrencyKey && (task.status === "queued" || task.status === "running"));
+  if (active) return active;
+  const now = nowIso();
+  const task: PipelineSubmitTaskRecord = {
+    id: `${args.storeRunId}-task-1`,
+    runId: args.runId,
+    storeRunId: args.storeRunId,
+    ...args.identity,
+    status: "queued",
+    concurrencyKey,
+    ownerRunId: args.runId,
+    candidateIds,
+    candidateCount: candidateIds.length,
+    submittedCount: 0,
+    skippedCount: 0,
+    failedCount: 0,
+    createdAt: now,
+    updatedAt: now
+  };
+  await repositoryPut(pipelineSubmitTaskStore, task);
+  return task;
+}
+
+async function refreshPipelineRunSummary(runId: string) {
+  const run = await repositoryGet<PipelineRunRecord>(pipelineRunStore, runId).catch(() => null);
+  if (!run) return null;
+  const [storeRuns, tasks] = await Promise.all([
+    loadPipelineStoreRunsForRun(runId),
+    loadPipelineSubmitTasksForRun(runId)
+  ]);
+  const scopedStoreRuns = storeRuns.filter((item) => item.runId === runId);
+  const scopedTasks = tasks.filter((item) => item.runId === runId);
+  const submittedCount = scopedTasks.reduce((sum, item) => sum + Number(item.submittedCount || 0), 0);
+  const failedStoreCount = scopedStoreRuns.filter((item) => item.status === "failed").length;
+  const taskFailedCount = scopedTasks.reduce((sum, item) => sum + Number(item.failedCount || 0), 0);
+  const failedCount = failedStoreCount + taskFailedCount;
+  const skippedCount =
+    scopedStoreRuns.filter((item) => item.status === "skipped").length +
+    scopedTasks.reduce((sum, item) => sum + Number(item.skippedCount || 0), 0);
+  const candidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.candidateCount || 0), 0);
+  const eligibleCandidateCount = scopedTasks.reduce((sum, item) => sum + Number(item.candidateCount || 0), 0);
+  const runningCount =
+    scopedTasks.filter((item) => item.status === "queued" || item.status === "running").length +
+    scopedStoreRuns.filter((item) => item.status === "queued" || item.status === "running").length;
+  const status: PipelineRunRecord["status"] = runningCount
+    ? "running"
+    : failedCount
+      ? (submittedCount || skippedCount ? "partial" : "failed")
+      : "ok";
+  const summary = {
+    ...(run.summary || {}),
+    productCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.productCount || 0), 0),
+    currentCategoryCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.currentCategoryCount || 0), 0),
+    effectiveCategoryCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.effectiveCategoryCount || 0), 0),
+    clueCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.clueCount || 0), 0),
+    tokenCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.tokenCount || 0), 0),
+    candidateCount,
+    eligibleCandidateCount,
+    submitTaskCount: scopedTasks.length,
+    submittedCount,
+    failedCount,
+    skippedCount,
+    processedStoreCount: scopedStoreRuns.length,
+    totalStoreCount: run.totalStoreCount
+  };
+  const updated = {
+    ...run,
+    status,
+    processedStoreCount: scopedStoreRuns.length,
+    submittedCount,
+    skippedCount,
+    failedCount,
+    summary,
+    updatedAt: nowIso()
+  } satisfies PipelineRunRecord;
+  await repositoryPut(pipelineRunStore, updated);
+  return updated;
+}
+
+async function detectPipelineClientCapability(runId: string) {
+  const native = window.chihuNative;
+  let nativeTextSegment = false;
+  let nativeTextSegmentAvailable = false;
+  let tokenizerVersion = "";
+  let tokenizerFallback = false;
+  let fallbackReason = "";
+  if (native?.text?.segment) {
+    try {
+      const result = await native.text.segment({ texts: ["pipeline segment smoke"], mode: "search", minTokenLength: 2 });
+      nativeTextSegmentAvailable = Boolean(result?.tokenizerVersion && result.items?.[0]?.tokens?.length);
+      tokenizerFallback = Boolean(result?.tokenizerFallback);
+      fallbackReason = result?.fallbackReason || "";
+      nativeTextSegment = nativeTextSegmentAvailable && !tokenizerFallback;
+      tokenizerVersion = result?.tokenizerVersion || "";
+    } catch {
+      nativeTextSegment = false;
+      nativeTextSegmentAvailable = false;
+    }
+  }
+  let v2StoreSmokeOk = false;
+  const smokeId = `${runId}-pipeline-v2-store-smoke`;
+  try {
+    await repositoryPut(pipelineOperationEventStore, {
+      id: smokeId,
+      runId,
+      level: "info",
+      event: "pipeline-v2-store-smoke",
+      message: "pipeline v2 store smoke",
+      createdAt: nowIso()
+    } satisfies PipelineOperationEventRecord);
+    const readBack = await repositoryGet<PipelineOperationEventRecord>(pipelineOperationEventStore, smokeId);
+    await repositoryDelete(pipelineOperationEventStore, smokeId);
+    v2StoreSmokeOk = readBack?.id === smokeId;
+  } catch {
+    v2StoreSmokeOk = false;
+  }
+  return {
+    nativeTextSegment,
+    nativeTextSegmentAvailable,
+    tokenizerVersion,
+    tokenizerFallback,
+    fallbackReason,
+    nativeDataStoreVersion: "native-record-store-v2",
+    v2StoreSmokeOk
+  };
+}
+
+function normalizeOpportunityMatchRules(value: DoudianOpportunityMatchRules = {}): DoudianOpportunityMatchRules {
+  const ratio = Number(value.minTokenHitRatio ?? 0.33);
+  return {
+    storeCategoryKeys: uniqueText(value.storeCategoryKeys || []),
+    minTokenHitRatio: Number.isFinite(ratio) ? Math.max(0.1, Math.min(1, ratio)) : 0.33
+  };
+}
+
+async function writePipelineEvent(record: Omit<PipelineOperationEventRecord, "id" | "createdAt"> & { createdAt?: string }) {
+  const createdAt = record.createdAt || nowIso();
+  await repositoryPut(pipelineOperationEventStore, {
+    ...record,
+    id: `${record.runId}-${record.storeRunId || record.shopId || "run"}-${createdAt}-${Math.random().toString(16).slice(2)}`,
+    createdAt
+  });
 }
 
 function targetStores(stores: DoudianStoreSummary[], shopIds: string[] = []) {
@@ -811,7 +2250,7 @@ function categoryMatchScore(product: DoudianOpportunityProductRow, clue: Doudian
     return { ok: true, score: 32, reason: "" };
   }
   const expected = splitCategoryPath(clue.categoryName);
-  const actual = splitCategoryPath(product.raw?.category_path || product.raw?.categoryPath || product.category);
+  const actual = splitCategoryPath(product.categoryPath?.length ? product.categoryPath : product.raw?.category_path || product.raw?.categoryPath || product.category);
   if (!expected.length || !actual.length) {
     return mode === "loose"
       ? { ok: true, score: 6, reason: "" }
@@ -928,6 +2367,9 @@ function candidateToProduct(candidate: DoudianOpportunityPrematchCandidate): Dou
     title: candidate.title,
     category: candidate.productCategory,
     categoryId: candidate.productCategoryId,
+    categoryName: text(product.categoryName || candidate.productCategory),
+    categoryPath: Array.isArray(product.categoryPath) ? product.categoryPath.map(text).filter(Boolean) : normalizeCategoryPath(candidate.productCategory),
+    lastCategoryKey: text(product.lastCategoryKey),
     price: coerceNumber(product.price) || 0,
     stock: coerceNumber(product.stock) || 0,
     sales: coerceNumber(product.sales) || 0,
@@ -1396,13 +2838,13 @@ async function queryClueWords(payload: DoudianAdapterPayload, store: DoudianStor
   const fallback = baseClueWords(clue);
   if (dryRun || !policyBoolean(payload.adapter, "opportunityReport.enableRemoteClueWords", false)) return fallback;
   const planKey = "opportunityClueWords";
-  const body = { clue_id: clue.clueId };
+  const body = { clue_id: platformIntId(clue.clueId) };
   const response = await runDoudianRequestPlan(payload, {
     partition: store.partition,
     planKey,
     context: bodyContext(body)
   });
-  const words = firstArray(response.data, ["data.data", "data", "words", "list"]).map((item) => {
+  const words = firstArray(response.data, mappingArray(payload.adapter, "clueWordPaths", ["data.data", "data", "data.words", "data.list", "words", "list"])).map((item) => {
     if (typeof item === "string" || typeof item === "number") return text(item);
     const record = objectRecord(item);
     return text(record.word || record.name || record.clue_word || record.clueWord || record.keyword || record.title);
@@ -1421,11 +2863,31 @@ function submitProductPayload(product: DoudianOpportunityProductRow, store: Doud
   const raw = product.raw || {};
   const price = rawPriceCents(product);
   const shopIdNumber = Number(product.shopId || store.shopId);
+  const rawCategoryDetail = objectRecord(raw.category_detail || raw.categoryDetail);
+  const rawCategoryId = text(
+    raw.category_id ||
+    raw.categoryId ||
+    raw.leaf_category_id ||
+    raw.leafCategoryId ||
+    raw.category_leaf_id ||
+    raw.categoryLeafId ||
+    rawCategoryDetail.leaf_cid ||
+    rawCategoryDetail.leafCid ||
+    rawCategoryDetail.fourth_cid ||
+    rawCategoryDetail.fourthCid ||
+    rawCategoryDetail.third_cid ||
+    rawCategoryDetail.thirdCid ||
+    rawCategoryDetail.second_cid ||
+    rawCategoryDetail.secondCid ||
+    rawCategoryDetail.first_cid ||
+    rawCategoryDetail.firstCid ||
+    product.categoryId
+  );
   return {
     product_id: product.productId,
     title: product.title,
     pic_url: text(raw.pic_url || raw.picUrl || raw.img || raw.cover || product.img),
-    category_id: text(raw.category_id || raw.categoryId || raw.leaf_category_id || raw.leafCategoryId || product.categoryId),
+    category_id: platformIntId(rawCategoryId === "0" ? product.categoryId : rawCategoryId),
     stock_num: coerceNumber(raw.stock_num || raw.stockNum || raw.stock || product.stock) || 0,
     sell_num: coerceNumber(raw.sell_num || raw.sellNum || raw.sale_num || raw.saleNum || product.sales) || 0,
     price,
@@ -1443,7 +2905,7 @@ function submitProductPayload(product: DoudianOpportunityProductRow, store: Doud
 
 function submitBody(clue: DoudianOpportunityClueRow, products: DoudianOpportunityProductRow[], store: DoudianStoreSummary, module: "query" | "search_page_query") {
   return {
-    clue_id: clue.clueId,
+    clue_id: platformIntId(clue.clueId),
     products: products.map((product) => submitProductPayload(product, store)),
     terminal_type: 0,
     source: "business_center",
@@ -1570,7 +3032,7 @@ function officialProductMatchesClueCategory(product: DoudianOpportunityProductRo
   if (key === "first_cid" || key === "second_cid") return true;
   const depth = key === "fourth_cid" ? 4 : 3;
   const expected = splitCategoryPath(clue.categoryName);
-  const actual = splitCategoryPath(product.raw?.category_path || product.raw?.categoryPath || product.category);
+  const actual = splitCategoryPath(product.categoryPath?.length ? product.categoryPath : product.raw?.category_path || product.raw?.categoryPath || product.category);
   if (expected.length < depth || actual.length < depth) return false;
   for (let index = 0; index < depth; index += 1) {
     if (expected[index] !== actual[index]) return false;
@@ -1593,8 +3055,8 @@ async function collectOfficialProductsForClue(payload: DoudianAdapterPayload, st
   for (let page = 1; page <= maxPages; page += 1) {
     const body = {
       condition: {
-        [clue.lastCategoryKey || "third_cid"]: clue.lastCategoryId,
-        clue_id: clue.clueId
+        [clue.lastCategoryKey || "third_cid"]: platformIntId(clue.lastCategoryId),
+        clue_id: platformIntId(clue.clueId)
       },
       page: {
         current: page,
@@ -1671,10 +3133,14 @@ async function submitProductsForClue(args: {
   titleUpdatePosition: DoudianOpportunityTitleUpdatePosition;
   module: "query" | "search_page_query";
   dryRun?: boolean;
+  validatedByPipeline?: boolean;
+  pipelineWords?: string[];
 }) {
   const executions: DoudianOpportunityExecution[] = [];
-  const words = await queryClueWords(args.payload, args.store, args.clue, args.dryRun);
-  const filtered = filterAndTitleProducts(args.payload, args.products, words, args.submitMode, args.titleMatchMode, args.titleUpdatePosition);
+  const words = args.pipelineWords || (args.validatedByPipeline ? baseClueWords(args.clue) : await queryClueWords(args.payload, args.store, args.clue, args.dryRun));
+  const filtered = args.validatedByPipeline
+    ? { selected: args.products, skipped: [] as DoudianOpportunityProductRow[], nextTitles: new Map<string, string>() }
+    : filterAndTitleProducts(args.payload, args.products, words, args.submitMode, args.titleMatchMode, args.titleUpdatePosition);
   if (filtered.skipped.length) {
     executions.push(...executionForProducts({
       runId: args.runId,
@@ -2384,7 +3850,7 @@ async function fetchCollect(payload: DoudianAdapterPayload, args: OpportunityArg
       }
       const body = {
         is_cate_type: false,
-        clue_id: clue.clueId,
+        clue_id: platformIntId(clue.clueId),
         terminal_type: 0,
         source: "business_center",
         module: "search_page_all",
@@ -2520,12 +3986,684 @@ async function saveExecuteResult(
   };
 }
 
+async function runSubmitWorker(payload: DoudianAdapterPayload, args: OpportunityArgs = {}) {
+  if (pipelineSubmitWorkerRunning) return { ok: true, skipped: true, reason: "worker-running" };
+  pipelineSubmitWorkerRunning = true;
+  try {
+    const ledger = await listStoreLedger();
+    const stores = ledger.stores || [];
+    let processed = 0;
+    while (true) {
+      const nowMs = Date.now();
+      const tasks = (await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []))
+        .filter((task) => task.status === "queued" || (task.status === "running" && (!task.leaseExpiresAt || Date.parse(task.leaseExpiresAt) < nowMs)))
+        .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+      if (!tasks.length) break;
+      const activeKeys = new Set<string>();
+      let processedThisPass = 0;
+      for (const task of tasks) {
+      if (activeKeys.has(task.concurrencyKey)) continue;
+      activeKeys.add(task.concurrencyKey);
+      const startedAt = nowIso();
+      await repositoryPut(pipelineSubmitTaskStore, {
+        ...task,
+        status: "running",
+        startedAt: task.startedAt || startedAt,
+        leaseExpiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+        updatedAt: startedAt
+      } satisfies PipelineSubmitTaskRecord);
+      const store = stores.find((item) => item.shopId === task.shopId);
+      const taskCandidateIdSet = new Set(task.candidateIds);
+      const taskCandidates = (await repositoryGetMany<DoudianOpportunityPrematchCandidate>(pipelineCandidateStore, task.candidateIds).catch(() => []))
+        .filter((candidate) => taskCandidateIdSet.has(candidate.id));
+      const updatedCandidates: DoudianOpportunityPrematchCandidate[] = [];
+      const executions: DoudianOpportunityExecution[] = [];
+      let submittedCount = 0;
+      let skippedCount = 0;
+      let failedCount = 0;
+      try {
+        if (!store) throw new Error("Selected store is missing login partition");
+        const limit = dailyAttemptLimit(args, payload.adapter);
+        let used = (await listSubmitAttempts()).length;
+        const dedupeIndex = await submittedDedupeIndex();
+        for (const candidate of taskCandidates) {
+          if (!candidate.eligible || candidate.status !== "ready") {
+            skippedCount += 1;
+            updatedCandidates.push(candidate);
+            continue;
+          }
+          const remaining = Math.max(0, limit - used);
+          const submittedSkipReason = remaining <= 0
+            ? "今日提报尝试额度不足"
+            : shouldSkipSubmittedCandidate(args, dedupeIndex, candidate);
+          if (submittedSkipReason) {
+            skippedCount += 1;
+            updatedCandidates.push({
+              ...candidate,
+              eligible: false,
+              estimatedCost: 0,
+              status: "skipped",
+              submitStatus: "skipped",
+              skipReason: submittedSkipReason
+            });
+            executions.push({
+              id: `${task.id}-${candidate.id}-skipped`,
+              sourceRunId: task.runId,
+              shopId: candidate.shopId,
+              shopName: candidate.shopName,
+              clueId: candidate.clueId,
+              clueName: candidate.clueName,
+              productId: candidate.productId,
+              title: candidate.title,
+              action: "submit",
+              stage: "dedupe",
+              status: "skipped",
+              ok: true,
+              message: `${submittedSkipReason}，已跳过`
+            });
+            continue;
+          }
+          const nextExecutions = await submitProductsForClue({
+            payload,
+            store,
+            clue: candidateToClue(candidate),
+            products: [candidateToProduct(candidate)],
+            runId: task.runId,
+            sourceRunId: task.runId,
+            submitMode: submitMode(args),
+            titleMatchMode: titleMatchMode(args),
+            titleUpdatePosition: titleUpdatePosition(args),
+            module: "search_page_query",
+            dryRun: args.dryRun,
+            validatedByPipeline: true,
+            pipelineWords: candidate.clueWords
+          });
+          const attempts = args.dryRun ? 0 : await recordSubmitAttempts({ runId: task.runId, matchRunId: task.runId, candidate, executions: nextExecutions });
+          used += attempts;
+          executions.push(...nextExecutions.map((item) => ({
+            ...item,
+            diagnostic: {
+              ...(item.diagnostic || {}),
+              pipelineCandidateId: candidate.id,
+              tokenHitRatio: candidate.tokenHitRatio,
+              matchedTokens: candidate.matchedTokens,
+              dailyAttemptUsed: used,
+              dailyAttemptLimit: limit
+            }
+          })));
+          const failed = nextExecutions.some((item) => item.ok === false);
+          const submitted = nextExecutions.some((item) => item.stage === "submit" && item.ok === true);
+          if (submitted) submittedCount += 1;
+          if (failed) failedCount += 1;
+          if (!submitted && !failed) skippedCount += 1;
+          updatedCandidates.push({
+            ...candidate,
+            status: submitted ? "submitted" : failed ? "failed" : "skipped",
+            submitStatus: submitted ? "submitted" : failed ? "failed" : "skipped",
+            skipReason: failed ? nextExecutions.find((item) => item.ok === false)?.message : candidate.skipReason,
+            submittedAt: submitted ? nowIso() : undefined
+          });
+        }
+        if (updatedCandidates.length) await repositoryPutMany(pipelineCandidateStore, updatedCandidates, { concurrency: 2 });
+        const finalStatus = failedCount ? (submittedCount || skippedCount ? "partial" : "failed") : "ok";
+        const finishedAt = nowIso();
+        await repositoryPut(pipelineSubmitTaskStore, {
+          ...task,
+          status: finalStatus,
+          submittedCount,
+          skippedCount,
+          failedCount,
+          leaseExpiresAt: undefined,
+          finishedAt,
+          updatedAt: finishedAt
+        } satisfies PipelineSubmitTaskRecord);
+        const storeRun = await repositoryGet<PipelineStoreRunRecord>(pipelineStoreRunStore, task.storeRunId).catch(() => null);
+        if (storeRun) {
+          await repositoryPut(pipelineStoreRunStore, {
+            ...storeRun,
+            status: finalStatus,
+            phase: "finished",
+            submittedCount,
+            failedCount,
+            updatedAt: finishedAt,
+            finishedAt
+          } satisfies PipelineStoreRunRecord);
+        }
+        await writePipelineEvent({
+          runId: task.runId,
+          storeRunId: task.storeRunId,
+          shopId: task.shopId,
+          level: failedCount ? "warn" : "info",
+          event: "pipeline-submit-task-finished",
+          message: failedCount ? "商机提报部分失败" : "商机提报任务完成",
+          detail: { submittedCount, skippedCount, failedCount, executionCount: executions.length }
+        }).catch(() => undefined);
+        await refreshPipelineRunSummary(task.runId).catch(() => null);
+      } catch (error) {
+        failedCount = Math.max(1, failedCount);
+        const failedAt = nowIso();
+        await repositoryPut(pipelineSubmitTaskStore, {
+          ...task,
+          status: "failed",
+          submittedCount,
+          skippedCount,
+          failedCount,
+          leaseExpiresAt: undefined,
+          lastError: error instanceof Error ? error.message : String(error),
+          finishedAt: failedAt,
+          updatedAt: failedAt
+        } satisfies PipelineSubmitTaskRecord);
+        await writePipelineEvent({
+          runId: task.runId,
+          storeRunId: task.storeRunId,
+          shopId: task.shopId,
+          level: "error",
+          event: "pipeline-submit-task-failed",
+          message: error instanceof Error ? error.message : String(error),
+          detail: { submittedCount, skippedCount, failedCount }
+        }).catch(() => undefined);
+        await refreshPipelineRunSummary(task.runId).catch(() => null);
+      }
+      processed += 1;
+      processedThisPass += 1;
+      }
+      if (!processedThisPass) break;
+    }
+    return { ok: true, processed };
+  } finally {
+    pipelineSubmitWorkerRunning = false;
+  }
+}
+
+async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: OpportunityArgs): Promise<DoudianOpportunityReportResult> {
+  const ledger = await listStoreLedger();
+  const stores = ledger.stores || [];
+  const targets = targetStores(stores, args.shopIds);
+  const runId = args.operationId || `opportunity-pipeline-submit-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const matchRules = normalizeOpportunityMatchRules(args.matchRules);
+  const filters = args.filters || {};
+  try {
+    assertOpportunityPipelineContract(payload.adapter);
+  } catch (error) {
+    return {
+      ...ledger,
+      ok: false,
+      status: "adapter-contract-error",
+      mode: "pipeline-submit",
+      message: error instanceof Error ? error.message : String(error),
+      rows: [],
+      clues: [],
+      products: [],
+      prematches: [],
+      executions: [],
+      filters,
+      matchRules
+    };
+  }
+  if (!targets.length) {
+    return {
+      ...ledger,
+      ok: false,
+      status: "no-store",
+      mode: "pipeline-submit",
+      message: "No Doudian stores selected",
+      rows: [],
+      clues: [],
+      products: [],
+      prematches: [],
+      executions: [],
+      filters,
+      matchRules
+    };
+  }
+
+  const clientCapability = await detectPipelineClientCapability(runId);
+  const allowTokenizerFallback = Boolean(args.dryRun);
+  if (!clientCapability.nativeTextSegmentAvailable || (!clientCapability.nativeTextSegment && !allowTokenizerFallback) || !clientCapability.v2StoreSmokeOk) {
+    return {
+      ...ledger,
+      ok: false,
+      status: "client-capability-missing",
+      mode: "pipeline-submit",
+      message: "当前客户端缺少商机提报所需 native 分词能力或 v2 本地记录能力，请升级客户端",
+      rows: [],
+      clues: [],
+      products: [],
+      prematches: [],
+      executions: [],
+      details: [{
+        status: "failed",
+        ok: false,
+        message: "pipeline native capability check failed",
+        reason: "client-capability-missing",
+        diagnostic: clientCapability
+      }],
+      filters,
+      matchRules
+    };
+  }
+
+  const now = nowIso();
+  const details: DoudianRunDetail[] = [];
+  const sourceHealth: Array<Record<string, unknown>> = [];
+  const products: DoudianOpportunityProductRow[] = [];
+  let processedStoreCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+  let submitTaskCount = 0;
+  let currentCategoryCount = 0;
+  let effectiveCategoryCount = 0;
+  let clueCount = 0;
+  let tokenCount = 0;
+  let candidateCount = 0;
+  let eligibleCandidateCount = 0;
+  const pipelineClues: DoudianOpportunityClueRow[] = [];
+  const pipelineCandidates: DoudianOpportunityPrematchCandidate[] = [];
+  const matchRulesHash = stableMatchRulesHash(args);
+  const dedupeIndex = await submittedDedupeIndex();
+
+  await repositoryPut(pipelineRunStore, {
+    id: runId,
+    runId,
+    operationId: args.operationId,
+    mode: "pipeline-submit",
+    filters,
+    matchRules,
+    shopIds: targets.map((store) => store.shopId),
+    tenantId: normalizePipelineStoreIdentity(targets[0]).tenantId,
+    clientCapability,
+    status: "running",
+    totalStoreCount: targets.length,
+    processedStoreCount: 0,
+    submittedCount: 0,
+    skippedCount: 0,
+    failedCount: 0,
+    summary: {},
+    adapterVersion: payload.adapter.version || "",
+    scriptsVersion: payload.scripts?.version || "",
+    requestPlanHash: requestPlanHash(payload.adapter),
+    createdAt: now,
+    updatedAt: now
+  } satisfies PipelineRunRecord);
+
+  if (clientCapability.tokenizerFallback) {
+    await writePipelineEvent({
+      runId,
+      level: "warn",
+      event: "pipeline-tokenizer-fallback",
+      message: "native tokenizer fallback used in dry-run",
+      detail: {
+        tokenizerFallback: true,
+        tokenizerVersion: clientCapability.tokenizerVersion,
+        fallbackReason: clientCapability.fallbackReason
+      }
+    }).catch(() => undefined);
+  }
+
+  for (const [index, store] of targets.entries()) {
+    const identity = normalizePipelineStoreIdentity(store);
+    const id = storeRunId(runId, identity);
+    const startedAt = nowIso();
+    await repositoryPut(pipelineStoreRunStore, {
+      id,
+      runId,
+      ...identity,
+      status: "running",
+      phase: "product-scan",
+      productCount: 0,
+      currentCategoryCount: 0,
+      effectiveCategoryCount: 0,
+      clueCount: 0,
+      tokenCount: 0,
+      candidateCount: 0,
+      eligibleCandidateCount: 0,
+      submittedCount: 0,
+      failedCount: 0,
+      startedAt,
+      updatedAt: startedAt
+    } satisfies PipelineStoreRunRecord);
+    try {
+      const scan = await scanProductsForStore(payload, store, args, runId, index + 1, targets.length);
+      products.push(...scan.products);
+      sourceHealth.push(...scan.sourceHealth);
+      const extracted = extractCurrentStoreCategories(scan.products);
+      const effective = effectiveStoreCategories(extracted.categories, matchRules);
+      currentCategoryCount += extracted.categories.length;
+      effectiveCategoryCount += effective.length;
+      await saveStoreCategorySnapshot({
+        runId,
+        identity,
+        categories: extracted.categories,
+        productCount: scan.products.length,
+        missingCategoryProductCount: extracted.missingCategoryProductCount,
+        createdAt: nowIso()
+      });
+      await upsertStoreCategoryLedger({ identity, categories: extracted.categories, seenAt: nowIso() });
+
+      let storeClueCount = 0;
+      let storeTokenCount = 0;
+      const storeCandidates: DoudianOpportunityPrematchCandidate[] = [];
+      const storeSourceHealth = [...scan.sourceHealth];
+      const missingCategoryIdCategories = effective.filter((category) => !text(category.categoryId));
+      if (missingCategoryIdCategories.length) {
+        await writePipelineEvent({
+          runId,
+          storeRunId: id,
+          shopId: identity.shopId,
+          level: "warn",
+          event: "pipeline-category-id-diagnostic",
+          message: "商品类目有名称但缺少 categoryId，商机加载将跳过",
+          detail: {
+            productCount: scan.products.length,
+            currentCategoryCount: extracted.categories.length,
+            effectiveCategoryCount: effective.length,
+            missingCategoryIdCategoryCount: missingCategoryIdCategories.length,
+            sampleCategories: missingCategoryIdCategories.slice(0, 10).map((category) => ({
+              categoryId: category.categoryId,
+              categoryName: category.categoryName,
+              categoryPath: category.categoryPath,
+              lastCategoryKey: category.lastCategoryKey,
+              categoryKey: category.categoryKey,
+              productCount: category.productCount,
+              sampleProductIds: category.sampleProductIds
+            }))
+          }
+        }).catch(() => undefined);
+      }
+      for (const category of effective) {
+        const categoryKey = cacheCategoryKey(category);
+        if (!categoryKey) {
+          await writePipelineEvent({
+            runId,
+            storeRunId: id,
+            shopId: identity.shopId,
+            level: "warn",
+            event: "pipeline-category-skipped",
+            message: "商品类目缺少 categoryId，已跳过商机加载",
+            detail: { category }
+          }).catch(() => undefined);
+          continue;
+        }
+        const clueResult = await loadCluesByCategoryWithCache({
+          payload,
+          store,
+          identity,
+          runId,
+          filters,
+          category,
+          dryRun: args.dryRun,
+          mockClues: args.mockClues
+        });
+        storeSourceHealth.push(...clueResult.sourceHealth);
+        sourceHealth.push(...clueResult.sourceHealth);
+        if (!clueResult.rows.length || !clueResult.cacheKey) continue;
+        pipelineClues.push(...clueResult.rows);
+        storeClueCount += clueResult.rows.length;
+        const tokenIndex = await tokenizeCluesWithCache({
+          clues: clueResult.rows,
+          clueCacheKey: clueResult.cacheKey,
+          categoryKey,
+          filterHash: stableFilterHash(filters, payload.adapter),
+          cacheScope: clueResult.cacheScope,
+          scopeId: clueResult.scopeId,
+          allowTokenizerFallback: Boolean(args.dryRun)
+        });
+        storeTokenCount += tokenIndex.tokens.length;
+        storeCandidates.push(...matchStoreProductsByTokens({
+          runId,
+          storeRunId: id,
+          clueCacheKey: clueResult.cacheKey,
+          wordCacheKey: tokenIndex.wordCacheKey,
+          effectiveCategoryKey: categoryKey,
+          products: scan.products,
+          clues: clueResult.rows,
+          tokenIndex,
+          minTokenHitRatio: Number(matchRules.minTokenHitRatio || 0.33),
+          matchRulesHash,
+          opportunityArgs: args,
+          dedupeIndex
+        }));
+      }
+      const bestByProduct = new Set<string>();
+      const dedupedStoreCandidates = storeCandidates
+        .sort((left, right) => right.matchScore - left.matchScore)
+        .map((candidate) => {
+          if (!candidate.eligible) return candidate;
+          const key = `${candidate.shopId}::${candidate.productId}`;
+          if (!bestByProduct.has(key)) {
+            bestByProduct.add(key);
+            return candidate;
+          }
+          return { ...candidate, eligible: false, estimatedCost: 0, status: "skipped", skipReason: "同商品已有更高分商机" };
+        });
+      if (dedupedStoreCandidates.length) {
+        await repositoryPutMany(pipelineCandidateStore, dedupedStoreCandidates, { concurrency: 2 });
+        pipelineCandidates.push(...dedupedStoreCandidates);
+      }
+      const task = await enqueueStoreSubmit({
+        runId,
+        storeRunId: id,
+        identity,
+        candidates: dedupedStoreCandidates
+      });
+      if (task) {
+        submitTaskCount += 1;
+        const queuedCandidates = dedupedStoreCandidates.map((candidate) => candidate.eligible && candidate.status === "ready"
+          ? { ...candidate, submitTaskId: task.id, submitStatus: "queued" }
+          : candidate);
+        await repositoryPutMany(pipelineCandidateStore, queuedCandidates, { concurrency: 2 });
+        for (const queued of queuedCandidates) {
+          const indexInRun = pipelineCandidates.findIndex((candidate) => candidate.id === queued.id);
+          if (indexInRun >= 0) pipelineCandidates[indexInRun] = queued;
+        }
+        void runSubmitWorker(payload, args).catch(() => undefined);
+      }
+      const eligibleCount = dedupedStoreCandidates.filter((candidate) => candidate.eligible && candidate.status === "ready").length;
+      let skipReason = "";
+      if (!effective.length) skipReason = "no-effective-category";
+      else if (!storeClueCount) skipReason = "no-clue-for-effective-category";
+      else if (!dedupedStoreCandidates.length) skipReason = "no-token-match-candidate";
+      else if (!eligibleCount) skipReason = "no-eligible-candidate";
+      if (skipReason) skippedCount += 1;
+      clueCount += storeClueCount;
+      tokenCount += storeTokenCount;
+      candidateCount += dedupedStoreCandidates.length;
+      eligibleCandidateCount += eligibleCount;
+      processedStoreCount += 1;
+      const finishedAt = nowIso();
+      await repositoryPut(pipelineStoreRunStore, {
+        id,
+        runId,
+        ...identity,
+        status: task ? "queued" : skipReason ? "skipped" : "ok",
+        phase: task ? "submit-queued" : "finished",
+        productCount: scan.products.length,
+        currentCategoryCount: extracted.categories.length,
+        effectiveCategoryCount: effective.length,
+        clueCount: storeClueCount,
+        tokenCount: storeTokenCount,
+        candidateCount: dedupedStoreCandidates.length,
+        eligibleCandidateCount: eligibleCount,
+        submittedCount: 0,
+        failedCount: 0,
+        skipReason,
+        sourceHealth: storeSourceHealth,
+        startedAt,
+        updatedAt: finishedAt,
+        finishedAt: task ? undefined : finishedAt
+      } satisfies PipelineStoreRunRecord);
+      await writePipelineEvent({
+        runId,
+        storeRunId: id,
+        shopId: identity.shopId,
+        level: task ? "info" : skipReason ? "warn" : "info",
+        event: task ? "pipeline-submit-task-queued" : skipReason ? "pipeline-store-skipped" : "pipeline-store-finished",
+        message: task ? "商机候选已生成并进入提报队列" : skipReason ? "店铺未生成可提报任务" : "店铺商机提报处理完成",
+        detail: {
+          productCount: scan.products.length,
+          currentCategoryCount: extracted.categories.length,
+          effectiveCategoryCount: effective.length,
+          missingCategoryProductCount: extracted.missingCategoryProductCount,
+          clueCount: storeClueCount,
+          tokenCount: storeTokenCount,
+          candidateCount: dedupedStoreCandidates.length,
+          eligibleCount,
+          submitTaskId: task?.id
+        }
+      }).catch(() => undefined);
+      details.push({
+        shopId: store.shopId,
+        shopName: store.shopName,
+        status: task ? "queued" : skipReason ? "skipped" : "ok",
+        ok: !skipReason,
+        message: task ? "已生成候选并进入提报队列" : skipReason ? "未生成可提报任务" : "店铺商机提报处理完成",
+        reason: skipReason,
+        diagnostic: {
+          productCount: scan.products.length,
+          currentCategoryCount: extracted.categories.length,
+          effectiveCategoryCount: effective.length,
+          missingCategoryProductCount: extracted.missingCategoryProductCount,
+          effectiveCategoryKeys: effective.map((category) => category.categoryKey),
+          clueCount: storeClueCount,
+          tokenCount: storeTokenCount,
+          candidateCount: dedupedStoreCandidates.length,
+          eligibleCount,
+          submitTaskId: task?.id
+        },
+        index: index + 1,
+        total: targets.length
+      });
+    } catch (error) {
+      failedCount += 1;
+      const failedAt = nowIso();
+      await repositoryPut(pipelineStoreRunStore, {
+        id,
+        runId,
+        ...identity,
+        status: "failed",
+        phase: "finished",
+        productCount: 0,
+        currentCategoryCount: 0,
+        effectiveCategoryCount: 0,
+        clueCount: 0,
+        tokenCount: 0,
+        candidateCount: 0,
+        eligibleCandidateCount: 0,
+        submittedCount: 0,
+        failedCount: 1,
+        skipReason: "pipeline-product-scan-failed",
+        startedAt,
+        updatedAt: failedAt,
+        finishedAt: failedAt
+      } satisfies PipelineStoreRunRecord);
+      await writePipelineEvent({
+        runId,
+        storeRunId: id,
+        shopId: identity.shopId,
+        level: "error",
+        event: "pipeline-store-failed",
+        message: error instanceof Error ? error.message : String(error),
+        detail: { phase: "product-scan" }
+      }).catch(() => undefined);
+      details.push({
+        shopId: store.shopId,
+        shopName: store.shopName,
+        status: "failed",
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+        reason: "pipeline-product-scan-failed",
+        category: "api",
+        index: index + 1,
+        total: targets.length
+      });
+    }
+  }
+
+  const status = failedCount
+    ? (processedStoreCount ? "partial" : "failed")
+    : submitTaskCount
+      ? "running"
+      : "ok";
+  const summary = {
+    productCount: products.length,
+    currentCategoryCount,
+    effectiveCategoryCount,
+    clueCount,
+    tokenCount,
+    candidateCount,
+    eligibleCandidateCount,
+    submitTaskCount,
+    submittedCount: 0,
+    failedCount,
+    skippedCount,
+    processedStoreCount,
+    totalStoreCount: targets.length
+  };
+  const updatedAt = nowIso();
+  await repositoryPut(pipelineRunStore, {
+    id: runId,
+    runId,
+    operationId: args.operationId,
+    mode: "pipeline-submit",
+    filters,
+    matchRules,
+    shopIds: targets.map((store) => store.shopId),
+    tenantId: normalizePipelineStoreIdentity(targets[0]).tenantId,
+    clientCapability,
+    status,
+    totalStoreCount: targets.length,
+    processedStoreCount,
+    submittedCount: 0,
+    skippedCount,
+    failedCount,
+    summary,
+    adapterVersion: payload.adapter.version || "",
+    scriptsVersion: payload.scripts?.version || "",
+    requestPlanHash: requestPlanHash(payload.adapter),
+    createdAt: now,
+    updatedAt
+  } satisfies PipelineRunRecord);
+  const refreshedRun = await refreshPipelineRunSummary(runId).catch(() => null);
+  const finalStatus = refreshedRun?.status || status;
+  const finalSummary = refreshedRun?.summary || summary;
+
+  return {
+    ...ledger,
+    ok: finalStatus === "ok",
+    status: finalStatus,
+    mode: "pipeline-submit",
+    message: submitTaskCount
+      ? "商机提报已生成候选并进入提报队列，提报 worker 正在后台推进"
+      : failedCount
+        ? "商机提报商品/类目阶段部分失败"
+        : "商机提报处理完成",
+    runId,
+    operationId: args.operationId,
+    rows: pipelineClues,
+    clues: pipelineClues,
+    products,
+    prematches: pipelineCandidates,
+    executions: [],
+    details,
+    successCount: details.filter((detail) => detail.ok).length,
+    failureCount: failedCount,
+    partialCount: submitTaskCount,
+    summary: finalSummary,
+    scanSummary: finalSummary,
+    sourceHealth,
+    filters,
+    matchRules,
+    requestPlanHash: requestPlanHash(payload.adapter)
+  };
+}
+
 export async function fetchOpportunityReport(args: OpportunityArgs = {}): Promise<DoudianOpportunityReportResult> {
   const payload = adapterPayload(args);
   const mode = args.mode || "clue-scan";
   if (mode === "clue-scan") return fetchClueScan(payload, args);
   if (mode === "product-scan") return fetchProductScan(payload, args);
   if (mode === "product-prematch") return fetchProductPrematch(payload, args);
+  if (mode === "pipeline-submit") return fetchPipelineSubmit(payload, args);
   if (mode === "clue-submit") return fetchClueSubmit(payload, args);
   if (mode === "product-submit") return fetchProductSubmit(payload, args);
   if (mode === "prematch-submit") return fetchPrematchSubmit(payload, args);
@@ -2536,6 +4674,62 @@ export async function fetchOpportunityReport(args: OpportunityArgs = {}): Promis
 
 export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): Promise<DoudianOpportunityReportResult> {
   const ledger = await listStoreLedger();
+  const payload = adapterPayload(args);
+  const pipelineRuns = await repositoryGetAll<PipelineRunRecord>(pipelineRunStore).catch(() => []);
+  const latestPipeline = pipelineRuns.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  if (latestPipeline) {
+    const [pipelineStoreRuns, pipelineCandidates] = await Promise.all([
+      loadPipelineStoreRunsForRun(latestPipeline.runId),
+      loadPipelineCandidatesForRun(latestPipeline.runId, latestPipelineCandidatePreviewLimit)
+    ]);
+    const storeRuns = pipelineStoreRuns.filter((item) => item.runId === latestPipeline.runId);
+    const prematches = pipelineCandidates.filter((item) => item.pipelineRunId === latestPipeline.runId || item.sourceRunId === latestPipeline.runId);
+    const candidateTotalCount = Number(latestPipeline.summary?.candidateCount || prematches.length);
+    const summary = {
+      ...(latestPipeline.summary || {}),
+      candidateTotalCount,
+      candidateLoadedCount: prematches.length,
+      candidateListTruncated: candidateTotalCount > prematches.length ? 1 : 0
+    };
+    return {
+      ...ledger,
+      ok: latestPipeline.status === "ok",
+      status: "cached",
+      mode: "latest",
+      message: "已恢复最近一次商机提报数据",
+      runId: latestPipeline.runId,
+      operationId: latestPipeline.operationId,
+      sourceRunId: latestPipeline.runId,
+      rows: [],
+      clues: [],
+      products: [],
+      prematches,
+      executions: [],
+      details: storeRuns.map((storeRun, index) => ({
+        shopId: storeRun.shopId,
+        shopName: storeRun.shopName,
+        status: storeRun.status,
+        ok: storeRun.status === "ok" || storeRun.status === "skipped",
+        message: storeRun.skipReason || storeRun.phase,
+        diagnostic: {
+          phase: storeRun.phase,
+          productCount: storeRun.productCount,
+          currentCategoryCount: storeRun.currentCategoryCount,
+          effectiveCategoryCount: storeRun.effectiveCategoryCount,
+          candidateCount: storeRun.candidateCount,
+          eligibleCandidateCount: storeRun.eligibleCandidateCount
+        },
+        index: index + 1,
+        total: storeRuns.length
+      })),
+      summary,
+      scanSummary: summary,
+      sourceHealth: [],
+      filters: args.filters || latestPipeline.filters,
+      matchRules: args.matchRules || latestPipeline.matchRules,
+      requestPlanHash: latestPipeline.requestPlanHash
+    };
+  }
   const [clueRuns, productRuns, prematchRuns, executeRuns] = await Promise.all([
     repositoryGetAll<ClueScanRunRecord>(clueScanStore).catch(() => []),
     repositoryGetAll<ProductScanRunRecord>(productScanStore).catch(() => []),
@@ -2549,7 +4743,7 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
   const latestClues = latestClue?.rows?.length ? latestClue.rows : await loadCluesForRun(latestClue?.runId || "");
   const latestProducts = latestProduct?.products?.length ? latestProduct.products : await loadProductsForRun(latestProduct?.runId || "");
   const latestPrematches = latestPrematch?.candidates?.length ? latestPrematch.candidates : await loadPrematchesForRun(latestPrematch?.runId || "");
-  const limit = dailyAttemptLimit(args, adapterPayload(args).adapter);
+  const limit = dailyAttemptLimit(args, payload.adapter);
   const used = (await listSubmitAttempts()).length;
   return {
     ...ledger,
@@ -2572,11 +4766,24 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
     scanSummary: latestClue?.scanSummary || latestProduct?.scanSummary || {},
     sourceHealth: latestClue?.sourceHealth || latestProduct?.sourceHealth || [],
     filters: args.filters || latestPrematch?.filters || latestClue?.filters || latestProduct?.filters || {},
+    matchRules: normalizeOpportunityMatchRules(args.matchRules),
     requestPlanHash: latestExecute?.requestPlanHash || latestPrematch?.requestPlanHash || latestClue?.requestPlanHash || latestProduct?.requestPlanHash || "",
     dailyAttemptLimit: limit,
     dailyAttemptUsed: used,
     dailyAttemptRemaining: Math.max(0, limit - used)
   };
+}
+
+export async function listOpportunityStoreCategoryLedger(args: { shopIds?: string[] } = {}) {
+  const requested = new Set((args.shopIds || []).map(text).filter(Boolean));
+  const rows = await repositoryGetAll<DoudianOpportunityStoreCategoryLedger>(storeCategoryLedgerStore).catch(() => []);
+  return rows
+    .filter((row) => !requested.size || requested.has(row.shopId))
+    .sort((left, right) => {
+      const time = String(right.lastSeenAt || "").localeCompare(String(left.lastSeenAt || ""));
+      if (time) return time;
+      return Number(right.productCount || 0) - Number(left.productCount || 0);
+    });
 }
 
 export async function restoreLatestOpportunityClueScan() {
@@ -2606,6 +4813,7 @@ export async function runDoudianOpportunityReportSelfCheck(options: { doudianAda
   const shopId = `opportunity-self-check-${suffix}`;
   const clueRunId = `opportunity-clue-self-check-${suffix}`;
   const productRunId = `opportunity-product-self-check-${suffix}`;
+  const pipelineRunId = `opportunity-pipeline-self-check-${suffix}`;
   const submitRunId = `opportunity-submit-self-check-${suffix}`;
   const collectRunId = `opportunity-collect-self-check-${suffix}`;
   try {
@@ -2683,27 +4891,76 @@ export async function runDoudianOpportunityReportSelfCheck(options: { doudianAda
       clueIds: (clueScan.clues || []).map((clue) => clue.id),
       dryRun: true
     });
+    const pipeline = await fetchOpportunityReport({
+      doudianAdapter: payload,
+      mode: "pipeline-submit",
+      shopIds: [shopId],
+      operationId: pipelineRunId,
+      mockClues: [mockClue],
+      mockProducts: [mockProduct],
+      matchRules: { minTokenHitRatio: 0.33 },
+      dryRun: true
+    });
+    await runSubmitWorker(payload, { doudianAdapter: payload, dryRun: true }).catch(() => undefined);
+    const pipelineLatest = await fetchOpportunityReportLatest({ doudianAdapter: payload, matchRules: { minTokenHitRatio: 0.33 } });
     const restored = await fetchOpportunityReportLatest({ doudianAdapter: payload });
     return {
-      ok: clueScan.ok === true && productScan.ok === true && submit.ok === true && collect.ok === true && restored.status === "cached",
+      ok: clueScan.ok === true &&
+        productScan.ok === true &&
+        submit.ok === true &&
+        collect.ok === true &&
+        (pipeline.prematches || []).length > 0 &&
+        pipelineLatest.status === "cached" &&
+        restored.status === "cached",
       clueScanOk: clueScan.ok === true,
       productScanOk: productScan.ok === true,
       submitDryRunOk: submit.executions?.every((item) => item.status === "dry_run" || item.status === "skipped") === true,
       collectDryRunOk: collect.executions?.some((item) => item.status === "dry_run") === true,
+      pipelineDryRunOk: (pipeline.prematches || []).length > 0,
+      pipelineRestoreOk: pipelineLatest.status === "cached",
       restoreOk: restored.status === "cached",
       clueRunId,
       productRunId,
+      pipelineRunId,
       executeRunIds: [submitRunId, collectRunId]
     };
   } finally {
     await deleteStoreLedger([shopId]).catch(() => undefined);
     await repositoryDelete(clueScanStore, clueRunId).catch(() => undefined);
     await repositoryDelete(productScanStore, productRunId).catch(() => undefined);
+    await repositoryDelete(pipelineRunStore, pipelineRunId).catch(() => undefined);
     await repositoryDelete(opportunityExecuteStore, submitRunId).catch(() => undefined);
     await repositoryDelete(opportunityExecuteStore, collectRunId).catch(() => undefined);
     const clues = await repositoryGetAll<DoudianOpportunityClueRow>(clueCandidateStore).catch(() => []);
     await Promise.all(clues.filter((clue) => clue.sourceRunId === clueRunId).map((clue) => repositoryDelete(clueCandidateStore, clue.id).catch(() => undefined)));
     const products = await repositoryGetAll<DoudianOpportunityProductRow>(productCandidateStore).catch(() => []);
     await Promise.all(products.filter((product) => product.sourceRunId === productRunId).map((product) => repositoryDelete(productCandidateStore, product.id).catch(() => undefined)));
+    const scope = `${"local-user"}-${shopId}-1`;
+    const [storeRuns, snapshots, ledgers, candidates, tasks, events, clueCaches, clueShards, wordCaches, wordShards] = await Promise.all([
+      loadPipelineStoreRunsForRun(pipelineRunId),
+      repositoryGetAll<StoreCategorySnapshotRecord>(storeCategorySnapshotStore).catch(() => []),
+      repositoryGetAll<StoreCategoryLedgerRecord>(storeCategoryLedgerStore).catch(() => []),
+      loadPipelineCandidatesForRun(pipelineRunId, 10000),
+      loadPipelineSubmitTasksForRun(pipelineRunId),
+      repositoryGetAllByPrefix<PipelineOperationEventRecord>(pipelineOperationEventStore, pipelineRunRecordPrefix(pipelineRunId), { pageSize: 500, maxItems: 10000 }).catch(() => []),
+      repositoryGetAll<ClueCacheRecord>(clueCacheStore).catch(() => []),
+      repositoryGetAll<ClueCacheShardRecord>(clueCacheShardStore).catch(() => []),
+      repositoryGetAll<ClueWordCacheRecord>(clueWordCacheStore).catch(() => []),
+      repositoryGetAll<ClueWordCacheShardRecord>(clueWordCacheShardStore).catch(() => [])
+    ]);
+    const selfCheckClueCacheIds = new Set(clueCaches.filter((item) => item.scopeId === scope || item.sourceShopId === shopId).map((item) => item.id));
+    const selfCheckWordCacheIds = new Set(wordCaches.filter((item) => selfCheckClueCacheIds.has(item.clueCacheKey)).map((item) => item.id));
+    await Promise.all([
+      ...storeRuns.filter((item) => item.runId === pipelineRunId).map((item) => repositoryDelete(pipelineStoreRunStore, item.id).catch(() => undefined)),
+      ...snapshots.filter((item) => item.runId === pipelineRunId || item.shopId === shopId).map((item) => repositoryDelete(storeCategorySnapshotStore, item.id).catch(() => undefined)),
+      ...ledgers.filter((item) => item.shopId === shopId).map((item) => repositoryDelete(storeCategoryLedgerStore, item.id).catch(() => undefined)),
+      ...candidates.filter((item) => item.pipelineRunId === pipelineRunId || item.sourceRunId === pipelineRunId).map((item) => repositoryDelete(pipelineCandidateStore, item.id).catch(() => undefined)),
+      ...tasks.filter((item) => item.runId === pipelineRunId || item.shopId === shopId).map((item) => repositoryDelete(pipelineSubmitTaskStore, item.id).catch(() => undefined)),
+      ...events.filter((item) => item.runId === pipelineRunId || item.shopId === shopId).map((item) => repositoryDelete(pipelineOperationEventStore, item.id).catch(() => undefined)),
+      ...clueCaches.filter((item) => selfCheckClueCacheIds.has(item.id)).map((item) => repositoryDelete(clueCacheStore, item.id).catch(() => undefined)),
+      ...clueShards.filter((item) => selfCheckClueCacheIds.has(item.clueCacheKey)).map((item) => repositoryDelete(clueCacheShardStore, item.id).catch(() => undefined)),
+      ...wordCaches.filter((item) => selfCheckWordCacheIds.has(item.id)).map((item) => repositoryDelete(clueWordCacheStore, item.id).catch(() => undefined)),
+      ...wordShards.filter((item) => selfCheckWordCacheIds.has(item.wordCacheKey)).map((item) => repositoryDelete(clueWordCacheShardStore, item.id).catch(() => undefined))
+    ]);
   }
 }

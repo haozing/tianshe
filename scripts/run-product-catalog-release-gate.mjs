@@ -138,7 +138,10 @@ function verifySchema() {
     backupApi: worker.includes("VACUUM INTO") && worker.includes("maintenance.createBackup"),
     corruptionRecovery: worker.includes("quarantineDatabaseFiles") && worker.includes("NATIVE_DATA_CORRUPT"),
     recordApi: worker.includes("records.put") && worker.includes("records.list"),
-    featureApi: worker.includes("features.saveStaleRun") && worker.includes("features.loadOpportunityCandidates")
+    featureApi: worker.includes("features.saveStaleRun") && worker.includes("features.loadOpportunityCandidates"),
+    opportunityPipelineStores: worker.includes("opportunity_pipeline_runs_v2") &&
+      worker.includes("opportunity_pipeline_submit_tasks_v2") &&
+      worker.includes("opportunity_clue_word_cache_shards_v2")
   };
 }
 
@@ -152,7 +155,10 @@ function verifyBusinessSafety() {
     liveLookupBeforeMutation: mutationSafety.includes("liveLookupProduct") && mutationSafety.includes("allowedStatus"),
     staleMutationSafety: staleGoods.includes("prepareMutationSafety") && staleGoods.includes("recordExecutionMutationResults"),
     bulkMutationSafety: bulkDelete.includes("prepareMutationSafety") && bulkDelete.includes("recordExecutionMutationResults"),
-    opportunityMutationSafety: opportunity.includes("prepareMutationSafety") && opportunity.includes("recordExecutionMutationResults")
+    opportunityMutationSafety: opportunity.includes("prepareMutationSafety") && opportunity.includes("recordExecutionMutationResults"),
+    opportunityPipelineMode: opportunity.includes("pipeline-submit") && opportunity.includes("fetchPipelineSubmit"),
+    opportunityPipelineCache: opportunity.includes("loadCluesByCategoryWithCache") && opportunity.includes("tokenizeCluesWithCache"),
+    opportunityPipelineWorker: opportunity.includes("runSubmitWorker") && opportunity.includes("validatedByPipeline")
   };
 }
 

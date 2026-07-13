@@ -7,8 +7,10 @@ import type {
   DoudianFundsDataResult,
   DoudianOpportunityFilters,
   DoudianOpportunityGoodsMatchType,
+  DoudianOpportunityMatchRules,
   DoudianOpportunityPrematchMode,
   DoudianOpportunityReportResult,
+  DoudianOpportunityStoreCategoryLedger,
   DoudianOpportunitySubmitMode,
   DoudianOpportunityTitleMatchMode,
   DoudianOpportunityTitleUpdatePosition,
@@ -31,6 +33,7 @@ import {
   fetchFundsDataLatest,
   fetchOpportunityReport,
   fetchOpportunityReportLatest,
+  listOpportunityStoreCategoryLedger,
   fetchStaleGoodsCleanup,
   fetchViolationsData,
   fetchViolationsDataLatest,
@@ -413,9 +416,10 @@ export async function fetchDoudianBulkDeleteProducts(args: {
 }
 
 export async function fetchDoudianOpportunityReport(args: {
-  mode?: "clue-scan" | "product-scan" | "product-prematch" | "clue-submit" | "product-submit" | "prematch-submit" | "collect" | "latest";
+  mode?: "clue-scan" | "product-scan" | "product-prematch" | "pipeline-submit" | "clue-submit" | "product-submit" | "prematch-submit" | "collect" | "latest";
   shopIds?: string[];
   filters?: DoudianOpportunityFilters;
+  matchRules?: DoudianOpportunityMatchRules;
   submitMode?: DoudianOpportunitySubmitMode;
   goodsMatchType?: DoudianOpportunityGoodsMatchType;
   matchMode?: DoudianOpportunityPrematchMode;
@@ -438,6 +442,7 @@ export async function fetchDoudianOpportunityReport(args: {
     mode: args.mode || "clue-scan",
     shopIds: args.shopIds || [],
     ...(args.filters ? { filters: args.filters } : {}),
+    ...(args.matchRules ? { matchRules: args.matchRules } : {}),
     ...(args.submitMode ? { submitMode: args.submitMode } : {}),
     ...(args.goodsMatchType ? { goodsMatchType: args.goodsMatchType } : {}),
     ...(args.matchMode ? { matchMode: args.matchMode } : {}),
@@ -460,13 +465,19 @@ export async function fetchDoudianOpportunityReport(args: {
 
 export async function fetchDoudianOpportunityReportLatest(args: {
   filters?: DoudianOpportunityFilters;
+  matchRules?: DoudianOpportunityMatchRules;
   forceAdapter?: boolean;
 } = {}): Promise<DoudianOpportunityReportResult> {
   const nextArgs = await withDoudianAdapter({
     mode: "latest",
-    ...(args.filters ? { filters: args.filters } : {})
+    ...(args.filters ? { filters: args.filters } : {}),
+    ...(args.matchRules ? { matchRules: args.matchRules } : {})
   }, { force: args.forceAdapter === true });
   return fetchOpportunityReportLatest(nextArgs);
+}
+
+export async function listDoudianOpportunityStoreCategories(args: { shopIds?: string[] } = {}): Promise<DoudianOpportunityStoreCategoryLedger[]> {
+  return listOpportunityStoreCategoryLedger({ shopIds: args.shopIds || [] });
 }
 
 export async function selectAndParseCompassFile(): Promise<{

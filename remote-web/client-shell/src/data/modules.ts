@@ -25,11 +25,11 @@ export const primaryModules: BusinessModule[] = [
     id: "opportunities-root",
     label: "商机中心",
     icon: "paperPlane",
-    route: "/opportunities",
+    route: "/opportunities/product-prematch",
     summary: "商机提报的一级入口。",
     status: "壳已就绪",
-    metrics: [["二级入口", "2"], ["待提报", "3"], ["已提报", "12"]],
-    actions: ["商机提报", "商品预匹配提报"]
+    metrics: [["二级入口", "1"], ["待提报", "3"], ["已提报", "12"]],
+    actions: ["商机提报"]
   },
   {
     id: "products-root",
@@ -85,24 +85,14 @@ export const secondaryModules: BusinessModule[] = [
     actions: ["刷新违规", "批量申诉", "整改清单"]
   },
   {
-    id: "opportunity-report",
+    id: "opportunity-product-prematch",
     label: "商机提报",
     icon: "paperPlane",
-    route: "/opportunities",
-    summary: "提交和跟进平台商机、品类机会和提报记录。",
-    status: "壳已就绪",
-    metrics: [["待提报", "3"], ["提报中", "1"], ["已通过", "12"]],
-    actions: ["新建提报", "刷新状态", "查看记录"]
-  },
-  {
-    id: "opportunity-product-prematch",
-    label: "商品预匹配提报",
-    icon: "paperPlane",
     route: "/opportunities/product-prematch",
-    summary: "先同步商品和商机，生成商品与商机词匹配池后再提报。",
+    summary: "按店铺扫描商品、沉淀类目并推进商机提报。",
     status: "壳已就绪",
-    metrics: [["可提报候选", "0"], ["待匹配商品", "0"], ["提报记录", "0"]],
-    actions: ["同步商品", "生成预匹配", "执行提报"]
+    metrics: [["提报状态", "v2"], ["店铺类目", "沉淀中"], ["候选明细", "自动"]],
+    actions: ["一键提报", "类目台账", "候选明细"]
   },
   {
     id: "slow-moving-cleanup",

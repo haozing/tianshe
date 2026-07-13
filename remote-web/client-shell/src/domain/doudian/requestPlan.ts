@@ -102,6 +102,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
         const sign = await signDoudianRequest(payload, {
           targetUrl: url,
           partition: args.partition,
+          planKey: args.planKey,
           plan,
           context
         });
@@ -130,7 +131,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
       }
       const headers = await buildRequestHeaders(adapter, args.partition, requestUrl, plan, args.headers, context);
       result = await requestJson(args.partition, requestUrl, headers, args.planKey, plan, context);
-      if (args.planKey === "businessCoreIndex") {
+      if (headers.cookie) {
         result.requestCookieState = summarizeCookieHeader(headers.cookie);
       }
     }
@@ -316,6 +317,46 @@ function requestDiagnostic(method: string, url: string, body: unknown) {
   };
 }
 
+function responseDataKeys(data: unknown) {
+  return data && typeof data === "object" && !Array.isArray(data)
+    ? Object.keys(data as Record<string, unknown>).sort().slice(0, 30)
+    : [];
+}
+
+function redactDiagnosticText(value: string) {
+  return value
+    .replace(/([?&](?:a_bogus|msToken|verifyFp|fp)=)[^&\s"]*/gi, "$1[REDACTED]")
+    .replace(/("(?:a_bogus|msToken|verifyFp|fp|cookie|token|sessionid)"\s*:\s*")[^"]*(")/gi, "$1[REDACTED]$2")
+    .replace(/((?:a_bogus|msToken|verifyFp|fp|cookie|token|sessionid)\s*[:=]\s*)[^\s,;&"}]+/gi, "$1[REDACTED]");
+}
+
+function diagnosticText(value: unknown) {
+  if (value == null) return "";
+  const raw = typeof value === "string" ? value : (() => {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  })();
+  return redactDiagnosticText(raw);
+}
+
+function responseDiagnostic(response: RequestPlanResult | undefined) {
+  if (!response) return undefined;
+  const dataText = diagnosticText(response.data);
+  const errorText = diagnosticText(response.error);
+  const combined = dataText || errorText;
+  return {
+    responseDataType: Array.isArray(response.data) ? "array" : response.data === null ? "null" : typeof response.data,
+    responseDataKeys: responseDataKeys(response.data),
+    responseDataLength: dataText.length,
+    responseDataHash: dataText ? shortHash(dataText) : "",
+    responseErrorLength: errorText.length,
+    responseSnippet: combined.slice(0, 500)
+  };
+}
+
 async function removePlanCookies(
   partition: string,
   planKey: string,
@@ -453,12 +494,19 @@ async function buildRequestHeaders(
     headers["User-Agent"] = userAgent || XZB_SIGN_USER_AGENT;
   }
   const cookieHeaderValues: string[] = [];
-  const cookieHeader = await requireChihuNative().cookies.getHeader({
+  const urlCookieHeader = await requireChihuNative().cookies.getHeader({
     partition,
-    url,
-    domain: adapter.cookieDomain
+    url
   });
-  if (cookieHeader.cookieHeader) cookieHeaderValues.push(cookieHeader.cookieHeader);
+  if (urlCookieHeader.cookieHeader) cookieHeaderValues.push(urlCookieHeader.cookieHeader);
+
+  if (adapter.cookieDomain) {
+    const domainCookieHeader = await requireChihuNative().cookies.getHeader({
+      partition,
+      domain: adapter.cookieDomain
+    }).catch(() => null);
+    if (domainCookieHeader?.cookieHeader) cookieHeaderValues.push(domainCookieHeader.cookieHeader);
+  }
 
   for (const cookieUrl of arrayText(plan.cookieUrls)) {
     const extra = await requireChihuNative().cookies.getHeader({
@@ -543,6 +591,8 @@ async function reportPlanSummary(
   const successPaths = arrayText(plan.successPaths);
   const hasSuccessPath = successPaths.some((path) => getPathValue(response.data, path) !== undefined);
   const cookieState = await requestPlanCookieState(partition, planKey);
+  const contractOk = requestPlanResponseOk(response, adapter, planKey);
+  const shouldReportResponseDiagnostic = responseHasHttpError(response) || !contractOk;
   await requireChihuNative().logs.report({
     category: "doudian-request-plan",
     event: "result",
@@ -552,7 +602,7 @@ async function reportPlanSummary(
     requestMode: String(plan.requestMode || "native-http"),
     status: response.status,
     httpOk: response.ok,
-    contractOk: requestPlanResponseOk(response, adapter, planKey),
+    contractOk,
     code: responseCode(response) ?? null,
     message: responseMessage(response),
     hasSuccessPath,
@@ -561,6 +611,7 @@ async function reportPlanSummary(
     pageHref: response.pageHref,
     pageTitle: response.pageTitle,
     ...(response.requestDiagnostic ? { requestDiagnostic: response.requestDiagnostic } : {}),
+    ...(shouldReportResponseDiagnostic ? { responseDiagnostic: responseDiagnostic(response) } : {}),
     ...(response.requestCookieState ? { requestCookieState: response.requestCookieState } : {}),
     ...(response.nonRetryable ? { nonRetryable: true } : {}),
     ...(response.signFailureReason ? { signFailureReason: response.signFailureReason } : {}),

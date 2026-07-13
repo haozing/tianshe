@@ -45,8 +45,8 @@ interface MetricItem {
 }
 
 const modeTabs: Array<{ id: OpportunityTab; label: string; icon: typeof Megaphone }> = [
-  { id: "clue", label: "按商机自动提报", icon: Megaphone },
-  { id: "product", label: "按商品自动提报", icon: PackageSearch }
+  { id: "clue", label: "调试：按商机", icon: Megaphone },
+  { id: "product", label: "调试：按商品", icon: PackageSearch }
 ];
 
 const rankTabs: Option[] = [
@@ -606,7 +606,8 @@ export function OpportunityReportPage() {
               <Sparkles className="size-[14px]" strokeWidth={2} />
               商机中心
             </span>
-            <h1 className="m-0 truncate text-[24px] font-extrabold leading-8 tracking-[0] text-brand-navy max-[760px]:text-[21px]">商机提报</h1>
+            <h1 className="m-0 truncate text-[24px] font-extrabold leading-8 tracking-[0] text-brand-navy max-[760px]:text-[21px]">商机调试工具</h1>
+            <span className="mt-1 block truncate text-[12px] font-semibold text-[#667085]">正式批量提报请使用“商机提报”。</span>
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2 max-[760px]:w-full max-[760px]:justify-start">
@@ -620,7 +621,7 @@ export function OpportunityReportPage() {
           </button>
           <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[13px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] transition-colors hover:bg-brand-foxHover disabled:opacity-50" type="button" onClick={runSubmit} disabled={busy || !selectedCount}>
             {loading === "submit" ? <Loader2 className="size-[15px] animate-spin" strokeWidth={2} /> : <Send className="size-[15px]" strokeWidth={2} />}
-            立即提报
+            调试提报
           </button>
         </div>
       </div>

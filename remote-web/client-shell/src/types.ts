@@ -748,7 +748,7 @@ export interface DoudianBulkDeleteResult extends DoudianStoreResult {
   requestPlanHash?: string;
 }
 
-export type DoudianOpportunityReportMode = "clue-scan" | "product-scan" | "product-prematch" | "clue-submit" | "product-submit" | "prematch-submit" | "collect" | "latest";
+export type DoudianOpportunityReportMode = "clue-scan" | "product-scan" | "product-prematch" | "pipeline-submit" | "clue-submit" | "product-submit" | "prematch-submit" | "collect" | "latest";
 export type DoudianOpportunitySubmitMode = "validate" | "updateTitle";
 export type DoudianOpportunityGoodsMatchType = "new" | "official";
 export type DoudianOpportunityPrematchMode = "precise" | "loose";
@@ -779,6 +779,29 @@ export interface DoudianOpportunityFilters {
   endTime?: string;
   pageSize?: number;
   maxPages?: number;
+}
+
+export interface DoudianOpportunityMatchRules {
+  storeCategoryKeys?: string[];
+  minTokenHitRatio?: number;
+}
+
+export interface DoudianOpportunityStoreCategoryLedger {
+  id: string;
+  tenantId: string;
+  shopId: string;
+  shopName: string;
+  storeGeneration: number;
+  categoryId: string;
+  categoryName: string;
+  categoryPath: string[];
+  lastCategoryKey: string;
+  categoryKey: string;
+  productCount: number;
+  seenCount: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  sampleProductIds: string[];
 }
 
 export interface DoudianOpportunityShopRef {
@@ -836,6 +859,9 @@ export interface DoudianOpportunityProductRow {
   img?: string;
   category?: string;
   categoryId?: string;
+  categoryName?: string;
+  categoryPath?: string[];
+  lastCategoryKey?: string;
   price?: number;
   stock?: number;
   sales?: number;
@@ -868,6 +894,21 @@ export interface DoudianOpportunityPrematchCandidate {
   clueLastCategoryKey?: string;
   clueWords: string[];
   matchedWords: string[];
+  matchedTokens?: string[];
+  effectiveTokenCount?: number;
+  matchedTokenCount?: number;
+  requiredTokenHits?: number;
+  tokenHitRatio?: number;
+  minTokenHitRatio?: number;
+  matchRulesHash?: string;
+  pipelineRunId?: string;
+  storeRunId?: string;
+  clueCacheKey?: string;
+  wordCacheKey?: string;
+  effectiveCategoryKey?: string;
+  submitStatus?: string;
+  submitTaskId?: string;
+  submittedAt?: string;
   matchMode: DoudianOpportunityPrematchMode;
   matchScore: number;
   categoryScore: number;
@@ -917,6 +958,7 @@ export interface DoudianOpportunityReportResult extends DoudianStoreResult {
   scanSummary?: Record<string, number>;
   sourceHealth?: Array<Record<string, unknown>>;
   filters?: DoudianOpportunityFilters;
+  matchRules?: DoudianOpportunityMatchRules;
   requestPlanHash?: string;
   productRunId?: string;
   clueRunId?: string;
