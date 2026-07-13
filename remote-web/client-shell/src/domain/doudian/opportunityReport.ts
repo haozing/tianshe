@@ -69,6 +69,7 @@ let pipelineSubmitWorkerRunning = false;
 interface OpportunityArgs {
   doudianAdapter?: DoudianAdapterPayload;
   mode?: string;
+  runId?: string;
   shopIds?: string[];
   filters?: DoudianOpportunityFilters;
   matchRules?: DoudianOpportunityMatchRules;
@@ -393,6 +394,13 @@ function platformIntId(value: unknown) {
   if (!/^\d+$/.test(raw)) return raw;
   const next = Number(raw);
   return Number.isSafeInteger(next) ? next : raw;
+}
+
+function platformNumberId(value: unknown, fallback = 0) {
+  const raw = text(value);
+  if (!/^\d+$/.test(raw)) return fallback;
+  const next = Number(raw);
+  return Number.isSafeInteger(next) ? next : fallback;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {
@@ -1970,7 +1978,7 @@ async function enqueueStoreSubmit(args: {
   if (!candidateIds.length) return null;
   const concurrencyKey = storeScopeId(args.identity);
   const active = (await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []))
-    .find((task) => task.concurrencyKey === concurrencyKey && (task.status === "queued" || task.status === "running"));
+    .find((task) => task.runId === args.runId && task.concurrencyKey === concurrencyKey && (task.status === "queued" || task.status === "running"));
   if (active) return active;
   const now = nowIso();
   const task: PipelineSubmitTaskRecord = {
@@ -2349,6 +2357,69 @@ function candidateFromMatch(args: {
       productRaw: args.product.raw || {},
       clue: args.clue,
       clueRaw: args.clue.raw || {}
+    }
+  };
+}
+
+function compactProductRawForSubmit(product: DoudianOpportunityProductRow) {
+  const raw = objectRecord(product.raw);
+  const categoryDetail = objectRecord(raw.category_detail || raw.categoryDetail);
+  return {
+    pic_url: text(raw.pic_url || raw.picUrl || raw.img || raw.cover || product.img),
+    category_id: text(
+      raw.category_id ||
+      raw.categoryId ||
+      raw.leaf_category_id ||
+      raw.leafCategoryId ||
+      raw.category_leaf_id ||
+      raw.categoryLeafId ||
+      categoryDetail.leaf_cid ||
+      categoryDetail.leafCid ||
+      categoryDetail.fourth_cid ||
+      categoryDetail.fourthCid ||
+      categoryDetail.third_cid ||
+      categoryDetail.thirdCid ||
+      categoryDetail.second_cid ||
+      categoryDetail.secondCid ||
+      categoryDetail.first_cid ||
+      categoryDetail.firstCid ||
+      product.categoryId
+    ),
+    category_path: text(raw.category_path || raw.categoryPath || product.category),
+    stock_num: coerceNumber(raw.stock_num || raw.stockNum || raw.stock || product.stock) || 0,
+    sell_num: coerceNumber(raw.sell_num || raw.sellNum || raw.sale_num || raw.saleNum || product.sales) || 0,
+    price: coerceNumber(raw.price || raw.min_price || raw.minPrice || raw.product_price_min || raw.productPriceMin) || 0,
+    product_price_min: coerceNumber(raw.product_price_min || raw.productPriceMin) || 0,
+    product_price_max: coerceNumber(raw.product_price_max || raw.productPriceMax || raw.max_price || raw.maxPrice) || 0,
+    audit_time: coerceNumber(raw.audit_time || raw.auditTime || raw.audit_time_num || raw.auditTimeNum) || 0,
+    brand_id: platformNumberId(raw.brand_id || raw.brandId),
+    brand_name: text(raw.brand_name || raw.brandName),
+    art_number: text(raw.art_number || raw.artNumber)
+  };
+}
+
+function compactPipelineCandidate(candidate: DoudianOpportunityPrematchCandidate): DoudianOpportunityPrematchCandidate {
+  const raw = objectRecord(candidate.raw);
+  const product = objectRecord(raw.product);
+  const clue = objectRecord(raw.clue);
+  return {
+    ...candidate,
+    raw: {
+      product: {
+        categoryName: text(product.categoryName || candidate.productCategory),
+        categoryPath: Array.isArray(product.categoryPath) ? product.categoryPath.map(text).filter(Boolean) : normalizeCategoryPath(candidate.productCategory),
+        lastCategoryKey: text(product.lastCategoryKey),
+        price: coerceNumber(product.price) || 0,
+        stock: coerceNumber(product.stock) || 0,
+        sales: coerceNumber(product.sales) || 0
+      },
+      productRaw: compactProductRawForSubmit(candidateToProduct(candidate)),
+      clue: {
+        shortName: text(clue.shortName),
+        recommendList: Array.isArray(clue.recommendList) ? clue.recommendList.map(text).filter(Boolean).slice(0, 12) : [],
+        profitInfoList: Array.isArray(clue.profitInfoList) ? clue.profitInfoList.map(text).filter(Boolean).slice(0, 12) : []
+      },
+      matchRulesHash: text(raw.matchRulesHash || candidate.matchRulesHash)
     }
   };
 }
@@ -2897,7 +2968,7 @@ function submitProductPayload(product: DoudianOpportunityProductRow, store: Doud
     category_path: text(raw.category_path || raw.categoryPath || product.category),
     shop_id: Number.isFinite(shopIdNumber) ? shopIdNumber : product.shopId || store.shopId,
     shop_name: product.shopName || store.shopName,
-    brand_id: text(raw.brand_id || raw.brandId),
+    brand_id: platformNumberId(raw.brand_id || raw.brandId),
     brand_name: text(raw.brand_name || raw.brandName),
     art_number: text(raw.art_number || raw.artNumber)
   };
@@ -3992,10 +4063,15 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
   try {
     const ledger = await listStoreLedger();
     const stores = ledger.stores || [];
+    const scopedRunId = text(args.runId || args.operationId || args.sourceRunId);
     let processed = 0;
     while (true) {
       const nowMs = Date.now();
-      const tasks = (await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []))
+      const taskPool = scopedRunId
+        ? await loadPipelineSubmitTasksForRun(scopedRunId)
+        : await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []);
+      const tasks = taskPool
+        .filter((task) => !scopedRunId || task.runId === scopedRunId)
         .filter((task) => task.status === "queued" || (task.status === "running" && (!task.leaseExpiresAt || Date.parse(task.leaseExpiresAt) < nowMs)))
         .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
       if (!tasks.length) break;
@@ -4258,7 +4334,6 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   let candidateCount = 0;
   let eligibleCandidateCount = 0;
   const pipelineClues: DoudianOpportunityClueRow[] = [];
-  const pipelineCandidates: DoudianOpportunityPrematchCandidate[] = [];
   const matchRulesHash = stableMatchRulesHash(args);
   const dedupeIndex = await submittedDedupeIndex();
 
@@ -4436,27 +4511,23 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           }
           return { ...candidate, eligible: false, estimatedCost: 0, status: "skipped", skipReason: "同商品已有更高分商机" };
         });
+      const compactedStoreCandidates = dedupedStoreCandidates.map(compactPipelineCandidate);
       if (dedupedStoreCandidates.length) {
-        await repositoryPutMany(pipelineCandidateStore, dedupedStoreCandidates, { concurrency: 2 });
-        pipelineCandidates.push(...dedupedStoreCandidates);
+        await repositoryPutMany(pipelineCandidateStore, compactedStoreCandidates, { concurrency: 2 });
       }
       const task = await enqueueStoreSubmit({
         runId,
         storeRunId: id,
         identity,
-        candidates: dedupedStoreCandidates
+        candidates: compactedStoreCandidates
       });
       if (task) {
         submitTaskCount += 1;
-        const queuedCandidates = dedupedStoreCandidates.map((candidate) => candidate.eligible && candidate.status === "ready"
+        const queuedCandidates = compactedStoreCandidates.map((candidate) => candidate.eligible && candidate.status === "ready"
           ? { ...candidate, submitTaskId: task.id, submitStatus: "queued" }
           : candidate);
         await repositoryPutMany(pipelineCandidateStore, queuedCandidates, { concurrency: 2 });
-        for (const queued of queuedCandidates) {
-          const indexInRun = pipelineCandidates.findIndex((candidate) => candidate.id === queued.id);
-          if (indexInRun >= 0) pipelineCandidates[indexInRun] = queued;
-        }
-        void runSubmitWorker(payload, args).catch(() => undefined);
+        void runSubmitWorker(payload, { ...args, runId }).catch(() => undefined);
       }
       const eligibleCount = dedupedStoreCandidates.filter((candidate) => candidate.eligible && candidate.status === "ready").length;
       let skipReason = "";
@@ -4626,6 +4697,14 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   const refreshedRun = await refreshPipelineRunSummary(runId).catch(() => null);
   const finalStatus = refreshedRun?.status || status;
   const finalSummary = refreshedRun?.summary || summary;
+  const previewCandidates = await loadPipelineCandidatesForRun(runId, latestPipelineCandidatePreviewLimit);
+  const candidateTotalCount = Number(finalSummary.candidateCount || candidateCount || previewCandidates.length);
+  const responseSummary = {
+    ...finalSummary,
+    candidateTotalCount,
+    candidateLoadedCount: previewCandidates.length,
+    candidateListTruncated: candidateTotalCount > previewCandidates.length ? 1 : 0
+  };
 
   return {
     ...ledger,
@@ -4642,14 +4721,14 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     rows: pipelineClues,
     clues: pipelineClues,
     products,
-    prematches: pipelineCandidates,
+    prematches: previewCandidates,
     executions: [],
     details,
     successCount: details.filter((detail) => detail.ok).length,
     failureCount: failedCount,
     partialCount: submitTaskCount,
-    summary: finalSummary,
-    scanSummary: finalSummary,
+    summary: responseSummary,
+    scanSummary: responseSummary,
     sourceHealth,
     filters,
     matchRules,

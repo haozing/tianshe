@@ -185,6 +185,7 @@ export function OpportunityProductPrematchPage() {
   const [skipSubmittedProductInSameClue, setSkipSubmittedProductInSameClue] = useState(true);
   const [message, setMessage] = useState("等待操作");
   const [loading, setLoading] = useState<"" | "stores" | "latest" | "products" | "clues" | "match" | "submit" | "pipeline">("");
+  const [pipelineInFlight, setPipelineInFlight] = useState(false);
   const [activeTab, setActiveTab] = useState<"submit" | "autoSubmit">("submit");
   const [autoSubmitPage, setAutoSubmitPage] = useState(0);
   const actionLockRef = useRef(false);
@@ -239,6 +240,7 @@ export function OpportunityProductPrematchPage() {
   const autoSubmitPageFrom = candidates.length ? autoSubmitPageStart + 1 : 0;
   const autoSubmitPageTo = Math.min(candidates.length, autoSubmitPageStart + autoSubmitItems.length);
   const busy = Boolean(loading);
+  const pipelineBusy = pipelineInFlight || loading === "pipeline";
 
   const productCountByShop = useMemo(() => {
     const next = new Map<string, number>();
@@ -362,26 +364,28 @@ export function OpportunityProductPrematchPage() {
     setSelectedStoreCategoryKeys((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
   }
 
-  async function runPipelineSubmit() {
+  function runPipelineSubmit() {
     if (actionLockRef.current) return;
     if (!selectedShopIds.size) {
       setMessage("请先选择店铺");
       return;
     }
     actionLockRef.current = true;
-    setLoading("pipeline");
-    setMessage("正在启动商机提报");
-    try {
-      const result = await fetchDoudianOpportunityReport({
-        mode: "pipeline-submit",
-        shopIds: Array.from(selectedShopIds),
-        filters,
-        matchRules,
-        skipSubmittedClueCategory,
-        skipSubmittedClue,
-        skipSubmittedProductInSameClue,
-        operationId: `opportunity-pipeline-submit-${Date.now()}`
-      });
+    setPipelineInFlight(true);
+    const operationId = `opportunity-pipeline-submit-${Date.now()}`;
+    setMatchRunId(operationId);
+    setMessage("商机提报已启动，后台正在生成候选");
+    const promise = fetchDoudianOpportunityReport({
+      mode: "pipeline-submit",
+      shopIds: Array.from(selectedShopIds),
+      filters,
+      matchRules,
+      skipSubmittedClueCategory,
+      skipSubmittedClue,
+      skipSubmittedProductInSameClue,
+      operationId
+    });
+    promise.then((result) => {
       setProducts(result.products || []);
       setClues(result.clues || result.rows || []);
       setCandidates(result.prematches || []);
@@ -391,12 +395,12 @@ export function OpportunityProductPrematchPage() {
       setClueRunId("");
       setMatchRunId(result.runId || "");
       setMessage(result.message || "商机提报已启动");
-    } catch (error) {
+    }).catch((error) => {
       setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
+    }).finally(() => {
       actionLockRef.current = false;
-      setLoading("");
-    }
+      setPipelineInFlight(false);
+    });
   }
 
   return (
@@ -486,9 +490,9 @@ export function OpportunityProductPrematchPage() {
                   <div className="grid gap-3">
                     <div className="grid gap-3 rounded-md border border-[#ffdcca] bg-[#fffaf7] p-3">
                       <div className="flex items-center justify-end">
-                        <button className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md bg-brand-fox px-4 text-[14px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] transition-colors hover:bg-brand-foxHover disabled:opacity-50" type="button" onClick={runPipelineSubmit} disabled={busy || !selectedShopIds.size}>
-                          {loading === "pipeline" ? <Loader2 className="size-[16px] animate-spin" strokeWidth={2} /> : <Send className="size-[16px]" strokeWidth={2} />}
-                          {loading === "pipeline" ? "正在启动" : "一键提报"}
+                        <button className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md bg-brand-fox px-4 text-[14px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] transition-colors hover:bg-brand-foxHover disabled:opacity-50" type="button" onClick={runPipelineSubmit} disabled={busy || pipelineBusy || !selectedShopIds.size}>
+                          {pipelineBusy ? <Loader2 className="size-[16px] animate-spin" strokeWidth={2} /> : <Send className="size-[16px]" strokeWidth={2} />}
+                          {pipelineBusy ? "后台运行" : "一键提报"}
                         </button>
                       </div>
                     </div>
