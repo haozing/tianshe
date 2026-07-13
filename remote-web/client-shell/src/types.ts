@@ -968,6 +968,16 @@ export interface DoudianOpportunityReportResult extends DoudianStoreResult {
   dailyAttemptRemaining?: number;
 }
 
+export interface DoudianOpportunityCandidatePage {
+  runId: string;
+  items: DoudianOpportunityPrematchCandidate[];
+  nextCursor?: string | null;
+  hasMore: boolean;
+  pageSize: number;
+  totalCount?: number;
+  loadedCount?: number;
+}
+
 export interface ChihuBridgeApi {
   version: string;
   rawMethods: string[];

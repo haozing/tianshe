@@ -6,7 +6,7 @@ import {
   RefreshCw,
   Send
 } from "lucide-react";
-import { fetchDoudianOpportunityReport, fetchDoudianOpportunityReportLatest, listDoudianOpportunityStoreCategories, listDoudianStores } from "../bridge/client";
+import { fetchDoudianOpportunityReport, fetchDoudianOpportunityReportLatest, listDoudianOpportunityCandidatesPage, listDoudianOpportunityStoreCategories, listDoudianStores } from "../bridge/client";
 import { cn } from "../lib/utils";
 import type {
   DoudianOpportunityClueRow,
@@ -188,6 +188,10 @@ export function OpportunityProductPrematchPage() {
   const [pipelineInFlight, setPipelineInFlight] = useState(false);
   const [activeTab, setActiveTab] = useState<"submit" | "autoSubmit">("submit");
   const [autoSubmitPage, setAutoSubmitPage] = useState(0);
+  const [candidatePageCursors, setCandidatePageCursors] = useState<Array<string | null>>([null]);
+  const [candidateNextCursor, setCandidateNextCursor] = useState<string | null>(null);
+  const [candidateHasMore, setCandidateHasMore] = useState(false);
+  const [candidatePageLoading, setCandidatePageLoading] = useState(false);
   const actionLockRef = useRef(false);
 
   const filters = useMemo<DoudianOpportunityFilters>(() => ({
@@ -219,7 +223,7 @@ export function OpportunityProductPrematchPage() {
       return Number.isFinite(value) ? value : fallback;
     };
     const totalCount = summaryNumber("candidateTotalCount", summaryNumber("candidateCount", candidates.length));
-    const loadedCount = summaryNumber("candidateLoadedCount", candidates.length);
+    const loadedCount = candidates.length;
     const listTruncated = summaryNumber("candidateListTruncated", 0) > 0 || totalCount > loadedCount;
     return {
       eligibleCount: summaryNumber("eligibleCandidateCount", eligibleCount),
@@ -230,15 +234,11 @@ export function OpportunityProductPrematchPage() {
       listTruncated
     };
   }, [candidates, resultSummary]);
-  const autoSubmitPageCount = Math.max(1, Math.ceil(candidates.length / autoSubmitPageSize));
+  const autoSubmitPageCount = Math.max(1, Math.ceil(candidateSummary.totalCount / autoSubmitPageSize));
   const safeAutoSubmitPage = Math.min(autoSubmitPage, autoSubmitPageCount - 1);
-  const autoSubmitPageStart = safeAutoSubmitPage * autoSubmitPageSize;
-  const autoSubmitItems = useMemo(
-    () => candidates.slice(autoSubmitPageStart, autoSubmitPageStart + autoSubmitPageSize),
-    [autoSubmitPageStart, candidates]
-  );
-  const autoSubmitPageFrom = candidates.length ? autoSubmitPageStart + 1 : 0;
-  const autoSubmitPageTo = Math.min(candidates.length, autoSubmitPageStart + autoSubmitItems.length);
+  const autoSubmitItems = candidates;
+  const autoSubmitPageFrom = candidates.length ? safeAutoSubmitPage * autoSubmitPageSize + 1 : 0;
+  const autoSubmitPageTo = candidates.length ? safeAutoSubmitPage * autoSubmitPageSize + candidates.length : 0;
   const busy = Boolean(loading);
   const pipelineBusy = pipelineInFlight || loading === "pipeline";
 
@@ -298,10 +298,6 @@ export function OpportunityProductPrematchPage() {
   }, [selectedShopIds]);
 
   useEffect(() => {
-    setAutoSubmitPage(0);
-  }, [candidates.length]);
-
-  useEffect(() => {
     setAutoSubmitPage((current) => Math.min(current, autoSubmitPageCount - 1));
   }, [autoSubmitPageCount]);
 
@@ -324,18 +320,62 @@ export function OpportunityProductPrematchPage() {
     setSelectedStoreCategoryKeys((current) => current.filter((key) => rows.some((row) => row.categoryKey === key)));
   }
 
+  async function loadCandidatePageForRun(runId: string, pageIndex: number, cursor: string | null, summary: Record<string, number> = {}) {
+    const id = runId.trim();
+    if (!id) {
+      setCandidates([]);
+      setAutoSubmitPage(0);
+      setCandidatePageCursors([null]);
+      setCandidateNextCursor(null);
+      setCandidateHasMore(false);
+      setResultSummary(summary);
+      return;
+    }
+    setCandidatePageLoading(true);
+    try {
+      const page = await listDoudianOpportunityCandidatesPage({ runId: id, cursor, pageSize: autoSubmitPageSize });
+      setCandidates(page.items || []);
+      setAutoSubmitPage(pageIndex);
+      setCandidateHasMore(page.hasMore === true);
+      setCandidateNextCursor(page.nextCursor || null);
+      setCandidatePageCursors((current) => {
+        const next = current.slice(0, pageIndex + 2);
+        next[pageIndex] = cursor;
+        if (page.hasMore && page.nextCursor) next[pageIndex + 1] = page.nextCursor;
+        return next;
+      });
+      setResultSummary((current) => ({
+        ...current,
+        ...summary,
+        candidateTotalCount: Number(page.totalCount ?? summary.candidateTotalCount ?? summary.candidateCount ?? current.candidateTotalCount ?? 0),
+        candidateLoadedCount: page.items?.length || 0,
+        candidateListTruncated: page.hasMore ? 1 : 0
+      }));
+    } finally {
+      setCandidatePageLoading(false);
+    }
+  }
+
+  function loadAutoSubmitPage(pageIndex: number) {
+    const target = Math.max(0, pageIndex);
+    const cursor = target === autoSubmitPage + 1 ? candidateNextCursor : candidatePageCursors[target] || null;
+    if (target > autoSubmitPage && !cursor) return;
+    void loadCandidatePageForRun(matchRunId, target, cursor, resultSummary);
+  }
+
   async function restoreLatest() {
     setLoading((current) => current || "latest");
     try {
       const result = await fetchDoudianOpportunityReportLatest({ filters, matchRules });
       setProducts(result.products || []);
       setClues(result.clues || []);
-      setCandidates(result.prematches || []);
       setExecutions(result.executions || []);
       setResultSummary(result.summary || {});
       setProductRunId(result.productRunId || "");
       setClueRunId(result.clueRunId || "");
-      setMatchRunId(result.matchRunId || "");
+      const runId = result.matchRunId || result.runId || "";
+      setMatchRunId(runId);
+      await loadCandidatePageForRun(runId, 0, null, result.summary || {});
       setMessage(result.message || "已恢复最近数据");
       await refreshStoreCategories();
     } finally {
@@ -374,6 +414,12 @@ export function OpportunityProductPrematchPage() {
     setPipelineInFlight(true);
     const operationId = `opportunity-pipeline-submit-${Date.now()}`;
     setMatchRunId(operationId);
+    setCandidates([]);
+    setAutoSubmitPage(0);
+    setCandidatePageCursors([null]);
+    setCandidateNextCursor(null);
+    setCandidateHasMore(false);
+    setResultSummary({});
     setMessage("商机提报已启动，后台正在生成候选");
     const promise = fetchDoudianOpportunityReport({
       mode: "pipeline-submit",
@@ -385,15 +431,16 @@ export function OpportunityProductPrematchPage() {
       skipSubmittedProductInSameClue,
       operationId
     });
-    promise.then((result) => {
+    promise.then(async (result) => {
       setProducts(result.products || []);
       setClues(result.clues || result.rows || []);
-      setCandidates(result.prematches || []);
       setExecutions(result.executions || []);
       setResultSummary(result.summary || {});
       setProductRunId("");
       setClueRunId("");
-      setMatchRunId(result.runId || "");
+      const runId = result.runId || operationId;
+      setMatchRunId(runId);
+      await loadCandidatePageForRun(runId, 0, null, result.summary || {});
       setMessage(result.message || "商机提报已启动");
     }).catch((error) => {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -589,7 +636,7 @@ export function OpportunityProductPrematchPage() {
                 <div className="min-w-0">
                   <strong className="block text-[15px] text-brand-navy">自动提报商品与商机词</strong>
                   <span className="mt-1 block truncate text-[12px] font-semibold text-[#667085]">
-                    共 {formatNumber(candidateSummary.totalCount)} 条{candidateSummary.listTruncated ? `，已加载 ${formatNumber(candidateSummary.loadedCount)} 条` : ""}，当前 {formatNumber(autoSubmitPageFrom)}-{formatNumber(autoSubmitPageTo)}
+                    共 {formatNumber(candidateSummary.totalCount)} 条，每页 {formatNumber(autoSubmitPageSize)} 条，当前 {formatNumber(autoSubmitPageFrom)}-{formatNumber(autoSubmitPageTo)}
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2 max-[760px]:w-full max-[760px]:justify-start">
@@ -598,20 +645,20 @@ export function OpportunityProductPrematchPage() {
                       aria-label="上一页自动提报商品"
                       className="grid size-9 place-items-center text-[#344054] transition-colors hover:bg-[#f8fbff] disabled:text-[#c7d2e2]"
                       type="button"
-                      onClick={() => setAutoSubmitPage((current) => Math.max(0, current - 1))}
-                      disabled={safeAutoSubmitPage <= 0}
+                      onClick={() => loadAutoSubmitPage(safeAutoSubmitPage - 1)}
+                      disabled={candidatePageLoading || safeAutoSubmitPage <= 0}
                     >
                       <ChevronLeft className="size-[16px]" strokeWidth={2} />
                     </button>
                     <span className="min-w-[70px] border-x border-[#dbe5f2] px-2 text-center text-[12px] font-semibold text-[#667085]">
-                      {formatNumber(safeAutoSubmitPage + 1)} / {formatNumber(autoSubmitPageCount)}
+                      {candidatePageLoading ? "加载中" : `${formatNumber(safeAutoSubmitPage + 1)} / ${formatNumber(autoSubmitPageCount)}`}
                     </span>
                     <button
                       aria-label="下一页自动提报商品"
                       className="grid size-9 place-items-center text-[#344054] transition-colors hover:bg-[#f8fbff] disabled:text-[#c7d2e2]"
                       type="button"
-                      onClick={() => setAutoSubmitPage((current) => Math.min(autoSubmitPageCount - 1, current + 1))}
-                      disabled={safeAutoSubmitPage >= autoSubmitPageCount - 1}
+                      onClick={() => loadAutoSubmitPage(safeAutoSubmitPage + 1)}
+                      disabled={candidatePageLoading || !candidateHasMore}
                     >
                       <ChevronRight className="size-[16px]" strokeWidth={2} />
                     </button>

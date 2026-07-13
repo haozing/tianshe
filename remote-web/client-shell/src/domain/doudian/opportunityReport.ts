@@ -6,6 +6,7 @@ import type {
   DoudianOpportunityFilters,
   DoudianOpportunityGoodsMatchType,
   DoudianOpportunityMatchRules,
+  DoudianOpportunityCandidatePage,
   DoudianOpportunityPrematchCandidate,
   DoudianOpportunityPrematchMode,
   DoudianOpportunityProductRow,
@@ -17,7 +18,7 @@ import type {
   DoudianRunDetail,
   DoudianStoreSummary
 } from "../../types";
-import { repositoryDelete, repositoryGet, repositoryGetAll, repositoryGetAllByPrefix, repositoryGetMany, repositoryPut, repositoryPutMany } from "./repository";
+import { repositoryDelete, repositoryGet, repositoryGetAll, repositoryGetAllByPrefix, repositoryGetMany, repositoryListByPrefix, repositoryPut, repositoryPutMany } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
@@ -4850,6 +4851,36 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
     dailyAttemptLimit: limit,
     dailyAttemptUsed: used,
     dailyAttemptRemaining: Math.max(0, limit - used)
+  };
+}
+
+export async function listOpportunityPipelineCandidatesPage(args: {
+  runId?: string;
+  cursor?: string | null;
+  pageSize?: number;
+} = {}): Promise<DoudianOpportunityCandidatePage> {
+  const runId = text(args.runId);
+  const pageSize = Math.max(1, Math.min(200, Math.floor(Number(args.pageSize || 100))));
+  if (!runId) {
+    return { runId: "", items: [], nextCursor: null, hasMore: false, pageSize, totalCount: 0, loadedCount: 0 };
+  }
+  const [run, page] = await Promise.all([
+    repositoryGet<PipelineRunRecord>(pipelineRunStore, runId).catch(() => null),
+    repositoryListByPrefix<DoudianOpportunityPrematchCandidate>(
+      pipelineCandidateStore,
+      pipelineRunRecordPrefix(runId),
+      { cursor: args.cursor || null, pageSize }
+    ).catch(() => ({ items: [], nextCursor: null, hasMore: false }))
+  ]);
+  const totalCount = Number(run?.summary?.candidateCount || page.items.length);
+  return {
+    runId,
+    items: page.items,
+    nextCursor: page.nextCursor,
+    hasMore: page.hasMore,
+    pageSize,
+    totalCount,
+    loadedCount: page.items.length
   };
 }
 

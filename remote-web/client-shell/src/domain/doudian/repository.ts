@@ -194,6 +194,40 @@ export async function repositoryGetAllByPrefix<T extends { id?: string }>(
   }
 }
 
+export async function repositoryListByPrefix<T extends { id?: string }>(
+  storeName: DoudianObjectStoreName,
+  recordIdPrefix: string,
+  options: { cursor?: string | null; pageSize?: number } = {}
+): Promise<CursorPage<T>> {
+  const prefix = String(recordIdPrefix || "").trim();
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(options.pageSize || 100))));
+  if (!prefix) {
+    return requireNativeData().records.list<T & Record<string, unknown>>({
+      storeName,
+      cursor: options.cursor || undefined,
+      limit: pageSize
+    }) as Promise<CursorPage<T>>;
+  }
+  const startCursor = String(options.cursor || "").trim();
+  const page: CursorPage<T & Record<string, unknown>> = await requireNativeData().records.list<T & Record<string, unknown>>({
+    storeName,
+    cursor: startCursor && startCursor.startsWith(prefix) ? startCursor : prefix,
+    limit: pageSize + 1
+  });
+  const items: T[] = [];
+  for (const item of page.items as T[]) {
+    const id = String(item.id || "");
+    if (!id.startsWith(prefix)) break;
+    if (items.length < pageSize) items.push(item);
+  }
+  const extra = (page.items as T[]).slice(items.length).some((item) => String(item.id || "").startsWith(prefix));
+  return {
+    items,
+    nextCursor: extra && items.length ? String(items[items.length - 1].id || "") : null,
+    hasMore: Boolean(extra && items.length)
+  };
+}
+
 export async function repositoryDelete(storeName: DoudianObjectStoreName, id: string): Promise<void> {
   await requireNativeData().records.delete({ storeName, id });
 }

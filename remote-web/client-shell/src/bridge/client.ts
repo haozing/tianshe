@@ -7,6 +7,7 @@ import type {
   DoudianFundsDataResult,
   DoudianOpportunityFilters,
   DoudianOpportunityGoodsMatchType,
+  DoudianOpportunityCandidatePage,
   DoudianOpportunityMatchRules,
   DoudianOpportunityPrematchMode,
   DoudianOpportunityReportResult,
@@ -33,6 +34,7 @@ import {
   fetchFundsDataLatest,
   fetchOpportunityReport,
   fetchOpportunityReportLatest,
+  listOpportunityPipelineCandidatesPage,
   listOpportunityStoreCategoryLedger,
   fetchStaleGoodsCleanup,
   fetchViolationsData,
@@ -474,6 +476,18 @@ export async function fetchDoudianOpportunityReportLatest(args: {
     ...(args.matchRules ? { matchRules: args.matchRules } : {})
   }, { force: args.forceAdapter === true });
   return fetchOpportunityReportLatest(nextArgs);
+}
+
+export async function listDoudianOpportunityCandidatesPage(args: {
+  runId?: string;
+  cursor?: string | null;
+  pageSize?: number;
+} = {}): Promise<DoudianOpportunityCandidatePage> {
+  return listOpportunityPipelineCandidatesPage({
+    runId: args.runId || "",
+    cursor: args.cursor || null,
+    pageSize: args.pageSize
+  });
 }
 
 export async function listDoudianOpportunityStoreCategories(args: { shopIds?: string[] } = {}): Promise<DoudianOpportunityStoreCategoryLedger[]> {
