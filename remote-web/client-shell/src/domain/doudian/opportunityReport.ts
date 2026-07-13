@@ -6,6 +6,7 @@ import type {
   DoudianOpportunityFilters,
   DoudianOpportunityGoodsMatchType,
   DoudianOpportunityMatchRules,
+  MatchDiagnostics,
   DoudianOpportunityCandidatePage,
   DoudianOpportunityPrematchCandidate,
   DoudianOpportunityPrematchMode,
@@ -23,6 +24,20 @@ import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestP
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
 import { getChihuNative } from "../../native/client";
+import { dispatchDoudianProgress } from "./progress";
+import {
+  AhoTokenMatcher,
+  compareCandidatesByEvidence,
+  createMatchDiagnostics,
+  createTokenQualityMap,
+  flattenProductTopK,
+  keepProductTopK,
+  matchDiagnosticsSummary,
+  mergeMatchDiagnostics,
+  productCandidateKey,
+  scoreAhoTokenMatch,
+  type TokenQuality
+} from "./opportunity/matching";
 
 const clueScanStore = "opportunity_clue_scan_runs_v1" as const;
 const clueCandidateStore = "opportunity_clue_candidates_v1" as const;
@@ -96,6 +111,7 @@ interface OpportunityArgs {
   maxPages?: number;
   mockClues?: Array<Record<string, unknown>>;
   mockProducts?: Array<Record<string, unknown>>;
+  isCancelled?: () => boolean;
 }
 
 interface ClueScanRunRecord {
@@ -249,7 +265,29 @@ interface PipelineStoreRunRecord extends PipelineStoreIdentity {
   clueCount: number;
   tokenCount: number;
   candidateCount: number;
+  persistedCandidateCount?: number;
   eligibleCandidateCount?: number;
+  alternativeCandidateCount?: number;
+  qualifiedCandidateCount?: number;
+  primaryCandidateCount?: number;
+  fallbackCandidateCount?: number;
+  plannedSubmitCandidateCount?: number;
+  primarySubmitCandidateCount?: number;
+  fallbackSubmitCandidateCount?: number;
+  dailyAttemptLimit?: number;
+  quotaUsedBefore?: number;
+  quotaRemainingBefore?: number;
+  quotaRemainingAfterPlan?: number;
+  quotaAttemptCount?: number;
+  quotaRemainingAfterSubmit?: number;
+  matchDiagnostics?: MatchDiagnostics;
+  rawPairCount?: number;
+  passedThresholdCount?: number;
+  filteredByNoTokenCount?: number;
+  filteredByWeakSingleTokenCount?: number;
+  filteredByThresholdCount?: number;
+  filteredByGenericOnlyCount?: number;
+  droppedByTopKCount?: number;
   submittedCount: number;
   failedCount: number;
   skipReason?: string;
@@ -291,6 +329,8 @@ interface PipelineSubmitTaskRecord extends PipelineStoreIdentity {
   ownerRunId?: string;
   candidateIds: string[];
   candidateCount: number;
+  primaryCandidateCount?: number;
+  fallbackCandidateCount?: number;
   submittedCount: number;
   skippedCount: number;
   failedCount: number;
@@ -422,6 +462,25 @@ function arrayText(value: unknown): string[] {
 
 function uniqueText(values: string[]) {
   return Array.from(new Set(values.map(text).filter(Boolean)));
+}
+
+function productTitleAliases(productTitle: string) {
+  return {
+    title: productTitle,
+    name: productTitle,
+    product_name: productTitle,
+    productName: productTitle,
+    product_title: productTitle,
+    productTitle: productTitle,
+    goods_name: productTitle,
+    goodsName: productTitle,
+    goods_title: productTitle,
+    goodsTitle: productTitle,
+    item_name: productTitle,
+    itemName: productTitle,
+    item_title: productTitle,
+    itemTitle: productTitle
+  };
 }
 
 function nowIso() {
@@ -1013,6 +1072,9 @@ function stableMatchRulesHash(args: OpportunityArgs) {
   return stableHash({
     storeCategoryKeys: [...(rules.storeCategoryKeys || [])].sort(),
     minTokenHitRatio: rules.minTokenHitRatio,
+    minWeightHitRatio: rules.minWeightHitRatio,
+    topKPerProduct: rules.topKPerProduct,
+    genericTokenDfRatio: rules.genericTokenDfRatio,
     matchMode: prematchMode(args),
     skipSubmittedClueCategory: args.skipSubmittedClueCategory === true,
     skipSubmittedClue: args.skipSubmittedClue === true,
@@ -1306,8 +1368,8 @@ function storeScopeId(identity: PipelineStoreIdentity) {
 }
 
 function pipelineCacheScope(adapter: DoudianAdapterConfig): "shop" | "global" {
-  const requested = policyText(adapter, "opportunityReport.pipelineCacheScope", "shop").toLocaleLowerCase();
-  const globalEnabled = policyBoolean(adapter, "opportunityReport.enableGlobalPipelineCache", false);
+  const requested = policyText(adapter, "opportunityReport.pipelineCacheScope", "global").toLocaleLowerCase();
+  const globalEnabled = policyBoolean(adapter, "opportunityReport.enableGlobalPipelineCache", true);
   return requested === "global" && globalEnabled ? "global" : "shop";
 }
 
@@ -1331,6 +1393,20 @@ async function loadPipelineStoreRunsForRun(runId: string, maxItems = 10000) {
     pipelineRunRecordPrefix(id),
     { pageSize: 500, maxItems }
   ).catch(() => []);
+}
+
+async function updatePipelineStoreRunProgress(id: string, patch: Partial<PipelineStoreRunRecord>) {
+  const key = text(id);
+  if (!key) return null;
+  const current = await repositoryGet<PipelineStoreRunRecord>(pipelineStoreRunStore, key).catch(() => null);
+  if (!current) return null;
+  const next = {
+    ...current,
+    ...patch,
+    updatedAt: nowIso()
+  } as PipelineStoreRunRecord;
+  await repositoryPut(pipelineStoreRunStore, next);
+  return next;
 }
 
 async function loadPipelineSubmitTasksForRun(runId: string, maxItems = 10000) {
@@ -1842,7 +1918,28 @@ function tokenMatchesTitle(title: string, token: string) {
   return text(title).toLocaleLowerCase().includes(text(token).toLocaleLowerCase());
 }
 
-function matchStoreProductsByTokens(args: {
+function groupProductsByCategoryKey(products: DoudianOpportunityProductRow[]) {
+  const groups = new Map<string, DoudianOpportunityProductRow[]>();
+  for (const product of products) {
+    const key = cacheCategoryKey({
+      categoryId: text(product.categoryId),
+      categoryName: text(product.categoryName || product.category),
+      categoryPath: product.categoryPath || normalizeCategoryPath(product.category),
+      lastCategoryKey: text(product.lastCategoryKey)
+    });
+    if (!key) continue;
+    const list = groups.get(key) || [];
+    list.push(product);
+    groups.set(key, list);
+  }
+  return groups;
+}
+
+function tokenWeight(tokenQuality: Map<string, TokenQuality>, token: string) {
+  return tokenQuality.get(token)?.finalWeight || 1;
+}
+
+function matchCategoryProductsByAhoTokens(args: {
   runId: string;
   storeRunId: string;
   clueCacheKey: string;
@@ -1852,21 +1949,45 @@ function matchStoreProductsByTokens(args: {
   clues: DoudianOpportunityClueRow[];
   tokenIndex: TokenIndex;
   minTokenHitRatio: number;
+  minWeightHitRatio: number;
+  genericTokenDfRatio: number;
+  topKPerProduct: number;
   matchRulesHash: string;
   opportunityArgs: OpportunityArgs;
-  dedupeIndex: SubmitDedupeIndex;
 }) {
+  const diagnostics = createMatchDiagnostics({
+    productCount: args.products.length,
+    clueCount: args.clues.length,
+    tokenCount: args.tokenIndex.tokens.length
+  });
   const clueById = new Map(args.clues.map((clue) => [clue.clueId, clue]));
-  const candidates: DoudianOpportunityPrematchCandidate[] = [];
-  const productCategoryKeys = new Set([args.effectiveCategoryKey]);
+  const matcher = new AhoTokenMatcher(args.tokenIndex.tokens);
+  const productHits = new Map<string, string[]>();
+  const productDf = new Map<string, number>();
+
   for (const product of args.products) {
-    if (!productCategoryKeys.has(cacheCategoryKey({
-      categoryId: text(product.categoryId),
-      categoryName: text(product.categoryName || product.category),
-      categoryPath: product.categoryPath || normalizeCategoryPath(product.category),
-      lastCategoryKey: text(product.lastCategoryKey)
-    }))) continue;
-    const hitTokens = args.tokenIndex.tokens.filter((token) => tokenMatchesTitle(product.title, token));
+    diagnostics.titleScannedCount += 1;
+    const hitTokens = matcher.match(product.title);
+    productHits.set(product.id || `${product.shopId}-${product.productId}`, hitTokens);
+    diagnostics.tokenHitCount += hitTokens.length;
+    if (!hitTokens.length) {
+      diagnostics.filteredByNoTokenCount += 1;
+      continue;
+    }
+    for (const token of hitTokens) productDf.set(token, (productDf.get(token) || 0) + 1);
+  }
+
+  const quality = createTokenQualityMap({
+    tokens: args.tokenIndex.tokens,
+    tokenToClueIds: args.tokenIndex.tokenToClueIds,
+    productDf,
+    productCount: args.products.length,
+    genericTokenDfRatio: args.genericTokenDfRatio
+  });
+  const topMatches = new Map<string, DoudianOpportunityPrematchCandidate[]>();
+
+  for (const product of args.products) {
+    const hitTokens = productHits.get(product.id || `${product.shopId}-${product.productId}`) || [];
     if (!hitTokens.length) continue;
     const matchedByClue = new Map<string, Set<string>>();
     for (const token of hitTokens) {
@@ -1876,30 +1997,51 @@ function matchStoreProductsByTokens(args: {
         matchedByClue.set(clueId, set);
       }
     }
+    diagnostics.rawPairCount += matchedByClue.size;
+
     for (const [clueId, tokenSet] of matchedByClue.entries()) {
       const clue = clueById.get(clueId);
       if (!clue) continue;
       const clueTokens = uniqueText(args.tokenIndex.clueTokens[clueId] || []);
-      const effectiveTokenCount = clueTokens.length;
-      if (effectiveTokenCount <= 0) continue;
-      const matchedTokens = Array.from(tokenSet);
+      const clueTokenCount = clueTokens.length;
+      if (clueTokenCount <= 0) continue;
+      const matchedTokens = Array.from(tokenSet).filter((token) => clueTokens.includes(token));
       const matchedTokenCount = matchedTokens.length;
-      const requiredTokenHits = Math.max(1, Math.ceil(effectiveTokenCount * args.minTokenHitRatio));
-      if (matchedTokenCount < requiredTokenHits) continue;
-      const tokenHitRatio = matchedTokenCount / effectiveTokenCount;
-      const categoryScore = 32;
-      const wordScore = Math.round(Math.min(1, tokenHitRatio) * 58);
-      const nameScore = clue.name && tokenMatchesTitle(product.title, clue.name) ? 10 : 0;
-      const matchScore = Math.min(100, categoryScore + wordScore + nameScore);
-      const submittedSkipReason = shouldSkipSubmittedCandidate(args.opportunityArgs, args.dedupeIndex, {
-        shopId: product.shopId,
-        clueId: clue.clueId,
-        productId: product.productId,
-        clueLastCategoryId: clue.lastCategoryId
+      const strongMatchedTokens = matchedTokens.filter((token) => quality.get(token)?.isStrong);
+      const genericMatchedTokens = matchedTokens.filter((token) => quality.get(token)?.isGeneric);
+      const effectiveMatchedTokenCount = matchedTokens.length - genericMatchedTokens.length;
+      const totalTokenWeight = clueTokens.reduce((sum, token) => sum + tokenWeight(quality, token), 0);
+      const matchedTokenWeight = matchedTokens.reduce((sum, token) => sum + tokenWeight(quality, token), 0);
+      const matchedWeightRatio = totalTokenWeight > 0 ? matchedTokenWeight / totalTokenWeight : 0;
+      const requiredTokenHits = clueTokenCount === 1
+        ? 1
+        : Math.max(2, Math.ceil(clueTokenCount * args.minTokenHitRatio));
+      const fullClueNameMatched = Boolean(clue.name && tokenMatchesTitle(product.title, clue.name));
+
+      if (clueTokenCount === 1) {
+        const token = matchedTokens[0];
+        if (!token || !quality.get(token)?.isStrong) {
+          diagnostics.filteredByWeakSingleTokenCount += 1;
+          continue;
+        }
+      } else if (effectiveMatchedTokenCount <= 0) {
+        diagnostics.filteredByGenericOnlyCount += 1;
+        continue;
+      } else if (matchedTokenCount < requiredTokenHits || matchedWeightRatio < args.minWeightHitRatio) {
+        diagnostics.filteredByThresholdCount += 1;
+        continue;
+      }
+
+      const score = scoreAhoTokenMatch({
+        matchedTokenCount,
+        clueTokenCount,
+        matchedWeightRatio,
+        strongMatchedTokenCount: strongMatchedTokens.length,
+        fullClueNameMatched
       });
-      const eligible = !submittedSkipReason;
+      diagnostics.passedThresholdCount += 1;
       const id = `${args.runId}-${product.shopId}-${product.productId}-${clue.clueId}`;
-      candidates.push({
+      keepProductTopK(topMatches, {
         id,
         candidateId: `${product.shopId}-${product.productId}-${clue.clueId}`,
         sourceRunId: args.runId,
@@ -1926,20 +2068,24 @@ function matchStoreProductsByTokens(args: {
         clueWords: clueTokens,
         matchedWords: matchedTokens,
         matchedTokens,
-        effectiveTokenCount,
+        effectiveTokenCount: clueTokenCount,
         matchedTokenCount,
         requiredTokenHits,
-        tokenHitRatio,
+        tokenHitRatio: matchedTokenCount / Math.max(1, clueTokenCount),
+        matchedTokenWeight,
+        matchedWeightRatio,
+        strongMatchedTokens,
+        genericMatchedTokens,
+        fullClueNameMatched,
         minTokenHitRatio: args.minTokenHitRatio,
         matchRulesHash: args.matchRulesHash,
         matchMode: prematchMode(args.opportunityArgs),
-        matchScore,
-        categoryScore,
-        wordScore,
-        eligible,
-        estimatedCost: eligible ? 1 : 0,
-        skipReason: submittedSkipReason,
-        status: eligible ? "ready" : "skipped",
+        matchScore: score.matchScore,
+        categoryScore: score.categoryScore,
+        wordScore: score.wordScore,
+        eligible: true,
+        estimatedCost: 1,
+        status: "ready",
         raw: {
           product,
           productRaw: product.raw || {},
@@ -1947,26 +2093,159 @@ function matchStoreProductsByTokens(args: {
           clueRaw: clue.raw || {},
           matchRulesHash: args.matchRulesHash
         }
-      });
+      }, args.topKPerProduct);
     }
   }
-  const sorted = candidates.sort((left, right) => right.matchScore - left.matchScore);
-  const bestByProduct = new Set<string>();
-  return sorted.map((candidate) => {
-    if (!candidate.eligible) return candidate;
-    const key = `${candidate.shopId}::${candidate.productId}`;
-    if (!bestByProduct.has(key)) {
-      bestByProduct.add(key);
-      return candidate;
+
+  const candidates = flattenProductTopK(topMatches).map((candidate) => ({
+    ...candidate,
+    rankForProduct: (topMatches.get(productCandidateKey(candidate)) || []).findIndex((item) => item.id === candidate.id) + 1
+  }));
+  diagnostics.persistedCandidateCount = candidates.length;
+  diagnostics.droppedByTopKCount = Math.max(0, diagnostics.passedThresholdCount - candidates.length);
+  return { candidates, diagnostics };
+}
+
+function markProductRanks(args: {
+  candidates: DoudianOpportunityPrematchCandidate[];
+  topKPerProduct: number;
+  opportunityArgs: OpportunityArgs;
+  dedupeIndex: SubmitDedupeIndex;
+}) {
+  const grouped = new Map<string, DoudianOpportunityPrematchCandidate[]>();
+  for (const candidate of args.candidates) {
+    const key = productCandidateKey(candidate);
+    const list = grouped.get(key) || [];
+    list.push(candidate);
+    grouped.set(key, list);
+  }
+  const ranked: DoudianOpportunityPrematchCandidate[] = [];
+  for (const list of grouped.values()) {
+    const sorted = list.sort(compareCandidatesByEvidence).slice(0, args.topKPerProduct);
+    sorted.forEach((candidate, index) => {
+      const rankForProduct = index + 1;
+      const submittedSkipReason = shouldSkipSubmittedCandidate(args.opportunityArgs, args.dedupeIndex, {
+        shopId: candidate.shopId,
+        clueId: candidate.clueId,
+        productId: candidate.productId,
+        clueLastCategoryId: candidate.clueLastCategoryId
+      });
+      const skipped = Boolean(submittedSkipReason);
+      const alternative = rankForProduct > 1;
+      ranked.push({
+        ...candidate,
+        rankForProduct,
+        alternative,
+        eligible: !alternative && !skipped,
+        estimatedCost: alternative || skipped ? 0 : 1,
+        status: skipped ? "skipped" : alternative ? "alternative" : "ready",
+        skipReason: submittedSkipReason || candidate.skipReason
+      });
+    });
+  }
+  return ranked.sort(compareCandidatesByEvidence);
+}
+
+function candidateRank(candidate: DoudianOpportunityPrematchCandidate) {
+  const rank = Math.floor(Number(candidate.rankForProduct || 1));
+  return Number.isFinite(rank) && rank > 0 ? rank : 1;
+}
+
+function isSubmitQualifiedCandidate(candidate: DoudianOpportunityPrematchCandidate) {
+  if (candidate.skipReason) return false;
+  if (!text(candidate.shopId) || !text(candidate.productId) || !text(candidate.clueId)) return false;
+  const status = text(candidate.status);
+  return status === "ready" || status === "alternative";
+}
+
+function compareFallbackCandidates(left: DoudianOpportunityPrematchCandidate, right: DoudianOpportunityPrematchCandidate) {
+  const rankDiff = candidateRank(left) - candidateRank(right);
+  if (rankDiff) return rankDiff;
+  return compareCandidatesByEvidence(left, right);
+}
+
+function compareSubmitQueueCandidates(left: DoudianOpportunityPrematchCandidate, right: DoudianOpportunityPrematchCandidate) {
+  const priorityDiff = (left.submitPriority === "fallback" ? 1 : 0) - (right.submitPriority === "fallback" ? 1 : 0);
+  if (priorityDiff) return priorityDiff;
+  return compareFallbackCandidates(left, right);
+}
+
+function selectStoreSubmitCandidates(args: {
+  candidates: DoudianOpportunityPrematchCandidate[];
+  dailyAttemptLimit: number;
+  quotaUsedBefore: number;
+}) {
+  const dailyAttemptLimit = Math.max(1, Math.floor(Number(args.dailyAttemptLimit || 1000)));
+  const quotaUsedBefore = Math.max(0, Math.floor(Number(args.quotaUsedBefore || 0)));
+  const quotaRemainingBefore = Math.max(0, dailyAttemptLimit - quotaUsedBefore);
+  const primaryCandidates = args.candidates
+    .filter((candidate) => candidateRank(candidate) <= 1 && isSubmitQualifiedCandidate(candidate))
+    .sort(compareCandidatesByEvidence);
+  const fallbackCandidates = args.candidates
+    .filter((candidate) => candidateRank(candidate) > 1 && isSubmitQualifiedCandidate(candidate))
+    .sort(compareFallbackCandidates);
+  const selectedPrimary = primaryCandidates.slice(0, quotaRemainingBefore);
+  const fallbackCapacity = Math.max(0, quotaRemainingBefore - selectedPrimary.length);
+  const selectedFallback = fallbackCandidates.slice(0, fallbackCapacity);
+  const selectedPrimaryIds = new Set(selectedPrimary.map((candidate) => candidate.id));
+  const selectedFallbackIds = new Set(selectedFallback.map((candidate) => candidate.id));
+  const selectedIds = new Set([...selectedPrimaryIds, ...selectedFallbackIds]);
+  const plannedSubmitCandidateCount = selectedIds.size;
+  const quotaRemainingAfterPlan = Math.max(0, quotaRemainingBefore - plannedSubmitCandidateCount);
+  const quotaSkipReason = quotaRemainingBefore <= 0 ? "今日提报尝试额度不足" : "未进入本次提报名额";
+  const candidates = args.candidates.map((candidate) => {
+    if (selectedPrimaryIds.has(candidate.id)) {
+      return {
+        ...candidate,
+        alternative: false,
+        eligible: true,
+        estimatedCost: 1,
+        status: "ready",
+        submitPriority: "primary",
+        fallbackSubmit: false,
+        skipReason: undefined
+      } satisfies DoudianOpportunityPrematchCandidate;
     }
-    return {
-      ...candidate,
-      eligible: false,
-      estimatedCost: 0,
-      status: "skipped",
-      skipReason: "同商品已有更高分商机"
-    };
+    if (selectedFallbackIds.has(candidate.id)) {
+      return {
+        ...candidate,
+        alternative: false,
+        eligible: true,
+        estimatedCost: 1,
+        status: "ready",
+        submitPriority: "fallback",
+        fallbackSubmit: true,
+        skipReason: undefined
+      } satisfies DoudianOpportunityPrematchCandidate;
+    }
+    if (candidateRank(candidate) <= 1 && isSubmitQualifiedCandidate(candidate)) {
+      return {
+        ...candidate,
+        eligible: false,
+        estimatedCost: 0,
+        status: "skipped",
+        submitStatus: "skipped",
+        submitPriority: "primary",
+        fallbackSubmit: false,
+        skipReason: candidate.skipReason || quotaSkipReason
+      } satisfies DoudianOpportunityPrematchCandidate;
+    }
+    return candidate;
   });
+  return {
+    candidates,
+    selectedIds,
+    qualifiedCandidateCount: primaryCandidates.length + fallbackCandidates.length,
+    primaryCandidateCount: primaryCandidates.length,
+    fallbackCandidateCount: fallbackCandidates.length,
+    plannedSubmitCandidateCount,
+    primarySubmitCandidateCount: selectedPrimary.length,
+    fallbackSubmitCandidateCount: selectedFallback.length,
+    dailyAttemptLimit,
+    quotaUsedBefore,
+    quotaRemainingBefore,
+    quotaRemainingAfterPlan
+  };
 }
 
 async function enqueueStoreSubmit(args: {
@@ -1975,7 +2254,10 @@ async function enqueueStoreSubmit(args: {
   identity: PipelineStoreIdentity;
   candidates: DoudianOpportunityPrematchCandidate[];
 }) {
-  const candidateIds = args.candidates.filter((item) => item.eligible && item.status === "ready").map((item) => item.id);
+  const readyCandidates = args.candidates
+    .filter((item) => item.eligible && item.status === "ready")
+    .sort(compareSubmitQueueCandidates);
+  const candidateIds = readyCandidates.map((item) => item.id);
   if (!candidateIds.length) return null;
   const concurrencyKey = storeScopeId(args.identity);
   const active = (await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []))
@@ -1992,6 +2274,8 @@ async function enqueueStoreSubmit(args: {
     ownerRunId: args.runId,
     candidateIds,
     candidateCount: candidateIds.length,
+    primaryCandidateCount: readyCandidates.filter((item) => item.submitPriority !== "fallback").length,
+    fallbackCandidateCount: readyCandidates.filter((item) => item.submitPriority === "fallback").length,
     submittedCount: 0,
     skippedCount: 0,
     failedCount: 0,
@@ -2000,6 +2284,87 @@ async function enqueueStoreSubmit(args: {
   };
   await repositoryPut(pipelineSubmitTaskStore, task);
   return task;
+}
+
+async function cancelPipelinePendingWorkForRun(runId: string, reason = "已取消商机提报任务") {
+  const id = text(runId);
+  if (!id) return;
+  const now = nowIso();
+  const [storeRuns, tasks] = await Promise.all([
+    loadPipelineStoreRunsForRun(id),
+    loadPipelineSubmitTasksForRun(id)
+  ]);
+  const cancellableStoreRuns = storeRuns.filter((item) => item.status === "running" || item.status === "queued");
+  if (cancellableStoreRuns.length) {
+    await repositoryPutMany(pipelineStoreRunStore, cancellableStoreRuns.map((item) => ({
+      ...item,
+      status: "cancelled",
+      phase: "finished",
+      skipReason: item.skipReason || reason,
+      updatedAt: now,
+      finishedAt: item.finishedAt || now
+    } satisfies PipelineStoreRunRecord)), { concurrency: 2 });
+  }
+  const cancellableTasks = tasks.filter((item) => item.status === "queued" || item.status === "running");
+  if (!cancellableTasks.length) return;
+  await repositoryPutMany(pipelineSubmitTaskStore, cancellableTasks.map((item) => ({
+    ...item,
+    status: "cancelled",
+    leaseExpiresAt: undefined,
+    lastError: reason,
+    updatedAt: now,
+    finishedAt: item.finishedAt || now
+  } satisfies PipelineSubmitTaskRecord)), { concurrency: 2 });
+  const taskIds = new Set(cancellableTasks.map((task) => task.id));
+  const candidateIds = Array.from(new Set(
+    cancellableTasks
+      .flatMap((task) => task.candidateIds || [])
+      .map(text)
+      .filter(Boolean)
+  ));
+  const candidatePages = await Promise.all(
+    chunk(candidateIds, 500).map((ids) => repositoryGetMany<DoudianOpportunityPrematchCandidate>(pipelineCandidateStore, ids).catch(() => []))
+  );
+  const candidates = candidatePages.flat();
+  const updatedCandidates = candidates
+    .filter((candidate) => candidate.submitTaskId && taskIds.has(candidate.submitTaskId))
+    .filter((candidate) => candidate.submitStatus === "queued" || candidate.status === "ready")
+    .map((candidate) => ({
+      ...candidate,
+      eligible: false,
+      estimatedCost: 0,
+      status: "skipped",
+      submitStatus: "cancelled",
+      skipReason: candidate.skipReason || reason
+    } satisfies DoudianOpportunityPrematchCandidate));
+  if (updatedCandidates.length) await repositoryPutMany(pipelineCandidateStore, updatedCandidates, { concurrency: 2 });
+}
+
+export async function cancelOpportunityPipelineSubmitTask(args: {
+  operationId?: string;
+  runId?: string;
+  reason?: string;
+} = {}) {
+  const runId = text(args.runId || args.operationId);
+  const reason = args.reason || "已取消商机提报任务";
+  if (!runId) return { ok: false, status: "missing-run", message: "missing pipeline run id" };
+  await cancelPipelinePendingWorkForRun(runId, reason);
+  const refreshedRun = await refreshPipelineRunSummary(runId).catch(() => null);
+  if (refreshedRun) {
+    await repositoryPut(pipelineRunStore, {
+      ...refreshedRun,
+      status: "cancelled",
+      updatedAt: nowIso()
+    } satisfies PipelineRunRecord).catch(() => undefined);
+  }
+  return {
+    ok: false,
+    status: "cancelled",
+    runId,
+    operationId: args.operationId || runId,
+    message: reason,
+    summary: refreshedRun?.summary || {}
+  };
 }
 
 async function refreshPipelineRunSummary(runId: string) {
@@ -2019,7 +2384,12 @@ async function refreshPipelineRunSummary(runId: string) {
     scopedStoreRuns.filter((item) => item.status === "skipped").length +
     scopedTasks.reduce((sum, item) => sum + Number(item.skippedCount || 0), 0);
   const candidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.candidateCount || 0), 0);
-  const eligibleCandidateCount = scopedTasks.reduce((sum, item) => sum + Number(item.candidateCount || 0), 0);
+  const qualifiedCandidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.qualifiedCandidateCount || 0), 0);
+  const eligibleCandidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.eligibleCandidateCount || 0), 0);
+  const alternativeCandidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.alternativeCandidateCount || 0), 0);
+  const plannedSubmitCandidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.plannedSubmitCandidateCount || 0), 0);
+  const primarySubmitCandidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.primarySubmitCandidateCount || 0), 0);
+  const fallbackSubmitCandidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.fallbackSubmitCandidateCount || 0), 0);
   const runningCount =
     scopedTasks.filter((item) => item.status === "queued" || item.status === "running").length +
     scopedStoreRuns.filter((item) => item.status === "queued" || item.status === "running").length;
@@ -2036,7 +2406,24 @@ async function refreshPipelineRunSummary(runId: string) {
     clueCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.clueCount || 0), 0),
     tokenCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.tokenCount || 0), 0),
     candidateCount,
+    qualifiedCandidateCount,
     eligibleCandidateCount,
+    alternativeCandidateCount,
+    plannedSubmitCandidateCount,
+    primarySubmitCandidateCount,
+    fallbackSubmitCandidateCount,
+    quotaUsedBefore: scopedStoreRuns.reduce((sum, item) => sum + Number(item.quotaUsedBefore || 0), 0),
+    quotaRemainingBefore: scopedStoreRuns.reduce((sum, item) => sum + Number(item.quotaRemainingBefore || 0), 0),
+    quotaRemainingAfterPlan: scopedStoreRuns.reduce((sum, item) => sum + Number(item.quotaRemainingAfterPlan || 0), 0),
+    quotaAttemptCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.quotaAttemptCount || item.quotaUsedBefore || 0), 0),
+    quotaRemainingAfterSubmit: scopedStoreRuns.reduce((sum, item) => sum + Number(item.quotaRemainingAfterSubmit || item.quotaRemainingAfterPlan || 0), 0),
+    rawPairCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.rawPairCount || item.matchDiagnostics?.rawPairCount || 0), 0),
+    passedThresholdCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.passedThresholdCount || item.matchDiagnostics?.passedThresholdCount || 0), 0),
+    filteredByNoTokenCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.filteredByNoTokenCount || item.matchDiagnostics?.filteredByNoTokenCount || 0), 0),
+    filteredByWeakSingleTokenCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.filteredByWeakSingleTokenCount || item.matchDiagnostics?.filteredByWeakSingleTokenCount || 0), 0),
+    filteredByThresholdCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.filteredByThresholdCount || item.matchDiagnostics?.filteredByThresholdCount || 0), 0),
+    filteredByGenericOnlyCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.filteredByGenericOnlyCount || item.matchDiagnostics?.filteredByGenericOnlyCount || 0), 0),
+    droppedByTopKCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.droppedByTopKCount || item.matchDiagnostics?.droppedByTopKCount || 0), 0),
     submitTaskCount: scopedTasks.length,
     submittedCount,
     failedCount,
@@ -2108,9 +2495,15 @@ async function detectPipelineClientCapability(runId: string) {
 
 function normalizeOpportunityMatchRules(value: DoudianOpportunityMatchRules = {}): DoudianOpportunityMatchRules {
   const ratio = Number(value.minTokenHitRatio ?? 0.33);
+  const weightRatio = Number(value.minWeightHitRatio ?? 0.35);
+  const topK = Math.floor(Number(value.topKPerProduct ?? 10));
+  const genericTokenDfRatio = Number(value.genericTokenDfRatio ?? 0.12);
   return {
     storeCategoryKeys: uniqueText(value.storeCategoryKeys || []),
-    minTokenHitRatio: Number.isFinite(ratio) ? Math.max(0.1, Math.min(1, ratio)) : 0.33
+    minTokenHitRatio: Number.isFinite(ratio) ? Math.max(0.1, Math.min(1, ratio)) : 0.33,
+    minWeightHitRatio: Number.isFinite(weightRatio) ? Math.max(0.05, Math.min(1, weightRatio)) : 0.35,
+    topKPerProduct: Number.isFinite(topK) ? Math.max(1, Math.min(1000, topK)) : 10,
+    genericTokenDfRatio: Number.isFinite(genericTokenDfRatio) ? Math.max(0.01, Math.min(1, genericTokenDfRatio)) : 0.12
   };
 }
 
@@ -2121,6 +2514,22 @@ async function writePipelineEvent(record: Omit<PipelineOperationEventRecord, "id
     id: `${record.runId}-${record.storeRunId || record.shopId || "run"}-${createdAt}-${Math.random().toString(16).slice(2)}`,
     createdAt
   });
+}
+
+function dispatchPipelineProgress(args: OpportunityArgs, progress: number, message: string) {
+  const operationId = text(args.operationId || args.runId);
+  if (!operationId) return;
+  dispatchDoudianProgress({
+    operationId,
+    taskType: "opportunityPipelineSubmit",
+    status: "running",
+    progress: Math.max(0, Math.min(99, Math.round(progress))),
+    message
+  });
+}
+
+function pipelineCancelled(args: OpportunityArgs) {
+  return args.isCancelled?.() === true;
 }
 
 function targetStores(stores: DoudianStoreSummary[], shopIds: string[] = []) {
@@ -2167,6 +2576,19 @@ function dailyAttemptLimit(args: OpportunityArgs, adapter: DoudianAdapterConfig)
   return Math.max(1, Math.min(10000, Math.floor(Number(args.dailyAttemptLimit || policyNumber(adapter, "opportunityReport.dailyAttemptLimit", 1000, 1, 10000)))));
 }
 
+function dynamicTopKPerProduct(args: {
+  configuredTopK?: number;
+  quotaRemaining: number;
+  productCount: number;
+  maxTopK?: number;
+}) {
+  const configured = Math.max(1, Math.floor(Number(args.configuredTopK || 1)));
+  const productCount = Math.max(1, Math.floor(Number(args.productCount || 1)));
+  const requiredForQuota = Math.ceil(Math.max(0, Number(args.quotaRemaining || 0)) / productCount);
+  const maxTopK = Math.max(1, Math.floor(Number(args.maxTopK || 1000)));
+  return Math.max(1, Math.min(maxTopK, Math.max(configured, requiredForQuota || 1)));
+}
+
 function relationKey(value: { shopId?: string; clueId?: string; productId?: string }) {
   return [value.shopId, value.clueId, value.productId].map(text).join("::");
 }
@@ -2179,9 +2601,23 @@ function clueCategoryKey(value: { shopId?: string; clueLastCategoryId?: string }
   return [value.shopId, value.clueLastCategoryId].map(text).join("::");
 }
 
-async function listSubmitAttempts(date = todayKey()) {
+async function listSubmitAttempts(date = todayKey(), shopId = "") {
   const attempts = await repositoryGetAll<SubmitAttemptRecord>(submitAttemptStore).catch(() => []);
-  return attempts.filter((item) => item.date === date);
+  const targetShopId = text(shopId);
+  return attempts.filter((item) => item.date === date && (!targetShopId || item.shopId === targetShopId));
+}
+
+async function submitAttemptCountsByShop(date = todayKey()) {
+  const attempts = await listSubmitAttempts(date);
+  const counts = new Map<string, number>();
+  for (const attempt of attempts) {
+    counts.set(attempt.shopId, (counts.get(attempt.shopId) || 0) + 1);
+  }
+  return counts;
+}
+
+async function submitAttemptCountForShop(shopId: string, date = todayKey()) {
+  return (await listSubmitAttempts(date, shopId)).length;
 }
 
 interface SubmitDedupeIndex {
@@ -2190,12 +2626,17 @@ interface SubmitDedupeIndex {
   clueCategoryKeys: Set<string>;
 }
 
+function submittedForDedupe(value: { ok?: boolean; status?: string }) {
+  return value.ok === true || ["submitted", "success", "ok"].includes(text(value.status).toLocaleLowerCase());
+}
+
 async function submittedDedupeIndex(): Promise<SubmitDedupeIndex> {
   const relationKeys = new Set<string>();
   const clueKeys = new Set<string>();
   const clueCategoryKeys = new Set<string>();
   const attempts = await repositoryGetAll<SubmitAttemptRecord>(submitAttemptStore).catch(() => []);
   attempts.forEach((item) => {
+    if (!submittedForDedupe(item)) return;
     relationKeys.add(relationKey(item));
     clueKeys.add(clueKey(item));
     if (item.clueLastCategoryId) clueCategoryKeys.add(clueCategoryKey(item));
@@ -2203,7 +2644,7 @@ async function submittedDedupeIndex(): Promise<SubmitDedupeIndex> {
   const runs = await repositoryGetAll<ExecuteRunRecord>(opportunityExecuteStore).catch(() => []);
   for (const run of runs) {
     for (const item of run.executions || []) {
-      if (item.stage === "submit" && item.planKey === "opportunitySubmitClue") {
+      if (item.stage === "submit" && item.planKey === "opportunitySubmitClue" && submittedForDedupe(item)) {
         relationKeys.add(relationKey(item));
         clueKeys.add(clueKey(item));
       }
@@ -2365,7 +2806,25 @@ function candidateFromMatch(args: {
 function compactProductRawForSubmit(product: DoudianOpportunityProductRow) {
   const raw = objectRecord(product.raw);
   const categoryDetail = objectRecord(raw.category_detail || raw.categoryDetail);
+  const productTitle = text(
+    raw.title ||
+    raw.name ||
+    raw.product_name ||
+    raw.productName ||
+    raw.product_title ||
+    raw.productTitle ||
+    raw.goods_name ||
+    raw.goodsName ||
+    raw.goods_title ||
+    raw.goodsTitle ||
+    raw.item_name ||
+    raw.itemName ||
+    raw.item_title ||
+    raw.itemTitle ||
+    product.title
+  );
   return {
+    ...productTitleAliases(productTitle),
     pic_url: text(raw.pic_url || raw.picUrl || raw.img || raw.cover || product.img),
     category_id: text(
       raw.category_id ||
@@ -2407,6 +2866,7 @@ function compactPipelineCandidate(candidate: DoudianOpportunityPrematchCandidate
     ...candidate,
     raw: {
       product: {
+        ...productTitleAliases(candidate.title),
         categoryName: text(product.categoryName || candidate.productCategory),
         categoryPath: Array.isArray(product.categoryPath) ? product.categoryPath.map(text).filter(Boolean) : normalizeCategoryPath(candidate.productCategory),
         lastCategoryKey: text(product.lastCategoryKey),
@@ -2428,6 +2888,24 @@ function compactPipelineCandidate(candidate: DoudianOpportunityPrematchCandidate
 function candidateToProduct(candidate: DoudianOpportunityPrematchCandidate): DoudianOpportunityProductRow {
   const raw = objectRecord(candidate.raw);
   const product = objectRecord(raw.product);
+  const productRaw = objectRecord(raw.productRaw);
+  const productTitle = text(
+    productRaw.title ||
+    productRaw.name ||
+    productRaw.product_name ||
+    productRaw.productName ||
+    productRaw.product_title ||
+    productRaw.productTitle ||
+    productRaw.goods_name ||
+    productRaw.goodsName ||
+    productRaw.goods_title ||
+    productRaw.goodsTitle ||
+    productRaw.item_name ||
+    productRaw.itemName ||
+    productRaw.item_title ||
+    productRaw.itemTitle ||
+    candidate.title
+  );
   return {
     id: `${candidate.matchRunId}-${candidate.shopId}-${candidate.productId}`,
     candidateId: `${candidate.shopId}-${candidate.productId}`,
@@ -2448,7 +2926,10 @@ function candidateToProduct(candidate: DoudianOpportunityPrematchCandidate): Dou
     matchedClueId: candidate.clueId,
     matchedClueName: candidate.clueName,
     status: "matched",
-    raw: objectRecord(raw.productRaw)
+    raw: {
+      ...productRaw,
+      ...productTitleAliases(productTitle)
+    }
   };
 }
 
@@ -2782,8 +3263,11 @@ async function fetchProductPrematch(payload: DoudianAdapterPayload, args: Opport
       total: list.length
     };
   });
-  const todayAttempts = await listSubmitAttempts();
   const limit = dailyAttemptLimit(args, payload.adapter);
+  const usedByShop = await submitAttemptCountsByShop();
+  const summaryShopIds = uniqueText(deduped.map((candidate) => candidate.shopId));
+  const dailyAttemptUsed = summaryShopIds.reduce((sum, shopId) => sum + (usedByShop.get(shopId) || 0), 0);
+  const dailyAttemptRemaining = summaryShopIds.reduce((sum, shopId) => sum + Math.max(0, limit - (usedByShop.get(shopId) || 0)), 0);
   const summary = {
     productCount: limitedProducts.length,
     clueCount: limitedClues.length,
@@ -2792,8 +3276,8 @@ async function fetchProductPrematch(payload: DoudianAdapterPayload, args: Opport
     skippedCount: deduped.filter((candidate) => !candidate.eligible).length,
     estimatedCost: deduped.reduce((sum, candidate) => sum + Number(candidate.estimatedCost || 0), 0),
     dailyAttemptLimit: limit,
-    dailyAttemptUsed: todayAttempts.length,
-    dailyAttemptRemaining: Math.max(0, limit - todayAttempts.length)
+    dailyAttemptUsed,
+    dailyAttemptRemaining
   };
   const now = nowIso();
   await savePrematchRun({
@@ -2836,8 +3320,8 @@ async function fetchProductPrematch(payload: DoudianAdapterPayload, args: Opport
     filters: args.filters || {},
     requestPlanHash: requestPlanHash(payload.adapter),
     dailyAttemptLimit: limit,
-    dailyAttemptUsed: todayAttempts.length,
-    dailyAttemptRemaining: Math.max(0, limit - todayAttempts.length)
+    dailyAttemptUsed,
+    dailyAttemptRemaining
   };
 }
 
@@ -2933,6 +3417,24 @@ function rawPriceCents(product: DoudianOpportunityProductRow) {
 
 function submitProductPayload(product: DoudianOpportunityProductRow, store: DoudianStoreSummary) {
   const raw = product.raw || {};
+  const productTitle = text(
+    raw.title ||
+    raw.name ||
+    raw.product_name ||
+    raw.productName ||
+    raw.product_title ||
+    raw.productTitle ||
+    raw.goods_name ||
+    raw.goodsName ||
+    raw.goods_title ||
+    raw.goodsTitle ||
+    raw.item_name ||
+    raw.itemName ||
+    raw.item_title ||
+    raw.itemTitle ||
+    product.title ||
+    product.productId
+  );
   const price = rawPriceCents(product);
   const shopIdNumber = Number(product.shopId || store.shopId);
   const rawCategoryDetail = objectRecord(raw.category_detail || raw.categoryDetail);
@@ -2955,9 +3457,19 @@ function submitProductPayload(product: DoudianOpportunityProductRow, store: Doud
     rawCategoryDetail.firstCid ||
     product.categoryId
   );
+  const titleFields = productTitleAliases(productTitle);
+  const productInfo = {
+    product_id: product.productId,
+    productId: product.productId,
+    ...titleFields
+  };
   return {
     product_id: product.productId,
-    title: product.title,
+    ...titleFields,
+    product_info: productInfo,
+    productInfo,
+    product_detail: productInfo,
+    productDetail: productInfo,
     pic_url: text(raw.pic_url || raw.picUrl || raw.img || raw.cover || product.img),
     category_id: platformIntId(rawCategoryId === "0" ? product.categoryId : rawCategoryId),
     stock_num: coerceNumber(raw.stock_num || raw.stockNum || raw.stock || product.stock) || 0,
@@ -2988,11 +3500,84 @@ function submitBody(clue: DoudianOpportunityClueRow, products: DoudianOpportunit
 
 function transientSubmitMessage(message: string, response?: RequestPlanResult) {
   const status = Number(response?.status || 0);
+  if (submitFrequencyLimitedMessage(message, response)) return false;
   return !message || status === 429 || status === 502 || status === 504 || message.includes("频繁") || message.includes("系统") || message.includes("network");
 }
 
+function submitFrequencyLimitedMessage(message: string, response?: RequestPlanResult) {
+  const value = text(message || responseMessage(response));
+  if (!value) return false;
+  return value.includes("操作太频繁") ||
+    value.includes("访问过于频繁") ||
+    value.includes("环境存在风险") ||
+    value.includes("频控") ||
+    (value.includes("频繁") && (value.includes("稍后") || value.includes("访问")));
+}
+
+function submitProductClueLimitMessage(message: string) {
+  const value = text(message);
+  return value.includes("最多支持关联") || value.includes("最多可关联") || value.includes("50个线索");
+}
+
+function productIdsFromSubmitMessage(message: string) {
+  const ids = new Set<string>();
+  const value = String(message || "");
+  for (const match of value.matchAll(/(?:ID|id|商品ID|商品id)[:：]?\s*(\d{5,})/g)) {
+    if (match[1]) ids.add(match[1]);
+  }
+  return ids;
+}
+
+function submitCandidateDelayMs(adapter: DoudianAdapterConfig) {
+  const base = policyNumber(adapter, "opportunityReport.submitCandidateDelayMs", 10000, 0, 120000);
+  const jitter = policyNumber(adapter, "opportunityReport.submitCandidateJitterMs", 2500, 0, 60000);
+  return base + (jitter ? Math.floor(Math.random() * (jitter + 1)) : 0);
+}
+
+function stopStoreOnSubmitFrequency(adapter: DoudianAdapterConfig) {
+  return policyBoolean(adapter, "opportunityReport.stopStoreOnSubmitFrequency", true);
+}
+
+function submitTaskLeaseMs(adapter: DoudianAdapterConfig) {
+  return policyNumber(adapter, "opportunityReport.submitTaskLeaseMs", 30 * 60 * 1000, 5 * 60 * 1000, 4 * 60 * 60 * 1000);
+}
+
+function submitLeaseRenewalMs(adapter: DoudianAdapterConfig) {
+  return policyNumber(adapter, "opportunityReport.submitLeaseRenewalMs", 2 * 60 * 1000, 30 * 1000, 10 * 60 * 1000);
+}
+
+function submitLeaseExpiresAt(adapter: DoudianAdapterConfig) {
+  return new Date(Date.now() + submitTaskLeaseMs(adapter)).toISOString();
+}
+
+function submitWorkerBatchSize(adapter: DoudianAdapterConfig) {
+  return policyNumber(adapter, "opportunityReport.submitBatchSize", submitBatchSizeFallback, 1, 100);
+}
+
+function sameSubmitBatchCandidate(seed: DoudianOpportunityPrematchCandidate, candidate: DoudianOpportunityPrematchCandidate) {
+  return text(seed.shopId) === text(candidate.shopId) &&
+    text(seed.clueId) === text(candidate.clueId) &&
+    text(seed.submitPriority) === text(candidate.submitPriority);
+}
+
+function executionsForCandidate(executions: DoudianOpportunityExecution[], candidate: DoudianOpportunityPrematchCandidate) {
+  const productId = text(candidate.productId);
+  const clueId = text(candidate.clueId);
+  return executions.filter((item) => text(item.productId) === productId && (!text(item.clueId) || text(item.clueId) === clueId));
+}
+
+function candidateExecutionState(executions: DoudianOpportunityExecution[]) {
+  const failedExecution = executions.find((item) => item.ok === false);
+  const submitted = executions.some((item) => item.stage === "submit" && item.ok === true);
+  return {
+    failed: Boolean(failedExecution),
+    failureMessage: failedExecution?.message || "",
+    submitted
+  };
+}
+
 function normalizedSubmitMessage(message: string) {
-  if (message.includes("访问过于频繁") || message.includes("环境存在风险")) return "商机中心存在环境风控，暂无法提报";
+  if (submitFrequencyLimitedMessage(message)) return "商机中心提交触发频控，已停止本店后续提报";
   if (message.includes("商品数不可超过10000")) return "已达当前店铺今日提报商品上限，请次日再试";
   if (message.includes("最多支持关联") || message.includes("最多可关联")) return message;
   if (message.includes("存在老品")) return "存在老品，已跳过提报";
@@ -3023,16 +3608,18 @@ function productFailureMessages(message: string) {
 
 async function submitWithRetry(payload: DoudianAdapterPayload, store: DoudianStoreSummary, body: Record<string, unknown>) {
   const planKey = "opportunitySubmitClue";
-  const retryLimit = policyNumber(payload.adapter, "opportunityReport.submitRetryLimit", 3, 1, 5);
+  const retryLimit = policyNumber(payload.adapter, "opportunityReport.submitRetryLimit", 1, 1, 3);
   const retryDelay = policyNumber(payload.adapter, "opportunityReport.submitRetryDelayMs", 5900, 0, 30000);
   let response: RequestPlanResult | undefined;
+  let attemptCount = 0;
   for (let attempt = 0; attempt < retryLimit; attempt += 1) {
+    attemptCount = attempt + 1;
     response = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context: bodyContext(body) });
     const message = responseMessage(response);
     if (submitResponseOk(response) || !transientSubmitMessage(message, response)) break;
     if (attempt < retryLimit - 1 && retryDelay) await wait(retryDelay);
   }
-  return response;
+  return { response, attemptCount };
 }
 
 async function editTitles(payload: DoudianAdapterPayload, store: DoudianStoreSummary, products: DoudianOpportunityProductRow[], nextTitles: Map<string, string>, dryRun = false) {
@@ -3072,6 +3659,7 @@ function executionForProducts(args: {
   message: string;
   planKey?: string;
   stage?: string;
+  diagnostic?: Record<string, unknown>;
 }) {
   return args.products.map((product) => ({
     id: `${args.runId}-${args.store.shopId}-${args.clue.clueId}-${product.productId}-${args.stage || args.status}`,
@@ -3090,7 +3678,8 @@ function executionForProducts(args: {
     status: args.status,
     ok: args.ok,
     message: args.message,
-    planKey: args.planKey
+    planKey: args.planKey,
+    diagnostic: args.diagnostic
   }));
 }
 
@@ -3323,7 +3912,12 @@ async function submitProductsForClue(args: {
         stage: "submit"
       }));
     } else {
-      const response = await submitWithRetry(args.payload, args.store, submitBody(args.clue, batch, args.store, args.module));
+      const submitResult = await submitWithRetry(args.payload, args.store, submitBody(args.clue, batch, args.store, args.module));
+      const response = submitResult.response;
+      const submitDiagnostic = {
+        remoteSubmitAttempt: true,
+        submitAttemptCount: submitResult.attemptCount
+      };
       const ok = submitResponseOk(response);
       const message = ok ? "商机提报已提交" : normalizedSubmitMessage(responseMessage(response));
       const failureMessages = ok ? new Map<string, string>() : productFailureMessages(message);
@@ -3342,7 +3936,8 @@ async function submitProductsForClue(args: {
             ok: true,
             message: "商机提报已提交",
             planKey: "opportunitySubmitClue",
-            stage: "submit"
+            stage: "submit",
+            diagnostic: submitDiagnostic
           }));
         }
         for (const product of failedProducts) {
@@ -3357,7 +3952,8 @@ async function submitProductsForClue(args: {
             ok: state.ok,
             message: state.message,
             planKey: "opportunitySubmitClue",
-            stage: "submit"
+            stage: "submit",
+            diagnostic: submitDiagnostic
           }));
         }
       } else {
@@ -3372,7 +3968,8 @@ async function submitProductsForClue(args: {
           ok: state.ok,
           message: state.message,
           planKey: "opportunitySubmitClue",
-          stage: "submit"
+          stage: "submit",
+          diagnostic: submitDiagnostic
         }));
       }
     }
@@ -3636,28 +4233,40 @@ async function recordSubmitAttempts(args: {
 }) {
   const date = todayKey();
   const now = nowIso();
-  const submitExecutions = args.executions.filter((item) => item.stage === "submit" && item.planKey === "opportunitySubmitClue");
-  await repositoryPutMany(submitAttemptStore, submitExecutions.map((item) => ({
-    id: `${date}-${args.runId}-${args.candidate.id}-${item.productId || args.candidate.productId}`,
-    date,
-    runId: args.runId,
-    matchRunId: args.matchRunId,
-    candidateId: args.candidate.id,
-    shopId: args.candidate.shopId,
-    shopName: args.candidate.shopName,
-    clueId: args.candidate.clueId,
-    clueName: args.candidate.clueName,
-    clueCategoryName: args.candidate.clueCategoryName,
-    clueLastCategoryId: args.candidate.clueLastCategoryId,
-    clueLastCategoryKey: args.candidate.clueLastCategoryKey,
-    productId: item.productId || args.candidate.productId,
-    title: item.title || args.candidate.title,
-    status: item.status,
-    ok: item.ok,
-    message: item.message,
-    createdAt: now
-  } satisfies SubmitAttemptRecord)));
-  return submitExecutions.length;
+  const submitExecutions = args.executions.filter((item) => {
+    const diagnostic = objectRecord(item.diagnostic);
+    return item.stage === "submit" && item.planKey === "opportunitySubmitClue" && diagnostic.remoteSubmitAttempt === true;
+  });
+  const records: SubmitAttemptRecord[] = [];
+  for (const item of submitExecutions) {
+    const diagnostic = objectRecord(item.diagnostic);
+    const attemptCount = Math.max(1, Math.floor(Number(diagnostic.submitAttemptCount || 1)));
+    for (let attemptIndex = 1; attemptIndex <= attemptCount; attemptIndex += 1) {
+      const finalAttempt = attemptIndex === attemptCount;
+      records.push({
+        id: `${date}-${args.runId}-${args.candidate.id}-${item.productId || args.candidate.productId}-attempt-${attemptIndex}`,
+        date,
+        runId: args.runId,
+        matchRunId: args.matchRunId,
+        candidateId: args.candidate.id,
+        shopId: args.candidate.shopId,
+        shopName: args.candidate.shopName,
+        clueId: args.candidate.clueId,
+        clueName: args.candidate.clueName,
+        clueCategoryName: args.candidate.clueCategoryName,
+        clueLastCategoryId: args.candidate.clueLastCategoryId,
+        clueLastCategoryKey: args.candidate.clueLastCategoryKey,
+        productId: item.productId || args.candidate.productId,
+        title: item.title || args.candidate.title,
+        status: finalAttempt ? item.status : "failed",
+        ok: finalAttempt ? item.ok : false,
+        message: finalAttempt ? item.message : `${item.message || "商机提报重试"}（第 ${attemptIndex} 次请求未成功）`,
+        createdAt: now
+      } satisfies SubmitAttemptRecord);
+    }
+  }
+  await repositoryPutMany(submitAttemptStore, records);
+  return records.length;
 }
 
 async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: OpportunityArgs): Promise<DoudianOpportunityReportResult> {
@@ -3672,7 +4281,7 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
   const matchMode = titleMatchMode(args);
   const updatePosition = titleUpdatePosition(args);
   const limit = dailyAttemptLimit(args, payload.adapter);
-  let used = (await listSubmitAttempts()).length;
+  const usedByShop = await submitAttemptCountsByShop();
   const dedupeIndex = await submittedDedupeIndex();
   const candidates = (await loadPrematchCandidates(args))
     .filter((candidate) => candidate.eligible && candidate.status !== "submitted")
@@ -3695,12 +4304,13 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
       executions: [],
       matchRunId,
       dailyAttemptLimit: limit,
-      dailyAttemptUsed: used,
-      dailyAttemptRemaining: Math.max(0, limit - used)
+      dailyAttemptUsed: 0,
+      dailyAttemptRemaining: limit
     };
   }
 
   for (const candidate of candidates) {
+    const used = usedByShop.get(candidate.shopId) || 0;
     const remaining = Math.max(0, limit - used);
     if (remaining <= 0) {
       const skipped = {
@@ -3795,7 +4405,8 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
       dryRun: args.dryRun
     });
     const attempts = args.dryRun ? 0 : await recordSubmitAttempts({ runId, matchRunId, candidate, executions: nextExecutions });
-    used += attempts;
+    const nextUsed = used + attempts;
+    usedByShop.set(candidate.shopId, nextUsed);
     executions.push(...nextExecutions.map((item) => ({
       ...item,
       diagnostic: {
@@ -3803,7 +4414,7 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
         prematchCandidateId: candidate.id,
         matchScore: candidate.matchScore,
         matchedWords: candidate.matchedWords,
-        dailyAttemptUsed: used,
+        dailyAttemptUsed: nextUsed,
         dailyAttemptLimit: limit
       }
     })));
@@ -3833,6 +4444,8 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
 
   await repositoryPutMany(prematchCandidateStore, updatedCandidates);
   const failedCount = executions.filter((item) => item.ok === false).length;
+  const usedTotal = Array.from(usedByShop.values()).reduce((sum, value) => sum + value, 0);
+  const shopLimitTotal = limit * Math.max(1, usedByShop.size);
   const result = await saveExecuteResult(payload, ledger, {
     runId,
     operationId: args.operationId,
@@ -3852,8 +4465,8 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
     prematches: updatedCandidates,
     matchRunId,
     dailyAttemptLimit: limit,
-    dailyAttemptUsed: used,
-    dailyAttemptRemaining: Math.max(0, limit - used)
+    dailyAttemptUsed: usedTotal,
+    dailyAttemptRemaining: Math.max(0, shopLimitTotal - usedTotal)
   };
 }
 
@@ -4086,27 +4699,106 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
         ...task,
         status: "running",
         startedAt: task.startedAt || startedAt,
-        leaseExpiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+        leaseExpiresAt: submitLeaseExpiresAt(payload.adapter),
         updatedAt: startedAt
       } satisfies PipelineSubmitTaskRecord);
       const store = stores.find((item) => item.shopId === task.shopId);
-      const taskCandidateIdSet = new Set(task.candidateIds);
-      const taskCandidates = (await repositoryGetMany<DoudianOpportunityPrematchCandidate>(pipelineCandidateStore, task.candidateIds).catch(() => []))
-        .filter((candidate) => taskCandidateIdSet.has(candidate.id));
+      const loadedTaskCandidates = await repositoryGetMany<DoudianOpportunityPrematchCandidate>(pipelineCandidateStore, task.candidateIds).catch(() => []);
+      const taskCandidateById = new Map(loadedTaskCandidates.map((candidate) => [candidate.id, candidate]));
+      const taskCandidates = task.candidateIds
+        .map((id) => taskCandidateById.get(id))
+        .filter((candidate): candidate is DoudianOpportunityPrematchCandidate => Boolean(candidate));
       const updatedCandidates: DoudianOpportunityPrematchCandidate[] = [];
       const executions: DoudianOpportunityExecution[] = [];
       let submittedCount = 0;
       let skippedCount = 0;
       let failedCount = 0;
+      let submitThrottleReason = "";
+      const blockedProductIds = new Set<string>();
+      const processedCandidateIds = new Set<string>();
       try {
         if (!store) throw new Error("Selected store is missing login partition");
         const limit = dailyAttemptLimit(args, payload.adapter);
-        let used = (await listSubmitAttempts()).length;
+        let used = await submitAttemptCountForShop(store.shopId);
         const dedupeIndex = await submittedDedupeIndex();
-        for (const candidate of taskCandidates) {
+        const leaseRenewalIntervalMs = submitLeaseRenewalMs(payload.adapter);
+        let lastLeaseRenewalMs = Date.now();
+        await updatePipelineStoreRunProgress(task.storeRunId, {
+          status: "running",
+          phase: "submitting",
+          quotaAttemptCount: used,
+          quotaRemainingAfterSubmit: Math.max(0, limit - used)
+        }).catch(() => null);
+        const updateStoreSubmitProgress = async () => {
+          await updatePipelineStoreRunProgress(task.storeRunId, {
+            status: "running",
+            phase: "submitting",
+            submittedCount,
+            failedCount,
+            quotaAttemptCount: used,
+            quotaRemainingAfterSubmit: Math.max(0, limit - used)
+          }).catch(() => null);
+        };
+        for (const [candidateIndex, candidate] of taskCandidates.entries()) {
+          if (processedCandidateIds.has(candidate.id)) continue;
           if (!candidate.eligible || candidate.status !== "ready") {
             skippedCount += 1;
             updatedCandidates.push(candidate);
+            continue;
+          }
+          if (submitThrottleReason) {
+            skippedCount += 1;
+            updatedCandidates.push({
+              ...candidate,
+              eligible: false,
+              estimatedCost: 0,
+              status: "skipped",
+              submitStatus: "skipped",
+              skipReason: submitThrottleReason
+            });
+            executions.push({
+              id: `${task.id}-${candidate.id}-submit-throttle-skipped`,
+              sourceRunId: task.runId,
+              shopId: candidate.shopId,
+              shopName: candidate.shopName,
+              clueId: candidate.clueId,
+              clueName: candidate.clueName,
+              productId: candidate.productId,
+              title: candidate.title,
+              action: "submit",
+              stage: "submit-throttle",
+              status: "skipped",
+              ok: true,
+              message: submitThrottleReason
+            });
+            continue;
+          }
+          if (blockedProductIds.has(candidate.productId)) {
+            const limitReason = "商品已达到商机关联上限，本轮后续同商品不再提报";
+            skippedCount += 1;
+            updatedCandidates.push({
+              ...candidate,
+              eligible: false,
+              estimatedCost: 0,
+              status: "skipped",
+              submitStatus: "skipped",
+              skipReason: limitReason
+            });
+            executions.push({
+              id: `${task.id}-${candidate.id}-product-limit-skipped`,
+              sourceRunId: task.runId,
+              shopId: candidate.shopId,
+              shopName: candidate.shopName,
+              clueId: candidate.clueId,
+              clueName: candidate.clueName,
+              productId: candidate.productId,
+              title: candidate.title,
+              action: "submit",
+              stage: "product-limit",
+              status: "skipped",
+              ok: true,
+              message: limitReason
+            });
             continue;
           }
           const remaining = Math.max(0, limit - used);
@@ -4140,11 +4832,22 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             });
             continue;
           }
+          const batchLimit = Math.min(submitWorkerBatchSize(payload.adapter), remaining);
+          const batchCandidates = [candidate];
+          for (let nextIndex = candidateIndex + 1; nextIndex < taskCandidates.length && batchCandidates.length < batchLimit; nextIndex += 1) {
+            const nextCandidate = taskCandidates[nextIndex];
+            if (!nextCandidate || processedCandidateIds.has(nextCandidate.id)) continue;
+            if (!sameSubmitBatchCandidate(candidate, nextCandidate)) continue;
+            if (!nextCandidate.eligible || nextCandidate.status !== "ready") continue;
+            if (blockedProductIds.has(nextCandidate.productId)) continue;
+            if (shouldSkipSubmittedCandidate(args, dedupeIndex, nextCandidate)) continue;
+            batchCandidates.push(nextCandidate);
+          }
           const nextExecutions = await submitProductsForClue({
             payload,
             store,
             clue: candidateToClue(candidate),
-            products: [candidateToProduct(candidate)],
+            products: batchCandidates.map(candidateToProduct),
             runId: task.runId,
             sourceRunId: task.runId,
             submitMode: submitMode(args),
@@ -4155,31 +4858,79 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             validatedByPipeline: true,
             pipelineWords: candidate.clueWords
           });
-          const attempts = args.dryRun ? 0 : await recordSubmitAttempts({ runId: task.runId, matchRunId: task.runId, candidate, executions: nextExecutions });
-          used += attempts;
-          executions.push(...nextExecutions.map((item) => ({
-            ...item,
-            diagnostic: {
-              ...(item.diagnostic || {}),
-              pipelineCandidateId: candidate.id,
-              tokenHitRatio: candidate.tokenHitRatio,
-              matchedTokens: candidate.matchedTokens,
-              dailyAttemptUsed: used,
-              dailyAttemptLimit: limit
+          let batchAttempts = 0;
+          for (const batchCandidate of batchCandidates) {
+            processedCandidateIds.add(batchCandidate.id);
+            const candidateExecutions = executionsForCandidate(nextExecutions, batchCandidate);
+            const attempts = args.dryRun ? 0 : await recordSubmitAttempts({ runId: task.runId, matchRunId: task.runId, candidate: batchCandidate, executions: candidateExecutions });
+            batchAttempts += attempts;
+            used += attempts;
+            const decoratedExecutions = candidateExecutions.map((item) => ({
+              ...item,
+              diagnostic: {
+                ...(item.diagnostic || {}),
+                pipelineCandidateId: batchCandidate.id,
+                tokenHitRatio: batchCandidate.tokenHitRatio,
+                matchedTokens: batchCandidate.matchedTokens,
+                dailyAttemptUsed: used,
+                dailyAttemptLimit: limit,
+                submitBatchSize: batchCandidates.length
+              }
+            }));
+            executions.push(...decoratedExecutions);
+            const { failed, failureMessage, submitted } = candidateExecutionState(candidateExecutions);
+            if (failureMessage && submitProductClueLimitMessage(failureMessage)) {
+              blockedProductIds.add(batchCandidate.productId);
+              for (const productId of productIdsFromSubmitMessage(failureMessage)) blockedProductIds.add(productId);
             }
-          })));
-          const failed = nextExecutions.some((item) => item.ok === false);
-          const submitted = nextExecutions.some((item) => item.stage === "submit" && item.ok === true);
-          if (submitted) submittedCount += 1;
-          if (failed) failedCount += 1;
-          if (!submitted && !failed) skippedCount += 1;
-          updatedCandidates.push({
-            ...candidate,
-            status: submitted ? "submitted" : failed ? "failed" : "skipped",
-            submitStatus: submitted ? "submitted" : failed ? "failed" : "skipped",
-            skipReason: failed ? nextExecutions.find((item) => item.ok === false)?.message : candidate.skipReason,
-            submittedAt: submitted ? nowIso() : undefined
-          });
+            if (!submitThrottleReason && failureMessage && stopStoreOnSubmitFrequency(payload.adapter) && submitFrequencyLimitedMessage(failureMessage)) {
+              submitThrottleReason = failureMessage || "商机中心提交触发频控，已停止本店后续提报";
+              await writePipelineEvent({
+                runId: task.runId,
+                storeRunId: task.storeRunId,
+                shopId: task.shopId,
+                level: "warn",
+                event: "pipeline-submit-throttled",
+                message: submitThrottleReason,
+                detail: {
+                  candidateId: batchCandidate.id,
+                  productId: batchCandidate.productId,
+                  clueId: batchCandidate.clueId,
+                  dailyAttemptUsed: used,
+                  dailyAttemptLimit: limit,
+                  submitBatchSize: batchCandidates.length
+                }
+              }).catch(() => undefined);
+            }
+            if (submitted) submittedCount += 1;
+            if (failed) failedCount += 1;
+            if (!submitted && !failed) skippedCount += 1;
+            updatedCandidates.push({
+              ...batchCandidate,
+              status: submitted ? "submitted" : failed ? "failed" : "skipped",
+              submitStatus: submitted ? "submitted" : failed ? "failed" : "skipped",
+              skipReason: failed ? failureMessage : batchCandidate.skipReason,
+              submittedAt: submitted ? nowIso() : undefined
+            });
+          }
+          if (batchAttempts > 0 || batchCandidates.length > 1) await updateStoreSubmitProgress();
+          if (!args.dryRun && batchAttempts > 0 && !submitThrottleReason) {
+            const delayMs = submitCandidateDelayMs(payload.adapter);
+            if (delayMs) await wait(delayMs);
+          }
+          if (Date.now() - lastLeaseRenewalMs >= leaseRenewalIntervalMs) {
+            lastLeaseRenewalMs = Date.now();
+            const renewedAt = nowIso();
+            await repositoryPut(pipelineSubmitTaskStore, {
+              ...task,
+              status: "running",
+              submittedCount,
+              skippedCount,
+              failedCount,
+              leaseExpiresAt: submitLeaseExpiresAt(payload.adapter),
+              updatedAt: renewedAt
+            } satisfies PipelineSubmitTaskRecord);
+          }
         }
         if (updatedCandidates.length) await repositoryPutMany(pipelineCandidateStore, updatedCandidates, { concurrency: 2 });
         const finalStatus = failedCount ? (submittedCount || skippedCount ? "partial" : "failed") : "ok";
@@ -4191,9 +4942,11 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
           skippedCount,
           failedCount,
           leaseExpiresAt: undefined,
+          lastError: submitThrottleReason || task.lastError,
           finishedAt,
           updatedAt: finishedAt
         } satisfies PipelineSubmitTaskRecord);
+        const finalQuotaAttemptCount = await submitAttemptCountForShop(store.shopId);
         const storeRun = await repositoryGet<PipelineStoreRunRecord>(pipelineStoreRunStore, task.storeRunId).catch(() => null);
         if (storeRun) {
           await repositoryPut(pipelineStoreRunStore, {
@@ -4202,6 +4955,9 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             phase: "finished",
             submittedCount,
             failedCount,
+            skipReason: submitThrottleReason || storeRun.skipReason,
+            quotaAttemptCount: finalQuotaAttemptCount,
+            quotaRemainingAfterSubmit: Math.max(0, limit - finalQuotaAttemptCount),
             updatedAt: finishedAt,
             finishedAt
           } satisfies PipelineStoreRunRecord);
@@ -4213,7 +4969,16 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
           level: failedCount ? "warn" : "info",
           event: "pipeline-submit-task-finished",
           message: failedCount ? "商机提报部分失败" : "商机提报任务完成",
-          detail: { submittedCount, skippedCount, failedCount, executionCount: executions.length }
+          detail: {
+            submittedCount,
+            skippedCount,
+            failedCount,
+            executionCount: executions.length,
+            quotaAttemptCount: finalQuotaAttemptCount,
+            dailyAttemptLimit: limit,
+            submitThrottleReason,
+            blockedProductCount: blockedProductIds.size
+          }
         }).catch(() => undefined);
         await refreshPipelineRunSummary(task.runId).catch(() => null);
       } catch (error) {
@@ -4333,7 +5098,11 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   let clueCount = 0;
   let tokenCount = 0;
   let candidateCount = 0;
+  let qualifiedCandidateCount = 0;
   let eligibleCandidateCount = 0;
+  let plannedSubmitCandidateCount = 0;
+  let primarySubmitCandidateCount = 0;
+  let fallbackSubmitCandidateCount = 0;
   const pipelineClues: DoudianOpportunityClueRow[] = [];
   const matchRulesHash = stableMatchRulesHash(args);
   const dedupeIndex = await submittedDedupeIndex();
@@ -4361,6 +5130,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     createdAt: now,
     updatedAt: now
   } satisfies PipelineRunRecord);
+  dispatchPipelineProgress(args, 3, "商机提报任务已初始化");
 
   if (clientCapability.tokenizerFallback) {
     await writePipelineEvent({
@@ -4376,7 +5146,79 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     }).catch(() => undefined);
   }
 
+  const finishCancelled = async (): Promise<DoudianOpportunityReportResult> => {
+    const cancelledAt = nowIso();
+    await cancelPipelinePendingWorkForRun(runId);
+    const summary = {
+      productCount: products.length,
+      currentCategoryCount,
+      effectiveCategoryCount,
+      clueCount,
+      tokenCount,
+      candidateCount,
+      qualifiedCandidateCount,
+      eligibleCandidateCount,
+      plannedSubmitCandidateCount,
+      primarySubmitCandidateCount,
+      fallbackSubmitCandidateCount,
+      submitTaskCount,
+      submittedCount: 0,
+      failedCount,
+      skippedCount,
+      processedStoreCount,
+      totalStoreCount: targets.length
+    };
+    await repositoryPut(pipelineRunStore, {
+      id: runId,
+      runId,
+      operationId: args.operationId,
+      mode: "pipeline-submit",
+      filters,
+      matchRules,
+      shopIds: targets.map((item) => item.shopId),
+      tenantId: normalizePipelineStoreIdentity(targets[0]).tenantId,
+      clientCapability,
+      status: "cancelled",
+      totalStoreCount: targets.length,
+      processedStoreCount,
+      submittedCount: 0,
+      skippedCount,
+      failedCount,
+      summary,
+      adapterVersion: payload.adapter.version || "",
+      scriptsVersion: payload.scripts?.version || "",
+      requestPlanHash: requestPlanHash(payload.adapter),
+      createdAt: now,
+      updatedAt: cancelledAt
+    } satisfies PipelineRunRecord);
+    return {
+      ...ledger,
+      ok: false,
+      status: "cancelled",
+      mode: "pipeline-submit",
+      message: "已取消商机提报任务",
+      runId,
+      operationId: args.operationId,
+      rows: pipelineClues,
+      clues: pipelineClues,
+      products,
+      prematches: [],
+      executions: [],
+      details,
+      successCount: details.filter((detail) => detail.ok).length,
+      failureCount: failedCount,
+      partialCount: 0,
+      summary,
+      scanSummary: summary,
+      sourceHealth,
+      filters,
+      matchRules,
+      requestPlanHash: requestPlanHash(payload.adapter)
+    };
+  };
+
   for (const [index, store] of targets.entries()) {
+    if (pipelineCancelled(args)) return finishCancelled();
     const identity = normalizePipelineStoreIdentity(store);
     const id = storeRunId(runId, identity);
     const startedAt = nowIso();
@@ -4393,19 +5235,39 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       tokenCount: 0,
       candidateCount: 0,
       eligibleCandidateCount: 0,
+      qualifiedCandidateCount: 0,
+      plannedSubmitCandidateCount: 0,
       submittedCount: 0,
       failedCount: 0,
       startedAt,
       updatedAt: startedAt
     } satisfies PipelineStoreRunRecord);
     try {
+      dispatchPipelineProgress(args, 5 + (index / targets.length) * 70, `扫描店铺商品：${store.shopName || store.shopId}`);
       const scan = await scanProductsForStore(payload, store, args, runId, index + 1, targets.length);
+      if (pipelineCancelled(args)) return finishCancelled();
       products.push(...scan.products);
       sourceHealth.push(...scan.sourceHealth);
+      const storeDailyAttemptLimit = dailyAttemptLimit(args, payload.adapter);
+      const quotaUsedBefore = await submitAttemptCountForShop(identity.shopId);
+      const quotaRemainingBefore = Math.max(0, storeDailyAttemptLimit - quotaUsedBefore);
+      const storeTopKPerProduct = dynamicTopKPerProduct({
+        configuredTopK: matchRules.topKPerProduct,
+        quotaRemaining: quotaRemainingBefore,
+        productCount: scan.products.length,
+        maxTopK: storeDailyAttemptLimit
+      });
       const extracted = extractCurrentStoreCategories(scan.products);
       const effective = effectiveStoreCategories(extracted.categories, matchRules);
+      const productsByCategoryKey = groupProductsByCategoryKey(scan.products);
       currentCategoryCount += extracted.categories.length;
       effectiveCategoryCount += effective.length;
+      await updatePipelineStoreRunProgress(id, {
+        phase: "clue-load",
+        productCount: scan.products.length,
+        currentCategoryCount: extracted.categories.length,
+        effectiveCategoryCount: effective.length
+      }).catch(() => null);
       await saveStoreCategorySnapshot({
         runId,
         identity,
@@ -4419,6 +5281,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       let storeClueCount = 0;
       let storeTokenCount = 0;
       const storeCandidates: DoudianOpportunityPrematchCandidate[] = [];
+      const storeDiagnostics = createMatchDiagnostics();
       const storeSourceHealth = [...scan.sourceHealth];
       const missingCategoryIdCategories = effective.filter((category) => !text(category.categoryId));
       if (missingCategoryIdCategories.length) {
@@ -4447,6 +5310,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         }).catch(() => undefined);
       }
       for (const category of effective) {
+        if (pipelineCancelled(args)) return finishCancelled();
         const categoryKey = cacheCategoryKey(category);
         if (!categoryKey) {
           await writePipelineEvent({
@@ -4460,6 +5324,8 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           }).catch(() => undefined);
           continue;
         }
+        const categoryProducts = productsByCategoryKey.get(categoryKey) || [];
+        if (!categoryProducts.length) continue;
         const clueResult = await loadCluesByCategoryWithCache({
           payload,
           store,
@@ -4475,6 +5341,13 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         if (!clueResult.rows.length || !clueResult.cacheKey) continue;
         pipelineClues.push(...clueResult.rows);
         storeClueCount += clueResult.rows.length;
+        await updatePipelineStoreRunProgress(id, {
+          phase: "clue-load",
+          productCount: scan.products.length,
+          currentCategoryCount: extracted.categories.length,
+          effectiveCategoryCount: effective.length,
+          clueCount: storeClueCount
+        }).catch(() => null);
         const tokenIndex = await tokenizeCluesWithCache({
           clues: clueResult.rows,
           clueCacheKey: clueResult.cacheKey,
@@ -4485,35 +5358,55 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           allowTokenizerFallback: Boolean(args.dryRun)
         });
         storeTokenCount += tokenIndex.tokens.length;
-        storeCandidates.push(...matchStoreProductsByTokens({
+        await updatePipelineStoreRunProgress(id, {
+          phase: "match",
+          productCount: scan.products.length,
+          currentCategoryCount: extracted.categories.length,
+          effectiveCategoryCount: effective.length,
+          clueCount: storeClueCount,
+          tokenCount: storeTokenCount
+        }).catch(() => null);
+        dispatchPipelineProgress(args, 12 + ((index + 0.35) / targets.length) * 70, `匹配商机词：${identity.shopName || identity.shopId}`);
+        const matchResult = matchCategoryProductsByAhoTokens({
           runId,
           storeRunId: id,
           clueCacheKey: clueResult.cacheKey,
           wordCacheKey: tokenIndex.wordCacheKey,
           effectiveCategoryKey: categoryKey,
-          products: scan.products,
+          products: categoryProducts,
           clues: clueResult.rows,
           tokenIndex,
           minTokenHitRatio: Number(matchRules.minTokenHitRatio || 0.33),
+          minWeightHitRatio: Number(matchRules.minWeightHitRatio || 0.35),
+          genericTokenDfRatio: Number(matchRules.genericTokenDfRatio || 0.12),
+          topKPerProduct: storeTopKPerProduct,
           matchRulesHash,
-          opportunityArgs: args,
-          dedupeIndex
-        }));
-      }
-      const bestByProduct = new Set<string>();
-      const dedupedStoreCandidates = storeCandidates
-        .sort((left, right) => right.matchScore - left.matchScore)
-        .map((candidate) => {
-          if (!candidate.eligible) return candidate;
-          const key = `${candidate.shopId}::${candidate.productId}`;
-          if (!bestByProduct.has(key)) {
-            bestByProduct.add(key);
-            return candidate;
-          }
-          return { ...candidate, eligible: false, estimatedCost: 0, status: "skipped", skipReason: "同商品已有更高分商机" };
+          opportunityArgs: args
         });
-      const compactedStoreCandidates = dedupedStoreCandidates.map(compactPipelineCandidate);
-      if (dedupedStoreCandidates.length) {
+        storeCandidates.push(...matchResult.candidates);
+        mergeMatchDiagnostics(storeDiagnostics, matchResult.diagnostics);
+      }
+      if (pipelineCancelled(args)) return finishCancelled();
+      const rankedStoreCandidates = markProductRanks({
+        candidates: storeCandidates,
+        topKPerProduct: storeTopKPerProduct,
+        opportunityArgs: args,
+        dedupeIndex
+      });
+      const plannedSelection = selectStoreSubmitCandidates({
+        candidates: rankedStoreCandidates,
+        dailyAttemptLimit: storeDailyAttemptLimit,
+        quotaUsedBefore
+      });
+      const plannedStoreCandidates = plannedSelection.candidates;
+      const eligibleCount = plannedSelection.plannedSubmitCandidateCount;
+      const alternativeCount = plannedStoreCandidates.filter((candidate) => candidateRank(candidate) > 1 || candidate.alternative === true).length;
+      storeDiagnostics.persistedCandidateCount = plannedStoreCandidates.length;
+      storeDiagnostics.eligibleCandidateCount = eligibleCount;
+      storeDiagnostics.alternativeCandidateCount = alternativeCount;
+      storeDiagnostics.droppedByTopKCount = Math.max(0, storeDiagnostics.passedThresholdCount - plannedStoreCandidates.length);
+      const compactedStoreCandidates = plannedStoreCandidates.map(compactPipelineCandidate);
+      if (plannedStoreCandidates.length) {
         await repositoryPutMany(pipelineCandidateStore, compactedStoreCandidates, { concurrency: 2 });
       }
       const task = await enqueueStoreSubmit({
@@ -4528,19 +5421,22 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           ? { ...candidate, submitTaskId: task.id, submitStatus: "queued" }
           : candidate);
         await repositoryPutMany(pipelineCandidateStore, queuedCandidates, { concurrency: 2 });
-        void runSubmitWorker(payload, { ...args, runId }).catch(() => undefined);
       }
-      const eligibleCount = dedupedStoreCandidates.filter((candidate) => candidate.eligible && candidate.status === "ready").length;
+      if (pipelineCancelled(args)) return finishCancelled();
       let skipReason = "";
       if (!effective.length) skipReason = "no-effective-category";
       else if (!storeClueCount) skipReason = "no-clue-for-effective-category";
-      else if (!dedupedStoreCandidates.length) skipReason = "no-token-match-candidate";
+      else if (!plannedStoreCandidates.length) skipReason = "no-token-match-candidate";
       else if (!eligibleCount) skipReason = "no-eligible-candidate";
       if (skipReason) skippedCount += 1;
       clueCount += storeClueCount;
       tokenCount += storeTokenCount;
-      candidateCount += dedupedStoreCandidates.length;
+      candidateCount += plannedStoreCandidates.length;
+      qualifiedCandidateCount += plannedSelection.qualifiedCandidateCount;
       eligibleCandidateCount += eligibleCount;
+      plannedSubmitCandidateCount += plannedSelection.plannedSubmitCandidateCount;
+      primarySubmitCandidateCount += plannedSelection.primarySubmitCandidateCount;
+      fallbackSubmitCandidateCount += plannedSelection.fallbackSubmitCandidateCount;
       processedStoreCount += 1;
       const finishedAt = nowIso();
       await repositoryPut(pipelineStoreRunStore, {
@@ -4554,8 +5450,23 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         effectiveCategoryCount: effective.length,
         clueCount: storeClueCount,
         tokenCount: storeTokenCount,
-        candidateCount: dedupedStoreCandidates.length,
+        matchDiagnostics: storeDiagnostics,
+        ...matchDiagnosticsSummary(storeDiagnostics),
+        candidateCount: plannedStoreCandidates.length,
         eligibleCandidateCount: eligibleCount,
+        alternativeCandidateCount: alternativeCount,
+        qualifiedCandidateCount: plannedSelection.qualifiedCandidateCount,
+        primaryCandidateCount: plannedSelection.primaryCandidateCount,
+        fallbackCandidateCount: plannedSelection.fallbackCandidateCount,
+        plannedSubmitCandidateCount: plannedSelection.plannedSubmitCandidateCount,
+        primarySubmitCandidateCount: plannedSelection.primarySubmitCandidateCount,
+        fallbackSubmitCandidateCount: plannedSelection.fallbackSubmitCandidateCount,
+        dailyAttemptLimit: plannedSelection.dailyAttemptLimit,
+        quotaUsedBefore: plannedSelection.quotaUsedBefore,
+        quotaRemainingBefore: plannedSelection.quotaRemainingBefore,
+        quotaRemainingAfterPlan: plannedSelection.quotaRemainingAfterPlan,
+        quotaAttemptCount: plannedSelection.quotaUsedBefore,
+        quotaRemainingAfterSubmit: plannedSelection.quotaRemainingBefore,
         submittedCount: 0,
         failedCount: 0,
         skipReason,
@@ -4578,11 +5489,22 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           missingCategoryProductCount: extracted.missingCategoryProductCount,
           clueCount: storeClueCount,
           tokenCount: storeTokenCount,
-          candidateCount: dedupedStoreCandidates.length,
+          candidateCount: plannedStoreCandidates.length,
+          qualifiedCandidateCount: plannedSelection.qualifiedCandidateCount,
           eligibleCount,
+          plannedSubmitCandidateCount: plannedSelection.plannedSubmitCandidateCount,
+          primarySubmitCandidateCount: plannedSelection.primarySubmitCandidateCount,
+          fallbackSubmitCandidateCount: plannedSelection.fallbackSubmitCandidateCount,
+          alternativeCount,
+          dailyAttemptLimit: plannedSelection.dailyAttemptLimit,
+          quotaUsedBefore: plannedSelection.quotaUsedBefore,
+          quotaRemainingBefore: plannedSelection.quotaRemainingBefore,
+          quotaRemainingAfterPlan: plannedSelection.quotaRemainingAfterPlan,
+          matchDiagnostics: matchDiagnosticsSummary(storeDiagnostics),
           submitTaskId: task?.id
         }
       }).catch(() => undefined);
+      dispatchPipelineProgress(args, 8 + ((index + 1) / targets.length) * 70, `店铺候选已落库：${identity.shopName || identity.shopId}`);
       details.push({
         shopId: store.shopId,
         shopName: store.shopName,
@@ -4598,8 +5520,22 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           effectiveCategoryKeys: effective.map((category) => category.categoryKey),
           clueCount: storeClueCount,
           tokenCount: storeTokenCount,
-          candidateCount: dedupedStoreCandidates.length,
+          candidateCount: plannedStoreCandidates.length,
+          qualifiedCandidateCount: plannedSelection.qualifiedCandidateCount,
           eligibleCount,
+          eligibleCandidateCount: eligibleCount,
+          plannedSubmitCandidateCount: plannedSelection.plannedSubmitCandidateCount,
+          primarySubmitCandidateCount: plannedSelection.primarySubmitCandidateCount,
+          fallbackSubmitCandidateCount: plannedSelection.fallbackSubmitCandidateCount,
+          alternativeCount,
+          alternativeCandidateCount: alternativeCount,
+          dailyAttemptLimit: plannedSelection.dailyAttemptLimit,
+          quotaUsedBefore: plannedSelection.quotaUsedBefore,
+          quotaRemainingBefore: plannedSelection.quotaRemainingBefore,
+          quotaRemainingAfterPlan: plannedSelection.quotaRemainingAfterPlan,
+          quotaAttemptCount: plannedSelection.quotaUsedBefore,
+          quotaRemainingAfterSubmit: plannedSelection.quotaRemainingBefore,
+          matchDiagnostics: matchDiagnosticsSummary(storeDiagnostics),
           submitTaskId: task?.id
         },
         index: index + 1,
@@ -4621,6 +5557,8 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         tokenCount: 0,
         candidateCount: 0,
         eligibleCandidateCount: 0,
+        qualifiedCandidateCount: 0,
+        plannedSubmitCandidateCount: 0,
         submittedCount: 0,
         failedCount: 1,
         skipReason: "pipeline-product-scan-failed",
@@ -4651,11 +5589,16 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     }
   }
 
+  if (pipelineCancelled(args)) return finishCancelled();
+  if (submitTaskCount > 0) {
+    dispatchPipelineProgress(args, 82, "自动提报任务处理中");
+    await runSubmitWorker(payload, { ...args, runId });
+    dispatchPipelineProgress(args, 95, "自动提报任务已完成，正在汇总");
+  }
+
   const status = failedCount
     ? (processedStoreCount ? "partial" : "failed")
-    : submitTaskCount
-      ? "running"
-      : "ok";
+    : "ok";
   const summary = {
     productCount: products.length,
     currentCategoryCount,
@@ -4663,7 +5606,11 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     clueCount,
     tokenCount,
     candidateCount,
+    qualifiedCandidateCount,
     eligibleCandidateCount,
+    plannedSubmitCandidateCount,
+    primarySubmitCandidateCount,
+    fallbackSubmitCandidateCount,
     submitTaskCount,
     submittedCount: 0,
     failedCount,
@@ -4698,6 +5645,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   const refreshedRun = await refreshPipelineRunSummary(runId).catch(() => null);
   const finalStatus = refreshedRun?.status || status;
   const finalSummary = refreshedRun?.summary || summary;
+  const finalFailedCount = Number(finalSummary.failedCount || failedCount || 0);
   const previewCandidates = await loadPipelineCandidatesForRun(runId, latestPipelineCandidatePreviewLimit);
   const candidateTotalCount = Number(finalSummary.candidateCount || candidateCount || previewCandidates.length);
   const responseSummary = {
@@ -4712,10 +5660,10 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     ok: finalStatus === "ok",
     status: finalStatus,
     mode: "pipeline-submit",
-    message: submitTaskCount
-      ? "商机提报已生成候选并进入提报队列，提报 worker 正在后台推进"
-      : failedCount
-        ? "商机提报商品/类目阶段部分失败"
+    message: finalFailedCount
+      ? "商机提报已完成，部分候选提报失败"
+      : submitTaskCount
+        ? "商机提报已生成候选并完成自动提报处理"
         : "商机提报处理完成",
     runId,
     operationId: args.operationId,
@@ -4726,7 +5674,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     executions: [],
     details,
     successCount: details.filter((detail) => detail.ok).length,
-    failureCount: failedCount,
+    failureCount: finalFailedCount,
     partialCount: submitTaskCount,
     summary: responseSummary,
     scanSummary: responseSummary,
@@ -4750,6 +5698,145 @@ export async function fetchOpportunityReport(args: OpportunityArgs = {}): Promis
   if (mode === "collect") return fetchCollect(payload, args);
   if (mode === "latest") return fetchOpportunityReportLatest(args);
   return { ok: false, status: "unsupported-mode", mode, message: "unsupported opportunity report mode", rows: [], clues: [], products: [], executions: [] };
+}
+
+export async function runOpportunityPipelineSubmitTask(args: OpportunityArgs = {}): Promise<DoudianOpportunityReportResult> {
+  const result = await fetchOpportunityReport({
+    ...args,
+    mode: "pipeline-submit",
+    operationId: args.operationId || args.runId
+  });
+  if (result.status !== "cancelled" && result.status !== "partial" && result.ok === false) {
+    throw new Error(result.message || `商机提报任务失败：${result.status || "unknown"}`);
+  }
+  return {
+    ok: result.ok,
+    status: result.status,
+    mode: result.mode,
+    message: result.message,
+    runId: result.runId,
+    operationId: result.operationId,
+    rows: [],
+    clues: [],
+    products: [],
+    prematches: [],
+    executions: [],
+    details: result.details || [],
+    successCount: result.successCount,
+    failureCount: result.failureCount,
+    partialCount: result.partialCount,
+    summary: result.summary || {},
+    scanSummary: result.scanSummary || result.summary || {},
+    sourceHealth: [],
+    filters: result.filters,
+    matchRules: result.matchRules,
+    requestPlanHash: result.requestPlanHash
+  };
+}
+
+async function buildPipelineRunCachedResult(
+  args: OpportunityArgs,
+  pipelineRun: PipelineRunRecord,
+  message: string
+): Promise<DoudianOpportunityReportResult> {
+  const ledger = await listStoreLedger();
+  const [pipelineStoreRuns, pipelineCandidates] = await Promise.all([
+    loadPipelineStoreRunsForRun(pipelineRun.runId),
+    loadPipelineCandidatesForRun(pipelineRun.runId, latestPipelineCandidatePreviewLimit)
+  ]);
+  const storeRuns = pipelineStoreRuns.filter((item) => item.runId === pipelineRun.runId);
+  const prematches = pipelineCandidates.filter((item) => item.pipelineRunId === pipelineRun.runId || item.sourceRunId === pipelineRun.runId);
+  const candidateTotalCount = Number(pipelineRun.summary?.candidateCount || prematches.length);
+  const summary = {
+    ...(pipelineRun.summary || {}),
+    candidateTotalCount,
+    candidateLoadedCount: prematches.length,
+    candidateListTruncated: candidateTotalCount > prematches.length ? 1 : 0
+  };
+  return {
+    ...ledger,
+    ok: pipelineRun.status === "ok",
+    status: "cached",
+    mode: "latest",
+    message,
+    runId: pipelineRun.runId,
+    operationId: pipelineRun.operationId,
+    sourceRunId: pipelineRun.runId,
+    rows: [],
+    clues: [],
+    products: [],
+    prematches,
+    executions: [],
+    details: storeRuns.map((storeRun, index) => ({
+      shopId: storeRun.shopId,
+      shopName: storeRun.shopName,
+      status: storeRun.status,
+      ok: storeRun.status === "ok" || storeRun.status === "skipped",
+      message: storeRun.skipReason || storeRun.phase,
+      diagnostic: {
+        phase: storeRun.phase,
+        productCount: storeRun.productCount,
+        clueCount: storeRun.clueCount,
+        currentCategoryCount: storeRun.currentCategoryCount,
+        effectiveCategoryCount: storeRun.effectiveCategoryCount,
+        candidateCount: storeRun.candidateCount,
+        eligibleCandidateCount: storeRun.eligibleCandidateCount,
+        alternativeCandidateCount: storeRun.alternativeCandidateCount,
+        qualifiedCandidateCount: storeRun.qualifiedCandidateCount,
+        primaryCandidateCount: storeRun.primaryCandidateCount,
+        fallbackCandidateCount: storeRun.fallbackCandidateCount,
+        plannedSubmitCandidateCount: storeRun.plannedSubmitCandidateCount,
+        primarySubmitCandidateCount: storeRun.primarySubmitCandidateCount,
+        fallbackSubmitCandidateCount: storeRun.fallbackSubmitCandidateCount,
+        dailyAttemptLimit: storeRun.dailyAttemptLimit,
+        quotaUsedBefore: storeRun.quotaUsedBefore,
+        quotaRemainingBefore: storeRun.quotaRemainingBefore,
+        quotaRemainingAfterPlan: storeRun.quotaRemainingAfterPlan,
+        quotaAttemptCount: storeRun.quotaAttemptCount,
+        quotaRemainingAfterSubmit: storeRun.quotaRemainingAfterSubmit,
+        submittedCount: storeRun.submittedCount,
+        failedCount: storeRun.failedCount
+      },
+      index: index + 1,
+      total: storeRuns.length
+    })),
+    summary,
+    scanSummary: summary,
+    sourceHealth: [],
+    filters: args.filters || pipelineRun.filters,
+    matchRules: args.matchRules || pipelineRun.matchRules,
+    requestPlanHash: pipelineRun.requestPlanHash
+  };
+}
+
+export async function fetchOpportunityPipelineRun(args: OpportunityArgs = {}): Promise<DoudianOpportunityReportResult> {
+  const runId = text(args.runId || args.operationId);
+  const pipelineRun = runId
+    ? await repositoryGet<PipelineRunRecord>(pipelineRunStore, runId).catch(() => null)
+    : null;
+  if (pipelineRun) return buildPipelineRunCachedResult(args, pipelineRun, "已恢复本次商机提报数据");
+  const ledger = await listStoreLedger();
+  return {
+    ...ledger,
+    ok: false,
+    status: "missing",
+    mode: "latest",
+    message: runId ? "未找到本次商机提报数据" : "missing pipeline run id",
+    runId,
+    sourceRunId: runId,
+    rows: [],
+    clues: [],
+    products: [],
+    prematches: [],
+    executions: [],
+    details: [],
+    summary: {},
+    scanSummary: {},
+    sourceHealth: [],
+    filters: args.filters || {},
+    matchRules: normalizeOpportunityMatchRules(args.matchRules),
+    requestPlanHash: ""
+  };
 }
 
 export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): Promise<DoudianOpportunityReportResult> {
@@ -4794,10 +5881,26 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
         diagnostic: {
           phase: storeRun.phase,
           productCount: storeRun.productCount,
+          clueCount: storeRun.clueCount,
           currentCategoryCount: storeRun.currentCategoryCount,
           effectiveCategoryCount: storeRun.effectiveCategoryCount,
           candidateCount: storeRun.candidateCount,
-          eligibleCandidateCount: storeRun.eligibleCandidateCount
+          eligibleCandidateCount: storeRun.eligibleCandidateCount,
+          alternativeCandidateCount: storeRun.alternativeCandidateCount,
+          qualifiedCandidateCount: storeRun.qualifiedCandidateCount,
+          primaryCandidateCount: storeRun.primaryCandidateCount,
+          fallbackCandidateCount: storeRun.fallbackCandidateCount,
+          plannedSubmitCandidateCount: storeRun.plannedSubmitCandidateCount,
+          primarySubmitCandidateCount: storeRun.primarySubmitCandidateCount,
+          fallbackSubmitCandidateCount: storeRun.fallbackSubmitCandidateCount,
+          dailyAttemptLimit: storeRun.dailyAttemptLimit,
+          quotaUsedBefore: storeRun.quotaUsedBefore,
+          quotaRemainingBefore: storeRun.quotaRemainingBefore,
+          quotaRemainingAfterPlan: storeRun.quotaRemainingAfterPlan,
+          quotaAttemptCount: storeRun.quotaAttemptCount,
+          quotaRemainingAfterSubmit: storeRun.quotaRemainingAfterSubmit,
+          submittedCount: storeRun.submittedCount,
+          failedCount: storeRun.failedCount
         },
         index: index + 1,
         total: storeRuns.length
@@ -4824,7 +5927,16 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
   const latestProducts = latestProduct?.products?.length ? latestProduct.products : await loadProductsForRun(latestProduct?.runId || "");
   const latestPrematches = latestPrematch?.candidates?.length ? latestPrematch.candidates : await loadPrematchesForRun(latestPrematch?.runId || "");
   const limit = dailyAttemptLimit(args, payload.adapter);
-  const used = (await listSubmitAttempts()).length;
+  const usedByShop = await submitAttemptCountsByShop();
+  const requestedShopIds = uniqueText(args.shopIds || []);
+  const latestShopIds = uniqueText([
+    ...requestedShopIds,
+    ...(latestPrematches || []).map((candidate) => candidate.shopId),
+    ...(latestExecute?.executions || []).map((execution) => execution.shopId)
+  ]);
+  const quotaShopIds = latestShopIds.length ? latestShopIds : (ledger.stores || []).map((store) => store.shopId);
+  const used = quotaShopIds.reduce((sum, shopId) => sum + (usedByShop.get(shopId) || 0), 0);
+  const remaining = quotaShopIds.reduce((sum, shopId) => sum + Math.max(0, limit - (usedByShop.get(shopId) || 0)), 0);
   return {
     ...ledger,
     ok: true,
@@ -4850,7 +5962,7 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
     requestPlanHash: latestExecute?.requestPlanHash || latestPrematch?.requestPlanHash || latestClue?.requestPlanHash || latestProduct?.requestPlanHash || "",
     dailyAttemptLimit: limit,
     dailyAttemptUsed: used,
-    dailyAttemptRemaining: Math.max(0, limit - used)
+    dailyAttemptRemaining: remaining
   };
 }
 

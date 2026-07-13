@@ -8,11 +8,13 @@ import {
 import { runFetchDoudianStoresTask } from "./storeImport";
 import { runProductCatalogSyncTask } from "./productCatalog";
 import { runRefreshDoudianStoreStatusTask } from "./storeStatus";
+import { cancelOpportunityPipelineSubmitTask, runOpportunityPipelineSubmitTask } from "./opportunityReport";
 
 interface RunningTask {
   cancelled: boolean;
   timer?: number;
   cleanup?: () => Promise<void> | void;
+  cancelCleanup?: () => Promise<void> | void;
   windows?: number[];
 }
 
@@ -83,12 +85,21 @@ function runMockLongTask(channel: BroadcastChannel, operationId: string, task: D
   tick();
 }
 
-function cancelTask(operationId: string) {
+async function cancelTask(operationId: string) {
   const task = runningTasks.get(operationId);
   if (!task) return;
   task.cancelled = true;
   if (task.timer) window.clearTimeout(task.timer);
-  void task.cleanup?.();
+  try {
+    await task.cancelCleanup?.();
+  } catch {
+    // Best-effort cleanup; the owner page also performs cancellation cleanup.
+  }
+  try {
+    await task.cleanup?.();
+  } catch {
+    // Ignore cleanup failures during cancellation.
+  }
 }
 
 async function runDomainTask(channel: BroadcastChannel, operationId: string, task: DoudianTaskRequest) {
@@ -123,6 +134,17 @@ async function runDomainTask(channel: BroadcastChannel, operationId: string, tas
         operationId,
         ...payload
       } as unknown as Parameters<typeof runProductCatalogSyncTask>[0]);
+    } else if (task.taskType === "opportunityPipelineSubmit") {
+      state.cancelCleanup = async () => {
+        await cancelOpportunityPipelineSubmitTask({
+          operationId,
+          reason: "已取消商机提报任务"
+        });
+      };
+      result = await runOpportunityPipelineSubmitTask({
+        operationId,
+        ...payload
+      } as unknown as Parameters<typeof runOpportunityPipelineSubmitTask>[0]);
     } else {
       throw new Error(`unsupported task type: ${task.taskType}`);
     }
@@ -146,7 +168,7 @@ export function installDoudianTaskRunner() {
   const isTargetTask = (operationId: string) => !runnerTaskId || operationId === runnerTaskId;
   const runnerWindow = window as typeof window & {
     __chihuDoudianTaskStart?: (message: DoudianTaskMessage) => boolean;
-    __chihuDoudianTaskCancel?: (operationId: string) => boolean;
+    __chihuDoudianTaskCancel?: (operationId: string) => boolean | Promise<boolean>;
   };
   runnerWindow.__chihuDoudianTaskStart = (message) => {
     if (message?.type !== "task:start") return false;
@@ -154,9 +176,9 @@ export function installDoudianTaskRunner() {
     if (!isTargetTask(operationId)) return false;
     return startTask(channel, message);
   };
-  runnerWindow.__chihuDoudianTaskCancel = (operationId) => {
+  runnerWindow.__chihuDoudianTaskCancel = async (operationId) => {
     if (!isTargetTask(operationId)) return false;
-    cancelTask(operationId);
+    await cancelTask(operationId);
     post(channel, { type: "task:result", operationId, resultSummary: "cancelled", result: { ok: false, status: "cancelled", message: "已取消任务" } });
     runningTasks.delete(operationId);
     return true;
@@ -169,7 +191,7 @@ export function installDoudianTaskRunner() {
       runnerWindow.__chihuDoudianTaskStart?.(message);
     }
     if (message.type === "task:cancel") {
-      runnerWindow.__chihuDoudianTaskCancel?.(message.operationId);
+      void runnerWindow.__chihuDoudianTaskCancel?.(message.operationId);
     }
   });
   return { channel, dispose: removeProgressForwarder };

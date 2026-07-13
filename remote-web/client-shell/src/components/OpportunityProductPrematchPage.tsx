@@ -6,7 +6,8 @@ import {
   RefreshCw,
   Send
 } from "lucide-react";
-import { fetchDoudianOpportunityReport, fetchDoudianOpportunityReportLatest, listDoudianOpportunityCandidatesPage, listDoudianOpportunityStoreCategories, listDoudianStores } from "../bridge/client";
+import { fetchDoudianOpportunityPipelineRun, fetchDoudianOpportunityReportLatest, listDoudianOpportunityCandidatesPage, listDoudianOpportunityStoreCategories, listDoudianStores, runDoudianOpportunityPipelineTask } from "../bridge/client";
+import { addDoudianProgressListener } from "../domain/doudian/progress";
 import { cn } from "../lib/utils";
 import type {
   DoudianOpportunityClueRow,
@@ -16,6 +17,7 @@ import type {
   DoudianOpportunityPrematchCandidate,
   DoudianOpportunityProductRow,
   DoudianOpportunityStoreCategoryLedger,
+  DoudianRunDetail,
   DoudianStoreSummary
 } from "../types";
 
@@ -58,6 +60,23 @@ const recentlyOptions: Option<number>[] = [
 ];
 
 const autoSubmitPageSize = 100;
+const defaultDailySubmitTarget = 1000;
+const storePhaseLabels: Record<string, string> = {
+  "product-scan": "同步商品",
+  "category-ledger": "类目整理",
+  "clue-load": "同步商机",
+  tokenize: "商机分词",
+  match: "匹配商机",
+  "submit-queued": "待提报",
+  submitting: "提报中",
+  finished: "完成"
+};
+const defaultMatchRules = {
+  minTokenHitRatio: 0.33,
+  minWeightHitRatio: 0.35,
+  topKPerProduct: 10,
+  genericTokenDfRatio: 0.12
+} as const;
 
 function formatNumber(value: number | undefined) {
   return Number(value || 0).toLocaleString("zh-CN");
@@ -153,13 +172,85 @@ function uniqueText(values: Array<string | undefined>) {
   return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)));
 }
 
+function detailDiagnosticOptionalNumber(detail: DoudianRunDetail | undefined, key: string) {
+  const diagnostic = (detail?.diagnostic && typeof detail.diagnostic === "object" ? detail.diagnostic : {}) as Record<string, unknown>;
+  const value = Number(diagnostic[key]);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function detailDiagnosticNumber(detail: DoudianRunDetail | undefined, key: string) {
+  return detailDiagnosticOptionalNumber(detail, key) ?? 0;
+}
+
+function detailDiagnosticText(detail: DoudianRunDetail | undefined, key: string) {
+  const diagnostic = (detail?.diagnostic && typeof detail.diagnostic === "object" ? detail.diagnostic : {}) as Record<string, unknown>;
+  return String(diagnostic[key] || "").trim();
+}
+
 function submitStatusInfo(item: DoudianOpportunityPrematchCandidate) {
   const status = String(item.submitStatus || item.status || "");
   if (item.submittedAt || status === "submitted") return { label: "已提报", className: "bg-[#eafaf0] text-[#087443]" };
   if (status === "failed") return { label: "失败", className: "bg-[#fff1ef] text-[#b42318]" };
   if (status === "skipped") return { label: "跳过", className: "bg-[#fff7e8] text-[#b54708]" };
+  if (item.alternative || status === "alternative") return { label: "备选", className: "bg-[#eef4ff] text-[#175cd3]" };
   if (item.eligible && status === "ready") return { label: "待提报", className: "bg-brand-foxSoft text-brand-fox" };
   return { label: status || "--", className: "bg-[#f2f4f7] text-[#667085]" };
+}
+
+function storeRangeStatusInfo(args: {
+  status: string;
+  phase?: string;
+  productCount: number;
+  candidateCount: number;
+  submittedCount: number;
+  failedCount: number;
+}) {
+  const status = String(args.status || "");
+  const phase = String(args.phase || "");
+  if (status === "running" && storePhaseLabels[phase]) return { label: storePhaseLabels[phase], className: "bg-[#eef4ff] text-[#175cd3]" };
+  if (status === "queued" && storePhaseLabels[phase]) return { label: storePhaseLabels[phase], className: "bg-brand-foxSoft text-brand-fox" };
+  if (status === "skipped") return { label: "已跳过", className: "bg-[#f2f4f7] text-[#667085]" };
+  if (status === "ok") return { label: "完成", className: "bg-[#eafaf0] text-[#087443]" };
+  if (status === "partial") return { label: "部分失败", className: "bg-[#fff7e8] text-[#b54708]" };
+  if (status === "failed") return { label: "失败", className: "bg-[#fff1ef] text-[#b42318]" };
+  if (status === "cancelled") return { label: "已取消", className: "bg-[#f2f4f7] text-[#667085]" };
+  if (status === "running" || status === "submitting") return { label: "提报中", className: "bg-[#eef4ff] text-[#175cd3]" };
+  if (args.failedCount > 0) return { label: "部分失败", className: "bg-[#fff7e8] text-[#b54708]" };
+  if (args.submittedCount > 0) return { label: "已提报", className: "bg-[#eafaf0] text-[#087443]" };
+  if (args.candidateCount > 0) return { label: "待提报", className: "bg-brand-foxSoft text-brand-fox" };
+  if (args.productCount > 0) return { label: "已同步", className: "bg-[#eafaf0] text-[#087443]" };
+  return { label: "待同步", className: "bg-[#f2f4f7] text-[#667085]" };
+}
+
+function pipelineLogPriority(detail: DoudianRunDetail) {
+  const status = String(detail.status || "");
+  const phase = detailDiagnosticText(detail, "phase");
+  if ((status === "running" || status === "submitting") && phase === "submitting") return 100;
+  if (status === "running" || status === "submitting") return 90;
+  if (phase === "submitting") return 85;
+  if (phase && phase !== "finished" && phase !== "submit-queued") return 70;
+  if (status === "queued" || phase === "submit-queued") return 40;
+  return 0;
+}
+
+function pipelineSnapshotLog(details: DoudianRunDetail[], summary: Record<string, number>) {
+  const activeDetail = [...details]
+    .map((detail, index) => ({ detail, index, priority: pipelineLogPriority(detail) }))
+    .filter((item) => item.priority > 0)
+    .sort((left, right) => right.priority - left.priority || left.index - right.index)[0]?.detail;
+  if (activeDetail) {
+    const phase = detailDiagnosticText(activeDetail, "phase");
+    const status = String(activeDetail.status || "");
+    const phaseText = storePhaseLabels[phase] || (status === "running" || status === "submitting" ? "提报中" : String(activeDetail.message || activeDetail.status || "处理中"));
+    return `${activeDetail.shopName || activeDetail.shopId || "店铺"}：${phaseText} · 商品 ${formatNumber(detailDiagnosticNumber(activeDetail, "productCount"))} · 商机 ${formatNumber(detailDiagnosticNumber(activeDetail, "clueCount"))} · 成功 ${formatNumber(detailDiagnosticNumber(activeDetail, "submittedCount"))} · 失败 ${formatNumber(detailDiagnosticNumber(activeDetail, "failedCount"))}`;
+  }
+  const submittedCount = Number(summary.submittedCount || 0);
+  const failedCount = Number(summary.failedCount || 0);
+  const productCount = Number(summary.productCount || 0);
+  const clueCount = Number(summary.clueCount || 0);
+  if (submittedCount || failedCount) return `提报完成：成功 ${formatNumber(submittedCount)} · 失败 ${formatNumber(failedCount)}`;
+  if (productCount || clueCount) return `已同步：商品 ${formatNumber(productCount)} · 商机 ${formatNumber(clueCount)}`;
+  return "等待一键提报";
 }
 
 export function OpportunityProductPrematchPage() {
@@ -171,6 +262,7 @@ export function OpportunityProductPrematchPage() {
   const [clues, setClues] = useState<DoudianOpportunityClueRow[]>([]);
   const [candidates, setCandidates] = useState<DoudianOpportunityPrematchCandidate[]>([]);
   const [executions, setExecutions] = useState<DoudianOpportunityExecution[]>([]);
+  const [runDetails, setRunDetails] = useState<DoudianRunDetail[]>([]);
   const [resultSummary, setResultSummary] = useState<Record<string, number>>({});
   const [productRunId, setProductRunId] = useState("");
   const [clueRunId, setClueRunId] = useState("");
@@ -179,13 +271,12 @@ export function OpportunityProductPrematchPage() {
   const [selectedReasonIds, setSelectedReasonIds] = useState<number[]>([]);
   const [selectedBenefitIds, setSelectedBenefitIds] = useState<number[]>([]);
   const [recentlyDayType, setRecentlyDayType] = useState(3);
-  const [minTokenHitRatio, setMinTokenHitRatio] = useState(0.33);
   const [skipSubmittedClueCategory, setSkipSubmittedClueCategory] = useState(false);
   const [skipSubmittedClue, setSkipSubmittedClue] = useState(false);
   const [skipSubmittedProductInSameClue, setSkipSubmittedProductInSameClue] = useState(true);
-  const [message, setMessage] = useState("等待操作");
   const [loading, setLoading] = useState<"" | "stores" | "latest" | "products" | "clues" | "match" | "submit" | "pipeline">("");
   const [pipelineInFlight, setPipelineInFlight] = useState(false);
+  const [pipelineLog, setPipelineLog] = useState("等待一键提报");
   const [activeTab, setActiveTab] = useState<"submit" | "autoSubmit">("submit");
   const [autoSubmitPage, setAutoSubmitPage] = useState(0);
   const [candidatePageCursors, setCandidatePageCursors] = useState<Array<string | null>>([null]);
@@ -193,19 +284,21 @@ export function OpportunityProductPrematchPage() {
   const [candidateHasMore, setCandidateHasMore] = useState(false);
   const [candidatePageLoading, setCandidatePageLoading] = useState(false);
   const actionLockRef = useRef(false);
+  const activePipelineOperationIdRef = useRef("");
+  const lastPipelineSnapshotRefreshRef = useRef(0);
 
   const filters = useMemo<DoudianOpportunityFilters>(() => ({
     activeKey: activeRank,
     tagIdList: selectedReasonIds,
     profitIdList: selectedBenefitIds,
     recentlyDayType,
-    cluePage: 2
+    cluePage: 5
   }), [activeRank, recentlyDayType, selectedBenefitIds, selectedReasonIds]);
 
   const matchRules = useMemo<DoudianOpportunityMatchRules>(() => ({
-    minTokenHitRatio,
+    ...defaultMatchRules,
     storeCategoryKeys: selectedStoreCategoryKeys
-  }), [minTokenHitRatio, selectedStoreCategoryKeys]);
+  }), [selectedStoreCategoryKeys]);
 
   const candidateSummary = useMemo(() => {
     let eligibleCount = 0;
@@ -226,7 +319,7 @@ export function OpportunityProductPrematchPage() {
     const loadedCount = candidates.length;
     const listTruncated = summaryNumber("candidateListTruncated", 0) > 0 || totalCount > loadedCount;
     return {
-      eligibleCount: summaryNumber("eligibleCandidateCount", eligibleCount),
+      eligibleCount: summaryNumber("plannedSubmitCandidateCount", summaryNumber("eligibleCandidateCount", eligibleCount)),
       submittedCount: summaryNumber("submittedCount", submittedCount),
       estimatedCost,
       totalCount,
@@ -234,6 +327,16 @@ export function OpportunityProductPrematchPage() {
       listTruncated
     };
   }, [candidates, resultSummary]);
+  const productTotalCount = Number(resultSummary.productCount || products.length);
+  const clueTotalCount = Number(resultSummary.clueCount || clues.length);
+  const processedStoreCount = Number(resultSummary.processedStoreCount || 0);
+  const totalStoreCount = Number(resultSummary.totalStoreCount || selectedShopIds.size);
+  const failedSubmitCount = Number(resultSummary.failedCount || 0);
+  const totalDailySubmitTarget = defaultDailySubmitTarget * Math.max(1, totalStoreCount || selectedShopIds.size || 1);
+  const summaryQuotaGap = Number(resultSummary.quotaRemainingAfterPlan);
+  const submitTargetGap = Number.isFinite(summaryQuotaGap)
+    ? Math.max(0, summaryQuotaGap)
+    : Math.max(0, totalDailySubmitTarget - candidateSummary.eligibleCount);
   const autoSubmitPageCount = Math.max(1, Math.ceil(candidateSummary.totalCount / autoSubmitPageSize));
   const safeAutoSubmitPage = Math.min(autoSubmitPage, autoSubmitPageCount - 1);
   const autoSubmitItems = candidates;
@@ -253,6 +356,55 @@ export function OpportunityProductPrematchPage() {
     for (const item of candidates) next.set(item.shopId, (next.get(item.shopId) || 0) + 1);
     return next;
   }, [candidates]);
+
+  const storeRunRows = useMemo(() => {
+    const detailsByShop = new Map(runDetails.map((detail) => [String(detail.shopId || ""), detail]));
+    const detailShopIds = new Set(runDetails.map((detail) => String(detail.shopId || "")).filter(Boolean));
+    const sourceStores = stores.length
+      ? stores
+      : runDetails.map((detail) => ({
+        shopId: String(detail.shopId || ""),
+        shopName: String(detail.shopName || "")
+      } as DoudianStoreSummary)).filter((store) => store.shopId);
+    return sourceStores
+      .filter((store) => !detailShopIds.size || detailShopIds.has(store.shopId) || selectedShopIds.has(store.shopId))
+      .map((store, index) => {
+        const detail = detailsByShop.get(store.shopId);
+        const productCount = detailDiagnosticNumber(detail, "productCount") || productCountByShop.get(store.shopId) || 0;
+        const clueCount = detailDiagnosticNumber(detail, "clueCount");
+        const candidateCount = detailDiagnosticNumber(detail, "candidateCount") || candidateCountByShop.get(store.shopId) || 0;
+        const qualifiedCandidateCount = detailDiagnosticOptionalNumber(detail, "qualifiedCandidateCount") ?? candidateCount;
+        const eligibleCount = detailDiagnosticOptionalNumber(detail, "plannedSubmitCandidateCount") ?? detailDiagnosticNumber(detail, "eligibleCandidateCount");
+        const submittedCount = detailDiagnosticNumber(detail, "submittedCount");
+        const failedCount = detailDiagnosticNumber(detail, "failedCount");
+        const dailyAttemptLimit = detailDiagnosticOptionalNumber(detail, "dailyAttemptLimit") ?? defaultDailySubmitTarget;
+        const quotaUsedBefore = detailDiagnosticNumber(detail, "quotaUsedBefore");
+        const quotaAttemptCount = detailDiagnosticOptionalNumber(detail, "quotaAttemptCount") ?? quotaUsedBefore + submittedCount + failedCount;
+        const quotaRemainingAfterSubmit = detailDiagnosticOptionalNumber(detail, "quotaRemainingAfterSubmit");
+        const quotaGap = quotaRemainingAfterSubmit ?? Math.max(0, dailyAttemptLimit - quotaAttemptCount);
+        const status = String(detail?.status || "");
+        const diagnosticPhase = detailDiagnosticText(detail, "phase");
+        const messagePhase = ["product-scan", "category-ledger", "clue-load", "tokenize", "match", "submit-queued", "submitting", "finished"].includes(String(detail?.message || ""))
+          ? String(detail?.message || "")
+          : "";
+        return {
+          shopId: store.shopId,
+          shopName: store.shopName,
+          index: detail?.index || index + 1,
+          status,
+          phase: diagnosticPhase || messagePhase,
+          productCount,
+          clueCount,
+          candidateCount,
+          qualifiedCandidateCount,
+          eligibleCount,
+          quotaAttemptCount,
+          submittedCount,
+          failedCount,
+          quotaGap
+        };
+      });
+  }, [candidateCountByShop, productCountByShop, runDetails, selectedShopIds, stores]);
 
   const categoryOptions = useMemo(() => {
     const byKey = new Map<string, { key: string; label: string; productCount: number; shopCount: number; lastSeenAt: string }>();
@@ -274,24 +426,58 @@ export function OpportunityProductPrematchPage() {
       .slice(0, 40);
   }, [storeCategories]);
 
-  const logLines = useMemo(() => {
-    const lines = [
-      `${new Date().toLocaleString("zh-CN", { hour12: false })} --- ${message}`,
-      productRunId ? `商品快照：${productRunId}` : "商品快照：未同步",
-      clueRunId ? `商机快照：${clueRunId}` : "商机快照：未扫描",
-      matchRunId ? `预匹配批次：${matchRunId}` : "预匹配批次：未生成"
-    ];
-    for (const item of executions.slice(0, 40)) {
-      const name = item.title || item.clueName || item.productId || item.clueId || item.id;
-      lines.push(`${item.ok ? "成功" : "失败"} | ${item.shopName || "--"} | ${name} | ${item.message}`);
-    }
-    return lines;
-  }, [clueRunId, executions, matchRunId, message, productRunId]);
-
   useEffect(() => {
     void refreshStores();
     void restoreLatest();
   }, []);
+
+  useEffect(() => addDoudianProgressListener((event) => {
+    const detail = event.detail;
+    if (detail.taskType !== "opportunityPipelineSubmit") return;
+    if (!activePipelineOperationIdRef.current || detail.operationId !== activePipelineOperationIdRef.current) return;
+    if (detail.status === "running") {
+      setPipelineInFlight(true);
+      setPipelineLog(`${Math.round(Number(detail.progress || 0))}% · ${detail.message || "一键提报处理中"}`);
+      const now = Date.now();
+      if (now - lastPipelineSnapshotRefreshRef.current >= 10000) {
+        lastPipelineSnapshotRefreshRef.current = now;
+        void restorePipelineRun(activePipelineOperationIdRef.current, { silent: true, includeCandidates: false, updatePipelineLog: true });
+      }
+      return;
+    }
+    actionLockRef.current = false;
+    setPipelineInFlight(false);
+    if (detail.status === "succeeded") {
+      const runId = activePipelineOperationIdRef.current;
+      activePipelineOperationIdRef.current = "";
+      lastPipelineSnapshotRefreshRef.current = 0;
+      setPipelineLog("一键提报完成，正在刷新结果");
+      void restorePipelineRun(runId);
+      return;
+    }
+    if (detail.status === "cancelled") {
+      activePipelineOperationIdRef.current = "";
+      lastPipelineSnapshotRefreshRef.current = 0;
+      setPipelineLog("一键提报已取消");
+      return;
+    }
+    setPipelineLog(detail.error ? `一键提报失败：${detail.error}` : "一键提报失败");
+  }), []);
+
+  useEffect(() => {
+    const runId = activePipelineOperationIdRef.current || matchRunId;
+    if (!pipelineInFlight || !runId) return undefined;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      if (cancelled) return;
+      lastPipelineSnapshotRefreshRef.current = Date.now();
+      void restorePipelineRun(runId, { silent: true, includeCandidates: false, updatePipelineLog: true });
+    }, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pipelineInFlight, matchRunId]);
 
   useEffect(() => {
     void refreshStoreCategories();
@@ -329,6 +515,7 @@ export function OpportunityProductPrematchPage() {
       setCandidateNextCursor(null);
       setCandidateHasMore(false);
       setResultSummary(summary);
+      setRunDetails([]);
       return;
     }
     setCandidatePageLoading(true);
@@ -363,21 +550,49 @@ export function OpportunityProductPrematchPage() {
     void loadCandidatePageForRun(matchRunId, target, cursor, resultSummary);
   }
 
+  async function applyRestoredOpportunityResult(
+    result: Awaited<ReturnType<typeof fetchDoudianOpportunityReportLatest>>,
+    options: { includeCandidates?: boolean; refreshCategories?: boolean; updatePipelineLog?: boolean } = {}
+  ) {
+    const details = Array.isArray(result.details)
+      ? result.details
+      : [...(result.details?.imported || []), ...(result.details?.failed || [])];
+    setProducts(result.products || []);
+    setClues(result.clues || []);
+    setExecutions(result.executions || []);
+    setRunDetails(details);
+    setResultSummary(result.summary || {});
+    setProductRunId(result.productRunId || "");
+    setClueRunId(result.clueRunId || "");
+    if (options.updatePipelineLog) setPipelineLog(pipelineSnapshotLog(details, result.summary || {}));
+    const runId = result.matchRunId || result.runId || "";
+    setMatchRunId(runId);
+    if (options.includeCandidates !== false) await loadCandidatePageForRun(runId, 0, null, result.summary || {});
+    if (options.refreshCategories !== false) await refreshStoreCategories();
+    return runId;
+  }
+
+  async function restorePipelineRun(runId: string, options: { silent?: boolean; includeCandidates?: boolean; updatePipelineLog?: boolean } = {}) {
+    const id = runId.trim();
+    if (!id) return;
+    if (!options.silent) setLoading((current) => current || "latest");
+    try {
+      const result = await fetchDoudianOpportunityPipelineRun({ runId: id });
+      await applyRestoredOpportunityResult(result, {
+        includeCandidates: options.includeCandidates !== false,
+        refreshCategories: options.includeCandidates !== false,
+        updatePipelineLog: options.updatePipelineLog === true
+      });
+    } finally {
+      if (!options.silent) setLoading("");
+    }
+  }
+
   async function restoreLatest() {
     setLoading((current) => current || "latest");
     try {
       const result = await fetchDoudianOpportunityReportLatest({ filters, matchRules });
-      setProducts(result.products || []);
-      setClues(result.clues || []);
-      setExecutions(result.executions || []);
-      setResultSummary(result.summary || {});
-      setProductRunId(result.productRunId || "");
-      setClueRunId(result.clueRunId || "");
-      const runId = result.matchRunId || result.runId || "";
-      setMatchRunId(runId);
-      await loadCandidatePageForRun(runId, 0, null, result.summary || {});
-      setMessage(result.message || "已恢复最近数据");
-      await refreshStoreCategories();
+      await applyRestoredOpportunityResult(result);
     } finally {
       setLoading("");
     }
@@ -407,7 +622,7 @@ export function OpportunityProductPrematchPage() {
   function runPipelineSubmit() {
     if (actionLockRef.current) return;
     if (!selectedShopIds.size) {
-      setMessage("请先选择店铺");
+      setPipelineLog("请先选择店铺");
       return;
     }
     actionLockRef.current = true;
@@ -419,10 +634,11 @@ export function OpportunityProductPrematchPage() {
     setCandidatePageCursors([null]);
     setCandidateNextCursor(null);
     setCandidateHasMore(false);
+    setRunDetails([]);
     setResultSummary({});
-    setMessage("商机提报已启动，后台正在生成候选");
-    const promise = fetchDoudianOpportunityReport({
-      mode: "pipeline-submit",
+    setPipelineLog("0% · 一键提报已启动，正在创建后台任务");
+    activePipelineOperationIdRef.current = operationId;
+    const promise = runDoudianOpportunityPipelineTask({
       shopIds: Array.from(selectedShopIds),
       filters,
       matchRules,
@@ -431,22 +647,14 @@ export function OpportunityProductPrematchPage() {
       skipSubmittedProductInSameClue,
       operationId
     });
-    promise.then(async (result) => {
-      setProducts(result.products || []);
-      setClues(result.clues || result.rows || []);
-      setExecutions(result.executions || []);
-      setResultSummary(result.summary || {});
-      setProductRunId("");
-      setClueRunId("");
-      const runId = result.runId || operationId;
-      setMatchRunId(runId);
-      await loadCandidatePageForRun(runId, 0, null, result.summary || {});
-      setMessage(result.message || "商机提报已启动");
+    promise.then((operation) => {
+      setMatchRunId(operation.operationId || operationId);
+      setPipelineLog("0% · 后台任务已创建，等待扫描店铺");
     }).catch((error) => {
-      setMessage(error instanceof Error ? error.message : String(error));
-    }).finally(() => {
+      console.error("商机提报任务启动失败", error);
       actionLockRef.current = false;
       setPipelineInFlight(false);
+      setPipelineLog(`一键提报启动失败：${error instanceof Error ? error.message : String(error)}`);
     });
   }
 
@@ -477,21 +685,21 @@ export function OpportunityProductPrematchPage() {
             </button>
           </div>
           <div className="grid shrink-0 grid-cols-4 gap-2 max-[980px]:grid-cols-2 max-[560px]:grid-cols-1">
-            <CompactMetric label="同步商品数" value={formatNumber(products.length)} detail={`${selectedShopIds.size} 家店铺`} tone="blue" />
-            <CompactMetric label="扫描商机数" value={formatNumber(clues.length)} detail={activeRank.split(",")[1] || "MATCH"} />
+            <CompactMetric label="店铺进度" value={`${formatNumber(processedStoreCount || storeRunRows.length)} / ${formatNumber(totalStoreCount || selectedShopIds.size)}`} detail={`${selectedShopIds.size} 家已选`} tone="blue" />
+            <CompactMetric label="同步商品数" value={formatNumber(productTotalCount)} detail={`商机 ${formatNumber(clueTotalCount)}`} />
             <CompactMetric
-              label="可提报候选数"
+              label="可提报商品"
               value={formatNumber(candidateSummary.eligibleCount)}
-              detail={candidateSummary.listTruncated ? `已载 ${formatNumber(candidateSummary.loadedCount)}` : `有效词 ${Math.round(minTokenHitRatio * 100)}%`}
+              detail={submitTargetGap ? `距店铺目标差 ${formatNumber(submitTargetGap)}` : "已满足店铺目标"}
               tone="green"
             />
-            <CompactMetric label="已提报商品数" value={formatNumber(candidateSummary.submittedCount)} detail={`预计 ${formatNumber(candidateSummary.estimatedCost)} 次`} />
+            <CompactMetric label="已提报商品" value={formatNumber(candidateSummary.submittedCount)} detail={`失败 ${formatNumber(failedSubmitCount)}`} />
           </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-hidden p-3">
           {activeTab === "submit" ? (
-            <div className="grid h-full min-h-0 grid-cols-[320px_minmax(0,1fr)_320px] gap-3 max-[1120px]:grid-cols-1">
+            <div className="grid h-full min-h-0 grid-cols-[620px_minmax(0,1fr)] gap-3 max-[1280px]:grid-cols-1">
               <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-brand-line bg-white">
                 <div className="flex min-h-[44px] shrink-0 items-center justify-between border-b border-[#edf1f6] bg-[#fbfcff] px-3">
                   <strong className="text-[14px] text-brand-navy">店铺范围</strong>
@@ -506,29 +714,36 @@ export function OpportunityProductPrematchPage() {
                     </label>
                   </div>
                 </div>
-                <div className="grid min-h-[38px] shrink-0 grid-cols-[44px_minmax(0,1fr)_96px] items-center border-b border-[#edf1f6] bg-[#fbfcff] text-[12px] font-semibold text-[#667085]">
+                <div className="grid min-h-[38px] shrink-0 grid-cols-[60px_minmax(120px,1fr)_78px_68px_68px_82px_82px] items-center border-b border-[#edf1f6] bg-[#fbfcff] text-[12px] font-semibold text-[#667085]">
                   <span className="text-center">序号</span>
                   <span className="px-3">店铺名称</span>
                   <span className="text-center">状态</span>
+                  <span className="px-2 text-right">商品数</span>
+                  <span className="px-2 text-right">商机数</span>
+                  <span className="px-2 text-right">成功提报</span>
+                  <span className="px-2 text-right">失败提报</span>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
-                  {stores.map((store, index) => {
-                    const productCount = productCountByShop.get(store.shopId) || 0;
-                    const candidateCount = candidateCountByShop.get(store.shopId) || 0;
-                    const status = candidateCount ? `${candidateCount}个` : productCount ? "已同步" : "待同步";
+                  {storeRunRows.map((row) => {
+                    const statusInfo = storeRangeStatusInfo(row);
                     return (
-                      <label className="grid min-h-[42px] cursor-pointer grid-cols-[44px_minmax(0,1fr)_96px] items-center border-b border-[#edf1f6] text-[13px] text-[#344054] hover:bg-[#fffaf7]" key={store.shopId}>
-                        <span className="flex items-center justify-center gap-2">
-                          <input checked={selectedShopIds.has(store.shopId)} className="size-4 accent-brand-fox" type="checkbox" onChange={() => toggleStore(store.shopId)} />
+                      <label className="grid min-h-[42px] cursor-pointer grid-cols-[60px_minmax(120px,1fr)_78px_68px_68px_82px_82px] items-center border-b border-[#edf1f6] text-[12px] text-[#344054] hover:bg-[#fffaf7]" key={row.shopId}>
+                        <span className="flex items-center justify-center gap-1.5">
+                          <input checked={selectedShopIds.has(row.shopId)} className="size-4 accent-brand-fox" type="checkbox" onChange={() => toggleStore(row.shopId)} />
+                          <span className="font-semibold text-[#667085]">{row.index}</span>
                         </span>
-                        <span className="min-w-0 truncate px-3 font-semibold" title={store.shopName}>{index + 1}. {store.shopName}</span>
+                        <span className="min-w-0 truncate px-3 font-semibold text-[13px]" title={row.shopName}>{row.shopName}</span>
                         <span className="px-2 text-center">
-                          <span className={cn("inline-flex rounded-md px-2 py-0.5 text-[12px] font-semibold", candidateCount ? "bg-brand-foxSoft text-brand-fox" : productCount ? "bg-[#eafaf0] text-[#087443]" : "bg-[#f2f4f7] text-[#667085]")}>{status}</span>
+                          <span className={cn("inline-flex rounded-md px-2 py-0.5 text-[12px] font-semibold", statusInfo.className)}>{statusInfo.label}</span>
                         </span>
+                        <span className="px-2 text-right font-semibold text-[#475467]">{formatNumber(row.productCount)}</span>
+                        <span className="px-2 text-right font-semibold text-[#475467]">{formatNumber(row.clueCount)}</span>
+                        <span className="px-2 text-right font-semibold text-[#087443]">{formatNumber(row.submittedCount)}</span>
+                        <span className="px-2 text-right font-semibold text-[#b42318]">{formatNumber(row.failedCount)}</span>
                       </label>
                     );
                   })}
-                  {!stores.length ? <div className="p-4 text-[13px] text-[#667085]">暂无店铺台账</div> : null}
+                  {!storeRunRows.length ? <div className="p-4 text-[13px] text-[#667085]">暂无店铺台账</div> : null}
                 </div>
               </section>
 
@@ -536,33 +751,24 @@ export function OpportunityProductPrematchPage() {
                 <div className="min-h-0 flex-1 overflow-auto p-3">
                   <div className="grid gap-3">
                     <div className="grid gap-3 rounded-md border border-[#ffdcca] bg-[#fffaf7] p-3">
-                      <div className="flex items-center justify-end">
+                      <div className="flex min-h-[40px] items-center gap-3">
                         <button className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md bg-brand-fox px-4 text-[14px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] transition-colors hover:bg-brand-foxHover disabled:opacity-50" type="button" onClick={runPipelineSubmit} disabled={busy || pipelineBusy || !selectedShopIds.size}>
                           {pipelineBusy ? <Loader2 className="size-[16px] animate-spin" strokeWidth={2} /> : <Send className="size-[16px]" strokeWidth={2} />}
                           {pipelineBusy ? "后台运行" : "一键提报"}
                         </button>
+                        <div className={cn("flex min-w-0 flex-1 items-center gap-2 rounded-md border px-3 py-2 text-[12px] font-semibold", pipelineBusy ? "border-[#fedf89] bg-[#fffbeb] text-[#b54708]" : "border-[#edf1f6] bg-white text-[#667085]")}>
+                          {pipelineBusy ? <Loader2 className="size-[14px] shrink-0 animate-spin" strokeWidth={2} /> : <span className="size-2 shrink-0 rounded-full bg-[#98a2b3]" />}
+                          <span className="min-w-0 truncate" title={pipelineLog}>{pipelineLog}</span>
+                        </div>
                       </div>
                     </div>
 
                     <div className="grid gap-3 rounded-md border border-[#edf1f6] bg-white p-3">
-                      <strong className="text-[14px] text-brand-navy">配置</strong>
-                      <div className="grid grid-cols-[150px_minmax(220px,1fr)] gap-3 max-[760px]:grid-cols-1">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <strong className="text-[14px] text-brand-navy">提报设置</strong>
+                      </div>
+                      <div className="grid max-w-[180px] gap-3">
                         <SelectField label="上新时间" value={recentlyDayType} options={recentlyOptions} onChange={setRecentlyDayType} />
-                        <label className="grid min-w-[220px] gap-2">
-                          <div className="flex items-center justify-between gap-3 text-[13px] font-semibold text-[#475467]">
-                            <span>有效词命中比例</span>
-                            <span className="rounded-md bg-brand-foxSoft px-2 py-1 text-brand-fox">{Math.round(minTokenHitRatio * 100)}%</span>
-                          </div>
-                          <input
-                            className="w-full accent-brand-fox"
-                            max={100}
-                            min={10}
-                            step={1}
-                            type="range"
-                            value={Math.round(minTokenHitRatio * 100)}
-                            onChange={(event) => setMinTokenHitRatio(Number(event.target.value) / 100)}
-                          />
-                        </label>
                       </div>
                       <div className="grid gap-2">
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -614,21 +820,6 @@ export function OpportunityProductPrematchPage() {
                 </div>
               </section>
 
-              <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-brand-line bg-white">
-                <div className="flex min-h-[44px] shrink-0 items-center justify-between border-b border-[#edf1f6] bg-[#fbfcff] px-3">
-                  <strong className="text-[14px] text-brand-navy">运行日志</strong>
-                  <span className={cn("max-w-[190px] truncate rounded-md px-2 py-1 text-[12px] font-semibold", busy ? "bg-[#fff7e8] text-[#b54708]" : "bg-[#f2f4f7] text-[#667085]")}>{message}</span>
-                </div>
-                <div className="min-h-0 flex-1 overflow-auto bg-[#fcfdff] p-3 font-mono text-[12px] leading-5 text-brand-navy">
-                  {busy ? (
-                    <div className="mb-2 flex items-center gap-2 text-[#b54708]">
-                      <Loader2 className="size-[15px] animate-spin" strokeWidth={2} />
-                      <span>{message}</span>
-                    </div>
-                  ) : null}
-                  {logLines.map((line, index) => <div className="whitespace-pre-wrap break-words" key={`${line}-${index}`}>{line}</div>)}
-                </div>
-              </section>
             </div>
           ) : (
             <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-brand-line bg-white">
@@ -667,20 +858,25 @@ export function OpportunityProductPrematchPage() {
               </div>
               <div className="min-h-0 flex-1 overflow-auto">
                 {autoSubmitItems.length ? (
-                  <table className="min-w-[1040px] w-full border-separate border-spacing-0 text-left">
+                  <table className="min-w-[1120px] w-full border-separate border-spacing-0 text-left">
                     <thead className="sticky top-0 z-10 bg-[#fbfcff] text-[12px] font-semibold text-[#667085]">
                       <tr>
                         <th className="w-[320px] border-b border-[#edf1f6] px-3 py-2.5">商品</th>
                         <th className="w-[170px] border-b border-[#edf1f6] px-3 py-2.5">店铺</th>
-                        <th className="w-[240px] border-b border-[#edf1f6] px-3 py-2.5">匹配商机</th>
-                        <th className="border-b border-[#edf1f6] px-3 py-2.5">商机词 / 命中词</th>
+                        <th className="w-[260px] border-b border-[#edf1f6] px-3 py-2.5">匹配商机</th>
+                        <th className="border-b border-[#edf1f6] px-3 py-2.5">命中证据</th>
                         <th className="w-[130px] border-b border-[#edf1f6] px-3 py-2.5">状态</th>
                       </tr>
                     </thead>
                     <tbody className="text-[13px]">
                       {autoSubmitItems.map((item) => {
                         const status = submitStatusInfo(item);
-                        const clueWords = uniqueText([...(item.clueWords || []), ...(item.matchedWords || [])]).slice(0, 8);
+                        const matchedTokens = uniqueText([...(item.matchedTokens || []), ...(item.matchedWords || [])]).slice(0, 8);
+                        const clueWords = uniqueText(item.clueWords || []).filter((word) => !matchedTokens.includes(word)).slice(0, 6);
+                        const strongCount = item.strongMatchedTokens?.length || 0;
+                        const genericCount = item.genericMatchedTokens?.length || 0;
+                        const evidenceCount = Math.max(matchedTokens.length, strongCount + genericCount);
+                        const weightRatio = Math.round(Number(item.matchedWeightRatio || item.tokenHitRatio || 0) * 100);
                         return (
                           <tr className="hover:bg-[#fffaf7]" key={item.id}>
                             <td className="border-b border-[#edf1f6] px-3 py-3 align-top">
@@ -691,12 +887,21 @@ export function OpportunityProductPrematchPage() {
                             <td className="border-b border-[#edf1f6] px-3 py-3 align-top">
                               <strong className="block truncate text-[#344054]" title={item.clueName}>{item.clueName || "--"}</strong>
                               <span className="mt-1 block truncate text-[12px] text-[#667085]" title={item.clueCategoryName}>{item.clueCategoryName || "--"}</span>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                <span className="rounded-md bg-[#f2f4f7] px-1.5 py-0.5 text-[11px] font-semibold text-[#475467]">#{item.rankForProduct || 1}</span>
+                                <span className="rounded-md bg-brand-foxSoft px-1.5 py-0.5 text-[11px] font-semibold text-brand-fox">{formatNumber(item.matchScore)}分</span>
+                                <span className="rounded-md bg-[#eef4ff] px-1.5 py-0.5 text-[11px] font-semibold text-[#175cd3]">{weightRatio}%</span>
+                              </div>
                             </td>
                             <td className="border-b border-[#edf1f6] px-3 py-3 align-top">
                               <div className="flex flex-wrap gap-1">
-                                {clueWords.map((word) => <span className="rounded-md bg-[#eafaf0] px-1.5 py-0.5 text-[11px] font-semibold text-[#087443]" key={`${item.id}-${word}`}>{word}</span>)}
-                                {!clueWords.length ? <span className="text-[12px] text-[#98a2b3]">--</span> : null}
+                                {matchedTokens.map((word) => <span className="rounded-md bg-[#eafaf0] px-1.5 py-0.5 text-[11px] font-semibold text-[#087443]" key={`${item.id}-hit-${word}`}>{word}</span>)}
+                                {clueWords.map((word) => <span className="rounded-md bg-[#f2f4f7] px-1.5 py-0.5 text-[11px] font-semibold text-[#667085]" key={`${item.id}-word-${word}`}>{word}</span>)}
+                                {!matchedTokens.length && !clueWords.length ? <span className="text-[12px] text-[#98a2b3]">--</span> : null}
                               </div>
+                              <span className="mt-1 block text-[12px] font-semibold text-[#667085]">
+                                命中 {formatNumber(evidenceCount)} 个词 · {item.fullClueNameMatched ? "完整匹配" : "部分匹配"}
+                              </span>
                             </td>
                             <td className="border-b border-[#edf1f6] px-3 py-3 align-top">
                               <span className={cn("inline-flex rounded-md px-2 py-1 text-[12px] font-semibold", status.className)}>{status.label}</span>

@@ -19,6 +19,7 @@ import {
   type DoudianTaskMessage,
   type DoudianTaskRequest
 } from "./progress";
+import { cancelOpportunityPipelineSubmitTask } from "./opportunityReport";
 import type { DoudianStoreResult } from "../../types";
 
 const runnerWindows = new Map<string, number>();
@@ -269,8 +270,18 @@ async function stopRunnerWindow(operationId: string) {
   runnerWindows.delete(operationId);
 }
 
+async function cleanupCancelledDoudianTask(record: DoudianOperationRecord | null | undefined) {
+  if (record?.taskType !== "opportunityPipelineSubmit") return;
+  await cancelOpportunityPipelineSubmitTask({
+    operationId: record.operationId,
+    reason: "已取消商机提报任务"
+  }).catch(() => undefined);
+}
+
 export async function cancelDoudianTask(operationId: string) {
+  const existing = await getOperation(operationId);
   await stopRunnerWindow(operationId);
+  await cleanupCancelledDoudianTask(existing);
   const record = await markOperationCancelled(operationId);
   dispatchDoudianProgress({
     operationId,

@@ -32,6 +32,7 @@ import {
   fetchBusinessDataLatest,
   fetchFundsData,
   fetchFundsDataLatest,
+  fetchOpportunityPipelineRun,
   fetchOpportunityReport,
   fetchOpportunityReportLatest,
   listOpportunityPipelineCandidatesPage,
@@ -41,11 +42,13 @@ import {
   fetchViolationsDataLatest,
   listStoreLedger,
   openStoreWindow,
+  startDoudianTask,
   runDoudianStoreTask,
   cancelDoudianTask,
   renameStoreGroup,
   runProductCatalogSyncTask,
-  updateStoreGroup
+  updateStoreGroup,
+  type DoudianOperationRecord
 } from "../domain/doudian";
 import { selectAndParseCompassFile as selectAndParseCompassFileRemote } from "../domain/doudian/fileImport";
 import { withDoudianAdapter } from "./doudianAdapter";
@@ -465,6 +468,49 @@ export async function fetchDoudianOpportunityReport(args: {
   return fetchOpportunityReport(nextArgs);
 }
 
+export async function runDoudianOpportunityPipelineTask(args: {
+  shopIds?: string[];
+  filters?: DoudianOpportunityFilters;
+  matchRules?: DoudianOpportunityMatchRules;
+  submitMode?: DoudianOpportunitySubmitMode;
+  goodsMatchType?: DoudianOpportunityGoodsMatchType;
+  matchMode?: DoudianOpportunityPrematchMode;
+  titleMatchMode?: DoudianOpportunityTitleMatchMode;
+  titleUpdatePosition?: DoudianOpportunityTitleUpdatePosition;
+  skipSubmittedClueCategory?: boolean;
+  skipSubmittedClue?: boolean;
+  skipSubmittedProductInSameClue?: boolean;
+  operationId?: string;
+  forceAdapter?: boolean;
+} = {}): Promise<DoudianOperationRecord> {
+  const nextArgs = await withDoudianAdapter({
+    mode: "pipeline-submit",
+    shopIds: args.shopIds || [],
+    ...(args.filters ? { filters: args.filters } : {}),
+    ...(args.matchRules ? { matchRules: args.matchRules } : {}),
+    ...(args.submitMode ? { submitMode: args.submitMode } : {}),
+    ...(args.goodsMatchType ? { goodsMatchType: args.goodsMatchType } : {}),
+    ...(args.matchMode ? { matchMode: args.matchMode } : {}),
+    ...(args.titleMatchMode ? { titleMatchMode: args.titleMatchMode } : {}),
+    ...(args.titleUpdatePosition ? { titleUpdatePosition: args.titleUpdatePosition } : {}),
+    ...(args.skipSubmittedClueCategory !== undefined ? { skipSubmittedClueCategory: args.skipSubmittedClueCategory } : {}),
+    ...(args.skipSubmittedClue !== undefined ? { skipSubmittedClue: args.skipSubmittedClue } : {}),
+    ...(args.skipSubmittedProductInSameClue !== undefined ? { skipSubmittedProductInSameClue: args.skipSubmittedProductInSameClue } : {}),
+    ...(args.operationId ? { operationId: args.operationId } : {})
+  }, { force: args.forceAdapter === true });
+  return startDoudianTask({
+    taskType: "opportunityPipelineSubmit",
+    operationId: args.operationId,
+    adapterVersion: nextArgs.doudianAdapter.adapter.version,
+    ruleVersion: nextArgs.doudianAdapter.scripts?.version || "",
+    metadata: {
+      shopCount: nextArgs.shopIds?.length || 0,
+      mode: "pipeline-submit"
+    },
+    payload: nextArgs
+  });
+}
+
 export async function fetchDoudianOpportunityReportLatest(args: {
   filters?: DoudianOpportunityFilters;
   matchRules?: DoudianOpportunityMatchRules;
@@ -476,6 +522,21 @@ export async function fetchDoudianOpportunityReportLatest(args: {
     ...(args.matchRules ? { matchRules: args.matchRules } : {})
   }, { force: args.forceAdapter === true });
   return fetchOpportunityReportLatest(nextArgs);
+}
+
+export async function fetchDoudianOpportunityPipelineRun(args: {
+  runId?: string;
+  filters?: DoudianOpportunityFilters;
+  matchRules?: DoudianOpportunityMatchRules;
+  forceAdapter?: boolean;
+} = {}): Promise<DoudianOpportunityReportResult> {
+  const nextArgs = await withDoudianAdapter({
+    mode: "latest",
+    ...(args.runId ? { runId: args.runId, operationId: args.runId } : {}),
+    ...(args.filters ? { filters: args.filters } : {}),
+    ...(args.matchRules ? { matchRules: args.matchRules } : {})
+  }, { force: args.forceAdapter === true });
+  return fetchOpportunityPipelineRun(nextArgs);
 }
 
 export async function listDoudianOpportunityCandidatesPage(args: {

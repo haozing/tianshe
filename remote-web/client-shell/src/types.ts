@@ -784,6 +784,27 @@ export interface DoudianOpportunityFilters {
 export interface DoudianOpportunityMatchRules {
   storeCategoryKeys?: string[];
   minTokenHitRatio?: number;
+  minWeightHitRatio?: number;
+  topKPerProduct?: number;
+  genericTokenDfRatio?: number;
+}
+
+export interface MatchDiagnostics {
+  productCount: number;
+  clueCount: number;
+  tokenCount: number;
+  titleScannedCount: number;
+  tokenHitCount: number;
+  rawPairCount: number;
+  passedThresholdCount: number;
+  persistedCandidateCount: number;
+  eligibleCandidateCount: number;
+  alternativeCandidateCount: number;
+  filteredByNoTokenCount: number;
+  filteredByWeakSingleTokenCount: number;
+  filteredByThresholdCount: number;
+  filteredByGenericOnlyCount: number;
+  droppedByTopKCount: number;
 }
 
 export interface DoudianOpportunityStoreCategoryLedger {
@@ -899,6 +920,14 @@ export interface DoudianOpportunityPrematchCandidate {
   matchedTokenCount?: number;
   requiredTokenHits?: number;
   tokenHitRatio?: number;
+  rankForProduct?: number;
+  alternative?: boolean;
+  matchedTokenWeight?: number;
+  matchedWeightRatio?: number;
+  strongMatchedTokens?: string[];
+  genericMatchedTokens?: string[];
+  fullClueNameMatched?: boolean;
+  matchDiagnostics?: MatchDiagnostics;
   minTokenHitRatio?: number;
   matchRulesHash?: string;
   pipelineRunId?: string;
@@ -908,6 +937,8 @@ export interface DoudianOpportunityPrematchCandidate {
   effectiveCategoryKey?: string;
   submitStatus?: string;
   submitTaskId?: string;
+  submitPriority?: "primary" | "fallback" | string;
+  fallbackSubmit?: boolean;
   submittedAt?: string;
   matchMode: DoudianOpportunityPrematchMode;
   matchScore: number;
