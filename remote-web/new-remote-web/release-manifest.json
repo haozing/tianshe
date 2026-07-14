@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026.07.04.client-shell",
-  "buildTime": "2026-07-14T08:35:52.531Z",
+  "releaseId": "2026.07.14.client-shell.2.1.10-phase2",
+  "buildTime": "2026-07-14T09:30:54.697Z",
   "entry": {
     "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
   },
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "f9d4970a7e00ea70bd6e35e787175fad24ef4cc180f08c6b0b94b90a6c2a01df"
+      "sha256": "6334bdad83303a5c6b36d5cb2655519c4c4f45c344e0168abc5059f7eac44de3"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,7 +36,7 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "efa65d6953579e515b2393c2f4ca8e4d19bff690cc0477f95cfbcccd0442b76f"
+      "sha256": "7b4f2abc136143f005af24a0d598689e8247d92728e34a001327649b05e6ace1"
     },
     {
       "path": "new-remote-web/styles.css",
@@ -71,7 +71,7 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "287f3f3c40cd1332d58e5573e70752b92fefa2f17d629e3eec38705aae672039"
+      "sha256": "0a67f283918cf7973f64bae867f596783d9044f2ea38d1ba99b7555449f41ca9"
     },
     {
       "path": "new-remote-web/config/doudian-adapter.json",
@@ -85,7 +85,7 @@
       "type": "update-notes",
       "cache": "no-cache",
       "required": true,
-      "sha256": "5f5afc2ed464c0ccabf1fe1c92aa5fd966b35d136bb55fa38cf0e0061d2afc88"
+      "sha256": "fbf3bbc30c69a10936d74b43287fe792bb0d6b7da3fe375cdbf344f7a63f77a5"
     },
     {
       "path": "new-remote-web/config/invalid-config.json",
@@ -115,5 +115,12 @@
     "single active entry only; no secondary entry is part of the active baseline",
     "Chihu config references this manifest",
     "Release artifact records sha256 for every required file"
-  ]
+  ],
+  "signature": {
+    "schemaVersion": 1,
+    "algorithm": "ed25519",
+    "keyId": "chihu-remote-web-ed25519-2026-07",
+    "payloadSha256": "a1f0957012982ae755ac33b449404757afacf804b595b2d25b393a0dfd1f1db9",
+    "value": "HmDAbkof0FudYEot78uSzIsLKToC54Bj0hcn44TQCgZRCE7uStOhjEpr8gwOJ+vVnI4QWj4AjpBPOX8eNJ1tAw=="
+  }
 }

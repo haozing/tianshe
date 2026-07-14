@@ -11,6 +11,8 @@ electron-client/out/
 electron-client/dist/
 electron-client/release/
 electron-client/license-config.local.json
+remote-web/signing-key.local.pem
+remote-web/*.private.pem
 node_modules/
 .env
 .env.*

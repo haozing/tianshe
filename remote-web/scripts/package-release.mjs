@@ -332,6 +332,7 @@ const report = {
   hashedAssets: hashedAssetsReport,
   entry: releaseCheck.entry,
   chihuConfig: releaseCheck.chihuConfig,
+  signature: releaseCheck.signature || null,
   rollback: releaseCheck.rollback,
   coexistence,
   artifacts: includedArtifacts,

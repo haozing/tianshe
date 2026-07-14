@@ -16,6 +16,7 @@ const { installSmokeCheck } = require("./smoke/install-smoke-check");
 const { registerIpcHandlers } = require("./ipc");
 const { installLicenseIpcGuard } = require("./license/ipc-guard");
 const { stopNativeDataService } = require("./database");
+const { verifyRemoteWebEntry, remoteIntegrityErrorDataUrl } = require("./security/remote-web-integrity");
 
 app.commandLine.appendSwitch("ignore-certificate-errors", "true");
 if (process.env.CHIHU_ENABLE_GPU === "1") {
@@ -41,6 +42,20 @@ let mainWindow = null;
 
 function getMainWindow() {
   return mainWindow;
+}
+
+async function loadHomeUrl(window, url) {
+  try {
+    const integrity = await verifyRemoteWebEntry(url);
+    if (integrity && !integrity.skipped) {
+      console.log(`[remote-web] verified ${integrity.releaseId} ${integrity.artifactCount} artifacts ${integrity.totalBytes} bytes`);
+    }
+    return window.loadURL(url);
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    console.error(`[remote-web] integrity check failed: ${message}`);
+    return window.loadURL(remoteIntegrityErrorDataUrl(url, error));
+  }
 }
 
 function createMainWindow() {
@@ -79,7 +94,9 @@ function createMainWindow() {
   });
 
   installSmokeCheck(mainWindow);
-  mainWindow.loadURL(HOME_INDEX_URL);
+  loadHomeUrl(mainWindow, HOME_INDEX_URL).catch((error) => {
+    console.error("[remote-web] load failed:", error && error.message ? error.message : error);
+  });
   return mainWindow;
 }
 
@@ -128,7 +145,7 @@ function registerMainWindowHandlers() {
       return win.loadFile(path.resolve(args.file));
     }
 
-    return win.loadURL(args.url || HOME_INDEX_URL);
+    return loadHomeUrl(win, args.url || HOME_INDEX_URL);
   });
 
   ipcMain.handle("resetMainWindow", async (_event, args = {}) => {

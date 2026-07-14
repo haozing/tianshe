@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "productName": "赤狐管家",
-  "currentVersion": "2.1.9-phase2",
+  "currentVersion": "2.1.10-phase2",
   "updatedAt": "2026-07-14T10:55:00+08:00",
   "summary": "本次更新修复 Windows 桌面快捷方式图标显示偏小的问题，并重新发布桌面安装包更新通道。",
   "releases": [
     {
-      "version": "2.1.9-phase2",
+      "version": "2.1.10-phase2",
       "date": "2026-07-14",
       "sections": [
         {
@@ -26,7 +26,7 @@
         {
           "title": "发布",
           "items": [
-            "桌面安装包版本提升到 2.1.9-phase2，客户端检查更新时可以识别到新版本。",
+            "桌面安装包版本提升到 2.1.10-phase2，客户端检查更新时可以识别到新版本。",
             "同步更新远程更新说明，用户菜单中的更新说明会显示本次变更。"
           ]
         }

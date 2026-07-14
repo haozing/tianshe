@@ -1,15 +1,17 @@
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const root = resolve(__dirname, "..");
+const repoRoot = resolve(root, "..");
 const artifactsDir = join(root, "artifacts");
 const manifestPath = join(root, "new-remote-web", "release-manifest.json");
 const chihuConfigPath = join(root, "new-remote-web", "config", "chihu-config.json");
 const doudianAdapterPath = join(root, "new-remote-web", "config", "doudian-adapter.json");
 const outputPath = join(artifactsDir, "release-check.json");
+const publicKeyPath = join(repoRoot, "electron-client", "src", "main", "security", "remote-web-public-key.pem");
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -17,6 +19,23 @@ function readJson(path) {
 
 function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function sha256Text(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  const keys = Object.keys(value).filter((key) => value[key] !== undefined).sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+}
+
+function unsignedManifestForSigning(manifest) {
+  const unsigned = JSON.parse(JSON.stringify(manifest));
+  delete unsigned.signature;
+  return unsigned;
 }
 
 function assert(condition, message) {
@@ -45,8 +64,40 @@ function isSha256(value) {
   return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value);
 }
 
+function isBase64(value) {
+  return typeof value === "string" && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+
 function hasText(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function verifyManifestSignature(manifest) {
+  assert(existsSync(publicKeyPath), `remote web public key is missing: ${publicKeyPath}`);
+  const signature = manifest.signature || {};
+  assert(signature.schemaVersion === 1, "manifest signature schemaVersion must be 1");
+  assert(signature.algorithm === "ed25519", "manifest signature algorithm must be ed25519");
+  assert(hasText(signature.keyId), "manifest signature keyId is required");
+  assert(isBase64(signature.value), "manifest signature value must be base64");
+
+  const payload = canonicalJson(unsignedManifestForSigning(manifest));
+  const payloadSha256 = sha256Text(payload);
+  if (signature.payloadSha256) {
+    assert(signature.payloadSha256 === payloadSha256, "manifest signature payloadSha256 mismatch");
+  }
+
+  const ok = verify(
+    null,
+    Buffer.from(payload, "utf8"),
+    createPublicKey(readFileSync(publicKeyPath, "utf8")),
+    Buffer.from(signature.value, "base64")
+  );
+  assert(ok, "manifest signature verification failed");
+  return {
+    keyId: signature.keyId,
+    algorithm: signature.algorithm,
+    payloadSha256
+  };
 }
 
 function hasStringItems(value) {
@@ -117,6 +168,7 @@ assert(manifest.schemaVersion === 1, "release manifest schemaVersion must be 1")
 assert(typeof manifest.releaseId === "string" && manifest.releaseId, "releaseId is required");
 assert(Array.isArray(manifest.artifacts) && manifest.artifacts.length > 0, "release artifacts are required");
 assert(manifest.rollback && manifest.rollback.config && manifest.rollback.resource && manifest.rollback.shell, "rollback matrix is incomplete");
+const manifestSignature = verifyManifestSignature(manifest);
 
 assert(chihuConfig.assets && typeof chihuConfig.assets.manifestUrl === "string" && chihuConfig.assets.manifestUrl.endsWith("release-manifest.json"), "chihu config must reference release manifest");
 assert(chihuConfig.entry && typeof chihuConfig.entry.newRemoteOrigin === "string" && chihuConfig.entry.newRemoteOrigin, "chihu config newRemoteOrigin is required");
@@ -195,6 +247,7 @@ const report = {
     blockedSchemes: doudianAdapter.blockedSchemes.length,
     responseMappings: Object.keys(doudianAdapter.responseMappings || {}).length
   },
+  signature: manifestSignature,
   rollback: manifest.rollback,
   artifacts: checkedArtifacts
 };

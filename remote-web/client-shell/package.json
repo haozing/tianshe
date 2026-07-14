@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "build:release": "npm run build && npm run release:sync",
+    "build:release": "npm run build && npm run obfuscate:release && npm run release:sync",
+    "obfuscate:release": "node ../scripts/obfuscate-release.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "release:sync": "node ../scripts/update-release-manifest.mjs",
     "typecheck": "tsc --noEmit"
@@ -30,6 +31,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.21",
+    "javascript-obfuscator": "^4.2.2",
     "postcss": "^8.5.6",
     "typescript": "^5.8.3"
   }

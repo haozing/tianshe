@@ -40,6 +40,13 @@ export interface ReleaseManifest {
   schemaVersion: 1;
   releaseId: string;
   buildTime: string;
+  signature?: {
+    schemaVersion: 1;
+    algorithm: "ed25519";
+    keyId: string;
+    payloadSha256: string;
+    value: string;
+  };
   artifacts: Array<{
     path: string;
     type: string;
