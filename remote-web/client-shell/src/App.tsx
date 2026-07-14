@@ -3,6 +3,13 @@ import { defaultConfig, loadConfig, loadManifest, RELEASE_MANIFEST_URL } from ".
 import { runBridgeSelfCheck } from "./bridge/client";
 import { getDoudianAdapterStatus, loadDoudianAdapterPayload } from "./bridge/doudianAdapter";
 import {
+  checkLicense,
+  getLicenseStatus,
+  initialLicenseStatus,
+  redeemLicense,
+  type LicenseStatus
+} from "./bridge/license";
+import {
   initStorage,
   refreshStorageHealth,
   STORAGE_KEY_DIAGNOSTICS,
@@ -33,6 +40,7 @@ import { BusinessDataPage } from "./components/BusinessDataPage";
 import { BulkDeletePage } from "./components/BulkDeletePage";
 import { FundsDataPage } from "./components/FundsDataPage";
 import { HomePage } from "./components/HomePage";
+import { LicenseGateScreen, LicenseRenewDialog } from "./components/LicenseGate";
 import { ModulePage } from "./components/ModulePage";
 import { OpportunityProductPrematchPage } from "./components/OpportunityProductPrematchPage";
 import { ShellHeader } from "./components/ShellHeader";
@@ -85,6 +93,11 @@ export function App() {
     route: currentRoute(),
     workspace: initStorage()
   }));
+  const [licenseStatus, setLicenseStatus] = useState<LicenseStatus>(initialLicenseStatus);
+  const [licenseChecking, setLicenseChecking] = useState(true);
+  const [licenseRedeeming, setLicenseRedeeming] = useState(false);
+  const [licenseMessage, setLicenseMessage] = useState("");
+  const [licenseDialogOpen, setLicenseDialogOpen] = useState(false);
 
   const moduleMap = useMemo(() => new Map(allModules.map((item) => [item.route, item])), []);
 
@@ -144,6 +157,64 @@ export function App() {
       delete window.chihuDoudianStoreRuntime;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function bootLicense() {
+      setLicenseChecking(true);
+      setLicenseMessage("");
+      const stored = await getLicenseStatus();
+      if (!cancelled) setLicenseStatus(stored);
+      const checked = await checkLicense("startup");
+      if (!cancelled) {
+        setLicenseStatus(checked);
+        setLicenseMessage(checked.licensed ? "" : checked.message || "");
+        setLicenseChecking(false);
+      }
+    }
+
+    void bootLicense().catch((error) => {
+      if (!cancelled) {
+        setLicenseStatus({
+          ...initialLicenseStatus,
+          status: "error",
+          reason: "LICENSE_CHECK_FAILED",
+          message: error instanceof Error ? error.message : String(error)
+        });
+        setLicenseChecking(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function refreshLicense(scene = "manual_refresh") {
+    setLicenseChecking(true);
+    setLicenseMessage("");
+    try {
+      const checked = await checkLicense(scene);
+      setLicenseStatus(checked);
+      setLicenseMessage(checked.licensed ? "授权状态已刷新" : checked.message || "");
+      return checked;
+    } finally {
+      setLicenseChecking(false);
+    }
+  }
+
+  async function submitLicenseCard(cardKey: string) {
+    setLicenseRedeeming(true);
+    setLicenseMessage("");
+    try {
+      const redeemed = await redeemLicense(cardKey);
+      setLicenseStatus(redeemed);
+      setLicenseMessage(redeemed.status === "redeemed_refresh_failed" ? redeemed.message || "卡密兑换成功，但授权状态刷新失败。" : redeemed.licensed ? "卡密兑换成功，已绑定当前设备。" : redeemed.message || "卡密兑换失败");
+    } finally {
+      setLicenseRedeeming(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -236,61 +307,92 @@ export function App() {
   const selectedModule = moduleMap.get(effectiveRoute);
   const configStatus = state.configError ? "error" : "ready";
   const bridgeStatus = state.bridge.ok ? "ready" : "missing";
+  const licenseReady = Boolean(licenseStatus.licensed || licenseStatus.bypass);
+
+  if (!licenseReady) {
+    return (
+      <LicenseGateScreen
+        status={licenseStatus}
+        checking={licenseChecking}
+        redeeming={licenseRedeeming}
+        message={licenseMessage}
+        onRedeem={submitLicenseCard}
+        onRefresh={() => refreshLicense("manual_refresh").then(() => undefined)}
+      />
+    );
+  }
 
   return (
-    <main
-      className="grid h-screen grid-rows-[84px_minmax(0,1fr)] bg-[#f5f7fb] text-shell-text max-[860px]:h-auto max-[860px]:min-h-screen max-[860px]:grid-rows-[auto_minmax(0,1fr)]"
-      data-foundation-shell="ready"
-      data-client-shell="ready"
-      data-single-entry="true"
-      data-route-slot="ready"
-      data-entry-origin={location.origin}
-      data-config-status={configStatus}
-      data-config-source={state.configSource}
-      data-config-schema={state.config.schemaVersion}
-      data-bridge-status={bridgeStatus}
-      data-bridge-method-count={state.bridge.methodCount || 0}
-      data-storage-health={state.storageHealth}
-      data-release-manifest={RELEASE_MANIFEST_URL}
-    >
-      <ShellHeader route={state.route} workspace={state.workspace} />
-      <section className="flex min-h-0 flex-col gap-4 overflow-hidden p-4 max-[760px]:overflow-visible max-[760px]:p-3">
-        {state.configError ? (
-          <div className="flex min-h-[38px] items-center gap-2.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-600">
-            <strong>Config error</strong>
-            <span className="min-w-0 break-words">{state.configError}</span>
+    <>
+      <main
+        className="grid h-screen grid-rows-[84px_minmax(0,1fr)] bg-[#f5f7fb] text-shell-text max-[860px]:h-auto max-[860px]:min-h-screen max-[860px]:grid-rows-[auto_minmax(0,1fr)]"
+        data-foundation-shell="ready"
+        data-client-shell="ready"
+        data-single-entry="true"
+        data-route-slot="ready"
+        data-entry-origin={location.origin}
+        data-config-status={configStatus}
+        data-config-source={state.configSource}
+        data-config-schema={state.config.schemaVersion}
+        data-bridge-status={bridgeStatus}
+        data-bridge-method-count={state.bridge.methodCount || 0}
+        data-storage-health={state.storageHealth}
+        data-release-manifest={RELEASE_MANIFEST_URL}
+      >
+        <ShellHeader
+          route={state.route}
+          workspace={state.workspace}
+          licenseStatus={licenseStatus}
+          onOpenLicenseDialog={() => setLicenseDialogOpen(true)}
+        />
+        <section className="flex min-h-0 flex-col gap-4 overflow-hidden p-4 max-[760px]:overflow-visible max-[760px]:p-3">
+          {state.configError ? (
+            <div className="flex min-h-[38px] items-center gap-2.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-600">
+              <strong>Config error</strong>
+              <span className="min-w-0 break-words">{state.configError}</span>
+            </div>
+          ) : null}
+          {state.manifestError ? (
+            <div className="flex min-h-[38px] items-center gap-2.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-600">
+              <strong>Manifest error</strong>
+              <span className="min-w-0 break-words">{state.manifestError}</span>
+            </div>
+          ) : null}
+          <div className={`min-h-0 flex-1 ${state.route === "/stores" || state.route === "/stores/business-data" || state.route === "/stores/funds" || state.route === "/warnings" || state.route === "/opportunities" || state.route === "/opportunities/product-prematch" || effectiveRoute === "/products/slow-moving" || effectiveRoute === "/products/bulk-delete" ? "overflow-hidden" : "overflow-auto"}`}>
+            {state.route === "/system/diagnostics" ? (
+              <DiagnosticsPage state={state} />
+            ) : state.route === "/stores" ? (
+              <StoreManagementPage />
+            ) : state.route === "/stores/business-data" ? (
+              <BusinessDataPage />
+            ) : state.route === "/stores/funds" ? (
+              <FundsDataPage />
+            ) : state.route === "/warnings" ? (
+              <ViolationsPage />
+            ) : state.route === "/opportunities" || state.route === "/opportunities/product-prematch" ? (
+              <OpportunityProductPrematchPage />
+            ) : effectiveRoute === "/products/slow-moving" ? (
+              <SlowMovingCleanupPage />
+            ) : effectiveRoute === "/products/bulk-delete" ? (
+              <BulkDeletePage />
+            ) : selectedModule ? (
+              <ModulePage module={selectedModule} />
+            ) : (
+              <HomePage />
+            )}
           </div>
-        ) : null}
-        {state.manifestError ? (
-          <div className="flex min-h-[38px] items-center gap-2.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-600">
-            <strong>Manifest error</strong>
-            <span className="min-w-0 break-words">{state.manifestError}</span>
-          </div>
-        ) : null}
-        <div className={`min-h-0 flex-1 ${state.route === "/stores" || state.route === "/stores/business-data" || state.route === "/stores/funds" || state.route === "/warnings" || state.route === "/opportunities" || state.route === "/opportunities/product-prematch" || effectiveRoute === "/products/slow-moving" || effectiveRoute === "/products/bulk-delete" ? "overflow-hidden" : "overflow-auto"}`}>
-          {state.route === "/system/diagnostics" ? (
-            <DiagnosticsPage state={state} />
-          ) : state.route === "/stores" ? (
-            <StoreManagementPage />
-          ) : state.route === "/stores/business-data" ? (
-            <BusinessDataPage />
-          ) : state.route === "/stores/funds" ? (
-            <FundsDataPage />
-          ) : state.route === "/warnings" ? (
-            <ViolationsPage />
-          ) : state.route === "/opportunities" || state.route === "/opportunities/product-prematch" ? (
-            <OpportunityProductPrematchPage />
-          ) : effectiveRoute === "/products/slow-moving" ? (
-            <SlowMovingCleanupPage />
-          ) : effectiveRoute === "/products/bulk-delete" ? (
-            <BulkDeletePage />
-          ) : selectedModule ? (
-            <ModulePage module={selectedModule} />
-          ) : (
-            <HomePage />
-          )}
-        </div>
-      </section>
-    </main>
+        </section>
+      </main>
+      <LicenseRenewDialog
+        open={licenseDialogOpen}
+        status={licenseStatus}
+        checking={licenseChecking}
+        redeeming={licenseRedeeming}
+        message={licenseMessage}
+        onOpenChange={setLicenseDialogOpen}
+        onRedeem={submitLicenseCard}
+        onRefresh={() => refreshLicense("license_dialog").then(() => undefined)}
+      />
+    </>
   );
 }

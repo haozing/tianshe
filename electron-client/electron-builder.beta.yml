@@ -20,6 +20,7 @@ files:
   - src/**/*
   - assets/**/*
   - package.json
+  - license-config.local.json
   - "!artifacts/**"
   - "!scripts/**"
   - "!release/**"

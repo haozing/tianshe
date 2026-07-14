@@ -9,8 +9,12 @@ const { registerLogHandlers } = require("./logs");
 const { registerUpdateHandlers } = require("./updates");
 const { registerBusinessDatabaseHandlers } = require("./business-database");
 const { registerTextSegmentationHandlers } = require("./text-segmentation");
+const { registerLicenseHandlers } = require("./license");
+const { installLicenseIpcGuard } = require("../license/ipc-guard");
 
 function registerIpcHandlers(context) {
+  registerLicenseHandlers(context);
+  installLicenseIpcGuard();
   registerAppInfoHandlers(context);
   registerCookieHandlers(context);
   registerHttpHandlers(context);

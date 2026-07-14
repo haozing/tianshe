@@ -116,6 +116,37 @@ export interface NativeTextSegmentResult {
   }>;
 }
 
+export interface NativeLicenseStatus {
+  ok?: boolean;
+  configured: boolean;
+  bypass?: boolean;
+  licensed: boolean;
+  status?: string;
+  reason?: string;
+  message?: string;
+  deviceNo?: string;
+  clientInstanceId?: string;
+  authStatus?: string;
+  allowPaidFeatures?: boolean;
+  expireAt?: string | null;
+  remainingSeconds?: number;
+  isPermanent?: boolean;
+  needRedeemOrRenew?: boolean;
+  contact?: string;
+  requestId?: string;
+  serverTime?: string;
+  lastCheckedAt?: string;
+}
+
+export interface NativeLicenseStatusRequest {
+  refresh?: boolean;
+  scene?: string;
+}
+
+export interface NativeLicenseRedeemRequest {
+  cardKey: string;
+}
+
 export interface ChihuNativeApi {
   app: {
     getInfo: () => Promise<unknown>;
@@ -145,6 +176,12 @@ export interface ChihuNativeApi {
   };
   http: {
     request: (args: NativeHttpRequest) => Promise<unknown>;
+  };
+  license?: {
+    getStatus: (args?: NativeLicenseStatusRequest) => Promise<NativeLicenseStatus>;
+    check: (args?: NativeLicenseStatusRequest) => Promise<NativeLicenseStatus>;
+    redeem: (args: NativeLicenseRedeemRequest) => Promise<NativeLicenseStatus>;
+    clearLocal: () => Promise<NativeLicenseStatus>;
   };
   files: {
     selectFile: (args?: SelectFileRequest) => Promise<SelectFileResult>;

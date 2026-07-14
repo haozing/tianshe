@@ -234,6 +234,12 @@ const chihuNative = {
   http: {
     request: invoke("native:http:request")
   },
+  license: {
+    getStatus: invoke("native:license:getStatus"),
+    check: invoke("native:license:check"),
+    redeem: invoke("native:license:redeem"),
+    clearLocal: invoke("native:license:clearLocal")
+  },
   files: {
     selectFile: invoke("native:files:selectFile"),
     readFile: invoke("native:files:readFile"),

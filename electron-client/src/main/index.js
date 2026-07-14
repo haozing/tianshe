@@ -14,6 +14,7 @@ const { addDevShortcuts } = require("./utils/dev-shortcuts");
 const { installSchemeBlocker } = require("./window/scheme-blocker");
 const { installSmokeCheck } = require("./smoke/install-smoke-check");
 const { registerIpcHandlers } = require("./ipc");
+const { installLicenseIpcGuard } = require("./license/ipc-guard");
 const { stopNativeDataService } = require("./database");
 
 app.commandLine.appendSwitch("ignore-certificate-errors", "true");
@@ -188,6 +189,7 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
+    installLicenseIpcGuard();
     registerMainWindowHandlers();
     registerIpcHandlers({ getMainWindow });
     createMainWindow();

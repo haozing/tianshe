@@ -10,6 +10,7 @@ electron-client/.npm-cache/
 electron-client/out/
 electron-client/dist/
 electron-client/release/
+electron-client/license-config.local.json
 node_modules/
 .env
 .env.*

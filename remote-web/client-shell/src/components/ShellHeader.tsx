@@ -25,6 +25,7 @@ import {
   X
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { LicenseStatus } from "../bridge/license";
 import type { WorkspaceState } from "../types";
 import { cn, isActiveRoute } from "../lib/utils";
 import { remoteAsset } from "../lib/assets";
@@ -543,11 +544,37 @@ function SettingsDialog({
   );
 }
 
-function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
-  const userName = workspace.operator || "hhhhh123";
-  const avatarText = userName.trim().slice(0, 1).toLowerCase() || "h";
-  const phone = workspace.phone || "18906311658";
-  const points = workspace.points || "0.1";
+function formatLicenseDate(value?: string | null) {
+  if (!value) return "未开通";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+}
+
+function formatLicenseDays(seconds?: number) {
+  const value = Number(seconds || 0);
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  return String(Math.ceil(value / 86400));
+}
+
+function ProfileMenuV2({
+  workspace,
+  licenseStatus,
+  onOpenLicenseDialog
+}: {
+  workspace: WorkspaceState;
+  licenseStatus?: LicenseStatus;
+  onOpenLicenseDialog?: () => void;
+}) {
+  const deviceNo = licenseStatus?.deviceNo || "未同步设备";
+  const userName = licenseStatus?.licensed || licenseStatus?.bypass ? deviceNo : "未授权设备";
+  const avatarText = licenseStatus?.licensed || licenseStatus?.bypass ? "D" : "!";
+  const authLine = licenseStatus?.isPermanent ? "永久授权" : `授权至 ${formatLicenseDate(licenseStatus?.expireAt)}`;
+  const remainingDays = licenseStatus?.isPermanent ? "永久" : formatLicenseDays(licenseStatus?.remainingSeconds);
   const [notesOpen, setNotesOpen] = useState(false);
   const [notes, setNotes] = useState<UpdateNotesDocument>(fallbackUpdateNotes);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -807,8 +834,11 @@ function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
   ), [downloadProgress, updateState, versionData]);
 
   const menuItems = [
-    { key: "license", label: "卡密兑换", Icon: CreditCard, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} /> },
-    { key: "logs", label: "消费日志", Icon: FileClock, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} /> },
+    { key: "license", label: "卡密续费", Icon: CreditCard, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} />, onClick: () => {
+      setProfileMenuOpen(false);
+      onOpenLicenseDialog?.();
+    } },
+    { key: "logs", label: "授权记录", Icon: FileClock, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} />, disabled: true },
     { key: "notes", label: "更新说明", Icon: Mail, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} />, onClick: () => {
       setProfileMenuOpen(false);
       setNotesOpen(true);
@@ -830,7 +860,7 @@ function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
           onClick={() => setProfileMenuOpen((open) => !open)}
         >
           <span className="grid size-5 place-items-center rounded-full bg-brand-navy text-[12px] font-bold text-white">{avatarText}</span>
-          <span>{userName}</span>
+          <span className="max-w-[138px] truncate">{userName}</span>
         </button>
 
         <div
@@ -845,14 +875,14 @@ function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
                 <span className="grid size-[46px] shrink-0 place-items-center rounded-full bg-[#3d43e9] text-[17px] font-semibold text-white">{avatarText}</span>
                 <div className="min-w-0">
                   <div className="truncate text-[15px] font-semibold leading-5 text-[#1d2939]">{userName}</div>
-                  <div className="mt-1 truncate text-[12px] text-[#98a2b3]">手机号： {phone}</div>
+                  <div className="mt-1 truncate text-[12px] text-[#98a2b3]">授权： {authLine}</div>
                 </div>
               </div>
 
               <div className="mt-5 flex items-center justify-center">
                 <div className="min-w-[92px] text-center">
-                  <div className="text-[19px] font-bold leading-6 text-[#3346e8]">{points}</div>
-                  <div className="mt-1 text-[12px] text-[#344054]">积分</div>
+                  <div className="text-[19px] font-bold leading-6 text-[#3346e8]">{remainingDays}</div>
+                  <div className="mt-1 text-[12px] text-[#344054]">剩余天数</div>
                 </div>
               </div>
             </div>
@@ -891,9 +921,16 @@ function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
                 <span>设置</span>
               </button>
               <span className="h-4 bg-[#d8dee8]" />
-              <button className="inline-flex h-full items-center justify-center gap-1.5 text-[13px] font-medium text-[#f04438] transition-colors hover:bg-[#fff1f0]" type="button">
-                <LogOut className="size-[15px]" strokeWidth={1.9} />
-                <span>退出登录</span>
+              <button
+                className="inline-flex h-full items-center justify-center gap-1.5 text-[13px] font-medium text-[#3346e8] transition-colors hover:bg-[#f6f8fc]"
+                type="button"
+                onClick={() => {
+                  setProfileMenuOpen(false);
+                  onOpenLicenseDialog?.();
+                }}
+              >
+                <CreditCard className="size-[15px]" strokeWidth={1.9} />
+                <span>设备续费</span>
               </button>
             </div>
           </div>
@@ -927,7 +964,17 @@ function ProfileMenuV2({ workspace }: { workspace: WorkspaceState }) {
   );
 }
 
-export function ShellHeader({ route, workspace }: { route: string; workspace: WorkspaceState }) {
+export function ShellHeader({
+  route,
+  workspace,
+  licenseStatus,
+  onOpenLicenseDialog
+}: {
+  route: string;
+  workspace: WorkspaceState;
+  licenseStatus?: LicenseStatus;
+  onOpenLicenseDialog?: () => void;
+}) {
   const activeTopRoute = topRoutes.find((item) => isActiveRoute(route, item.route)) || topRoutes[0];
   const secondaryRoutes = activeTopRoute.subRoutes;
   const subActive = activeSecondaryRoute(route, secondaryRoutes);
@@ -963,10 +1010,10 @@ export function ShellHeader({ route, workspace }: { route: string; workspace: Wo
         </nav>
 
         <div className="app-no-drag flex shrink-0 items-center gap-2.5 px-4 text-[13px] text-[#475467]">
-          <ProfileMenuV2 workspace={workspace} />
-          <button className="inline-flex h-7 items-center gap-1.5 px-2 text-[12px] font-bold text-[#a45b00] transition-colors hover:text-[#8a4b00]" type="button">
+          <ProfileMenuV2 workspace={workspace} licenseStatus={licenseStatus} onOpenLicenseDialog={onOpenLicenseDialog} />
+          <button className="inline-flex h-7 items-center gap-1.5 px-2 text-[12px] font-bold text-[#a45b00] transition-colors hover:text-[#8a4b00]" type="button" onClick={onOpenLicenseDialog}>
             <Crown className="size-[14px]" strokeWidth={2} />
-            <span>点击购买</span>
+            <span>卡密续费</span>
           </button>
           <span className="h-5 w-px bg-[#e5ebf2]" />
           <button className="grid size-7 place-items-center rounded-md text-[#667085] transition-colors hover:bg-brand-foxSoft hover:text-brand-navy" type="button" aria-label="最小化" onClick={() => void minimizeMainWindow()}>
