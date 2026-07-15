@@ -1,4 +1,4 @@
-import { repositoryGet, repositoryGetAll, repositoryPut } from "./repository";
+import { repositoryCleanupOperations, repositoryGet, repositoryPut, repositoryQueryOperations } from "./repository";
 
 export type DoudianOperationStatus = "created" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -18,6 +18,12 @@ export interface DoudianOperationRecord {
   runnerWinId?: number;
   metadata?: Record<string, unknown>;
 }
+
+const OPERATION_RETENTION_DAYS = 14;
+const OPERATION_MAX_TERMINAL_RECORDS = 200;
+const OPERATION_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+let lastOperationCleanupAt = 0;
+let operationCleanupPromise: Promise<unknown> | null = null;
 
 function now() {
   return new Date().toISOString();
@@ -62,10 +68,25 @@ export async function updateOperation(operationId: string, patch: Partial<Doudia
 }
 
 export async function listActiveOperations(): Promise<DoudianOperationRecord[]> {
-  const records = await repositoryGetAll<DoudianOperationRecord>("operations");
-  return records
-    .filter((record) => record.status === "created" || record.status === "running")
-    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  await cleanupOperationHistory();
+  return repositoryQueryOperations<DoudianOperationRecord>({
+    statuses: ["created", "running"],
+    limit: 1000
+  });
+}
+
+export async function cleanupOperationHistory(force = false) {
+  const currentTime = Date.now();
+  if (!force && currentTime - lastOperationCleanupAt < OPERATION_CLEANUP_INTERVAL_MS) return operationCleanupPromise;
+  if (operationCleanupPromise) return operationCleanupPromise;
+  lastOperationCleanupAt = currentTime;
+  operationCleanupPromise = repositoryCleanupOperations({
+    retentionDays: OPERATION_RETENTION_DAYS,
+    maxTerminalRecords: OPERATION_MAX_TERMINAL_RECORDS
+  }).finally(() => {
+    operationCleanupPromise = null;
+  });
+  return operationCleanupPromise;
 }
 
 export async function markOperationRunning(operationId: string, runnerWinId?: number) {
@@ -77,17 +98,25 @@ export async function markOperationProgress(operationId: string, progress: numbe
 }
 
 export async function markOperationResult(operationId: string, resultSummary = "completed") {
-  return updateOperation(operationId, { status: "succeeded", progress: 100, resultSummary });
+  const record = await updateOperation(operationId, { status: "succeeded", progress: 100, resultSummary });
+  void cleanupOperationHistory();
+  return record;
 }
 
 export async function markOperationFullResult(operationId: string, resultSummary = "completed", result?: unknown) {
-  return updateOperation(operationId, { status: "succeeded", progress: 100, resultSummary, result });
+  const record = await updateOperation(operationId, { status: "succeeded", progress: 100, resultSummary, result });
+  void cleanupOperationHistory();
+  return record;
 }
 
 export async function markOperationError(operationId: string, error: string) {
-  return updateOperation(operationId, { status: "failed", error });
+  const record = await updateOperation(operationId, { status: "failed", error });
+  void cleanupOperationHistory();
+  return record;
 }
 
 export async function markOperationCancelled(operationId: string) {
-  return updateOperation(operationId, { status: "cancelled", resultSummary: "cancelled" });
+  const record = await updateOperation(operationId, { status: "cancelled", resultSummary: "cancelled" });
+  void cleanupOperationHistory();
+  return record;
 }

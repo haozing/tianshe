@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026.07.14.client-shell.2.1.10-phase2",
-  "buildTime": "2026-07-14T09:30:54.697Z",
+  "releaseId": "2026.07.15.violations-v2",
+  "buildTime": "2026-07-15T10:11:40.785Z",
   "entry": {
-    "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
+    "remoteWebOrigin": "NEW_REMOTE_WEB_ORIGIN_PROD"
   },
   "cachePolicy": {
     "html": "no-cache",
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "6334bdad83303a5c6b36d5cb2655519c4c4f45c344e0168abc5059f7eac44de3"
+      "sha256": "a2394cc77946ea47057ecf95d8dc9eb50dce03bc25a0c73ff8a355fab2163287"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,14 +36,14 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "7b4f2abc136143f005af24a0d598689e8247d92728e34a001327649b05e6ace1"
+      "sha256": "0becaa08a2b7b7061b15bf7caf5678b949c9788415d502324ddfe65dfb44e370"
     },
     {
       "path": "new-remote-web/styles.css",
       "type": "remote-css",
       "cache": "short",
       "required": true,
-      "sha256": "c51602b52146d0327cd8724170f70fe018731128ed8334275819d79d19b900d2"
+      "sha256": "30d327a75db3c60f0ecb75bbf868829533c6f6377b9f3dde24da9f5464d500b3"
     },
     {
       "path": "new-remote-web/assets/chihu-app-icon.png",
@@ -71,14 +71,14 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "0a67f283918cf7973f64bae867f596783d9044f2ea38d1ba99b7555449f41ca9"
+      "sha256": "21264e5b201af8791635208179caeaad4b4c87340c1cfb66a3caa15107d8ac22"
     },
     {
       "path": "new-remote-web/config/doudian-adapter.json",
       "type": "doudian-adapter",
       "cache": "no-cache",
       "required": true,
-      "sha256": "daadd8f40af6764e88598a379d53428201d39895e676118c5c688d0510810623"
+      "sha256": "a12f455e7638c85a47578a8e91d2f7ab12c0ae8025e45e27686aa3262611422f"
     },
     {
       "path": "new-remote-web/config/update-notes.json",
@@ -120,7 +120,7 @@
     "schemaVersion": 1,
     "algorithm": "ed25519",
     "keyId": "chihu-remote-web-ed25519-2026-07",
-    "payloadSha256": "a1f0957012982ae755ac33b449404757afacf804b595b2d25b393a0dfd1f1db9",
-    "value": "HmDAbkof0FudYEot78uSzIsLKToC54Bj0hcn44TQCgZRCE7uStOhjEpr8gwOJ+vVnI4QWj4AjpBPOX8eNJ1tAw=="
+    "payloadSha256": "aae1a21c2049f3ba8567ac6985a963e145e0df6b22d547ff46f7a2d049c3ab9f",
+    "value": "xVqwsb/BZoGgsYr8RiLlbQxX3ArdBS+uxV6Em+jRQxqP2OEpMsWvm1zRS3ySIE4pSSVQqBOpIT7JvW4qDaueBg=="
   }
 }

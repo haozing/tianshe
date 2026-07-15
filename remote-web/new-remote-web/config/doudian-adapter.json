@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "contractVersion": "doudian-adapter.v1",
   "platform": "doudian",
-  "version": "2026.07.09.remote-adapter-opportunity-report-v1-xzb-local-mstoken",
+  "version": "2026.07.15.remote-adapter-violations-v2",
   "source": "remote-web",
   "capabilities": {
     "actions": [
@@ -67,6 +67,7 @@
       "violationProductLookup",
       "staleGoodsProductList",
       "staleGoodsRecommendAdmit",
+      "staleGoodsCompassDownload",
       "staleGoodsBatchOffline",
       "staleGoodsBatchDelete",
       "staleGoodsCompleteDelete",
@@ -277,7 +278,8 @@
           "action": "collectStaleGoodsCandidates",
           "requestPlans": [
             "staleGoodsProductList",
-            "staleGoodsRecommendAdmit"
+            "staleGoodsRecommendAdmit",
+            "staleGoodsCompassDownload"
           ]
         },
         {
@@ -422,6 +424,7 @@
     "violationPenaltyList": "/governance/shop/penalty/get_penalty_list",
     "staleGoodsProductList": "/product/tproduct/list",
     "staleGoodsRecommendAdmit": "/api/commop/recommend_admit/item/page",
+    "staleGoodsCompassDownload": "https://compass.jinritemai.com/compass_api/download_center/shop/download_file_sync",
     "staleGoodsBatchOffline": "/product/tproduct/batchOffline",
     "staleGoodsBatchDelete": "/product/tproduct/batchDelete",
     "staleGoodsCompleteDelete": "/product/tproduct/completeDelete",
@@ -1742,21 +1745,56 @@
             "punishLevel"
           ]
         },
+        "violationAt": {
+          "paths": [
+            "violation_time",
+            "violationTime",
+            "violation_at",
+            "violationAt",
+            "penalty_time",
+            "penaltyTime"
+          ]
+        },
+        "createdAt": {
+          "paths": [
+            "create_time",
+            "createTime",
+            "created_at",
+            "createdAt"
+          ]
+        },
         "processStatus": {
+          "paths": [
+            "process_status",
+            "processStatus",
+            "status_name",
+            "statusName",
+            "handle_status",
+            "handleStatus"
+          ]
+        },
+        "penaltyStatus": {
           "paths": [
             "all_exec_task_status_text",
             "allExecTaskStatusText",
             "all_exec_task_status",
             "allExecTaskStatus",
-            "process_status",
-            "processStatus",
-            "status",
-            "status_name",
-            "statusName",
-            "handle_status",
-            "handleStatus",
+            "penalty_status",
+            "penaltyStatus"
+          ]
+        },
+        "appealStatus": {
+          "paths": [
             "appeal_status",
             "appealStatus"
+          ]
+        },
+        "rectificationStatus": {
+          "paths": [
+            "improve_status",
+            "improveStatus",
+            "rectification_status",
+            "rectificationStatus"
           ]
         },
         "productStatus": {
@@ -2031,11 +2069,28 @@
         "200"
       ],
       "listPaths": [
-        "staleGoodsProductList.data"
+        "staleGoodsProductList.data",
+        "staleGoodsProductList.data.list",
+        "staleGoodsProductList.data.data",
+        "staleGoodsProductList.data.data.list",
+        "staleGoodsProductList.list"
       ],
       "totalPaths": [
         "staleGoodsProductList.data.total",
+        "staleGoodsProductList.data.data.total",
         "staleGoodsProductList.total"
+      ],
+      "recommendListPaths": [
+        "staleGoodsRecommendAdmit.data.list",
+        "staleGoodsRecommendAdmit.data.data.list",
+        "staleGoodsRecommendAdmit.data.items",
+        "staleGoodsRecommendAdmit.list",
+        "staleGoodsRecommendAdmit.data"
+      ],
+      "recommendTotalPaths": [
+        "staleGoodsRecommendAdmit.data.total",
+        "staleGoodsRecommendAdmit.data.data.total",
+        "staleGoodsRecommendAdmit.total"
       ],
       "fieldScales": {
         "price": 100
@@ -2365,7 +2420,7 @@
         "当前网络不稳定"
       ],
       "prepareUrl": "https://compass.jinritemai.com/shop",
-      "prepareBeforeRequest": true,
+      "prepareBeforeRequest": false,
       "removeCookiesBeforePrepare": [
         "LUOPAN_DT"
       ],
@@ -2834,6 +2889,7 @@
       "sign": true,
       "signStrategy": "mstoken-myargs",
       "localSigner": true,
+      "localSignerOnly": true,
       "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
       "debugPlan": true,
       "signatureParam": false,
@@ -2846,7 +2902,6 @@
       "signQuery": "appid=1",
       "signBody": "",
       "signWindowTokenFallback": false,
-      "prepareBeforeSign": true,
       "headers": {
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json"
@@ -2867,10 +2922,6 @@
       "maxAttempts": 2,
       "retryDelayMs": 1000,
       "retryBackoff": "linear",
-      "prepareUrl": "https://fxg.jinritemai.com/ffa/mshop/violation",
-      "prepareWaitMs": 3000,
-      "signerWaitMs": 3000,
-      "prepareRetryAttempts": 1,
       "pageFetchOnSignFailure": false,
       "pageFetchTimeoutMs": 18000,
       "calibrationStatus": "xzb-post-myargs-local-mstoken-refresh",
@@ -2904,19 +2955,20 @@
         "page": "{page}",
         "page_size": "{pageSize}",
         "pageSize": "{pageSize}",
-        "check_status": "3",
+        "check_status": "{checkStatus}",
         "group_id": "",
         "sku_type": "",
-        "is_online": "1",
+        "is_online": "{isOnline}",
+        "is_offline": "{isOffline}",
         "from_mng": "1",
         "need_auto_rectify_info": "true",
         "need_pay_no_stock_skus": "true",
         "comment_percent": "",
-        "order_field": "audit_time",
+        "order_field": "{orderField}",
         "sort": "desc",
         "status": "{productStatus}",
         "draft_status": "0",
-        "tab": "onSale",
+        "tab": "{tab}",
         "business_type": "4",
         "not_for_sale_search_type": "1",
         "supply_status": "",
@@ -2938,8 +2990,7 @@
       "endpointKey": "staleGoodsRecommendAdmit",
       "method": "POST",
       "sign": true,
-      "diagnosticOnly": true,
-      "calibrationStatus": "failed",
+      "calibrationStatus": "xzb-recommend-admit-joined",
       "includeEmptySignature": false,
       "origin": "https://fxg.jinritemai.com",
       "referer": "https://fxg.jinritemai.com/ffa/pg/mallRecommendPool",
@@ -2966,19 +3017,46 @@
       "signatureParam": false,
       "signDomain": ".jinritemai.com",
       "signQuery": "",
-      "signBody": "{\"in_pool\":false,\"item_info\":\"\",\"page\":{\"current\":1,\"page_size\":1000},\"un_reached_threshold_list\":[3],\"have_sell\":false}",
       "body": {
         "in_pool": false,
         "item_info": "",
         "page": {
-          "current": 1,
-          "page_size": 1000
+          "current": "{recommendPage}",
+          "page_size": "{recommendPageSize}"
         },
-        "un_reached_threshold_list": [
-          3
-        ],
+        "un_reached_threshold_list": "{unreachedThresholdList}",
         "have_sell": false
       }
+    },
+    "staleGoodsCompassDownload": {
+      "endpointKey": "staleGoodsCompassDownload",
+      "method": "GET",
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerOnly": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "includeEmptySignature": false,
+      "origin": "https://compass.jinritemai.com",
+      "referer": "https://compass.jinritemai.com/shop",
+      "signerUrl": "https://compass.jinritemai.com/shop",
+      "signDomain": ".jinritemai.com",
+      "responseType": "base64",
+      "headers": {
+        "Accept": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*"
+      },
+      "query": {
+        "download_scene_identity": "shop_product_list",
+        "file_name": "{compassFileName}",
+        "req_json_str": "{compassRequestJson}",
+        "sheet_name_list": "\u5168\u90e8"
+      },
+      "retryOnHttpError": true,
+      "maxAttempts": 3,
+      "retryDelayMs": 1200,
+      "retryBackoff": "linear",
+      "allowMissingCode": true,
+      "successPaths": []
     },
     "staleGoodsBatchOffline": {
       "endpointKey": "staleGoodsBatchOffline",
@@ -2990,12 +3068,9 @@
       "referer": "https://fxg.jinritemai.com/ffa/g/list",
       "headers": {
         "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json"
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
       },
-      "body": {
-        "product_ids": "{productIds}",
-        "productIds": "{productIds}"
-      },
+      "body": "{formBody}",
       "retryOnHttpError": true,
       "maxAttempts": 2,
       "retryDelayMs": 1200,
@@ -3013,12 +3088,9 @@
       "referer": "https://fxg.jinritemai.com/ffa/g/list",
       "headers": {
         "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json"
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
       },
-      "body": {
-        "product_ids": "{productIds}",
-        "productIds": "{productIds}"
-      },
+      "body": "{formBody}",
       "retryOnHttpError": true,
       "maxAttempts": 2,
       "retryDelayMs": 1200,
@@ -3033,15 +3105,12 @@
       "sign": false,
       "includeEmptySignature": false,
       "origin": "https://fxg.jinritemai.com",
-      "referer": "https://fxg.jinritemai.com/ffa/g/list",
+      "referer": "https://fxg.jinritemai.com/ffa/g/recycle",
       "headers": {
         "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json"
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
       },
-      "body": {
-        "product_ids": "{productIds}",
-        "productIds": "{productIds}"
-      },
+      "body": "{formBody}",
       "retryOnHttpError": true,
       "maxAttempts": 2,
       "retryDelayMs": 1200,
@@ -3099,22 +3168,33 @@
       "endpointKey": "bulkDeleteBatchDelete",
       "method": "POST",
       "dryRunOnly": false,
-      "sign": false,
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerOnly": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
       "includeEmptySignature": false,
       "origin": "https://fxg.jinritemai.com",
       "referer": "https://fxg.jinritemai.com/ffa/g/list",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/g/list",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "signQuery": "appid=1",
+      "signBody": "{formBody}",
       "headers": {
         "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json"
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
       },
-      "body": {
-        "product_ids": "{productIdList}"
-      },
-      "retryOnHttpError": true,
-      "maxAttempts": 2,
+      "body": "{formBody}",
+      "retryOnHttpError": false,
+      "maxAttempts": 1,
       "retryDelayMs": 1200,
       "retryBackoff": "linear",
-      "allowMissingCode": true,
+      "allowMissingCode": false,
       "successCodes": [
         0,
         "0"
@@ -3131,22 +3211,33 @@
       "endpointKey": "bulkDeleteCompleteDelete",
       "method": "POST",
       "dryRunOnly": false,
-      "sign": false,
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerOnly": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
       "includeEmptySignature": false,
       "origin": "https://fxg.jinritemai.com",
-      "referer": "https://fxg.jinritemai.com/ffa/g/list",
+      "referer": "https://fxg.jinritemai.com/ffa/g/recycle",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/g/recycle",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "signQuery": "appid=1",
+      "signBody": "{formBody}",
       "headers": {
         "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json"
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
       },
-      "body": {
-        "product_ids": "{productIdList}"
-      },
-      "retryOnHttpError": true,
-      "maxAttempts": 2,
+      "body": "{formBody}",
+      "retryOnHttpError": false,
+      "maxAttempts": 1,
       "retryDelayMs": 1200,
       "retryBackoff": "linear",
-      "allowMissingCode": true,
+      "allowMissingCode": false,
       "successCodes": [
         0,
         "0"
@@ -3610,6 +3701,24 @@
         "businessCreditScoreLevel",
         "businessOnSaleProducts",
         "businessOfflineProducts"
+      ],
+      "requestPlanGroups": [
+        [
+          "businessCoreIndex",
+          "businessHomepage",
+          "businessWarnTicket",
+          "businessCreditScoreBase",
+          "businessCreditScoreLevel",
+          "businessOnSaleProducts",
+          "businessOfflineProducts"
+        ],
+        ["businessSmartActivityCoupon"],
+        ["businessSmartActivityDirectDiscount"],
+        ["businessSmartActivityNewUserBonus"]
+      ],
+      "requestPlanGroupDelayMs": 500,
+      "coreMetricPlans": [
+        "businessCoreIndex"
       ],
       "datePresetMap": {
         "today": "today",
@@ -4076,6 +4185,7 @@
       }
     },
     "fundsData": {
+      "contractVersion": "2026.07.15.funds-current-v1",
       "concurrency": 2,
       "requestPlans": [
         "fundAccountList",
@@ -4087,6 +4197,20 @@
         "fundAccountCenter",
         "fundShopDepositPage"
       ],
+      "requestPlanGroups": [
+        [
+          "fundAccountList",
+          "fundPledgeCash",
+          "fundPledgePayable"
+        ],
+        [
+          "fundShopAwardOverview",
+          "fundCompensateStatistics",
+          "fundBillQuery"
+        ]
+      ],
+      "requestPlanGroupConcurrency": 3,
+      "requestPlanGroupDelayMs": 200,
       "requiredPlans": [
         "fundAccountList",
         "fundPledgeCash",
@@ -4115,21 +4239,6 @@
           "startOffsetDays": 0,
           "endOffsetDays": 0,
           "sameDay": true
-        },
-        "today": {
-          "startOffsetDays": 0,
-          "endOffsetDays": 0,
-          "sameDay": true
-        },
-        "7d": {
-          "startOffsetDays": -6,
-          "endOffsetDays": 0,
-          "sameDay": false
-        },
-        "30d": {
-          "startOffsetDays": -29,
-          "endOffsetDays": 0,
-          "sameDay": false
         }
       },
       "fieldSchema": {
@@ -4495,7 +4604,8 @@
         "fundShopDepositPage"
       ],
       "cachePolicy": {
-        "skipAllZeroWhenCriticalMissing": true
+        "skipAllZeroWhenCriticalMissing": true,
+        "autoRefreshTtlMs": 300000
       },
       "derivedFields": [
         {
@@ -4580,8 +4690,12 @@
       }
     },
     "violationsData": {
-      "concurrency": 2,
+      "concurrency": 4,
+      "pageConcurrency": 4,
       "maxPages": 50,
+      "cacheRetentionDays": 35,
+      "filterMode": "local-after-complete-fetch",
+      "dateField": "violationAt",
       "requestPlans": [
         "violationPenaltyList"
       ],
@@ -4678,7 +4792,7 @@
         }
       },
       "fieldSchema": {
-        "version": "2026.07.07.violations-data-fields-v1-xzb-aligned",
+        "version": "2026.07.15.violations-data-fields-v2-coverage",
         "columns": [
           {
             "key": "totalRecords",
@@ -4849,29 +4963,31 @@
       "productStatus": "",
       "requestPlans": [
         "staleGoodsProductList",
-        "staleGoodsRecommendAdmit"
+        "staleGoodsRecommendAdmit",
+        "staleGoodsCompassDownload"
       ],
-      "optionalPlans": [
-        "staleGoodsRecommendAdmit"
-      ],
+      "optionalPlans": [],
       "requiredPlans": [
-        "staleGoodsProductList"
+        "staleGoodsProductList",
+        "staleGoodsRecommendAdmit",
+        "staleGoodsCompassDownload"
       ],
       "executePlans": {
         "offline": "staleGoodsBatchOffline",
         "recycle": "staleGoodsBatchDelete",
-        "delete": "staleGoodsCompleteDelete"
+        "delete": "staleGoodsBatchDelete",
+        "completeDelete": "staleGoodsCompleteDelete"
       },
       "confirmText": "确认清理",
-      "ruleVersion": "stale-goods-rule.xzb-v1",
-      "fieldSchemaVersion": "stale-goods-fields.xzb-v1",
+      "ruleVersion": "stale-goods-rule.xzb-v2-trusted-scan",
+      "fieldSchemaVersion": "stale-goods-fields.xzb-v2-source-aware",
       "defaultRules": {
         "totalSalesEnabled": true,
-        "totalSalesMax": 5,
+        "totalSalesMax": 0,
         "exposureEnabled": true,
-        "exposureMax": 800,
+        "exposureMax": 0,
         "clickEnabled": true,
-        "clickMax": 30,
+        "clickMax": 0,
         "exposureUsersEnabled": false,
         "exposureUsersMax": 0,
         "clickUsersEnabled": false,
@@ -4888,7 +5004,9 @@
         "noSalesDays": 30,
         "skipListedDaysEnabled": false,
         "listedDays": 0,
-        "trafficPeriod": "30d",
+        "trafficPeriod": "7d",
+        "productSource": "selling",
+        "perStoreLimit": 0,
         "noSalesType": "balanced",
         "requireLowRating": false,
         "requireLowInfo": false,
@@ -4911,7 +5029,11 @@
         "cancelled": "清理滞销任务已取消",
         "partialSourceStore": "部分数据来源异常，已按可用数据完成扫描"
       },
-      "maxProductListPages": 20,
+      "maxProductListPages": 100,
+      "maxProductIdSearchPages": 2,
+      "recommendPageSize": 1000,
+      "maxRecommendPages": 20,
+      "executeBatchSize": 100,
       "pageStart": 0
     },
     "bulkDelete": {
@@ -4920,7 +5042,16 @@
       "pageSize": 100,
       "maxProductListPages": 20,
       "maxProductIdSearchPages": 2,
+      "productIdLookupConcurrency": 2,
+      "maxUnscopedProductIds": 50,
+      "maxProjectedIdLookupRequests": 500,
       "pageStart": 0,
+      "executeBatchSize": 100,
+      "executeBatchDelayMs": 3000,
+      "liveLookupConcurrency": 4,
+      "recycleConfirmAttempts": 5,
+      "recycleConfirmDelayMs": 1000,
+      "maxPreviewAgeMs": 900000,
       "requestPlans": [
         "bulkDeleteProductList"
       ],

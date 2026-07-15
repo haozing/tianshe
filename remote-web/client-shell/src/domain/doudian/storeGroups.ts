@@ -1,6 +1,6 @@
 import type { DoudianAdapterPayload, DoudianStoreGroup, DoudianStoreResult, DoudianStoreSummary } from "../../types";
 import { getChihuNative } from "../../native/client";
-import { repositoryDelete, repositoryGet, repositoryGetAll, repositoryPut, repositoryPutMany } from "./repository";
+import { repositoryDelete, repositoryDeleteMany, repositoryGet, repositoryGetAll, repositoryGetAllByPrefix, repositoryPut, repositoryPutMany } from "./repository";
 
 const DEFAULT_GROUP_NAME = "未分组";
 const ALL_GROUP_NAME = "全部分组";
@@ -182,12 +182,33 @@ export async function upsertStoreLedger(store: Partial<DoudianStoreSummary> & { 
 }
 
 export async function upsertStoreLedgers(stores: Array<Partial<DoudianStoreSummary> & { shopId?: string; id?: string }>) {
-  const changed = [];
-  for (const store of stores || []) {
-    const record = await upsertStoreLedger(store);
-    if (record) changed.push(toPublicStore(record));
+  const inputs = stores || [];
+  if (!inputs.length) return [];
+  const [existingStores, existingGroups] = await Promise.all([
+    repositoryGetAll<StoreRecord>("stores"),
+    repositoryGetAll<GroupRecord>("groups")
+  ]);
+  const previousStores = new Map(existingStores.map((store) => [store.id, store]));
+  const previousGroups = new Map(existingGroups.map((group) => [group.id, group]));
+  const storeRecords: StoreRecord[] = [];
+  const groupRecords = new Map<string, GroupRecord>();
+
+  for (const store of inputs) {
+    const shopId = normalizedText(store.shopId || store.id);
+    const record = toStoreRecord(store, shopId ? previousStores.get(shopId) : null);
+    if (!record) continue;
+    storeRecords.push(record);
+    previousStores.set(record.id, record);
+    if (record.groupName) {
+      const groupRecord = toGroupRecord(record.groupName, record.groupId || record.groupName, previousGroups.get(record.groupId || record.groupName));
+      groupRecords.set(groupRecord.id, groupRecord);
+      previousGroups.set(groupRecord.id, groupRecord);
+    }
   }
-  return changed;
+
+  if (groupRecords.size) await repositoryPutMany("groups", Array.from(groupRecords.values()));
+  const changed = await repositoryPutMany("stores", storeRecords);
+  return changed.map(toPublicStore);
 }
 
 export async function getStoreLedger(shopId: string) {
@@ -203,21 +224,45 @@ export async function listStoreLedger(): Promise<DoudianStoreResult> {
   };
 }
 
+async function deleteStoreLatestCaches(shopIds: string[]) {
+  await Promise.all(shopIds.map(async (shopId) => {
+    const [businessRows, violationRows] = await Promise.all([
+      repositoryGetAllByPrefix<{ id: string }>("business_latest", `${shopId}::`, { pageSize: 500, maxItems: 10000 }),
+      repositoryGetAllByPrefix<{ id: string }>("violations_latest", `${shopId}::`, { pageSize: 500, maxItems: 10000 })
+    ]);
+    await Promise.all([
+      repositoryDelete("funds_latest", shopId).catch(() => undefined),
+      repositoryDeleteMany("business_latest", businessRows.map((record) => record.id)),
+      repositoryDeleteMany("violations_latest", violationRows.map((record) => record.id))
+    ]);
+  }));
+}
+
 export async function deleteStoreLedger(shopIds: string[]): Promise<DoudianStoreResult> {
   const ids = Array.from(new Set((shopIds || []).map((id) => normalizedText(id)).filter(Boolean)));
   const native = getChihuNative();
   const deletedStores = (await Promise.all(ids.map((id) => repositoryGet<StoreRecord>("stores", id)))).filter((store): store is StoreRecord => !!store);
 
   await Promise.all(ids.map((id) => repositoryDelete("stores", id)));
+  await deleteStoreLatestCaches(ids);
   if (native?.cookies.clear) {
     await Promise.all(deletedStores.map((store) => store.partition ? native.cookies.clear({ partition: store.partition }).catch(() => null) : null));
+  }
+  const nextSnapshot = await ledgerSnapshot();
+  if (native?.partitions.cleanInvalid) {
+    const currentPartitions = (nextSnapshot.stores || []).map((store) => normalizedText(store.partition)).filter(Boolean);
+    const deletedPartitions = deletedStores.map((store) => normalizedText(store.partition)).filter(Boolean);
+    await native.partitions.cleanInvalid({
+      currentPartitions,
+      prefixes: ["persist:chihu_doudian_shop_", ...deletedPartitions]
+    }).catch(() => null);
   }
 
   return {
     ok: true,
     deleted: deletedStores.length,
     message: `已删除 ${deletedStores.length} 家店铺。`,
-    ...(await ledgerSnapshot())
+    ...nextSnapshot
   };
 }
 

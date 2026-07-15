@@ -2,6 +2,7 @@ import type {
   BridgeSelfCheck,
   DoudianAdapterPayload,
   DoudianBulkDeleteFilters,
+  DoudianBulkDeleteProgress,
   DoudianBulkDeleteResult,
   DoudianBusinessDataResult,
   DoudianFundsDataResult,
@@ -15,7 +16,6 @@ import type {
   DoudianOpportunitySubmitMode,
   DoudianOpportunityTitleMatchMode,
   DoudianOpportunityTitleUpdatePosition,
-  DoudianStaleGoodsCandidate,
   DoudianStaleGoodsCleanupResult,
   DoudianStaleGoodsRules,
   DoudianStoreResult,
@@ -28,9 +28,7 @@ import {
   deleteEmptyStoreGroup,
   deleteStoreLedger,
   fetchBulkDeleteProducts,
-  fetchBusinessData,
   fetchBusinessDataLatest,
-  fetchFundsData,
   fetchFundsDataLatest,
   fetchOpportunityPipelineRun,
   fetchOpportunityReport,
@@ -38,7 +36,6 @@ import {
   listOpportunityPipelineCandidatesPage,
   listOpportunityStoreCategoryLedger,
   fetchStaleGoodsCleanup,
-  fetchViolationsData,
   fetchViolationsDataLatest,
   listStoreLedger,
   openStoreWindow,
@@ -271,7 +268,21 @@ export async function fetchDoudianBusinessData(args: {
     ...(args.endDate ? { endDate: args.endDate } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
-  return fetchBusinessData(nextArgs);
+  const dedupeKey = JSON.stringify({
+    shopIds: [...(args.shopIds || [])].sort(),
+    datePreset: args.datePreset || "today",
+    beginDate: args.beginDate || "",
+    endDate: args.endDate || "",
+    adapterVersion: nextArgs.doudianAdapter.adapter.version || ""
+  });
+  return runDoudianStoreTask({
+    taskType: "businessData",
+    operationId: args.operationId,
+    adapterVersion: nextArgs.doudianAdapter.adapter.version,
+    ruleVersion: nextArgs.doudianAdapter.scripts?.version || "",
+    metadata: { dedupeKey, replaceActive: true },
+    payload: nextArgs
+  }, 900000) as Promise<DoudianBusinessDataResult>;
 }
 
 export async function fetchDoudianBusinessDataLatest(args: {
@@ -292,34 +303,34 @@ export async function fetchDoudianBusinessDataLatest(args: {
 
 export async function fetchDoudianFundsData(args: {
   shopIds?: string[];
-  datePreset?: string;
-  beginDate?: string;
-  endDate?: string;
   operationId?: string;
   forceAdapter?: boolean;
 } = {}): Promise<DoudianFundsDataResult> {
   const nextArgs = await withDoudianAdapter({
     shopIds: args.shopIds || [],
-    ...(args.datePreset ? { datePreset: args.datePreset } : {}),
-    ...(args.beginDate ? { beginDate: args.beginDate } : {}),
-    ...(args.endDate ? { endDate: args.endDate } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
-  return fetchFundsData(nextArgs);
+  const dedupeKey = JSON.stringify({
+    shopIds: [...(args.shopIds || [])].sort(),
+    view: "current-snapshot",
+    adapterVersion: nextArgs.doudianAdapter.adapter.version || ""
+  });
+  return runDoudianStoreTask({
+    taskType: "fundsData",
+    operationId: args.operationId,
+    adapterVersion: nextArgs.doudianAdapter.adapter.version,
+    ruleVersion: nextArgs.doudianAdapter.scripts?.version || "",
+    metadata: { dedupeKey, replaceActive: true },
+    payload: nextArgs
+  }, 900000) as Promise<DoudianFundsDataResult>;
 }
 
 export async function fetchDoudianFundsDataLatest(args: {
   shopIds?: string[];
-  datePreset?: string;
-  beginDate?: string;
-  endDate?: string;
   forceAdapter?: boolean;
 } = {}): Promise<DoudianFundsDataResult> {
   const nextArgs = await withDoudianAdapter({
-    shopIds: args.shopIds || [],
-    ...(args.datePreset ? { datePreset: args.datePreset } : {}),
-    ...(args.beginDate ? { beginDate: args.beginDate } : {}),
-    ...(args.endDate ? { endDate: args.endDate } : {})
+    shopIds: args.shopIds || []
   }, { force: args.forceAdapter === true });
   return fetchFundsDataLatest(nextArgs);
 }
@@ -341,7 +352,27 @@ export async function fetchDoudianViolationsData(args: {
     ...(args.processStatus ? { processStatus: args.processStatus } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
-  return fetchViolationsData(nextArgs);
+  const dedupeKey = JSON.stringify({
+    shopIds: [...(args.shopIds || [])].sort(),
+    datePreset: args.datePreset || "all",
+    beginDate: args.beginDate || "",
+    endDate: args.endDate || "",
+    processStatus: args.processStatus || "",
+    adapterVersion: nextArgs.doudianAdapter.adapter.version || ""
+  });
+  const result = await runDoudianStoreTask({
+    taskType: "violationsData",
+    operationId: args.operationId,
+    adapterVersion: nextArgs.doudianAdapter.adapter.version,
+    ruleVersion: nextArgs.doudianAdapter.scripts?.version || "",
+    metadata: { dedupeKey, replaceActive: true },
+    payload: nextArgs
+  }, 900000) as DoudianViolationsDataResult;
+  if (result.recordsDeferred) {
+    const cached = await fetchViolationsDataLatest(nextArgs);
+    return { ...result, records: cached.records || [], recordsDeferred: false };
+  }
+  return result;
 }
 
 export async function fetchDoudianViolationsDataLatest(args: {
@@ -368,11 +399,11 @@ export async function fetchDoudianStaleGoodsCleanup(args: {
   rules?: DoudianStaleGoodsRules;
   action?: "offline" | "recycle" | "delete" | "optimize";
   candidateIds?: string[];
-  candidates?: DoudianStaleGoodsCandidate[];
   sourceRunId?: string;
   confirmText?: string;
   compassFileName?: string;
   compassRows?: Array<Record<string, unknown>>;
+  compassPeriod?: "7d" | "30d" | "90d";
   operationId?: string;
   forceAdapter?: boolean;
 } = {}): Promise<DoudianStaleGoodsCleanupResult> {
@@ -382,11 +413,11 @@ export async function fetchDoudianStaleGoodsCleanup(args: {
     ...(args.rules ? { rules: args.rules } : {}),
     ...(args.action ? { action: args.action } : {}),
     ...(args.candidateIds?.length ? { candidateIds: args.candidateIds } : {}),
-    ...(args.candidates?.length ? { candidates: args.candidates } : {}),
     ...(args.sourceRunId ? { sourceRunId: args.sourceRunId } : {}),
     ...(args.confirmText ? { confirmText: args.confirmText } : {}),
     ...(args.compassFileName ? { compassFileName: args.compassFileName } : {}),
     ...(args.compassRows?.length ? { compassRows: args.compassRows } : {}),
+    ...(args.compassPeriod ? { compassPeriod: args.compassPeriod } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
   return fetchStaleGoodsCleanup(nextArgs);
@@ -403,6 +434,8 @@ export async function fetchDoudianBulkDeleteProducts(args: {
   sourceRunId?: string;
   confirmText?: string;
   operationId?: string;
+  onProgress?: (progress: DoudianBulkDeleteProgress) => void;
+  shouldCancel?: () => boolean;
   forceAdapter?: boolean;
 } = {}): Promise<DoudianBulkDeleteResult> {
   const nextArgs = await withDoudianAdapter({
@@ -417,7 +450,11 @@ export async function fetchDoudianBulkDeleteProducts(args: {
     ...(args.confirmText ? { confirmText: args.confirmText } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
-  return fetchBulkDeleteProducts(nextArgs);
+  return fetchBulkDeleteProducts({
+    ...nextArgs,
+    ...(args.onProgress ? { onProgress: args.onProgress } : {}),
+    ...(args.shouldCancel ? { shouldCancel: args.shouldCancel } : {})
+  });
 }
 
 export async function fetchDoudianOpportunityReport(args: {
@@ -572,12 +609,13 @@ export async function cancelDoudianStoreOperation(operationId: string): Promise<
   return { ...(await listStoreLedger()), ok: false, status: "cancelled", operationId, message: "已取消任务" };
 }
 
-export async function openDoudianStore(shopId: string): Promise<DoudianStoreResult> {
+export async function openDoudianStore(shopId: string, url?: string): Promise<DoudianStoreResult> {
   let doudianAdapter: DoudianAdapterPayload | undefined;
   try {
     doudianAdapter = (await withDoudianAdapter({ shopId })).doudianAdapter;
   } catch {}
-  return openStoreWindow(shopId, { doudianAdapter });
+  const resolvedUrl = url && doudianAdapter?.adapter.origin ? new URL(url, doudianAdapter.adapter.origin).toString() : undefined;
+  return openStoreWindow(shopId, { doudianAdapter, url: resolvedUrl });
 }
 
 export async function deleteDoudianStores(shopIds: string[]): Promise<DoudianStoreResult> {

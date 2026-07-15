@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "audit:bulk-delete": "node remote-web/scripts/audit-bulk-delete-contract.mjs",
+    "audit:stale-goods": "node remote-web/scripts/audit-stale-goods-cleanup-contract.mjs",
     "release:gate:product-catalog": "node scripts/run-product-catalog-release-gate.mjs",
     "release:cos": "node scripts/publish-oss.mjs",
     "release:cos:remote": "node scripts/publish-oss.mjs --remote",

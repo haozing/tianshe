@@ -10,11 +10,12 @@ import type {
   DoudianStaleGoodsRules,
   DoudianStoreSummary
 } from "../../types";
-import { repositoryDelete, repositoryGetAll, repositoryPut, repositoryPutMany } from "./repository";
+import { repositoryDelete, repositoryGet, repositoryGetAll, repositoryGetMany, repositoryPut, repositoryPutMany } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { requireChihuNative } from "../../native/client";
 import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
+import * as XLSX from "xlsx";
 
 interface StaleGoodsArgs {
   doudianAdapter?: DoudianAdapterPayload;
@@ -23,13 +24,13 @@ interface StaleGoodsArgs {
   rules?: DoudianStaleGoodsRules;
   compassFileName?: string;
   compassRows?: Array<Record<string, unknown>>;
+  compassPeriod?: "7d" | "30d" | "90d";
   operationId?: string;
   pageSize?: number;
   maxProductListPages?: number;
   mockProducts?: Array<Record<string, unknown>>;
   action?: DoudianStaleGoodsAction | string;
   candidateIds?: string[];
-  candidates?: DoudianStaleGoodsCandidate[];
   sourceRunId?: string;
   confirmText?: string;
 }
@@ -138,13 +139,13 @@ function fieldScale(adapter: DoudianAdapterConfig, field: string) {
   return Number.isFinite(value) && value > 0 ? value : 1;
 }
 
-function firstArray(value: unknown, paths: string[]) {
-  if (Array.isArray(value)) return value;
+function findArray(value: unknown, paths: string[]) {
+  if (Array.isArray(value)) return { found: true, items: value };
   for (const path of paths) {
     const next = path ? getPathValue(value, path) : value;
-    if (Array.isArray(next)) return next;
+    if (Array.isArray(next)) return { found: true, items: next };
   }
-  return [];
+  return { found: false, items: [] as unknown[] };
 }
 
 function coerceNumber(value: unknown): number | undefined {
@@ -170,9 +171,9 @@ function readField(record: unknown, adapter: DoudianAdapterConfig, field: string
   return firstPathValue(record, fieldPaths(adapter, field));
 }
 
-function readNumber(record: unknown, adapter: DoudianAdapterConfig, field: string, fallback = 0) {
+function readOptionalNumber(record: unknown, adapter: DoudianAdapterConfig, field: string) {
   const value = coerceNumber(readField(record, adapter, field));
-  return value === undefined ? fallback : value / fieldScale(adapter, field);
+  return value === undefined ? undefined : value / fieldScale(adapter, field);
 }
 
 function readText(record: unknown, adapter: DoudianAdapterConfig, field: string, fallback = "") {
@@ -200,11 +201,11 @@ function defaultRules(adapter: DoudianAdapterConfig): DoudianStaleGoodsRules {
   const config = objectRecord(policy(adapter, "staleGoodsCleanup.defaultRules", {}));
   return {
     totalSalesEnabled: config.totalSalesEnabled !== false,
-    totalSalesMax: Number(config.totalSalesMax ?? 5),
+    totalSalesMax: Number(config.totalSalesMax ?? 0),
     exposureEnabled: config.exposureEnabled !== false,
-    exposureMax: Number(config.exposureMax ?? 800),
+    exposureMax: Number(config.exposureMax ?? 0),
     clickEnabled: config.clickEnabled !== false,
-    clickMax: Number(config.clickMax ?? 30),
+    clickMax: Number(config.clickMax ?? 0),
     exposureUsersEnabled: config.exposureUsersEnabled === true,
     exposureUsersMax: Number(config.exposureUsersMax ?? 0),
     clickUsersEnabled: config.clickUsersEnabled === true,
@@ -221,7 +222,10 @@ function defaultRules(adapter: DoudianAdapterConfig): DoudianStaleGoodsRules {
     noSalesDays: Number(config.noSalesDays ?? 30),
     skipListedDaysEnabled: config.skipListedDaysEnabled === true,
     listedDays: Number(config.listedDays ?? 0),
-    trafficPeriod: (config.trafficPeriod === "7d" || config.trafficPeriod === "90d") ? config.trafficPeriod : "30d",
+    perStoreLimit: Number(config.perStoreLimit ?? 0),
+    trafficPeriod: (config.trafficPeriod === "30d" || config.trafficPeriod === "90d") ? config.trafficPeriod : "7d",
+    productSource: config.productSource === "offline" || config.productSource === "importedIds" ? config.productSource : "selling",
+    importedProductIds: Array.isArray(config.importedProductIds) ? config.importedProductIds.map((item) => text(item)).filter(Boolean) : [],
     noSalesType: (config.noSalesType === "strict" || config.noSalesType === "trafficWaste") ? config.noSalesType : "balanced",
     requireLowRating: config.requireLowRating === true,
     requireLowInfo: config.requireLowInfo === true,
@@ -236,12 +240,13 @@ function normalizeRules(args: StaleGoodsArgs, adapter: DoudianAdapterConfig) {
 }
 
 function qualityIssues(row: DoudianStaleGoodsCandidate) {
+  const thresholds = new Set((row.recommendThresholds || []).map(Number));
   return {
-    lowRating: Number(row.ratingScore || 0) > 0 && Number(row.ratingScore || 0) < 4.5,
-    lowInfo: Number(row.infoQualityScore || 0) > 0 && Number(row.infoQualityScore || 0) < 70,
-    lowImage: Number(row.mainImageScore || 0) > 0 && Number(row.mainImageScore || 0) < 70,
-    sameStyleRisk: row.sameStyleRisk === true,
-    badTitle: Number(row.titleQualityScore || 0) > 0 && Number(row.titleQualityScore || 0) < 70
+    lowRating: thresholds.has(3) || (Number(row.ratingScore || 0) > 0 && Number(row.ratingScore || 0) < 4.5),
+    lowInfo: thresholds.has(4) || (Number(row.infoQualityScore || 0) > 0 && Number(row.infoQualityScore || 0) < 70),
+    lowImage: thresholds.has(21) || (Number(row.mainImageScore || 0) > 0 && Number(row.mainImageScore || 0) < 70),
+    sameStyleRisk: thresholds.has(20) || row.sameStyleRisk === true,
+    badTitle: thresholds.has(19) || (Number(row.titleQualityScore || 0) > 0 && Number(row.titleQualityScore || 0) < 70)
   };
 }
 
@@ -258,10 +263,11 @@ function qualityLabels(row: DoudianStaleGoodsCandidate) {
 
 function scoreCandidate(row: DoudianStaleGoodsCandidate) {
   const qualityIssueCount = qualityLabels(row).length;
-  const noPeriodSales = Number(row.periodSales || 0) === 0 ? 30 : 0;
-  const lowTotalSales = Number(row.totalSales || 0) <= 5 ? 18 : 0;
-  const trafficWaste = Number(row.exposureCount || 0) >= 1000 && Number(row.periodSales || 0) === 0 ? 20 : 0;
-  const stockPressure = Number(row.stock || 0) >= 80 ? 12 : Number(row.stock || 0) >= 30 ? 8 : 4;
+  const available = row.metricAvailability || {};
+  const noPeriodSales = available.periodSales && Number(row.periodSales || 0) === 0 ? 30 : 0;
+  const lowTotalSales = available.totalSales && Number(row.totalSales || 0) <= 5 ? 18 : 0;
+  const trafficWaste = available.exposureCount && available.periodSales && Number(row.exposureCount || 0) >= 1000 && Number(row.periodSales || 0) === 0 ? 20 : 0;
+  const stockPressure = !available.stock ? 0 : Number(row.stock || 0) >= 80 ? 12 : Number(row.stock || 0) >= 30 ? 8 : 4;
   const ageDays = Number(row.daysSinceAge ?? -1);
   const age = ageDays >= 90 ? 10 : ageDays >= 30 ? 6 : 0;
   const quality = Math.min(15, qualityIssueCount * 4);
@@ -276,30 +282,92 @@ function riskFromScore(score: number) {
 
 function actionFromCandidate(row: DoudianStaleGoodsCandidate) {
   const issues = qualityLabels(row);
-  const hasTrafficWaste = Number(row.exposureCount || 0) >= 1000 && Number(row.periodSales || 0) === 0;
-  if (Number(row.totalSales || 0) <= 1 && Number(row.periodSales || 0) === 0 && issues.length >= 3) return "delete";
-  if (Number(row.totalSales || 0) <= 2 && Number(row.periodSales || 0) === 0 && Number(row.stock || 0) >= 80) return "recycle";
-  if (hasTrafficWaste || Number(row.stock || 0) >= 30) return "offline";
+  const available = row.metricAvailability || {};
+  const salesKnown = available.totalSales && available.periodSales;
+  const hasTrafficWaste = available.exposureCount && available.periodSales && Number(row.exposureCount || 0) >= 1000 && Number(row.periodSales || 0) === 0;
+  if (salesKnown && Number(row.totalSales || 0) <= 1 && Number(row.periodSales || 0) === 0 && issues.length >= 3) return "delete";
+  if (salesKnown && available.stock && Number(row.totalSales || 0) <= 2 && Number(row.periodSales || 0) === 0 && Number(row.stock || 0) >= 80) return "recycle";
+  if (hasTrafficWaste || (available.stock && Number(row.stock || 0) >= 30)) return "offline";
   return "optimize";
 }
 
 function reasons(row: DoudianStaleGoodsCandidate) {
+  const available = row.metricAvailability || {};
   const output = [];
-  if (Number(row.periodSales || 0) === 0) output.push("no period sales");
-  if (Number(row.totalSales || 0) <= 5) output.push("low total sales");
-  if (Number(row.exposureCount || 0) >= 1000 && Number(row.periodSales || 0) === 0) output.push("traffic without conversion");
-  if (Number(row.clickCount || 0) <= 30) output.push("low clicks");
-  if (Number(row.stock || 0) >= 80) output.push("stock pressure");
+  if (available.periodSales && Number(row.periodSales || 0) === 0) output.push("no period sales");
+  if (available.totalSales && Number(row.totalSales || 0) <= 5) output.push("low total sales");
+  if (available.exposureCount && available.periodSales && Number(row.exposureCount || 0) >= 1000 && Number(row.periodSales || 0) === 0) output.push("traffic without conversion");
+  if (available.clickCount && Number(row.clickCount || 0) <= 30) output.push("low clicks");
+  if (available.stock && Number(row.stock || 0) >= 80) output.push("stock pressure");
   if (Number(row.daysSinceAge ?? -1) >= 30) output.push("old product");
   return [...output, ...qualityLabels(row)].slice(0, 5);
 }
 
-function candidateFromProduct(store: DoudianStoreSummary, product: Record<string, unknown>, adapter: DoudianAdapterConfig, runId: string, index: number, compassById: Map<string, Record<string, unknown>>) {
-  const productId = readText(product, adapter, "productId") || `product-${index + 1}`;
+function firstRecordValue(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    if (record[key] !== undefined && record[key] !== null && record[key] !== "") return record[key];
+  }
+  return undefined;
+}
+
+const compassAliases: Record<string, string[]> = {
+  productId: ["productId", "product_id", "goods_id", "\u5546\u54c1ID", "\u5546\u54c1id", "\u5546\u54c1\u7f16\u7801"],
+  title: ["title", "name", "\u5546\u54c1\u6807\u9898", "\u5546\u54c1\u540d\u79f0"],
+  totalSales: ["totalSales", "sales", "saleNum", "sell_num", "\u603b\u9500\u91cf", "\u7d2f\u8ba1\u9500\u91cf"],
+  periodSales: ["periodSales", "payOrderCount", "turNover", "pay_cnt", "\u6210\u4ea4\u8ba2\u5355\u6570", "\u5468\u671f\u6210\u4ea4"],
+  exposureCount: ["exposureCount", "showCount", "product_show_cnt", "\u5546\u54c1\u66dd\u5149\u6b21\u6570", "\u66dd\u5149\u6b21\u6570"],
+  clickCount: ["clickCount", "product_click_cnt", "\u5546\u54c1\u70b9\u51fb\u6b21\u6570", "\u70b9\u51fb\u6b21\u6570"],
+  exposureUsers: ["exposureUsers", "product_show_ucnt", "\u5546\u54c1\u66dd\u5149\u4eba\u6570", "\u66dd\u5149\u4eba\u6570"],
+  clickUsers: ["clickUsers", "product_click_ucnt", "\u5546\u54c1\u70b9\u51fb\u4eba\u6570", "\u70b9\u51fb\u4eba\u6570"],
+  price: ["price", "minPrice", "\u4ef7\u683c", "\u5546\u54c1\u4ef7\u683c"],
+  stock: ["stock", "stockNum", "\u5e93\u5b58", "\u5e93\u5b58\u6570\u91cf"],
+  ratingScore: ["ratingScore", "\u7efc\u5408\u8bc4\u4ef7"],
+  infoQualityScore: ["infoQualityScore", "\u4fe1\u606f\u8d28\u91cf\u5206"],
+  mainImageScore: ["mainImageScore", "\u4e3b\u56fe\u5f97\u5206"],
+  titleQualityScore: ["titleQualityScore", "\u6807\u9898\u5f97\u5206"]
+};
+
+function compassNumber(record: Record<string, unknown>, field: string) {
+  return coerceNumber(firstRecordValue(record, compassAliases[field] || [field]));
+}
+
+function joinedNumber(product: Record<string, unknown>, compass: Record<string, unknown>, adapter: DoudianAdapterConfig, field: string) {
+  const productValue = readOptionalNumber(product, adapter, field);
+  if (productValue !== undefined) return { value: productValue, available: true };
+  const compassValue = compassNumber(compass, field);
+  return { value: compassValue ?? 0, available: compassValue !== undefined };
+}
+
+function candidateFromProduct(
+  store: DoudianStoreSummary,
+  product: Record<string, unknown>,
+  adapter: DoudianAdapterConfig,
+  runId: string,
+  compassById: Map<string, Record<string, unknown>>,
+  recommendById: Map<string, Set<number>>,
+  productSource: DoudianStaleGoodsRules["productSource"]
+) {
+  const productId = readText(product, adapter, "productId");
+  if (!productId) return null;
+  const compassMatched = compassById.has(productId);
   const compass = compassById.get(productId) || {};
   const createdAt = normalizeDate(readField(product, adapter, "createdAt") || compass.createdAt || compass.createTime);
   const listedAt = normalizeDate(readField(product, adapter, "listedAt") || compass.listedAt || compass.auditTime);
   const ageDate = createdAt || listedAt;
+  const price = joinedNumber(product, compass, adapter, "price");
+  const stock = joinedNumber(product, compass, adapter, "stock");
+  const totalSales = joinedNumber(product, compass, adapter, "totalSales");
+  const periodSales = joinedNumber(product, compass, adapter, "periodSales");
+  const exposureCount = joinedNumber(product, compass, adapter, "exposureCount");
+  const clickCount = joinedNumber(product, compass, adapter, "clickCount");
+  const exposureUsers = joinedNumber(product, compass, adapter, "exposureUsers");
+  const clickUsers = joinedNumber(product, compass, adapter, "clickUsers");
+  const ratingScore = joinedNumber(product, compass, adapter, "ratingScore");
+  const infoQualityScore = joinedNumber(product, compass, adapter, "infoQualityScore");
+  const mainImageScore = joinedNumber(product, compass, adapter, "mainImageScore");
+  const titleQualityScore = joinedNumber(product, compass, adapter, "titleQualityScore");
+  const recommendThresholds = [...(recommendById.get(productId) || new Set<number>())];
+  const sameStyleValue = readField(product, adapter, "sameStyleRisk");
   const base: DoudianStaleGoodsCandidate = {
     id: `${runId}-${store.shopId}-${productId}`,
     candidateId: `${store.shopId}-${productId}`,
@@ -308,9 +376,9 @@ function candidateFromProduct(store: DoudianStoreSummary, product: Record<string
     shopName: store.shopName,
     group: store.groupName || "",
     productId,
-    title: readText(product, adapter, "title") || text(compass.title || compass.name) || productId,
+    title: readText(product, adapter, "title") || text(firstRecordValue(compass, compassAliases.title)) || productId,
     category: readText(product, adapter, "category") || text(compass.category) || "",
-    status: readText(product, adapter, "status") || text(compass.status) || "\u5728\u552e",
+    status: productSource === "offline" ? "\u5df2\u4e0b\u67b6" : readText(product, adapter, "status") || text(compass.status) || "\u5728\u552e",
     createdAt,
     listedAt,
     ageDate,
@@ -318,24 +386,41 @@ function candidateFromProduct(store: DoudianStoreSummary, product: Record<string
     daysSinceAge: daysSince(ageDate),
     daysSinceCreated: daysSince(createdAt),
     daysSinceListed: daysSince(listedAt),
-    price: readNumber(product, adapter, "price", Number(compass.price || 0)),
-    stock: readNumber(product, adapter, "stock", Number(compass.stock || 0)),
-    totalSales: readNumber(product, adapter, "totalSales", Number(compass.totalSales || compass.sales || 0)),
-    periodSales: readNumber(product, adapter, "periodSales", Number(compass.periodSales || compass.payOrderCount || 0)),
-    exposureCount: readNumber(product, adapter, "exposureCount", Number(compass.exposureCount || compass.showCount || 0)),
-    clickCount: readNumber(product, adapter, "clickCount", Number(compass.clickCount || 0)),
-    exposureUsers: readNumber(product, adapter, "exposureUsers", Number(compass.exposureUsers || 0)),
-    clickUsers: readNumber(product, adapter, "clickUsers", Number(compass.clickUsers || 0)),
-    ratingScore: readNumber(product, adapter, "ratingScore", Number(compass.ratingScore || 0)),
-    infoQualityScore: readNumber(product, adapter, "infoQualityScore", Number(compass.infoQualityScore || 0)),
-    mainImageScore: readNumber(product, adapter, "mainImageScore", Number(compass.mainImageScore || 0)),
-    titleQualityScore: readNumber(product, adapter, "titleQualityScore", Number(compass.titleQualityScore || 0)),
-    sameStyleRisk: Boolean(readField(product, adapter, "sameStyleRisk") || compass.sameStyleRisk),
+    price: price.value,
+    stock: stock.value,
+    totalSales: totalSales.value,
+    periodSales: periodSales.value,
+    exposureCount: exposureCount.value,
+    clickCount: clickCount.value,
+    exposureUsers: exposureUsers.value,
+    clickUsers: clickUsers.value,
+    ratingScore: ratingScore.value,
+    infoQualityScore: infoQualityScore.value,
+    mainImageScore: mainImageScore.value,
+    titleQualityScore: titleQualityScore.value,
+    sameStyleRisk: recommendThresholds.includes(20) || Boolean(sameStyleValue || compass.sameStyleRisk),
     risk: "low",
     riskScore: 0,
     action: "optimize",
     reasons: [],
-    source: "platform product list"
+    source: ["platform product list", compassMatched ? "compass traffic" : "", recommendThresholds.length ? "recommend_admit" : ""].filter(Boolean).join(" + "),
+    compassMatched,
+    recommendThresholds,
+    metricAvailability: {
+      price: price.available,
+      stock: stock.available,
+      totalSales: totalSales.available,
+      periodSales: periodSales.available,
+      exposureCount: exposureCount.available,
+      clickCount: clickCount.available,
+      exposureUsers: exposureUsers.available,
+      clickUsers: clickUsers.available,
+      ratingScore: ratingScore.available,
+      infoQualityScore: infoQualityScore.available,
+      mainImageScore: mainImageScore.available,
+      titleQualityScore: titleQualityScore.available,
+      sameStyleRisk: recommendThresholds.includes(20) || sameStyleValue !== undefined || compass.sameStyleRisk !== undefined
+    }
   };
   const riskScore = scoreCandidate(base);
   base.riskScore = riskScore;
@@ -346,18 +431,20 @@ function candidateFromProduct(store: DoudianStoreSummary, product: Record<string
 }
 
 function evaluateRules(row: DoudianStaleGoodsCandidate, rules: DoudianStaleGoodsRules) {
-  const withinSales = !rules.totalSalesEnabled || Number(row.totalSales || 0) <= rules.totalSalesMax;
-  const withinPeriodSales = !rules.periodSalesEnabled || Number(row.periodSales || 0) <= rules.periodSalesMax;
-  const withinExposure = !rules.exposureEnabled || Number(row.exposureCount || 0) <= rules.exposureMax;
-  const withinClick = !rules.clickEnabled || Number(row.clickCount || 0) <= rules.clickMax;
-  const withinExposureUsers = !rules.exposureUsersEnabled || Number(row.exposureUsers || 0) <= Number(rules.exposureUsersMax || 0);
-  const withinClickUsers = !rules.clickUsersEnabled || Number(row.clickUsers || 0) <= Number(rules.clickUsersMax || 0);
+  const available = row.metricAvailability || {};
+  const withinMaximum = (enabled: boolean | undefined, field: string, value: number, maximum: number) => !enabled || (available[field] === true && value <= maximum);
+  const withinSales = withinMaximum(rules.totalSalesEnabled, "totalSales", Number(row.totalSales || 0), rules.totalSalesMax);
+  const withinPeriodSales = withinMaximum(rules.periodSalesEnabled, "periodSales", Number(row.periodSales || 0), rules.periodSalesMax);
+  const withinExposure = withinMaximum(rules.exposureEnabled, "exposureCount", Number(row.exposureCount || 0), rules.exposureMax);
+  const withinClick = withinMaximum(rules.clickEnabled, "clickCount", Number(row.clickCount || 0), rules.clickMax);
+  const withinExposureUsers = withinMaximum(rules.exposureUsersEnabled, "exposureUsers", Number(row.exposureUsers || 0), Number(rules.exposureUsersMax || 0));
+  const withinClickUsers = withinMaximum(rules.clickUsersEnabled, "clickUsers", Number(row.clickUsers || 0), Number(rules.clickUsersMax || 0));
   const metricEnabled = [rules.totalSalesEnabled, rules.periodSalesEnabled, rules.exposureEnabled, rules.clickEnabled, rules.exposureUsersEnabled, rules.clickUsersEnabled].some(Boolean);
   const metricMatch = metricEnabled ? [withinSales, withinPeriodSales, withinExposure, withinClick, withinExposureUsers, withinClickUsers].every(Boolean) : true;
   const stockMax = Number(rules.stockMax || 0);
   const priceMax = Number(rules.maxPrice || 0);
-  const stockMatch = !rules.stockRangeEnabled || (Number(row.stock || 0) >= rules.stockMin && (!stockMax || Number(row.stock || 0) <= stockMax));
-  const priceMatch = !rules.priceRangeEnabled || (Number(row.price || 0) >= rules.minPrice && (!priceMax || Number(row.price || 0) <= priceMax));
+  const stockMatch = !rules.stockRangeEnabled || (available.stock === true && Number(row.stock || 0) >= rules.stockMin && (!stockMax || Number(row.stock || 0) <= stockMax));
+  const priceMatch = !rules.priceRangeEnabled || (available.price === true && Number(row.price || 0) >= rules.minPrice && (!priceMax || Number(row.price || 0) <= priceMax));
   const createdOldEnough = !rules.skipCreatedDaysEnabled || (Number(row.daysSinceCreated ?? -1) >= rules.noSalesDays);
   const listedOldEnough = !rules.skipListedDaysEnabled || (Number(row.daysSinceListed ?? -1) >= Number(rules.listedDays || 0));
   const issues = qualityIssues(row);
@@ -370,13 +457,18 @@ function evaluateRules(row: DoudianStaleGoodsCandidate, rules: DoudianStaleGoods
   ];
   const hasQualityRule = [rules.requireLowRating, rules.requireLowInfo, rules.requireLowImage, rules.requireSameStyleRisk, rules.requireBadTitle].some(Boolean);
   const qualityMatch = hasQualityRule ? qualityRules.some(Boolean) : true;
-  const baseMatch = stockMatch && priceMatch && createdOldEnough && listedOldEnough && qualityMatch;
+  const baseWithoutAge = stockMatch && priceMatch && qualityMatch;
   const typeMatch = rules.noSalesType === "strict"
-    ? Number(row.periodSales || 0) === 0 && (!rules.totalSalesEnabled || Number(row.totalSales || 0) <= rules.totalSalesMax)
+    ? available.periodSales === true && Number(row.periodSales || 0) === 0 && withinSales
     : rules.noSalesType === "trafficWaste"
-      ? Number(row.exposureCount || 0) >= (rules.exposureEnabled ? rules.exposureMax : 0) && Number(row.periodSales || 0) <= rules.periodSalesMax
+      ? available.exposureCount === true && available.periodSales === true && Number(row.exposureCount || 0) >= (rules.exposureEnabled ? rules.exposureMax : 0) && Number(row.periodSales || 0) <= rules.periodSalesMax
       : metricMatch;
-  return baseMatch && typeMatch;
+  const ageMatch = createdOldEnough && listedOldEnough;
+  const ageKnown = (!rules.skipCreatedDaysEnabled || Number(row.daysSinceCreated ?? -1) >= 0) && (!rules.skipListedDaysEnabled || Number(row.daysSinceListed ?? -1) >= 0);
+  return {
+    match: baseWithoutAge && ageMatch && typeMatch,
+    ageBlocked: baseWithoutAge && typeMatch && ageKnown && !ageMatch
+  };
 }
 
 function buildRow(store: DoudianStoreSummary, candidates: DoudianStaleGoodsCandidate[], remoteTotal = 0): DoudianStaleGoodsRow {
@@ -392,7 +484,7 @@ function buildRow(store: DoudianStoreSummary, candidates: DoudianStaleGoodsCandi
     recycleCount: candidates.filter((item) => item.action === "recycle").length,
     deleteCount: candidates.filter((item) => item.action === "delete").length,
     optimizeCount: candidates.filter((item) => item.action === "optimize").length,
-    trafficWasteCount: candidates.filter((item) => Number(item.exposureCount || 0) >= 1000 && Number(item.periodSales || 0) === 0).length,
+    trafficWasteCount: candidates.filter((item) => item.metricAvailability?.exposureCount && item.metricAvailability?.periodSales && Number(item.exposureCount || 0) >= 1000 && Number(item.periodSales || 0) === 0).length,
     qualityIssueCount: candidates.filter((item) => qualityLabels(item).length > 0).length,
     stockCount: candidates.reduce((sum, item) => sum + Number(item.stock || 0), 0)
   };
@@ -420,8 +512,12 @@ function actionPlanKey(adapter: DoudianAdapterConfig, action: string) {
   if (plans[action]) return text(plans[action]);
   if (action === "offline") return "staleGoodsBatchOffline";
   if (action === "recycle") return "staleGoodsBatchDelete";
-  if (action === "delete") return "staleGoodsCompleteDelete";
+  if (action === "delete") return "staleGoodsBatchDelete";
   return "";
+}
+
+function completeDeletePlanKey(adapter: DoudianAdapterConfig) {
+  return text(executePlans(adapter).completeDelete) || "staleGoodsCompleteDelete";
 }
 
 function executePlanGuard(adapter: DoudianAdapterConfig, action: string, planKey: string) {
@@ -436,39 +532,20 @@ function executePlanGuard(adapter: DoudianAdapterConfig, action: string, planKey
   };
 }
 
-function normalizeExecuteCandidates(args: StaleGoodsArgs) {
-  const selectedIds = new Set((args.candidateIds || []).map((id) => text(id)).filter(Boolean));
-  return (args.candidates || [])
-    .filter((item) => item && typeof item === "object")
-    .filter((item) => !selectedIds.size || selectedIds.has(text(item.id || `${item.shopId || ""}-${item.productId || ""}`)))
-    .map((item) => ({
-      ...item,
-      id: text(item.id || `${item.shopId || ""}-${item.productId || ""}`),
-      candidateId: text(item.candidateId || item.id || `${item.shopId || ""}-${item.productId || ""}`),
-      sourceRunId: text(item.sourceRunId || args.sourceRunId),
-      shopId: text(item.shopId),
-      shopName: text(item.shopName),
-      productId: text(item.productId),
-      title: text(item.title),
-      action: text(args.action || item.action)
-    }))
-    .filter((item) => item.shopId && item.productId && ["offline", "recycle", "delete"].includes(item.action));
-}
-
-async function validateExecuteSourceRun(sourceRunId: string, selected: DoudianStaleGoodsCandidate[]) {
+async function loadExecuteCandidates(sourceRunId: string, candidateIds: string[], action: string) {
   if (!sourceRunId) throw new Error("stale goods execute requires sourceRunId");
-  const run = await repositoryGetAll<ScanRunRecord>("stale_scan_runs")
-    .then((runs) => runs.find((item) => item.runId === sourceRunId || item.id === sourceRunId) || null);
+  const run = await repositoryGet<ScanRunRecord>("stale_scan_runs", sourceRunId);
   if (!run) throw new Error("stale goods source scan run not found");
-  const candidates = await repositoryGetAll<DoudianStaleGoodsCandidate>("stale_candidates");
-  const valid = new Set(candidates.filter((item) => item.sourceRunId === sourceRunId).flatMap((item) => [
-    text(item.id),
-    text(item.candidateId),
-    `${item.shopId}-${item.productId}`
-  ]).filter(Boolean));
-  const invalid = selected.filter((item) => !valid.has(text(item.id)) && !valid.has(text(item.candidateId)) && !valid.has(`${item.shopId}-${item.productId}`));
-  if (invalid.length) throw new Error(`stale goods candidates are not from source run: ${invalid.slice(0, 3).map((item) => item.productId).join(",")}`);
-  return run;
+  const ids = Array.from(new Set(candidateIds.map((id) => text(id)).filter(Boolean)));
+  if (!ids.length) throw new Error("stale goods cleanup selected products missing");
+  const candidates = await repositoryGetMany<DoudianStaleGoodsCandidate>("stale_candidates", ids);
+  const byId = new Map(candidates.map((candidate) => [text(candidate.id), candidate]));
+  const missing = ids.filter((id) => !byId.has(id));
+  if (missing.length) throw new Error(`stale goods candidates missing from local snapshot: ${missing.slice(0, 3).join(",")}`);
+  const selected = ids.map((id) => byId.get(id) as DoudianStaleGoodsCandidate);
+  const invalid = selected.filter((candidate) => candidate.sourceRunId !== sourceRunId || !candidate.shopId || !candidate.productId);
+  if (invalid.length) throw new Error(`stale goods candidates are not from source run: ${invalid.slice(0, 3).map((item) => item.id).join(",")}`);
+  return selected.map((candidate) => ({ ...candidate, sourceRunId, action }));
 }
 
 function executeSummary(executions: DoudianStaleGoodsExecution[]) {
@@ -488,7 +565,8 @@ function staleExecutionsFromRejected(
   store: DoudianStoreSummary,
   rejected: Array<{ item: DoudianStaleGoodsCandidate; mutationKey: string; status: string; ok: boolean; message: string; liveLifecycleStatus?: string }>,
   action: string,
-  planKey: string
+  planKey: string,
+  stage: string
 ): DoudianStaleGoodsExecution[] {
   return rejected.map((entry) => ({
     id: entry.item.id,
@@ -504,18 +582,26 @@ function staleExecutionsFromRejected(
     status: entry.status,
     ok: entry.ok,
     message: entry.message,
-    planKey
+    planKey,
+    stage
   }));
 }
 
-async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, candidates: DoudianStaleGoodsCandidate[], action: string, planKey: string, index: number, total: number, runId: string) {
+async function executeStage(payload: DoudianAdapterPayload, store: DoudianStoreSummary, candidates: DoudianStaleGoodsCandidate[], action: string, planKey: string, stage: string, index: number, total: number, runId: string) {
   const guard = executePlanGuard(payload.adapter, action, planKey);
   let productIds = candidates.map((item) => item.productId).filter(Boolean);
+  const formBody = (ids: string[]) => {
+    const params = new URLSearchParams();
+    ids.forEach((id) => params.append("product_ids[]", id));
+    return params.toString();
+  };
   const requestContext = {
     productIds: productIds.join(","),
     productIdList: productIds,
     productCount: productIds.length,
+    formBody: formBody(productIds),
     action,
+    stage,
     shopId: store.shopId,
     shopName: store.shopName,
     partition: store.partition,
@@ -535,7 +621,8 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
         status: "failed",
         ok: false,
         message,
-        planKey
+        planKey,
+        stage
       })),
       detail: {
         shopId: store.shopId,
@@ -565,7 +652,8 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
         status: "dry_run",
         ok: true,
         message,
-        planKey
+        planKey,
+        stage
       })),
       detail: {
         shopId: store.shopId,
@@ -589,11 +677,11 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
     runId,
     sourceRunId: candidates.find((item) => item.sourceRunId)?.sourceRunId,
     operationId: runId,
-    action,
-    stage: action,
+    action: stage === "recycle" ? "recycle" : action,
+    stage,
     planKey
   });
-  const rejectedExecutions = staleExecutionsFromRejected(store, safety.rejected, action, planKey);
+  const rejectedExecutions = staleExecutionsFromRejected(store, safety.rejected, action, planKey, stage);
   const safeCandidates = safety.allowed;
   if (!safeCandidates.length) {
     return {
@@ -617,7 +705,8 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
     ...requestContext,
     productIds: productIds.join(","),
     productIdList: productIds,
-    productCount: productIds.length
+    productCount: productIds.length,
+    formBody: formBody(productIds)
   };
   const response = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context: safeRequestContext });
   const ok = requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter));
@@ -640,10 +729,11 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
       status: ok ? "submitted" : "failed",
       ok,
       message,
-      planKey
+      planKey,
+      stage
     }))
   ];
-  await recordExecutionMutationResults({ store, executions, defaultAction: action }).catch(() => undefined);
+  await recordExecutionMutationResults({ store, executions, defaultAction: stage === "recycle" ? "recycle" : action }).catch(() => undefined);
   return {
     executions,
     detail: {
@@ -661,6 +751,122 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
   };
 }
 
+async function executeStore(
+  payload: DoudianAdapterPayload,
+  store: DoudianStoreSummary,
+  candidates: DoudianStaleGoodsCandidate[],
+  action: string,
+  planKey: string,
+  index: number,
+  total: number,
+  runId: string
+) {
+  const batchSize = policyNumber(payload.adapter, "staleGoodsCleanup.executeBatchSize", 100, 1, 100);
+  const batches = chunksOf(candidates, batchSize);
+  const completePlanKey = completeDeletePlanKey(payload.adapter);
+  const firstGuard = executePlanGuard(payload.adapter, action, planKey);
+  const completeGuard = action === "delete" ? executePlanGuard(payload.adapter, action, completePlanKey) : null;
+  if (action === "delete" && !completeGuard?.ok) {
+    const message = "stale goods complete delete plan unavailable";
+    return {
+      executions: candidates.map((candidate) => ({
+        id: candidate.id,
+        sourceRunId: candidate.sourceRunId,
+        shopId: store.shopId,
+        shopName: store.shopName,
+        productId: candidate.productId,
+        title: candidate.title,
+        action,
+        stage: "delete",
+        status: "failed",
+        ok: false,
+        message,
+        planKey: completePlanKey
+      } as DoudianStaleGoodsExecution)),
+      detail: { shopId: store.shopId, shopName: store.shopName, status: "failed", ok: false, message, reason: "stale-goods-complete-delete-plan-missing", category: "adapter", diagnostic: { planKey, completePlanKey }, index, total } as DoudianRunDetail
+    };
+  }
+  if (firstGuard.ok && (firstGuard.dryRunOnly || completeGuard?.dryRunOnly)) {
+    const message = policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeDryRun", "Stale goods cleanup dry-run only; no platform write request was submitted", { count: candidates.length });
+    const executions = candidates.map((candidate) => ({
+      id: candidate.id,
+      sourceRunId: candidate.sourceRunId,
+      shopId: store.shopId,
+      shopName: store.shopName,
+      productId: candidate.productId,
+      title: candidate.title,
+      action,
+      stage: action === "delete" ? "delete" : action,
+      status: "dry_run",
+      ok: true,
+      message,
+      planKey
+    } as DoudianStaleGoodsExecution));
+    return {
+      executions,
+      detail: {
+        shopId: store.shopId,
+        shopName: store.shopName,
+        status: "dry_run",
+        ok: true,
+        message,
+        reason: "stale-goods-execute-dry-run",
+        category: "adapter-policy",
+        diagnostic: { batchSize, batchCount: batches.length, firstGuard, completeGuard, twoStageDelete: action === "delete" },
+        index,
+        total
+      } as DoudianRunDetail
+    };
+  }
+
+  const executions: DoudianStaleGoodsExecution[] = [];
+  const diagnostics: Array<Record<string, unknown>> = [];
+  for (const [batchIndex, batch] of batches.entries()) {
+    const firstStageName = action === "offline" ? "offline" : "recycle";
+    const first = await executeStage(payload, store, batch, action, planKey, firstStageName, batchIndex + 1, batches.length, runId);
+    const diagnostic: Record<string, unknown> = { index: batchIndex + 1, total: batches.length, firstStage: first.detail.diagnostic };
+    if (action !== "delete" || first.executions.every((execution) => execution.status === "dry_run")) {
+      executions.push(...first.executions);
+      if (action === "delete") diagnostic.completeDelete = { guard: completeGuard, plannedProductCount: batch.length };
+      diagnostics.push(diagnostic);
+      continue;
+    }
+    const successfulIds = new Set(first.executions.filter((execution) => execution.ok && execution.status === "submitted").map((execution) => execution.id));
+    const firstStageFailures = first.executions.filter((execution) => !successfulIds.has(execution.id));
+    const deleteCandidates = batch.filter((candidate) => successfulIds.has(candidate.id));
+    executions.push(...firstStageFailures);
+    if (deleteCandidates.length) {
+      const second = await executeStage(payload, store, deleteCandidates, action, completePlanKey, "delete", batchIndex + 1, batches.length, runId);
+      executions.push(...second.executions);
+      diagnostic.completeDelete = second.detail.diagnostic;
+    }
+    diagnostics.push(diagnostic);
+  }
+  const failedCount = executions.filter((execution) => !execution.ok).length;
+  const dryRun = executions.length > 0 && executions.every((execution) => execution.status === "dry_run");
+  const ok = executions.length === candidates.length && failedCount === 0 && executions.every((execution) => execution.status === "submitted" || execution.status === "dry_run");
+  const message = ok
+    ? dryRun
+      ? policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeDryRun", "Stale goods cleanup dry-run only; no platform write request was submitted", { count: candidates.length })
+      : policyMessage(payload.adapter, "staleGoodsCleanup.messages.executedStore", "Stale goods cleanup executed", { count: candidates.length })
+    : executions.find((execution) => !execution.ok)?.message || policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeFailed", "Stale goods cleanup failed");
+  return {
+    executions,
+    detail: {
+      shopId: store.shopId,
+      shopName: store.shopName,
+      status: ok ? (dryRun ? "dry_run" : "ok") : executions.some((execution) => execution.ok) ? "partial" : "failed",
+      ok,
+      message,
+      reason: ok ? (dryRun ? "stale-goods-execute-dry-run" : "") : "stale-goods-execute-partial-or-failed",
+      category: ok ? (dryRun ? "adapter-policy" : "") : "api",
+      diagnostic: { batchSize, batches: diagnostics },
+      index,
+      total
+    } as DoudianRunDetail
+  };
+}
+
 async function saveExecuteRun(record: ExecuteRunRecord) {
   await repositoryPut("stale_execute_runs", record);
 }
@@ -668,51 +874,278 @@ async function saveExecuteRun(record: ExecuteRunRecord) {
 function compassByProductId(rows: Array<Record<string, unknown>> = []) {
   const map = new Map<string, Record<string, unknown>>();
   for (const row of rows) {
-    const productId = text(row.productId || row.product_id || row.goods_id || row["\u5546\u54c1ID"]);
+    const productId = text(firstRecordValue(row, compassAliases.productId));
     if (productId) map.set(productId, row);
   }
   return map;
 }
 
-async function collectProducts(payload: DoudianAdapterPayload, store: DoudianStoreSummary, planKeys: string[], args: StaleGoodsArgs) {
-  if (args.mockProducts?.length) return { products: args.mockProducts, remoteTotal: args.mockProducts.length, sourceHealth: [], responses: {} as Record<string, RequestPlanResult> };
-  const products: Record<string, unknown>[] = [];
-  const responses: Record<string, RequestPlanResult> = {};
-  let remoteTotal = 0;
-  const pageSize = Math.max(10, Math.min(200, Math.floor(Number(args.pageSize || policyNumber(payload.adapter, "staleGoodsCleanup.pageSize", 100, 10, 200)))));
-  const maxPages = Math.max(1, Math.min(50, Math.floor(Number(args.maxProductListPages || policyNumber(payload.adapter, "staleGoodsCleanup.maxProductListPages", 20, 1, 50)))));
-  const pageStart = policyNumber(payload.adapter, "staleGoodsCleanup.pageStart", 0, 0, 1);
-  for (const planKey of planKeys) {
-    if (planKey !== "staleGoodsProductList") {
-      responses[planKey] = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context: { page: "0", pageSize: String(pageSize), productStatus: "", keyword: "" } }).catch((error) => ({ ok: false, status: 0, data: null, error: error instanceof Error ? error.message : String(error), source: planKey }));
-      continue;
-    }
-    for (let page = pageStart; page < pageStart + maxPages; page += 1) {
-      const response = await runDoudianRequestPlan(payload, {
-        partition: store.partition,
-        planKey,
-        context: { page: String(page), pageSize: String(pageSize), productStatus: policyText(payload.adapter, "staleGoodsCleanup.productStatus", ""), keyword: "" }
-      });
-      responses[page === pageStart ? planKey : `${planKey}:page:${page}`] = response;
-      const payloadForPage = { [planKey]: response.data };
-      const items = firstArray(payloadForPage, listPaths(payload.adapter));
-      products.push(...items.map((item) => objectRecord(item)));
-      remoteTotal = readTotal(payloadForPage, payload.adapter) || remoteTotal;
-      if (!requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter))) break;
-      if (!remoteTotal || products.length >= remoteTotal) break;
-    }
+function chunksOf<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
+}
+
+function productSourceContext(source: DoudianStaleGoodsRules["productSource"]) {
+  if (source === "offline") {
+    return { checkStatus: "", isOnline: "", isOffline: "1", tab: "offline", orderField: "offline_time", productStatus: "" };
   }
+  return { checkStatus: "3", isOnline: "1", isOffline: "", tab: "onSale", orderField: "audit_time", productStatus: "0" };
+}
+
+function optionalTotal(payload: unknown, adapter: DoudianAdapterConfig, paths = totalPaths(adapter)) {
+  const total = coerceNumber(firstPathValue(payload, paths));
+  return total !== undefined && total >= 0 ? total : undefined;
+}
+
+function productRecordId(record: Record<string, unknown>, adapter: DoudianAdapterConfig) {
+  return readText(record, adapter, "productId");
+}
+
+async function runPlan(payload: DoudianAdapterPayload, store: DoudianStoreSummary, planKey: string, context: Record<string, unknown>) {
+  return runDoudianRequestPlan(payload, { partition: store.partition, planKey, context })
+    .catch((error) => ({ ok: false, status: 0, data: null, error: error instanceof Error ? error.message : String(error), source: planKey } as RequestPlanResult));
+}
+
+async function collectProducts(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: StaleGoodsArgs, rules: DoudianStaleGoodsRules) {
+  if (args.mockProducts?.length) {
+    return {
+      products: args.mockProducts,
+      remoteTotal: args.mockProducts.length,
+      complete: true,
+      truncated: false,
+      splitRequired: false,
+      malformed: false,
+      fetchedPages: 0,
+      plannedPages: 0,
+      sourceHealth: [] as Array<Record<string, unknown>>,
+      responses: {} as Record<string, RequestPlanResult>
+    };
+  }
+  const planKey = "staleGoodsProductList";
+  const products = new Map<string, Record<string, unknown>>();
+  const responses: Record<string, RequestPlanResult> = {};
+  const pageSize = Math.max(10, Math.min(200, Math.floor(Number(args.pageSize || policyNumber(payload.adapter, "staleGoodsCleanup.pageSize", 100, 10, 200)))));
+  const maxPages = Math.max(1, Math.min(200, Math.floor(Number(args.maxProductListPages || policyNumber(payload.adapter, "staleGoodsCleanup.maxProductListPages", 100, 1, 200)))));
+  const idMaxPages = policyNumber(payload.adapter, "staleGoodsCleanup.maxProductIdSearchPages", 2, 1, 10);
+  const pageStart = policyNumber(payload.adapter, "staleGoodsCleanup.pageStart", 0, 0, 1);
+  const source = rules.productSource || "selling";
+  const importedIds = Array.from(new Set((rules.importedProductIds || []).map((id) => text(id)).filter(Boolean)));
+  const idBatches = source === "importedIds" ? chunksOf(importedIds, 100) : [[]];
+  if (source === "importedIds" && !idBatches.length) {
+    return { products: [], remoteTotal: 0, complete: false, truncated: false, splitRequired: false, malformed: false, fetchedPages: 0, plannedPages: 0, sourceHealth: [{ key: planKey, status: 0, ok: false, reason: "missing-imported-product-ids" }], responses };
+  }
+  let remoteTotal: number | undefined;
+  let fetchedPages = 0;
+  let plannedPages = 0;
+  let malformed = false;
+  let requestFailed = false;
+  let incompleteBatch = false;
+  const sourceHealth: Array<Record<string, unknown>> = [];
+  const baseContext = productSourceContext(source);
+
+  for (const [batchIndex, idBatch] of idBatches.entries()) {
+    const batchSet = new Set(idBatch);
+    let batchComplete = false;
+    let batchFetchedItems = 0;
+    let batchFetchedPages = 0;
+    let batchTotal: number | undefined;
+    const batchMaxPages = source === "importedIds" ? idMaxPages : maxPages;
+    for (let offset = 0; offset < batchMaxPages; offset += 1) {
+      const page = pageStart + offset;
+      const response = await runPlan(payload, store, planKey, {
+        page: String(page),
+        pageSize: String(pageSize),
+        keyword: source === "importedIds" ? idBatch.join(",") : "",
+        ...baseContext
+      });
+      const responseKey = `${planKey}:batch:${batchIndex}:page:${page}`;
+      responses[responseKey] = response;
+      fetchedPages += 1;
+      batchFetchedPages += 1;
+      const payloadForPage = { [planKey]: response.data };
+      const parsed = findArray(payloadForPage, listPaths(payload.adapter));
+      const responseOk = requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter));
+      sourceHealth.push({ key: responseKey, status: response.status, ok: responseOk && parsed.found, parsed: parsed.found, itemCount: parsed.items.length });
+      if (!responseOk) {
+        requestFailed = true;
+        break;
+      }
+      if (!parsed.found) {
+        malformed = true;
+        break;
+      }
+      batchFetchedItems += parsed.items.length;
+      batchTotal = optionalTotal(payloadForPage, payload.adapter) ?? batchTotal;
+      if (source !== "importedIds") remoteTotal = batchTotal ?? remoteTotal;
+      for (const item of parsed.items) {
+        const record = objectRecord(item);
+        const productId = productRecordId(record, payload.adapter);
+        if (!productId || (source === "importedIds" && !batchSet.has(productId))) continue;
+        if (!products.has(productId)) products.set(productId, record);
+      }
+      const foundBatchIds = source === "importedIds" ? idBatch.filter((id) => products.has(id)).length : 0;
+      if (source === "importedIds" && foundBatchIds >= idBatch.length) batchComplete = true;
+      else if (batchTotal !== undefined && batchFetchedItems >= batchTotal) batchComplete = true;
+      else if (parsed.items.length < pageSize) batchComplete = true;
+      else if (source !== "importedIds" && remoteTotal !== undefined && products.size >= remoteTotal) batchComplete = true;
+      if (batchComplete) break;
+    }
+    plannedPages += batchTotal === undefined ? (batchComplete ? batchFetchedPages : batchMaxPages) : Math.max(1, Math.ceil(batchTotal / pageSize));
+    if (!batchComplete) incompleteBatch = true;
+    if (requestFailed || malformed) break;
+  }
+  const complete = !requestFailed && !malformed && !incompleteBatch && (source === "importedIds" || remoteTotal === undefined || products.size >= remoteTotal);
+  const splitRequired = source !== "importedIds" && remoteTotal !== undefined && remoteTotal > pageSize * maxPages;
   return {
-    products,
-    remoteTotal: remoteTotal || products.length,
-    sourceHealth: Object.entries(responses).map(([key, response]) => ({ key, status: response.status, ok: requestPlanResponseOk(response, payload.adapter, key.split(":page:")[0], mappings(payload.adapter)) })),
+    products: [...products.values()],
+    remoteTotal: source === "importedIds" ? products.size : remoteTotal ?? products.size,
+    complete,
+    truncated: !complete && !requestFailed && !malformed,
+    splitRequired,
+    malformed,
+    fetchedPages,
+    plannedPages: Math.max(fetchedPages, plannedPages),
+    sourceHealth,
     responses
   };
 }
 
-function readTotal(payload: unknown, adapter: DoudianAdapterConfig) {
-  const total = coerceNumber(firstPathValue(payload, totalPaths(adapter)));
-  return total !== undefined ? total : 0;
+function mappingPathList(adapter: DoudianAdapterConfig, key: string) {
+  const value = mappings(adapter)[key];
+  return Array.isArray(value) ? value.map((item) => text(item)).filter(Boolean) : [];
+}
+
+function recommendThresholdTypes(rules: DoudianStaleGoodsRules) {
+  const thresholds = [
+    rules.requireLowRating ? 3 : 0,
+    rules.requireLowInfo ? 4 : 0,
+    rules.requireLowImage ? 21 : 0,
+    rules.requireSameStyleRisk ? 20 : 0,
+    rules.requireBadTitle ? 19 : 0,
+    rules.noSalesType === "strict" ? 22 : 0
+  ].filter(Boolean);
+  return Array.from(new Set(thresholds.length ? thresholds : [3]));
+}
+
+function recommendProductId(record: Record<string, unknown>) {
+  return text(firstPathValue(record, ["base_item_info.item_id", "baseItemInfo.itemId", "item_id", "itemId", "product_id", "productId"]));
+}
+
+async function collectRecommendAdmit(payload: DoudianAdapterPayload, store: DoudianStoreSummary, rules: DoudianStaleGoodsRules) {
+  const planKey = "staleGoodsRecommendAdmit";
+  const byId = new Map<string, Set<number>>();
+  const sourceHealth: Array<Record<string, unknown>> = [];
+  const responses: Record<string, RequestPlanResult> = {};
+  if (!payload.adapter.requestPlans?.[planKey]) return { byId, complete: false, fetchedPages: 0, sourceHealth, responses };
+  const thresholds = recommendThresholdTypes(rules);
+  const pageSize = policyNumber(payload.adapter, "staleGoodsCleanup.recommendPageSize", 1000, 10, 1000);
+  const maxPages = policyNumber(payload.adapter, "staleGoodsCleanup.maxRecommendPages", 20, 1, 100);
+  let complete = true;
+  let fetchedPages = 0;
+  for (const threshold of thresholds) {
+    let thresholdComplete = false;
+    let fetchedItems = 0;
+    let remoteTotal: number | undefined;
+    for (let page = 1; page <= maxPages; page += 1) {
+      const response = await runPlan(payload, store, planKey, {
+        recommendPage: page,
+        recommendPageSize: pageSize,
+        unreachedThresholdList: [threshold]
+      });
+      const key = `${planKey}:threshold:${threshold}:page:${page}`;
+      responses[key] = response;
+      fetchedPages += 1;
+      const wrapped = { [planKey]: response.data };
+      const parsed = findArray(wrapped, mappingPathList(payload.adapter, "recommendListPaths"));
+      const responseOk = requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter));
+      sourceHealth.push({ key, status: response.status, ok: responseOk && parsed.found, parsed: parsed.found, itemCount: parsed.items.length, threshold });
+      if (!responseOk || !parsed.found) break;
+      fetchedItems += parsed.items.length;
+      remoteTotal = optionalTotal(wrapped, payload.adapter, mappingPathList(payload.adapter, "recommendTotalPaths")) ?? remoteTotal;
+      for (const item of parsed.items) {
+        const productId = recommendProductId(objectRecord(item));
+        if (!productId) continue;
+        const current = byId.get(productId) || new Set<number>();
+        current.add(threshold);
+        byId.set(productId, current);
+      }
+      if ((remoteTotal !== undefined && fetchedItems >= remoteTotal) || parsed.items.length < pageSize) {
+        thresholdComplete = true;
+        break;
+      }
+    }
+    if (!thresholdComplete) complete = false;
+  }
+  return { byId, complete, fetchedPages, sourceHealth, responses };
+}
+
+function localDateText(date: Date, separator = "-") {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return [year, month, day].join(separator);
+}
+
+function compassRequestContext(period: DoudianStaleGoodsRules["trafficPeriod"]) {
+  const days = period === "90d" ? 90 : period === "30d" ? 30 : 7;
+  const now = new Date();
+  const dataDelayDays = now.getHours() >= 8 ? 1 : 2;
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dataDelayDays);
+  const begin = new Date(end.getFullYear(), end.getMonth(), end.getDate() - days + 1);
+  const request = {
+    date_type: days === 7 ? 21 : 23,
+    begin_date: `${localDateText(begin, "/")} 00:00:00`,
+    end_date: `${localDateText(end, "/")} 00:00:00`,
+    is_activity: false,
+    activity_id: "",
+    key_word: "",
+    index_selected: "pay_cnt,product_show_ucnt,product_click_ucnt,product_show_cnt,product_click_cnt",
+    sale_type: 1,
+    content_type: 1,
+    cate_ids: "",
+    product_tab: 0,
+    only_abnormal: false,
+    only_drop: false,
+    new_version: true,
+    abnormal_threshold: 20,
+    page_no: 1,
+    page_size: 10
+  };
+  return {
+    compassFileName: `stale-goods-${localDateText(begin)}-${localDateText(end)}.xlsx`,
+    compassRequestJson: JSON.stringify(request)
+  };
+}
+
+function workbookRows(base64: string) {
+  const workbook = XLSX.read(base64, { type: "base64" });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  return sheet ? XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: null }) : [];
+}
+
+async function collectCompassRows(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: StaleGoodsArgs, rules: DoudianStaleGoodsRules) {
+  if (args.compassRows?.length && args.compassPeriod === rules.trafficPeriod) {
+    return {
+      rows: args.compassRows,
+      complete: true,
+      sourceHealth: [{ key: "staleGoodsCompassImport", status: 200, ok: true, itemCount: args.compassRows.length, period: rules.trafficPeriod }],
+      responses: {} as Record<string, RequestPlanResult>
+    };
+  }
+  if (args.mockProducts?.length) return { rows: [] as Array<Record<string, unknown>>, complete: true, sourceHealth: [] as Array<Record<string, unknown>>, responses: {} as Record<string, RequestPlanResult> };
+  const planKey = "staleGoodsCompassDownload";
+  if (!payload.adapter.requestPlans?.[planKey]) return { rows: [] as Array<Record<string, unknown>>, complete: false, sourceHealth: [{ key: planKey, status: 0, ok: false, reason: "missing-plan" }], responses: {} as Record<string, RequestPlanResult> };
+  const response = await runPlan(payload, store, planKey, compassRequestContext(rules.trafficPeriod));
+  const responses = { [planKey]: response };
+  const responseOk = requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter));
+  try {
+    const rows = responseOk && typeof response.data === "string" ? workbookRows(response.data) : [];
+    const complete = responseOk && rows.length > 0;
+    return { rows, complete, sourceHealth: [{ key: planKey, status: response.status, ok: complete, itemCount: rows.length, period: rules.trafficPeriod }], responses };
+  } catch (error) {
+    return { rows: [] as Array<Record<string, unknown>>, complete: false, sourceHealth: [{ key: planKey, status: response.status, ok: false, reason: "workbook-parse-failed", message: error instanceof Error ? error.message : String(error) }], responses };
+  }
 }
 
 function responseCode(response: RequestPlanResult | undefined) {
@@ -774,30 +1207,91 @@ async function reportStaleGoodsRow(args: {
   }
 }
 
-async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, planKeys: string[], args: StaleGoodsArgs, runId: string, rules: DoudianStaleGoodsRules) {
-  const collected = await collectProducts(payload, store, planKeys, args);
-  const compass = compassByProductId(args.compassRows || []);
-  const products = collected.products.map((product, index) => candidateFromProduct(store, product, payload.adapter, runId, index, compass));
-  const candidates = products.filter((product) => evaluateRules(product, rules));
+async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: StaleGoodsArgs, runId: string, rules: DoudianStaleGoodsRules) {
+  const [collected, compassResult, recommendResult] = await Promise.all([
+    collectProducts(payload, store, args, rules),
+    collectCompassRows(payload, store, args, rules),
+    args.mockProducts?.length
+      ? Promise.resolve({ byId: new Map<string, Set<number>>(), complete: true, fetchedPages: 0, sourceHealth: [] as Array<Record<string, unknown>>, responses: {} as Record<string, RequestPlanResult> })
+      : collectRecommendAdmit(payload, store, rules)
+  ]);
+  const compass = compassByProductId(compassResult.rows);
+  const products = collected.products
+    .map((product) => candidateFromProduct(store, product, payload.adapter, runId, compass, recommendResult.byId, rules.productSource))
+    .filter((product): product is DoudianStaleGoodsCandidate => Boolean(product));
+  const evaluations = products.map((product) => ({ product, evaluation: evaluateRules(product, rules) }));
+  const matched = evaluations.filter((item) => item.evaluation.match).map((item) => item.product);
+  const perStoreLimit = Math.max(0, Math.floor(Number(rules.perStoreLimit || 0)));
+  const limitedCandidates = perStoreLimit
+    ? [...matched].sort((left, right) => Number(right.riskScore || 0) - Number(left.riskScore || 0)).slice(0, perStoreLimit)
+    : matched;
+  const enabledMetricFields = Array.from(new Set([
+    rules.totalSalesEnabled ? "totalSales" : "",
+    rules.periodSalesEnabled ? "periodSales" : "",
+    rules.exposureEnabled ? "exposureCount" : "",
+    rules.clickEnabled ? "clickCount" : "",
+    rules.exposureUsersEnabled ? "exposureUsers" : "",
+    rules.clickUsersEnabled ? "clickUsers" : "",
+    rules.noSalesType === "strict" || rules.noSalesType === "trafficWaste" ? "periodSales" : "",
+    rules.noSalesType === "trafficWaste" ? "exposureCount" : ""
+  ].filter(Boolean)));
+  const selectedQualityFields = [
+    rules.requireLowRating ? "ratingScore" : "",
+    rules.requireLowInfo ? "infoQualityScore" : "",
+    rules.requireLowImage ? "mainImageScore" : "",
+    rules.requireSameStyleRisk ? "sameStyleRisk" : "",
+    rules.requireBadTitle ? "titleQualityScore" : ""
+  ].filter(Boolean);
+  const missingMetricCount = products.filter((product) => enabledMetricFields.some((field) => product.metricAvailability?.[field] !== true)).length;
+  const metricComplete = missingMetricCount === 0;
+  const qualityComplete = recommendResult.complete || products.every((product) => selectedQualityFields.every((field) => product.metricAvailability?.[field] === true));
+  const trafficFieldsEnabled = enabledMetricFields.some((field) => ["periodSales", "exposureCount", "clickCount", "exposureUsers", "clickUsers"].includes(field));
+  const compassRequired = trafficFieldsEnabled && !metricComplete;
+  const ok = collected.complete && recommendResult.complete && qualityComplete && (!compassRequired || compassResult.complete) && metricComplete;
+  const candidates = ok ? limitedCandidates : [];
+  const sourceHealth = [...collected.sourceHealth, ...compassResult.sourceHealth, ...recommendResult.sourceHealth];
+  const optionalSourceFailure = sourceHealth.some((item) => item.ok === false);
   const row = buildRow(store, candidates, collected.remoteTotal);
-  const ok = args.mockProducts?.length ? true : planKeys.includes("staleGoodsProductList")
-    ? Object.entries(collected.responses).some(([key, response]) => key.startsWith("staleGoodsProductList") && requestPlanResponseOk(response, payload.adapter, "staleGoodsProductList", mappings(payload.adapter)))
-    : true;
+  const reason = collected.malformed
+    ? "stale-goods-product-response-malformed"
+    : collected.truncated
+      ? "stale-goods-product-list-truncated"
+      : !collected.complete
+        ? "stale-goods-product-list-incomplete"
+        : !recommendResult.complete || !qualityComplete
+          ? "stale-goods-recommend-incomplete"
+          : !metricComplete || (compassRequired && !compassResult.complete)
+            ? "stale-goods-metrics-incomplete"
+            : candidates.length ? "" : "stale-goods-no-candidate";
   const detail: DoudianRunDetail = {
     shopId: store.shopId,
     shopName: store.shopName,
-    status: ok ? "ok" : "failed",
+    status: ok ? (optionalSourceFailure ? "partial" : "ok") : "failed",
     ok,
     message: ok
       ? candidates.length ? policyMessage(payload.adapter, "staleGoodsCleanup.messages.scanned", "Stale goods scanned") : policyMessage(payload.adapter, "staleGoodsCleanup.messages.noCandidateStore", "No stale goods candidates")
       : policyMessage(payload.adapter, "staleGoodsCleanup.messages.failed", "Stale goods scan failed"),
-    reason: ok ? (candidates.length ? "" : "stale-goods-no-candidate") : "stale-goods-request-failed",
-    category: ok ? "" : "api",
+    reason,
+    category: ok ? (optionalSourceFailure ? "source" : "") : collected.truncated ? "coverage" : "api",
     diagnostic: {
       productCount: products.length,
       candidateCount: candidates.length,
       remoteTotal: collected.remoteTotal,
-      sourceHealth: collected.sourceHealth
+      ageBlocked: evaluations.filter((item) => item.evaluation.ageBlocked).length,
+      missingCreatedAt: products.filter((item) => !item.createdAt).length,
+      missingListedAt: products.filter((item) => !item.listedAt).length,
+      missingAgeDate: products.filter((item) => !item.ageDate).length,
+      missingMetricCount,
+      compassSourceCount: compass.size,
+      compassMatchedCount: products.filter((item) => item.compassMatched).length,
+      recommendMatchedCount: products.filter((item) => (item.recommendThresholds || []).length > 0).length,
+      truncated: collected.truncated,
+      splitRequired: collected.splitRequired,
+      malformed: collected.malformed,
+      fetchedPages: collected.fetchedPages,
+      plannedPages: collected.plannedPages,
+      recommendFetchedPages: recommendResult.fetchedPages,
+      sourceHealth
     }
   };
   await reportStaleGoodsRow({
@@ -806,10 +1300,10 @@ async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSumm
     detail,
     products,
     candidates,
-    responses: collected.responses,
+    responses: { ...collected.responses, ...compassResult.responses, ...recommendResult.responses },
     adapter: payload.adapter
   });
-  return { row, products, candidates, detail, sourceHealth: collected.sourceHealth };
+  return { row, products, candidates, detail, sourceHealth };
 }
 
 async function saveScanRun(record: ScanRunRecord) {
@@ -818,36 +1312,44 @@ async function saveScanRun(record: ScanRunRecord) {
 }
 
 function scanSummary(rows: DoudianStaleGoodsRow[], candidates: DoudianStaleGoodsCandidate[], details: DoudianRunDetail[], sourceHealth: Array<Record<string, unknown>>) {
+  const diagnosticNumber = (detail: DoudianRunDetail, key: string) => {
+    const value = Number(objectRecord(detail.diagnostic)[key] || 0);
+    return Number.isFinite(value) ? value : 0;
+  };
+  const productCount = details.reduce((sum, detail) => sum + diagnosticNumber(detail, "productCount"), 0);
+  const compassMatchedCount = details.reduce((sum, detail) => sum + diagnosticNumber(detail, "compassMatchedCount"), 0);
   return {
-    productCount: rows.reduce((sum, row) => sum + Number(row.totalProducts || 0), 0),
+    productCount,
     remoteTotal: rows.reduce((sum, row) => sum + Number(row.totalProducts || 0), 0),
     candidateCount: candidates.length,
-    ageBlocked: 0,
-    missingCreatedAt: candidates.filter((item) => !item.createdAt).length,
-    missingListedAt: candidates.filter((item) => !item.listedAt).length,
-    missingAgeDate: candidates.filter((item) => !item.ageDate).length,
-    sourceFailureCount: details.filter((detail) => detail.ok === false).length,
-    diagnosticSourceCount: sourceHealth.filter((item) => item.key !== "staleGoodsProductList").length,
-    truncatedStoreCount: 0,
-    splitRequiredStoreCount: 0,
-    fetchedPages: sourceHealth.filter((item) => String(item.key || "").includes("staleGoodsProductList")).length,
-    plannedPages: sourceHealth.filter((item) => String(item.key || "").includes("staleGoodsProductList")).length
+    ageBlocked: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "ageBlocked"), 0),
+    missingCreatedAt: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "missingCreatedAt"), 0),
+    missingListedAt: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "missingListedAt"), 0),
+    missingAgeDate: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "missingAgeDate"), 0),
+    missingMetricCount: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "missingMetricCount"), 0),
+    sourceFailureCount: sourceHealth.filter((item) => item.ok === false).length,
+    diagnosticSourceCount: sourceHealth.filter((item) => !String(item.key || "").startsWith("staleGoodsProductList")).length,
+    truncatedStoreCount: details.filter((detail) => objectRecord(detail.diagnostic).truncated === true).length,
+    splitRequiredStoreCount: details.filter((detail) => objectRecord(detail.diagnostic).splitRequired === true).length,
+    fetchedPages: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "fetchedPages"), 0),
+    plannedPages: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "plannedPages"), 0),
+    compassSourceCount: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "compassSourceCount"), 0),
+    compassMatchedCount,
+    compassMatchRate: productCount ? (compassMatchedCount / productCount) * 100 : 0
   };
 }
 
 async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: StaleGoodsArgs): Promise<DoudianStaleGoodsCleanupResult> {
   if (String(args.confirmText || "") !== "\u786e\u8ba4\u6e05\u7406") throw new Error("stale goods cleanup confirm text mismatch");
-  const selected = normalizeExecuteCandidates(args);
-  if (!selected.length) throw new Error("stale goods cleanup selected products missing");
-  const action = text(args.action || selected[0]?.action);
+  const action = text(args.action);
   if (!["offline", "recycle", "delete"].includes(action)) throw new Error("unsupported stale goods cleanup action");
-  const sourceRunId = text(args.sourceRunId || selected.find((item) => item.sourceRunId)?.sourceRunId);
-  await validateExecuteSourceRun(sourceRunId, selected);
+  const sourceRunId = text(args.sourceRunId);
+  const selected = await loadExecuteCandidates(sourceRunId, args.candidateIds || [], action);
 
   const ledger = await listStoreLedger();
   const stores = ledger.stores || [];
-  const requested = new Set((args.shopIds || []).map((id) => text(id)).filter(Boolean));
-  const targets = requested.size ? stores.filter((store) => requested.has(store.shopId)) : stores;
+  const selectedShopIds = new Set(selected.map((candidate) => candidate.shopId));
+  const targets = stores.filter((store) => selectedShopIds.has(store.shopId));
   const byStore = new Map<string, { store: DoudianStoreSummary; candidates: DoudianStaleGoodsCandidate[] }>();
   for (const candidate of selected) {
     const store = targets.find((item) => item.shopId === candidate.shopId);
@@ -897,8 +1399,10 @@ async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: Stal
       })));
     }
   }
-  const successCount = details.filter((detail) => detail.ok).length;
-  const failureCount = details.filter((detail) => !detail.ok).length;
+  const successCount = executions.filter((execution) => execution.ok).length;
+  const failureCount = executions.filter((execution) => !execution.ok).length;
+  const successfulStoreCount = details.filter((detail) => detail.ok).length;
+  const failedStoreCount = details.filter((detail) => !detail.ok).length;
   const summary = executeSummary(executions);
   const cleanupRuleVersion = policyText(payload.adapter, "staleGoodsCleanup.ruleVersion", "stale-goods-rule");
   const fieldSchemaVersion = policyText(payload.adapter, "staleGoodsCleanup.fieldSchemaVersion", "stale-goods-fields");
@@ -923,7 +1427,7 @@ async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: Stal
     dryRun,
     executions,
     details,
-    summary,
+    summary: { ...summary, successfulStoreCount, failedStoreCount },
     adapterVersion: payload.adapter.version || "",
     scriptsVersion: payload.scripts?.version || "",
     cleanupRuleVersion,
@@ -947,7 +1451,7 @@ async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: Stal
     successCount,
     failureCount,
     partialCount: failureCount,
-    summary,
+    summary: { ...summary, successfulStoreCount, failedStoreCount },
     scanSummary: {},
     sourceHealth: [],
     cleanupRuleVersion,
@@ -973,8 +1477,18 @@ export async function fetchStaleGoodsCleanup(args: StaleGoodsArgs = {}): Promise
   const candidates: DoudianStaleGoodsCandidate[] = [];
   const details: DoudianRunDetail[] = [];
   const sourceHealth: Array<Record<string, unknown>> = [];
-  for (const store of targets) {
-    const result = await scanStore(payload, store, planKeys, args, runId, rules);
+  const concurrency = Math.max(1, Math.min(targets.length || 1, policyNumber(payload.adapter, "staleGoodsCleanup.concurrency", 2, 1, 8)));
+  const results = new Array<Awaited<ReturnType<typeof scanStore>>>(targets.length);
+  let nextStoreIndex = 0;
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    for (;;) {
+      const index = nextStoreIndex;
+      nextStoreIndex += 1;
+      if (index >= targets.length) return;
+      results[index] = await scanStore(payload, targets[index], args, runId, rules);
+    }
+  }));
+  for (const result of results) {
     rows.push(result.row);
     candidates.push(...result.candidates);
     details.push(result.detail);
@@ -982,14 +1496,17 @@ export async function fetchStaleGoodsCleanup(args: StaleGoodsArgs = {}): Promise
   }
   const successCount = details.filter((detail) => detail.ok).length;
   const failureCount = details.filter((detail) => !detail.ok).length;
+  const partialSourceCount = details.filter((detail) => detail.ok && detail.status === "partial").length;
   const summary = scanSummary(rows, candidates, details, sourceHealth);
   const cleanupRuleVersion = policyText(payload.adapter, "staleGoodsCleanup.ruleVersion", "stale-goods-rule");
   const fieldSchemaVersion = policyText(payload.adapter, "staleGoodsCleanup.fieldSchemaVersion", "stale-goods-fields");
   const requestHash = requestPlanHash(payload.adapter, planKeys);
-  const status = failureCount ? (successCount ? "partial" : "failed") : "ok";
+  const status = failureCount ? (successCount ? "partial" : "failed") : partialSourceCount ? "partial" : "ok";
   const message = failureCount
     ? policyMessage(payload.adapter, "staleGoodsCleanup.messages.partial", "Stale goods scan partially failed", { successCount, failureCount })
-    : policyMessage(payload.adapter, "staleGoodsCleanup.messages.done", "Stale goods scan done", { count: candidates.length });
+    : partialSourceCount
+      ? policyMessage(payload.adapter, "staleGoodsCleanup.messages.partialSourceStore", "Stale goods scan completed with source warnings", { count: partialSourceCount })
+      : policyMessage(payload.adapter, "staleGoodsCleanup.messages.done", "Stale goods scan done", { count: candidates.length });
   const record: ScanRunRecord = {
     id: runId,
     mode: "scan",
@@ -1012,7 +1529,7 @@ export async function fetchStaleGoodsCleanup(args: StaleGoodsArgs = {}): Promise
   };
   await saveScanRun(record);
   return {
-    ok: failureCount === 0,
+    ok: failureCount === 0 && partialSourceCount === 0,
     status,
     mode: "scan",
     message,
@@ -1024,7 +1541,7 @@ export async function fetchStaleGoodsCleanup(args: StaleGoodsArgs = {}): Promise
     details,
     successCount,
     failureCount,
-    partialCount: failureCount,
+    partialCount: failureCount + partialSourceCount,
     summary,
     scanSummary: summary,
     sourceHealth,
@@ -1066,6 +1583,7 @@ export async function runDoudianStaleGoodsScanSelfCheck(options: { doudianAdapte
       mode: "scan",
       shopIds: [shopId],
       operationId: runId,
+      rules: { ...defaultRules(payload.adapter), totalSalesMax: 5, exposureMax: 800, clickMax: 30 },
       mockProducts: [{
         product_id: `product-${suffix}`,
         title: "Self Check Product",
@@ -1112,6 +1630,7 @@ export async function runDoudianStaleGoodsExecuteSelfCheck(options: { doudianAda
       mode: "scan",
       shopIds: [shopId],
       operationId: scanRunId,
+      rules: { ...defaultRules(payload.adapter), totalSalesMax: 5, exposureMax: 800, clickMax: 30 },
       mockProducts: [0, 1, 2].map((index) => ({
         product_id: `exec-product-${index}-${suffix}`,
         title: `Execute Self Check Product ${index}`,
@@ -1142,7 +1661,6 @@ export async function runDoudianStaleGoodsExecuteSelfCheck(options: { doudianAda
         shopIds: [shopId],
         action,
         candidateIds: [candidate.id],
-        candidates: [{ ...candidate, action }],
         sourceRunId: scanRunId,
         confirmText: "\u786e\u8ba4\u6e05\u7406",
         operationId: runId

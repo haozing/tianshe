@@ -35,7 +35,7 @@ type RiskFilter = "all" | RiskLevel;
 type SortKey = "风险评分" | "近30天成交" | "曝光次数" | "库存数量" | "创建时间";
 type TrafficPeriod = "7d" | "30d" | "90d";
 type NoSalesType = "balanced" | "strict" | "trafficWaste";
-type ProductSource = "selling" | "importedIds";
+type ProductSource = "selling" | "offline" | "importedIds";
 type CleanupColumnKey = "status" | "sales" | "traffic" | "stockPrice" | "quality" | "time" | "source" | "action";
 
 interface ScanDiagnostics {
@@ -46,12 +46,16 @@ interface ScanDiagnostics {
   missingCreatedAt: number;
   missingListedAt: number;
   missingAgeDate: number;
+  missingMetricCount: number;
   sourceFailureCount: number;
   diagnosticSourceCount: number;
   truncatedStoreCount: number;
   splitRequiredStoreCount: number;
   fetchedPages: number;
   plannedPages: number;
+  compassSourceCount: number;
+  compassMatchedCount: number;
+  compassMatchRate: number;
   sourceHealth: Array<Record<string, unknown>>;
 }
 
@@ -131,6 +135,9 @@ interface CandidateRow {
   source: string;
   candidateId?: string;
   sourceRunId?: string;
+  metricAvailability?: Record<string, boolean>;
+  compassMatched?: boolean;
+  recommendThresholds?: number[];
 }
 
 type RemoteCandidateRow = DoudianStaleGoodsCandidate & CandidateRow;
@@ -144,11 +151,11 @@ interface MetricItem {
 
 const defaultRules: RuleSettings = {
   totalSalesEnabled: true,
-  totalSalesMax: 5,
+  totalSalesMax: 0,
   exposureEnabled: true,
-  exposureMax: 800,
+  exposureMax: 0,
   clickEnabled: true,
-  clickMax: 30,
+  clickMax: 0,
   exposureUsersEnabled: false,
   exposureUsersMax: 0,
   clickUsersEnabled: false,
@@ -166,7 +173,7 @@ const defaultRules: RuleSettings = {
   skipListedDaysEnabled: false,
   listedDays: 0,
   perStoreLimit: 0,
-  trafficPeriod: "30d",
+  trafficPeriod: "7d",
   noSalesType: "balanced",
   requireLowRating: false,
   requireLowInfo: false,
@@ -209,6 +216,7 @@ const noSalesTypeOptions: Array<{ value: NoSalesType; label: string }> = [
 
 const productSourceOptions: Array<{ value: ProductSource; label: string }> = [
   { value: "selling", label: "售卖中商品" },
+  { value: "offline", label: "已下架商品" },
   { value: "importedIds", label: "商品ID导入" }
 ];
 
@@ -426,12 +434,13 @@ function clickRate(row: CandidateRow) {
 }
 
 function qualityIssueKeys(row: CandidateRow) {
+  const thresholds = new Set((row.recommendThresholds || []).map(Number));
   return {
-    lowRating: row.ratingScore > 0 && row.ratingScore < 4.5,
-    lowInfo: row.infoQualityScore < 70,
-    lowImage: row.mainImageScore < 70,
-    sameStyleRisk: row.sameStyleRisk,
-    badTitle: row.titleQualityScore < 70
+    lowRating: thresholds.has(3) || (row.ratingScore > 0 && row.ratingScore < 4.5),
+    lowInfo: thresholds.has(4) || (row.infoQualityScore > 0 && row.infoQualityScore < 70),
+    lowImage: thresholds.has(21) || (row.mainImageScore > 0 && row.mainImageScore < 70),
+    sameStyleRisk: thresholds.has(20) || row.sameStyleRisk,
+    badTitle: thresholds.has(19) || (row.titleQualityScore > 0 && row.titleQualityScore < 70)
   };
 }
 
@@ -518,7 +527,8 @@ function buildCandidates(stores: StoreOption[]) {
         daysSinceCreated: daysSince(base.createdAt),
         daysSinceListed: daysSince(base.listedAt),
         reasons: [] as string[],
-        source: "平台商品列表 + 罗盘经营版商品列表"
+        source: "平台商品列表 + 罗盘经营版商品列表",
+        compassMatched: true
       } satisfies CandidateRow;
       row.reasons = reasonsForCandidate(row);
       rows.push(row);
@@ -568,15 +578,6 @@ function normalizeRemoteCandidate(row: DoudianStaleGoodsCandidate, fallbackStore
     action,
     reasons: Array.isArray(row.reasons) ? row.reasons.map(String) : [],
     source: String(row.source || "平台商品列表")
-  };
-}
-
-function toStaleGoodsCandidatePayload(row: CandidateRow): DoudianStaleGoodsCandidate {
-  return {
-    ...row,
-    group: row.group,
-    candidateId: row.candidateId,
-    sourceRunId: row.sourceRunId
   };
 }
 
@@ -646,7 +647,7 @@ function applyPerStoreLimit(rows: CandidateRow[], limit: number) {
   return rows.filter((row) => selectedIds.has(row.id));
 }
 
-function toRemoteRules(rules: RuleSettings): DoudianStaleGoodsRules {
+function toRemoteRules(rules: RuleSettings, productSource: ProductSource, importedProductIds: Set<string>): DoudianStaleGoodsRules {
   return {
     totalSalesEnabled: rules.totalSalesEnabled,
     totalSalesMax: rules.totalSalesMax,
@@ -670,7 +671,10 @@ function toRemoteRules(rules: RuleSettings): DoudianStaleGoodsRules {
     noSalesDays: rules.noSalesDays,
     skipListedDaysEnabled: rules.skipListedDaysEnabled,
     listedDays: rules.listedDays,
+    perStoreLimit: rules.perStoreLimit,
     trafficPeriod: rules.trafficPeriod,
+    productSource,
+    importedProductIds: productSource === "importedIds" ? [...importedProductIds] : [],
     noSalesType: rules.noSalesType,
     requireLowRating: rules.requireLowRating,
     requireLowInfo: rules.requireLowInfo,
@@ -684,12 +688,11 @@ function aggregateCandidates(rows: CandidateRow[]) {
   const highRisk = rows.filter((row) => row.risk === "high").length;
   const offline = rows.filter((row) => row.action === "offline").length;
   const optimize = rows.filter((row) => row.action === "optimize").length;
-  const trafficWaste = rows.filter((row) => row.exposureCount >= 1000 && row.periodSales === 0).length;
+  const trafficWaste = rows.filter((row) => row.metricAvailability?.exposureCount !== false && row.metricAvailability?.periodSales !== false && row.exposureCount >= 1000 && row.periodSales === 0).length;
   const qualityIssue = rows.filter((row) => qualityIssueLabels(row).length > 0).length;
   const destructive = rows.filter((row) => row.action === "delete" || row.action === "recycle").length;
   const stock = rows.reduce((sum, row) => sum + row.stock, 0);
-  const matchRate = rows.length ? Math.min(100, 92 + Math.floor(rows.length % 7)) : 0;
-  return { highRisk, offline, optimize, trafficWaste, qualityIssue, destructive, stock, matchRate };
+  return { highRisk, offline, optimize, trafficWaste, qualityIssue, destructive, stock };
 }
 
 function numberFromRecord(record: Record<string, unknown> | undefined, key: string) {
@@ -716,18 +719,28 @@ function normalizeScanDiagnostics(result?: {
     missingCreatedAt: numberFromRecord(scanSummary, "missingCreatedAt"),
     missingListedAt: numberFromRecord(scanSummary, "missingListedAt"),
     missingAgeDate: numberFromRecord(scanSummary, "missingAgeDate"),
+    missingMetricCount: numberFromRecord(scanSummary, "missingMetricCount"),
     sourceFailureCount: numberFromRecord(scanSummary, "sourceFailureCount"),
     diagnosticSourceCount: numberFromRecord(scanSummary, "diagnosticSourceCount"),
     truncatedStoreCount: numberFromRecord(scanSummary, "truncatedStoreCount"),
     splitRequiredStoreCount: numberFromRecord(scanSummary, "splitRequiredStoreCount"),
     fetchedPages: numberFromRecord(scanSummary, "fetchedPages"),
     plannedPages: numberFromRecord(scanSummary, "plannedPages"),
+    compassSourceCount: numberFromRecord(scanSummary, "compassSourceCount"),
+    compassMatchedCount: numberFromRecord(scanSummary, "compassMatchedCount"),
+    compassMatchRate: numberFromRecord(scanSummary, "compassMatchRate"),
     sourceHealth: Array.isArray(result.sourceHealth) ? result.sourceHealth : []
   };
 }
 
 function scanDiagnosticMessage(diagnostics: ScanDiagnostics | null) {
   if (!diagnostics) return "";
+  if (diagnostics.truncatedStoreCount > 0 || diagnostics.splitRequiredStoreCount > 0) {
+    return `扫描不完整：${formatNumber(Math.max(diagnostics.truncatedStoreCount, diagnostics.splitRequiredStoreCount))} 家店铺超过当前分页覆盖，请勿执行清理`;
+  }
+  if (diagnostics.sourceFailureCount > 0) {
+    return "扫描不完整：商品、罗盘或无动销来源异常，请稍后重试";
+  }
   if (diagnostics.candidateCount > 0) {
     return `命中 ${formatNumber(diagnostics.candidateCount)} 个候选，已读取 ${formatNumber(diagnostics.productCount)} 个商品`;
   }
@@ -737,9 +750,7 @@ function scanDiagnosticMessage(diagnostics: ScanDiagnostics | null) {
   if (diagnostics.ageBlocked > 0) {
     return `未命中候选：${formatNumber(diagnostics.ageBlocked)} 个商品未达到创建/上架天数门槛`;
   }
-  if (diagnostics.sourceFailureCount > 0) {
-    return `未命中候选：部分数据来源异常，请稍后重试`;
-  }
+  if (diagnostics.missingMetricCount > 0) return `未命中候选：${formatNumber(diagnostics.missingMetricCount)} 个商品缺少当前规则所需指标`;
   if (diagnostics.productCount > 0) return `未命中候选：已读取 ${formatNumber(diagnostics.productCount)} 个商品，但未满足当前规则`;
   return "未命中候选：平台商品列表没有返回可判断商品";
 }
@@ -748,6 +759,8 @@ function sourceHealthLabel(item: Record<string, unknown>) {
   const key = String(item.key || "");
   const status = String(item.status || "");
   const httpStatus = Number(item.httpStatus || 0);
+  if (item.ok === true) return `${key || "来源"} 正常${status ? ` HTTP ${status}` : ""}`;
+  if (item.ok === false) return `${key || "来源"} 失败${status ? ` HTTP ${status}` : ""}`;
   if (status === "ready") return `${key} 正常`;
   if (status === "diagnostic_only") return `${key} 诊断源`;
   if (status === "optional_failed") return `${key} 可选失败${httpStatus ? ` HTTP ${httpStatus}` : ""}`;
@@ -1085,9 +1098,11 @@ function exportCandidates(rows: CandidateRow[], selectedIds: Set<string>, adapte
     ["缺创建时间", diagnostics.missingCreatedAt],
     ["缺上架时间", diagnostics.missingListedAt],
     ["缺年龄判断时间", diagnostics.missingAgeDate],
+    ["缺规则所需指标", diagnostics.missingMetricCount],
     ["来源失败", diagnostics.sourceFailureCount],
     ["诊断源", diagnostics.diagnosticSourceCount],
-    ["需创建时间分段店铺", diagnostics.splitRequiredStoreCount],
+    ["分页截断店铺", diagnostics.truncatedStoreCount],
+    ["超过分页上限店铺", diagnostics.splitRequiredStoreCount],
     ["分页", `${diagnostics.fetchedPages}/${diagnostics.plannedPages || diagnostics.fetchedPages}`],
     ["来源健康", diagnostics.sourceHealth.map(sourceHealthLabel).join(" / ")]
   ] : [];
@@ -1161,6 +1176,7 @@ export function SlowMovingCleanupPage() {
   const [adapterVersion, setAdapterVersion] = useState("fallback");
   const [compassFileName, setCompassFileName] = useState("");
   const [compassRows, setCompassRows] = useState<Array<Record<string, unknown>>>([]);
+  const [compassPeriod, setCompassPeriod] = useState<TrafficPeriod | undefined>();
   const [productSource, setProductSource] = useState<ProductSource>("selling");
   const [columnPanelOpen, setColumnPanelOpen] = useState(false);
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<Set<CleanupColumnKey>>(() => defaultColumnSet());
@@ -1197,9 +1213,13 @@ export function SlowMovingCleanupPage() {
   const candidateSourceStores = selectedStores.length ? selectedStores : stores;
   const allCandidates = useMemo(() => buildCandidates(candidateSourceStores), [candidateSourceStores]);
   const importedProductIds = useMemo(() => new Set(compassRows.map((row) => String(row.productId || "").trim()).filter(Boolean)), [compassRows]);
+  const importedIdsMissing = productSource === "importedIds" && importedProductIds.size === 0;
   const rawMatchedCandidates = useMemo(() => {
-    const sourceFiltered = (rows: CandidateRow[]) => rows.filter((row) => productSource !== "importedIds" || importedProductIds.has(String(row.productId)));
-    if (!previewMode) return sourceFiltered(remoteCandidates.filter((row) => selectedIds.has(row.shopId)));
+    const sourceFiltered = (rows: CandidateRow[]) => rows.filter((row) => {
+      if (productSource === "importedIds") return importedProductIds.has(String(row.productId));
+      return productSource === "offline" ? row.status === "已下架" : row.status === "在售";
+    });
+    if (!previewMode) return remoteCandidates.filter((row) => selectedIds.has(row.shopId));
     return sourceFiltered(allCandidates.filter((row) => selectedIds.has(row.shopId) && matchesRules(row, rules)));
   }, [allCandidates, importedProductIds, previewMode, productSource, remoteCandidates, selectedIds, rules]);
   const matchedCandidates = useMemo(() => applyPerStoreLimit(rawMatchedCandidates, rules.perStoreLimit), [rawMatchedCandidates, rules.perStoreLimit]);
@@ -1224,7 +1244,8 @@ export function SlowMovingCleanupPage() {
   const visibleColumns = cleanupColumns.filter((column) => visibleColumnKeys.has(column.key));
   const tableMinWidth = 460 + visibleColumns.length * 152;
   const summary = aggregateCandidates(matchedCandidates);
-  const planRows = planOpen ? (selectedCandidates.length ? selectedCandidates : matchedCandidates.filter((row) => row.action === planAction)) : [];
+  const defaultPlanAction: CandidateAction = summary.offline ? "offline" : matchedCandidates.some((row) => row.action === "recycle") ? "recycle" : "delete";
+  const planRows = planOpen ? selectedCandidates : [];
 
   const metrics: MetricItem[] = [
     { label: "滞销候选", value: formatNumber(matchedCandidates.length), detail: `${selectedStores.length} 家店铺命中`, tone: "blue" },
@@ -1234,11 +1255,26 @@ export function SlowMovingCleanupPage() {
     { label: "有曝无转", value: formatNumber(summary.trafficWaste), detail: "罗盘流量口径", tone: "danger" },
     { label: "低质命中", value: formatNumber(summary.qualityIssue), detail: "评价/信息/主图/标题", tone: "warning" },
     { label: "库存占用", value: formatNumber(summary.stock), detail: "候选商品库存", tone: "blue" },
-    { label: "匹配率", value: matchedCandidates.length ? formatPercent(summary.matchRate) : "-", detail: "商品ID合并结果", tone: "green" }
+    {
+      label: "罗盘匹配率",
+      value: scanDiagnostics?.compassSourceCount ? formatPercent(scanDiagnostics.compassMatchRate) : "-",
+      detail: scanDiagnostics?.compassSourceCount ? `${formatNumber(scanDiagnostics.compassMatchedCount)} / ${formatNumber(scanDiagnostics.productCount)} 个商品` : "本次未使用罗盘明细",
+      tone: "green"
+    }
   ];
 
   function setRule<K extends keyof RuleSettings>(key: K, value: RuleSettings[K]) {
     setRules((current) => ({ ...current, [key]: value }));
+  }
+
+  function setTrafficPeriod(value: TrafficPeriod) {
+    if (value !== rules.trafficPeriod && compassRows.length) {
+      setCompassRows([]);
+      setCompassFileName("");
+      setCompassPeriod(undefined);
+      setCleanupMessage("流量周期已变更，原罗盘明细已清除");
+    }
+    setRule("trafficPeriod", value);
   }
 
   async function refreshStores() {
@@ -1275,18 +1311,24 @@ export function SlowMovingCleanupPage() {
   }
 
   async function scanGoods() {
+    if (importedIdsMissing) {
+      setCleanupState("error");
+      setCleanupMessage("商品ID导入模式需要先导入包含商品ID的文件");
+      return;
+    }
     setAnalysisStarted(true);
     setCleanupState("loading");
-    setCleanupMessage("正在按创建时间分段读取商品并合并罗盘指标");
+    setCleanupMessage(`正在完整读取商品并合并${trafficPeriodOptions.find((item) => item.key === rules.trafficPeriod)?.label || "所选周期"}罗盘指标`);
     setLastScanAt(new Date());
     if (!previewMode) {
       try {
         const result = await fetchDoudianStaleGoodsCleanup({
           mode: "scan",
         shopIds: [...selectedIds],
-        rules: toRemoteRules(rules),
+        rules: toRemoteRules(rules, productSource, importedProductIds),
         compassFileName,
         compassRows,
+        compassPeriod,
         operationId: `stale-scan-${Date.now()}`,
           forceAdapter: true
         });
@@ -1294,7 +1336,7 @@ export function SlowMovingCleanupPage() {
         const byStore = new Map(stores.map((store) => [store.id, store]));
         const nextCandidates = (result.candidates || []).map((row) => normalizeRemoteCandidate(row, byStore.get(String(row.shopId))));
         const nextDiagnostics = normalizeScanDiagnostics(result);
-        const sourceFilteredCandidates = nextCandidates.filter((row) => selectedIds.has(row.shopId) && (productSource !== "importedIds" || importedProductIds.has(String(row.productId))));
+        const sourceFilteredCandidates = nextCandidates.filter((row) => selectedIds.has(row.shopId));
         const nextMatchedCandidates = applyPerStoreLimit(sourceFilteredCandidates, rules.perStoreLimit);
         setRemoteCandidates(nextCandidates);
         setScanDiagnostics(nextDiagnostics);
@@ -1340,6 +1382,7 @@ export function SlowMovingCleanupPage() {
   function handleCompassFile(file?: File) {
     setCompassFileName(file?.name || "");
     setCompassRows([]);
+    setCompassPeriod(file ? rules.trafficPeriod : undefined);
     if (!file) return;
     const lowerName = file.name.toLowerCase();
     if (!lowerName.endsWith(".csv") && !lowerName.endsWith(".tsv") && !lowerName.endsWith(".txt")) {
@@ -1365,6 +1408,7 @@ export function SlowMovingCleanupPage() {
       if (result.canceled) return;
       setCompassFileName(result.fileName || "");
       setCompassRows(Array.isArray(result.rows) ? result.rows : []);
+      setCompassPeriod(rules.trafficPeriod);
       setCleanupState(result.ok ? "ready" : "error");
       setCleanupMessage(result.message || (result.ok ? `已读取 ${result.count || 0} 条经营版商品指标` : "经营版商品列表解析失败"));
       return;
@@ -1432,12 +1476,12 @@ export function SlowMovingCleanupPage() {
     setCleanupState("ready");
     setCleanupMessage(`${actionCopy[action].label}计划已生成，需二次确认后才能执行`);
     const next = new Set(matchedCandidates.filter((row) => row.action === action).map((row) => row.id));
-    setSelectedCandidateIds(next.size ? next : new Set(matchedCandidates.filter((row) => row.action !== "optimize").map((row) => row.id)));
+    setSelectedCandidateIds(next);
   }
 
   async function confirmExecution() {
     if (!previewMode && confirmInput === "确认清理") {
-      const executable = selectedExecutable.length ? selectedExecutable : matchedCandidates.filter((row) => row.action === planAction && row.action !== "optimize");
+      const executable = selectedExecutable;
       if (!executable.length) {
         setCleanupState("error");
         setCleanupMessage("未选择可执行的滞销商品");
@@ -1449,11 +1493,8 @@ export function SlowMovingCleanupPage() {
       try {
         const result = await fetchDoudianStaleGoodsCleanup({
           mode: "execute",
-          shopIds: [...selectedIds],
-          rules: toRemoteRules(rules),
           action: planAction,
           candidateIds: executable.map((row) => row.id),
-          candidates: executable.map(toStaleGoodsCandidatePayload),
           confirmText: confirmInput,
           sourceRunId: executable.find((row) => row.sourceRunId)?.sourceRunId,
           operationId: `stale-exec-${Date.now()}`,
@@ -1539,7 +1580,7 @@ export function SlowMovingCleanupPage() {
       return (
         <td className="max-w-[220px] px-3">
           <div className="truncate font-semibold text-[#344054]" title={row.source}>{row.source}</div>
-          <div className="mt-0.5 text-[11px] text-[#98a2b3]">商品ID匹配</div>
+          <div className="mt-0.5 text-[11px] text-[#98a2b3]">{row.compassMatched ? "罗盘商品ID已匹配" : "未匹配罗盘明细"}</div>
         </td>
       );
     }
@@ -1695,7 +1736,7 @@ export function SlowMovingCleanupPage() {
                   <Download className="size-[14px]" strokeWidth={2} />
                   导出清单
                 </button>
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!matchedCandidates.length} onClick={() => buildPlan("offline")}>
+                <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!matchedCandidates.some((row) => row.action !== "optimize")} onClick={() => buildPlan(defaultPlanAction)}>
                   <Workflow className="size-[14px]" strokeWidth={2} />
                   生成计划
                 </button>
@@ -1706,7 +1747,7 @@ export function SlowMovingCleanupPage() {
                   <RefreshCw className="size-[14px]" strokeWidth={2} />
                   恢复默认
                 </button>
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!selectedIds.size || cleanupState === "loading"} onClick={() => void scanGoods()}>
+                <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!selectedIds.size || importedIdsMissing || cleanupState === "loading"} onClick={() => void scanGoods()}>
                   {cleanupState === "loading" ? <Loader2 className="size-[14px] animate-spin" strokeWidth={2} /> : <PackageSearch className="size-[14px]" strokeWidth={2} />}
                   开始分析
                 </button>
@@ -1781,7 +1822,7 @@ export function SlowMovingCleanupPage() {
                     <span className="text-[13px] text-[#667085]">识别方式：</span>
                     <SegmentButtonGroup value={rules.noSalesType} options={noSalesTypeOptions} onChange={(value) => setRule("noSalesType", value)} />
                     <span className="text-[13px] text-[#667085]">流量周期：</span>
-                    <SegmentButtonGroup value={rules.trafficPeriod} options={trafficPeriodOptions.map((period) => ({ value: period.key, label: period.label }))} onChange={(value) => setRule("trafficPeriod", value)} />
+                    <SegmentButtonGroup value={rules.trafficPeriod} options={trafficPeriodOptions.map((period) => ({ value: period.key, label: period.label }))} onChange={setTrafficPeriod} />
                     <span className="ml-2 text-[13px] text-[#667085]">商品来源：</span>
                     <SegmentButtonGroup value={productSource} options={productSourceOptions} onChange={setProductSource} />
                     <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" title={compassFileName || "导入经营版_商品_商品列表"} onClick={() => void importCompassFile()}>
@@ -1805,7 +1846,7 @@ export function SlowMovingCleanupPage() {
               <span className="truncate text-[12px] text-[#667085]">
                 当前筛选：{selectedIds.size} 家店铺 · {noSalesTypeLabel} · {trafficPeriodLabel} · {perStoreLimitLabel}
               </span>
-              <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-4 text-[13px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!selectedIds.size || cleanupState === "loading"} onClick={() => void scanGoods()}>
+              <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-4 text-[13px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!selectedIds.size || importedIdsMissing || cleanupState === "loading"} onClick={() => void scanGoods()}>
                 {cleanupState === "loading" ? <Loader2 className="size-[15px] animate-spin" strokeWidth={2} /> : <PackageSearch className="size-[15px]" strokeWidth={2} />}
                 开始滞销商品分析
               </button>
@@ -1932,7 +1973,7 @@ export function SlowMovingCleanupPage() {
         )}
       </div>
 
-      {planRows.length ? (
+      {planOpen ? (
         <div className="fixed bottom-4 right-4 z-40 grid w-[min(520px,calc(100vw-32px))] gap-3 rounded-lg border border-[#ffdca8] bg-white p-4 shadow-[0_18px_42px_rgba(15,23,42,0.18)]">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -1955,6 +1996,7 @@ export function SlowMovingCleanupPage() {
                 className={cn("inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-semibold", planAction === action ? "border-brand-fox bg-brand-foxSoft text-brand-navy" : "border-[#dbe5f2] bg-white text-[#344054]")}
                 key={action}
                 type="button"
+                disabled={!matchedCandidates.some((row) => row.action === action)}
                 onClick={() => buildPlan(action)}
               >
                 {action === "delete" ? <Trash2 className="size-[14px]" strokeWidth={2} /> : <Archive className="size-[14px]" strokeWidth={2} />}
@@ -1969,7 +2011,7 @@ export function SlowMovingCleanupPage() {
               value={confirmInput}
               onChange={(event) => setConfirmInput(event.target.value)}
             />
-            <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white disabled:opacity-50" type="button" disabled={executingPlan || confirmInput !== "确认清理"} onClick={() => void confirmExecution()}>
+            <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white disabled:opacity-50" type="button" disabled={executingPlan || !planRows.length || confirmInput !== "确认清理"} onClick={() => void confirmExecution()}>
               <Check className="size-[14px]" strokeWidth={2.2} />
               确认执行
             </button>

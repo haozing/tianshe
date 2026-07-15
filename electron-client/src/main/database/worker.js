@@ -667,6 +667,58 @@ function putNativeRecord(args = {}, options = {}) {
   }
 }
 
+function putManyNativeRecords(args = {}) {
+  const database = ensureDb();
+  const storeName = normalizeRecordStoreName(args.storeName || args.store);
+  const inputs = Array.isArray(args.records || args.items || args.values) ? (args.records || args.items || args.values) : [];
+  const ts = nowIso();
+  if (!inputs.length) {
+    return {
+      ok: true,
+      storeName,
+      count: 0,
+      records: args.omitRecords === true ? undefined : [],
+      payloadBytes: 0
+    };
+  }
+
+  const records = [];
+  let totalPayloadBytes = 0;
+  const statement = database.prepare(`
+    INSERT INTO native_records (store_name, record_id, payload_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(store_name, record_id) DO UPDATE SET
+      payload_json = excluded.payload_json,
+      updated_at = excluded.updated_at
+  `);
+
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    for (const input of inputs) {
+      let record = normalizeRecordPayload(input);
+      let recordId = recordIdFor(storeName, record);
+      if (!recordId) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Native record requires id", { storeName });
+      record = prepareNativeRecord(storeName, { ...record, id: record.id || recordId }, ts);
+      recordId = recordIdFor(storeName, record);
+      const payloadJson = encodeJson(record);
+      totalPayloadBytes += Buffer.byteLength(payloadJson, "utf8");
+      statement.run(storeName, recordId, payloadJson, normalizeString(record.createdAt) || ts, ts);
+      if (args.omitRecords !== true) records.push(record);
+    }
+    database.exec("COMMIT");
+    return {
+      ok: true,
+      storeName,
+      count: inputs.length,
+      records: args.omitRecords === true ? undefined : records,
+      payloadBytes: totalPayloadBytes
+    };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function cleanupLargeRecordSessions() {
   const now = Date.now();
   for (const [sessionId, session] of largeRecordSessions.entries()) {
@@ -830,6 +882,29 @@ function getNativeRecord(args = {}) {
   return formatNativeRecord(row);
 }
 
+function normalizeRecordIds(storeName, values) {
+  const ids = Array.isArray(values) ? values : [];
+  return Array.from(new Set(ids.map((value) => recordIdFor(storeName, value)).filter(Boolean)));
+}
+
+function getManyNativeRecords(args = {}) {
+  const storeName = normalizeRecordStoreName(args.storeName || args.store);
+  const recordIds = normalizeRecordIds(storeName, args.ids || args.recordIds);
+  if (!recordIds.length) return [];
+  const database = ensureDb();
+  const records = new Map();
+  for (let index = 0; index < recordIds.length; index += 400) {
+    const chunk = recordIds.slice(index, index + 400);
+    const placeholders = chunk.map(() => "?").join(", ");
+    const rows = database.prepare(`
+      SELECT * FROM native_records
+      WHERE store_name = ? AND record_id IN (${placeholders})
+    `).all(storeName, ...chunk);
+    for (const row of rows) records.set(row.record_id, formatNativeRecord(row));
+  }
+  return recordIds.map((recordId) => records.get(recordId)).filter(Boolean);
+}
+
 function listNativeRecords(args = {}) {
   const storeName = normalizeRecordStoreName(args.storeName || args.store);
   const limit = validatePageSize(args.limit, 10000, 50000);
@@ -847,6 +922,79 @@ function listNativeRecords(args = {}) {
     nextCursor: rows.length > limit ? pageRows[pageRows.length - 1].record_id : null,
     hasMore: rows.length > limit
   };
+}
+
+function queryNativeOperations(args = {}) {
+  const allowedStatuses = new Set(["created", "running", "succeeded", "failed", "cancelled"]);
+  const statuses = Array.from(new Set((Array.isArray(args.statuses) ? args.statuses : [])
+    .map(normalizeString)
+    .filter((status) => allowedStatuses.has(status))));
+  const taskType = normalizeString(args.taskType);
+  const updatedAfter = normalizeString(args.updatedAfter);
+  const limit = validatePageSize(args.limit, 200, 1000);
+  const conditions = ["store_name = 'operations'"];
+  const params = [];
+  if (statuses.length) {
+    conditions.push(`CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.status') END IN (${statuses.map(() => "?").join(", ")})`);
+    params.push(...statuses);
+  }
+  if (taskType) {
+    conditions.push("CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.taskType') END = ?");
+    params.push(taskType);
+  }
+  if (updatedAfter) {
+    conditions.push("updated_at >= ?");
+    params.push(updatedAfter);
+  }
+  const rows = ensureDb().prepare(`
+    SELECT * FROM native_records
+    WHERE ${conditions.join(" AND ")}
+    ORDER BY updated_at DESC, record_id DESC
+    LIMIT ?
+  `).all(...params, limit);
+  return rows.map(formatNativeRecord);
+}
+
+function cleanupNativeOperations(args = {}) {
+  const database = ensureDb();
+  const terminalStatuses = ["succeeded", "failed", "cancelled"];
+  const retentionDays = Math.max(1, Math.min(365, normalizeInteger(args.retentionDays) || 14));
+  const maxTerminalRecords = Math.max(10, Math.min(10000, normalizeInteger(args.maxTerminalRecords) || 200));
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const statusPlaceholders = terminalStatuses.map(() => "?").join(", ");
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const expired = database.prepare(`
+      DELETE FROM native_records
+      WHERE store_name = 'operations'
+        AND CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.status') END IN (${statusPlaceholders})
+        AND updated_at < ?
+    `).run(...terminalStatuses, cutoff).changes;
+    const overflow = database.prepare(`
+      DELETE FROM native_records
+      WHERE store_name = 'operations'
+        AND record_id IN (
+          SELECT record_id FROM native_records
+          WHERE store_name = 'operations'
+            AND CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.status') END IN (${statusPlaceholders})
+          ORDER BY updated_at DESC, record_id DESC
+          LIMIT -1 OFFSET ?
+        )
+    `).run(...terminalStatuses, maxTerminalRecords).changes;
+    database.exec("COMMIT");
+    return {
+      ok: true,
+      deleted: expired + overflow,
+      expired,
+      overflow,
+      cutoff,
+      retentionDays,
+      maxTerminalRecords
+    };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function deleteNativeRecord(args = {}) {
@@ -898,6 +1046,34 @@ function deleteNativeRecord(args = {}) {
     const result = database.prepare("DELETE FROM native_records WHERE store_name = ? AND record_id = ?").run(storeName, recordId);
     database.exec("COMMIT");
     return { ok: true, storeName, recordId, deleted: result.changes, deletedAt: ts };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function deleteManyNativeRecords(args = {}) {
+  const database = ensureDb();
+  const storeName = normalizeRecordStoreName(args.storeName || args.store);
+  if (storeName === "stores" || storeName === "groups") {
+    throw createError("NATIVE_DATA_BAD_ARGUMENT", "records.deleteMany cannot bypass store/group delete side effects", { storeName });
+  }
+  const recordIds = normalizeRecordIds(storeName, args.ids || args.recordIds);
+  const ts = nowIso();
+  if (!recordIds.length) return { ok: true, storeName, requested: 0, deleted: 0, missing: 0, deletedAt: ts };
+  let deleted = 0;
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    for (let index = 0; index < recordIds.length; index += 400) {
+      const chunk = recordIds.slice(index, index + 400);
+      const placeholders = chunk.map(() => "?").join(", ");
+      deleted += database.prepare(`
+        DELETE FROM native_records
+        WHERE store_name = ? AND record_id IN (${placeholders})
+      `).run(storeName, ...chunk).changes;
+    }
+    database.exec("COMMIT");
+    return { ok: true, storeName, requested: recordIds.length, deleted, missing: recordIds.length - deleted, deletedAt: ts };
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
@@ -2187,13 +2363,18 @@ function handle(method, args = {}) {
     case "stores.upsertIdentity": return upsertStoreIdentity(args);
     case "stores.tombstoneIdentity": return tombstoneStoreIdentity(args);
     case "records.put": return putNativeRecord(args);
+    case "records.putMany": return putManyNativeRecords(args);
     case "records.putLarge.start": return startLargeNativeRecordPut(args);
     case "records.putLarge.chunk": return putLargeNativeRecordChunk(args);
     case "records.putLarge.commit": return commitLargeNativeRecordPut(args);
     case "records.putLarge.abort": return abortLargeNativeRecordPut(args);
     case "records.get": return getNativeRecord(args);
+    case "records.getMany": return getManyNativeRecords(args);
     case "records.list": return listNativeRecords(args);
+    case "records.queryOperations": return queryNativeOperations(args);
+    case "records.cleanupOperations": return cleanupNativeOperations(args);
     case "records.delete": return deleteNativeRecord(args);
+    case "records.deleteMany": return deleteManyNativeRecords(args);
     case "catalogJobs.acquire": return acquireCatalogJob(args);
     case "catalogJobs.get": return getCatalogJob(args);
     case "catalogJobs.cancel": return cancelCatalogJob(args);

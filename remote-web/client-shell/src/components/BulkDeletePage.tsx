@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Archive,
@@ -580,6 +580,7 @@ export function BulkDeletePage() {
   const [executionRows, setExecutionRows] = useState<DoudianBulkDeleteExecution[]>([]);
   const [previewPage, setPreviewPage] = useState(0);
   const [previewPageSize, setPreviewPageSize] = useState<PreviewPageSize>("100");
+  const cancelExecutionRef = useRef(false);
 
   const previewMode = !hasNativeStoreBridge();
 
@@ -606,7 +607,8 @@ export function BulkDeletePage() {
 
   const allProducts = useMemo(() => buildSampleProducts(stores), [stores]);
   const productImportItems = useMemo(() => parseProductImportItems(idText, stores), [idText, stores]);
-  const usableProductImportItems = useMemo(() => productImportItems.filter((item) => item.productId), [productImportItems]);
+  const usableProductImportItems = useMemo(() => productImportItems.filter((item) => item.productId && item.validationStatus === "ok"), [productImportItems]);
+  const invalidProductImportCount = productImportItems.length - usableProductImportItems.length;
   const scopedProductImportCount = usableProductImportItems.filter((item) => item.shopId || item.shopName).length;
 
   const samplePreviewRows = useMemo(() => {
@@ -788,6 +790,19 @@ export function BulkDeletePage() {
       setPreviewMessage("检测到多商品 ID，请切换到“商品ID导入”后再生成预览");
       return;
     }
+    if (sourceMode === "ids" && invalidProductImportCount > 0) {
+      setAnalyzed(false);
+      setRemoteCandidates([]);
+      setSourceRunId("");
+      setSelectedProductIds(new Set());
+      setPreviewMessage(`导入内容有 ${invalidProductImportCount} 行缺少商品 ID 或无法匹配店铺，请修正后重试`);
+      return;
+    }
+    if (sourceMode === "ids" && !usableProductImportItems.length) {
+      setAnalyzed(false);
+      setPreviewMessage("请先导入有效的商品 ID");
+      return;
+    }
 
     setPreviewBusy(true);
     setAnalyzed(false);
@@ -847,7 +862,8 @@ export function BulkDeletePage() {
   async function executePreview() {
     if (!selectedExecutableRows.length || confirmInput !== "确认删除") return;
     setRunState("running");
-    setProgress(12);
+    cancelExecutionRef.current = false;
+    setProgress(0);
     setExecutionMessage("");
     setExecutionRows([]);
     if (previewMode) {
@@ -871,7 +887,6 @@ export function BulkDeletePage() {
       return;
     }
     try {
-      setProgress(deleteMode === "final" ? 42 : 58);
       const result = await fetchDoudianBulkDeleteProducts({
         mode: "execute",
         shopIds: [...selectedIds],
@@ -879,13 +894,15 @@ export function BulkDeletePage() {
         candidateIds,
         sourceRunId,
         confirmText: "确认删除",
+        onProgress: (event) => setProgress(event.percent),
+        shouldCancel: () => cancelExecutionRef.current,
         forceAdapter: true
       });
       const nextExecutions = result.executions || [];
       const failedCount = nextExecutions.filter((item) => item.ok === false).length;
-      const submittedCount = nextExecutions.filter((item) => item.ok && item.status !== "dry_run").length;
+      const submittedCount = nextExecutions.filter((item) => item.ok && item.status === "submitted").length;
       setExecutionRows(nextExecutions);
-      setProgress(100);
+      if (result.status !== "cancelled") setProgress(100);
       setRunState(result.ok ? "done" : "error");
       setExecutionMessage(result.message || (result.ok ? `批量删除已提交，成功 ${submittedCount} 个` : `批量删除执行失败，失败 ${failedCount} 个`));
     } catch (error) {
@@ -896,10 +913,15 @@ export function BulkDeletePage() {
     }
   }
 
+  function cancelExecution() {
+    cancelExecutionRef.current = true;
+    setExecutionMessage("正在取消，将在当前请求完成后停止");
+  }
+
   const tableMinWidth = 1160;
   const canExecute = previewMode ? analyzed : analyzed && Boolean(sourceRunId);
   const failedExecutionRows = executionRows.filter((item) => item.ok === false);
-  const submittedExecutionCount = executionRows.filter((item) => item.ok && item.status !== "dry_run").length;
+  const submittedExecutionCount = executionRows.filter((item) => item.ok && item.status === "submitted").length;
 
   return (
     <section className={cn("grid h-full min-h-0 gap-3 overflow-hidden text-[#1d2939] max-[980px]:grid-cols-1 max-[980px]:overflow-auto", sidebarCollapsed ? "grid-cols-[minmax(0,1fr)]" : "grid-cols-[250px_minmax(0,1fr)]")}>
@@ -1289,9 +1311,9 @@ export function BulkDeletePage() {
               value={confirmInput}
               onChange={(event) => setConfirmInput(event.target.value)}
             />
-            <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white disabled:opacity-50" type="button" disabled={runState === "running" || !canExecute || !selectedExecutableRows.length || confirmInput !== "确认删除"} onClick={() => void executePreview()}>
-              {runState === "running" ? <Loader2 className="size-[14px] animate-spin" strokeWidth={2.2} /> : <PlayCircle className="size-[14px]" strokeWidth={2.2} />}
-              确认执行
+            <button className={cn("inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-[12px] font-semibold text-white disabled:opacity-50", runState === "running" ? "bg-[#b42318]" : "bg-brand-fox")} type="button" disabled={runState !== "running" && (!canExecute || !selectedExecutableRows.length || confirmInput !== "确认删除")} onClick={() => runState === "running" ? cancelExecution() : void executePreview()}>
+              {runState === "running" ? <XCircle className="size-[14px]" strokeWidth={2.2} /> : <PlayCircle className="size-[14px]" strokeWidth={2.2} />}
+              {runState === "running" ? "取消执行" : "确认执行"}
             </button>
           </div>
           <div className="grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">

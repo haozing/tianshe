@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.14.client-shell.2.1.10-phase2",
+  "version": "2026.07.15.violations-v2",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -34,7 +34,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "2c284e5-dirty",
-    "buildTime": "2026-07-14T09:30:54.697Z"
+    "gitCommit": "7ff27e4-dirty",
+    "buildTime": "2026-07-15T10:11:40.785Z"
   }
 }

@@ -8,9 +8,12 @@ import type {
   DoudianViolationsDataRow
 } from "../../types";
 import { requireChihuNative } from "../../native/client";
-import { repositoryDelete, repositoryGetAll, repositoryPut } from "./repository";
+import { getNativeData } from "../../nativeData/client";
+import { repositoryDelete, repositoryGetAll, repositoryGetMany, repositoryPutMany } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
+import { dispatchDoudianProgress } from "./progress";
+import violationsResponseFixture from "./fixtures/violationsResponse.json";
 
 const VIOLATION_DATA_FIELDS = [
   "totalRecords",
@@ -42,6 +45,12 @@ interface ViolationsDataArgs {
   maxPages?: number;
   concurrency?: number;
   mockRecords?: DoudianViolationRecord[];
+  isCancelled?: () => boolean;
+  trackWindow?: (winId: number) => void;
+}
+
+function throwIfCancelled(args: ViolationsDataArgs) {
+  if (args.isCancelled?.()) throw new Error("cancelled");
 }
 
 interface DateContext {
@@ -58,6 +67,17 @@ interface DateContext {
   beginDateCompact: string;
   endDateCompact: string;
   startDateCompact: string;
+}
+
+type ViolationsCoverageStatus = "complete" | "truncated" | "partial" | "failed" | "not_queried";
+
+interface StoreCoverage {
+  coverageStatus: ViolationsCoverageStatus;
+  complete: boolean;
+  truncated: boolean;
+  fetchedAt: string;
+  remoteTotal?: number;
+  fetchedRecords: number;
 }
 
 interface ViolationsLatestRecord {
@@ -117,6 +137,20 @@ function compactDate(value: string) {
 
 function slashDateStart(value: string) {
   return `${value.replace(/-/g, "/")} 00:00:00`;
+}
+
+function localDateStartMs(value: string) {
+  const parsed = new Date(`${value}T00:00:00`);
+  return parsed.getTime();
+}
+
+function recordInDateRange(record: DoudianViolationRecord, dateContext: DateContext) {
+  if (dateContext.datePreset === "all") return true;
+  const value = String(record.violationAt || record.createdAt || "");
+  const timestamp = dueMs(value);
+  const begin = localDateStartMs(dateContext.beginDate);
+  const endExclusive = addDateDays(new Date(`${dateContext.endDate}T00:00:00`), 1).getTime();
+  return Number.isFinite(timestamp) && Number.isFinite(begin) && Number.isFinite(endExclusive) && timestamp >= begin && timestamp < endExclusive;
 }
 
 function policy(adapter: DoudianAdapterConfig, path: string, fallback: unknown = undefined): unknown {
@@ -319,11 +353,43 @@ function normalizeSeverity(value: unknown) {
 
 function normalizeProcessStatus(value: unknown) {
   const next = text(value).toLowerCase();
+  if (!next) return "unknown";
+  if (/(完成|成功|已处理|已处置|已处罚|已撤销|关闭|通过|done|success|finish|closed)/i.test(next)) return "done";
   if (/(失败|异常|error|fail)/i.test(next)) return "failed";
   if (/(申诉|appeal)/i.test(next)) return "appealing";
   if (/(整改|修复|rectif|repair)/i.test(next)) return "rectifying";
-  if (/(完成|已处理|已处置|关闭|通过|done|success|finish|closed)/i.test(next)) return "done";
-  return "pending";
+  if (/(待|未处理|pending|waiting|todo)/i.test(next)) return "pending";
+  return "unknown";
+}
+
+function normalizeWorkflowStatus(value: unknown, kind: "appeal" | "rectification" | "penalty") {
+  const next = String(value ?? "").trim().toLowerCase();
+  if (!next || /^-1$/.test(next) || /(不支持|无需|not supported)/i.test(next)) return "unknown";
+  if (kind === "appeal" && next === "0") return "appealing";
+  if (kind === "rectification" && next === "0") return "rectifying";
+  if ((kind === "appeal" || kind === "rectification") && next === "1") return "done";
+  if ((kind === "appeal" || kind === "rectification") && ["2", "11", "21"].includes(next)) return "failed";
+  if (kind === "appeal" && next === "3") return "appealing";
+  if (kind === "rectification" && next === "3") return "rectifying";
+  if ((kind === "appeal" || kind === "rectification") && next === "20") return "pending";
+  if (kind === "penalty" && ["1", "2"].includes(next)) return "done";
+  if (kind === "penalty" && next === "3") return "pending";
+  return normalizeProcessStatus(next);
+}
+
+function resolveProcessStatus(record: unknown, adapter: DoudianAdapterConfig) {
+  const explicit = normalizeProcessStatus(readViolationField(record, adapter, "processStatus"));
+  if (explicit !== "unknown") return explicit;
+  const statuses = [
+    normalizeWorkflowStatus(readViolationField(record, adapter, "appealStatus"), "appeal"),
+    normalizeWorkflowStatus(readViolationField(record, adapter, "rectificationStatus"), "rectification")
+  ];
+  if (statuses.includes("failed")) return "failed";
+  if (statuses.includes("appealing")) return "appealing";
+  if (statuses.includes("rectifying")) return "rectifying";
+  if (statuses.includes("pending")) return "pending";
+  if (statuses.includes("done")) return "done";
+  return normalizeWorkflowStatus(readViolationField(record, adapter, "penaltyStatus"), "penalty");
 }
 
 function normalizeProductStatus(value: unknown, productId = "") {
@@ -377,14 +443,36 @@ function totalPaths(adapter: DoudianAdapterConfig) {
   return Array.isArray(paths) ? paths.map((item) => text(item)).filter(Boolean) : [];
 }
 
-function readTotal(payload: unknown, adapter: DoudianAdapterConfig) {
+function readTotal(payload: unknown, adapter: DoudianAdapterConfig): number | undefined {
   const total = coerceNumber(firstPathValue(payload, totalPaths(adapter)));
-  return total !== undefined ? total : 0;
+  return total !== undefined && total >= 0 ? total : undefined;
+}
+
+function paginationCoverage(args: {
+  remoteTotal?: number;
+  mergedRecordCount: number;
+  stoppedOnShortPage: boolean;
+  requestFailed: boolean;
+  fetchedPages: number;
+  maxPages: number;
+}) {
+  const totalSatisfied = args.remoteTotal !== undefined && args.mergedRecordCount >= args.remoteTotal;
+  const truncated = !args.requestFailed && !args.stoppedOnShortPage && !totalSatisfied && args.fetchedPages >= args.maxPages;
+  const complete = !args.requestFailed && !truncated && (args.stoppedOnShortPage || totalSatisfied || args.remoteTotal === 0);
+  const coverageStatus: ViolationsCoverageStatus = truncated
+    ? "truncated"
+    : args.requestFailed
+      ? (args.mergedRecordCount ? "partial" : "failed")
+      : complete
+        ? "complete"
+        : "partial";
+  return { totalSatisfied, truncated, complete, coverageStatus };
 }
 
 function mergePagePayloads(planKey: string, responses: RequestPlanResult[], adapter: DoudianAdapterConfig) {
   const list = responses.flatMap((response) => firstArray({ [planKey]: response.data }, listPaths(adapter)));
-  const total = responses.reduce((max, response) => Math.max(max, readTotal({ [planKey]: response.data }, adapter)), 0);
+  const totals = responses.map((response) => readTotal({ [planKey]: response.data }, adapter)).filter((value): value is number => value !== undefined);
+  const total = totals.length ? Math.max(...totals) : undefined;
   const first = responses[0];
   if (!first) return { ok: false, status: 0, data: null, error: "missing response", source: planKey };
   return {
@@ -395,10 +483,10 @@ function mergePagePayloads(planKey: string, responses: RequestPlanResult[], adap
     data: {
       data: {
         tickets: list,
-        total: total || list.length
+        total: total ?? list.length
       },
       tickets: list,
-      total: total || list.length
+      total: total ?? list.length
     }
   };
 }
@@ -410,6 +498,8 @@ function extractRecords(store: DoudianStoreSummary, responses: Record<string, Re
     const productId = text(readViolationField(item, adapter, "productId"));
     const reason = text(readViolationField(item, adapter, "reason"));
     const dueAt = normalizeDateTime(readViolationField(item, adapter, "dueAt"));
+    const violationAt = normalizeDateTime(readViolationField(item, adapter, "violationAt"));
+    const createdAt = normalizeDateTime(readViolationField(item, adapter, "createdAt"));
     const id = text(readViolationField(item, adapter, "id")) || `${store.shopId || "shop"}-violation-${index + 1}`;
     const productStatus = normalizeProductStatus(readViolationField(item, adapter, "productStatus"), productId);
     return {
@@ -422,11 +512,13 @@ function extractRecords(store: DoudianStoreSummary, responses: Record<string, Re
       productId,
       reason: reason || "违规原因待确认",
       severity: normalizeSeverity(readViolationField(item, adapter, "severity")),
-      processStatus: normalizeProcessStatus(readViolationField(item, adapter, "processStatus")),
+      processStatus: resolveProcessStatus(item, adapter),
       productStatus,
       associationStatus: associationStatus(productStatus, productId),
       action: text(readViolationField(item, adapter, "action")) || "待人工确认",
       dueAt,
+      violationAt,
+      createdAt,
       penaltyAmount: amount(readViolationField(item, adapter, "penaltyAmount"), fieldScale(adapter, "penaltyAmount")),
       failureReason: text(readViolationField(item, adapter, "failureReason")),
       sourcePlan: String(requestContext.sourcePlan || "violationPenaltyList"),
@@ -452,19 +544,29 @@ function emptyRow(store: DoudianStoreSummary): DoudianViolationsDataRow {
     productMissingCount: 0,
     offlineProductCount: 0,
     failedCount: 0,
-    penaltyAmount: 0
+    penaltyAmount: 0,
+    coverageStatus: "not_queried",
+    complete: false,
+    truncated: false,
+    fetchedAt: ""
   };
 }
 
-function buildRow(store: DoudianStoreSummary, records: DoudianViolationRecord[], dateContext: DateContext, remoteTotal = 0) {
+function buildRow(store: DoudianStoreSummary, records: DoudianViolationRecord[], dateContext: DateContext, coverage: StoreCoverage = {
+  coverageStatus: "complete",
+  complete: true,
+  truncated: false,
+  fetchedAt: nowIso(),
+  fetchedRecords: records.length
+}) {
   const row = emptyRow(store);
-  row.totalRecords = records.length || remoteTotal;
+  row.totalRecords = records.length;
   row.pendingCount = records.filter((record) => record.processStatus === "pending").length;
   row.appealCount = records.filter((record) => record.processStatus === "appealing").length;
   row.rectificationCount = records.filter((record) => record.processStatus === "rectifying").length;
   row.highRiskCount = records.filter((record) => record.severity === "high").length;
-  row.dueSoonCount = records.filter((record) => dueSoon(String(record.dueAt || ""))).length;
-  row.overdueCount = records.filter((record) => overdue(String(record.dueAt || ""))).length;
+  row.dueSoonCount = records.filter((record) => record.processStatus !== "done" && dueSoon(String(record.dueAt || ""))).length;
+  row.overdueCount = records.filter((record) => record.processStatus !== "done" && overdue(String(record.dueAt || ""))).length;
   row.productLinkedCount = records.filter((record) => ["online", "offline", "recycled"].includes(String(record.associationStatus || ""))).length;
   row.productMissingCount = records.filter((record) => record.associationStatus === "not_found").length;
   row.offlineProductCount = records.filter((record) => record.productStatus === "已下架" || record.productStatus === "回收站").length;
@@ -473,6 +575,12 @@ function buildRow(store: DoudianStoreSummary, records: DoudianViolationRecord[],
   row.datePreset = dateContext.datePreset;
   row.beginDate = dateContext.beginDate;
   row.endDate = dateContext.endDate;
+  row.coverageStatus = coverage.coverageStatus;
+  row.complete = coverage.complete;
+  row.truncated = coverage.truncated;
+  row.fetchedAt = coverage.fetchedAt;
+  if (coverage.remoteTotal !== undefined) row.remoteTotal = coverage.remoteTotal;
+  row.fetchedRecords = coverage.fetchedRecords;
   return row;
 }
 
@@ -480,11 +588,11 @@ function rowSummary(row: DoudianViolationsDataRow, records: DoudianViolationReco
   const nonZeroFields = VIOLATION_DATA_FIELDS.filter((field) => Number(row[field] || 0) !== 0);
   return {
     recordCount: records.length,
-    remoteTotal: Number(row.totalRecords || 0),
+    remoteTotal: row.remoteTotal === undefined ? null : Number(row.remoteTotal),
     nonZeroFieldCount: nonZeroFields.length,
     nonZeroFields,
     noRecord: Number(row.totalRecords || 0) === 0 && records.length === 0,
-    remoteTotalWithoutRecords: Number(row.totalRecords || 0) > 0 && records.length === 0
+    remoteTotalWithoutRecords: Number(row.remoteTotal || 0) > 0 && records.length === 0
   };
 }
 
@@ -609,7 +717,8 @@ function associationPolicy(adapter: DoudianAdapterConfig) {
 }
 
 function associationEnabled(adapter: DoudianAdapterConfig) {
-  return associationPolicy(adapter).enabled === true;
+  const gate = text(objectRecord(policy(adapter, "violationsData.acceptanceGates", {})).productAssociation).toLowerCase();
+  return associationPolicy(adapter).enabled === true && ["passed", "accepted", "ready", "complete"].includes(gate);
 }
 
 function associationPlans(adapter: DoudianAdapterConfig) {
@@ -653,6 +762,15 @@ function extractAssociation(response: RequestPlanResult, adapter: DoudianAdapter
   return { productId: matchedId, productStatus, associationStatus: associationStatus(productStatus, matchedId), raw: matched };
 }
 
+function productStatusFromLifecycle(value: unknown) {
+  const next = text(value).toLowerCase();
+  if (["selling", "online", "on_sale"].includes(next)) return "在售";
+  if (["offline", "off_sale", "sold_out"].includes(next)) return "已下架";
+  if (["recycle", "recycled", "deleted"].includes(next)) return "回收站";
+  if (["not_found", "missing"].includes(next)) return "未关联";
+  return "未查询";
+}
+
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
   const results = new Array<PromiseSettledResult<R>>(items.length);
   let nextIndex = 0;
@@ -671,7 +789,7 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper:
   return results;
 }
 
-async function associateProducts(payload: DoudianAdapterPayload, store: DoudianStoreSummary, records: DoudianViolationRecord[], requestContext: Record<string, unknown>): Promise<{
+async function associateProducts(payload: DoudianAdapterPayload, store: DoudianStoreSummary, records: DoudianViolationRecord[], requestContext: Record<string, unknown>, args: ViolationsDataArgs): Promise<{
   records: DoudianViolationRecord[];
   failures: Array<Record<string, unknown>>;
   responses: Record<string, unknown>;
@@ -679,17 +797,55 @@ async function associateProducts(payload: DoudianAdapterPayload, store: DoudianS
   if (!associationEnabled(payload.adapter)) return { records, failures: [], responses: {} as Record<string, unknown> };
   const planKeys = associationPlans(payload.adapter);
   const productIds = Array.from(new Set(records.map((record) => text(record.productId)).filter(Boolean)));
-  if (!planKeys.length || !productIds.length) return { records, failures: [], responses: {} as Record<string, unknown> };
+  if (!productIds.length) return { records, failures: [], responses: {} as Record<string, unknown> };
   const failures: Array<Record<string, unknown>> = [];
   const responses: Record<string, unknown> = {};
   const byProductId = new Map<string, ReturnType<typeof extractAssociation>>();
+  const nativeData = getNativeData();
+  if (nativeData?.catalog.getProductsByIds) {
+    try {
+      const localRows = await nativeData.catalog.getProductsByIds({
+        platform: "doudian",
+        tenantId: text(store.tenantId) || "local-user",
+        shopId: store.shopId,
+        storeGeneration: Math.max(1, Math.trunc(Number(store.storeGeneration || 1))),
+        productIds
+      });
+      for (const row of localRows) {
+        const productStatus = productStatusFromLifecycle(row.lifecycleStatus || row.mergedFields?.lifecycleStatus);
+        if (productStatus === "未查询") continue;
+        byProductId.set(row.productId, {
+          productId: row.productId,
+          productStatus,
+          associationStatus: associationStatus(productStatus, row.productId),
+          raw: row
+        });
+      }
+      responses.localCatalog = { requested: productIds.length, matched: byProductId.size };
+    } catch (error) {
+      failures.push({ key: "localProductCatalog", phase: "product_association", optional: true, status: 0, code: null, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  const unresolvedProductIds = productIds.filter((productId) => !byProductId.has(productId));
+  if (!planKeys.length || !unresolvedProductIds.length) {
+    return {
+      records: records.map((record) => {
+        const association = byProductId.get(String(record.productId || ""));
+        return association ? { ...record, productStatus: association.productStatus, associationStatus: association.associationStatus, productAssociationRaw: association.raw } : record;
+      }),
+      failures,
+      responses
+    };
+  }
   const concurrency = Math.max(1, Math.min(4, Math.floor(Number(associationPolicy(payload.adapter).concurrency || 2))));
-  const settled = await mapWithConcurrency(productIds, concurrency, async (productId) => {
+  const settled = await mapWithConcurrency(unresolvedProductIds, concurrency, async (productId) => {
+    throwIfCancelled(args);
     for (const planKey of planKeys) {
       const response = await runDoudianRequestPlan(payload, {
         partition: store.partition,
         planKey,
-        context: { ...requestContext, productId }
+        context: { ...requestContext, productId },
+        trackWindow: args.trackWindow
       });
       responses[`${planKey}:${productId}`] = {
         status: response.status || 0,
@@ -706,7 +862,7 @@ async function associateProducts(payload: DoudianAdapterPayload, store: DoudianS
     }
   });
   settled.forEach((result, index) => {
-    if (result.status === "rejected") failures.push({ key: planKeys.join(","), phase: "product_association", productId: productIds[index] || "", optional: true, status: 0, code: null, message: result.reason instanceof Error ? result.reason.message : String(result.reason) });
+    if (result.status === "rejected") failures.push({ key: planKeys.join(","), phase: "product_association", productId: unresolvedProductIds[index] || "", optional: true, status: 0, code: null, message: result.reason instanceof Error ? result.reason.message : String(result.reason) });
   });
   return {
     records: records.map((record) => {
@@ -728,6 +884,25 @@ function latestId(shopId: string, dateContext: DateContext, adapterVersion: stri
   return `${shopId}::${dateContext.datePreset}::${dateContext.beginDate}::${dateContext.endDate}::${adapterVersion}::${schemaVersion}::${hash}::${linkage}`;
 }
 
+let lastViolationsCacheCleanupDay = "";
+
+async function cleanupViolationsLatestCache(adapterVersion: string, schemaVersion: string, hash: string, linkage: string, retentionDays = 35) {
+  const cleanupDay = formatLocalIsoDate(new Date());
+  if (lastViolationsCacheCleanupDay === cleanupDay) return;
+  lastViolationsCacheCleanupDay = cleanupDay;
+  const cutoff = Date.now() - Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
+  const records = await repositoryGetAll<ViolationsLatestRecord>("violations_latest");
+  const stale = records.filter((record) => (
+    record.adapterVersion !== adapterVersion ||
+    record.fieldSchemaVersion !== schemaVersion ||
+    record.requestPlanHash !== hash ||
+    record.productLinkageVersion !== linkage ||
+    !Number.isFinite(Date.parse(record.updatedAt)) ||
+    Date.parse(record.updatedAt) < cutoff
+  ));
+  await Promise.all(stale.map((record) => repositoryDelete("violations_latest", record.id).catch(() => undefined)));
+}
+
 function targetStores(stores: DoudianStoreSummary[], shopIds: string[] = []) {
   const requested = new Set(shopIds.map((item) => text(item)).filter(Boolean));
   return requested.size ? stores.filter((store) => requested.has(store.shopId)) : stores;
@@ -735,11 +910,13 @@ function targetStores(stores: DoudianStoreSummary[], shopIds: string[] = []) {
 
 async function collectForStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, planKeys: string[], dateContext: DateContext, args: ViolationsDataArgs, index: number, total: number) {
   if (!store.partition) throw new Error("store partition missing");
+  throwIfCancelled(args);
   const responses: Record<string, RequestPlanResult> = {};
   const pageSummary: Record<string, unknown> = {};
   const pageSize = Math.max(1, Math.min(200, Math.floor(Number(args.pageSize || 50))));
   const pageStart = Math.max(0, Math.floor(Number(args.page || 0)));
   const maxPages = Math.max(1, Math.min(200, Math.floor(Number(args.maxPages || policyNumber(payload.adapter, "violationsData.maxPages", 50)))));
+  const pageConcurrency = Math.max(1, Math.min(8, Math.floor(policyNumber(payload.adapter, "violationsData.pageConcurrency", 4))));
   const requestContext: Record<string, unknown> = {
     ...dateContext,
     processStatus: args.processStatus || "",
@@ -754,37 +931,78 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
   };
 
   for (const planKey of planKeys) {
-    let page = pageStart;
-    let fetchedPages = 0;
-    let remoteTotal = 0;
+    throwIfCancelled(args);
+    let remoteTotal: number | undefined;
+    let stoppedOnShortPage = false;
+    let requestFailed = false;
     const pageResponses: RequestPlanResult[] = [];
     const pageRecords: Array<Record<string, unknown>> = [];
-    do {
-      const key = fetchedPages === 0 ? planKey : `${planKey}:page:${page}`;
+
+    const fetchPage = async (page: number) => {
+      throwIfCancelled(args);
       const response = await runDoudianRequestPlan(payload, {
         partition: store.partition,
         planKey,
-        context: { ...requestContext, page, page_size: pageSize, pageSize }
+        context: { ...requestContext, page, page_size: pageSize, pageSize },
+        trackWindow: args.trackWindow
       });
-      responses[key] = response;
-      pageResponses.push(response);
       const pagePayload = payloadFromResponses({ [planKey]: response });
       const pageListCount = firstArray(pagePayload, listPaths(payload.adapter)).length;
-      remoteTotal = readTotal(pagePayload, payload.adapter) || remoteTotal;
-      pageRecords.push({
+      const pageTotal = readTotal(pagePayload, payload.adapter);
+      return {
         page,
-        status: response.status || 0,
-        ok: requestPlanResponseOk(response, payload.adapter, planKey, violationsDataMappings(payload.adapter)),
-        code: responseCode(response) ?? null,
-        listCount: pageListCount,
-        total: remoteTotal || 0,
-        message: responseMessage(response)
+        response,
+        pageListCount,
+        pageTotal,
+        ok: requestPlanResponseOk(response, payload.adapter, planKey, violationsDataMappings(payload.adapter))
+      };
+    };
+
+    const appendPage = (result: Awaited<ReturnType<typeof fetchPage>>) => {
+      const key = pageResponses.length === 0 ? planKey : `${planKey}:page:${result.page}`;
+      responses[key] = result.response;
+      pageResponses.push(result.response);
+      if (result.pageTotal !== undefined) remoteTotal = remoteTotal === undefined ? result.pageTotal : Math.max(remoteTotal, result.pageTotal);
+      if (!result.ok) requestFailed = true;
+      if (result.pageListCount < pageSize) stoppedOnShortPage = true;
+      pageRecords.push({
+        page: result.page,
+        status: result.response.status || 0,
+        ok: result.ok,
+        code: responseCode(result.response) ?? null,
+        listCount: result.pageListCount,
+        total: result.pageTotal,
+        message: responseMessage(result.response)
       });
-      fetchedPages += 1;
-      page += 1;
-      if (!requestPlanResponseOk(response, payload.adapter, planKey, violationsDataMappings(payload.adapter))) break;
-      if (!remoteTotal || fetchedPages >= Math.ceil(remoteTotal / pageSize)) break;
-    } while (fetchedPages < maxPages);
+    };
+
+    const firstPage = await fetchPage(pageStart);
+    appendPage(firstPage);
+    if (firstPage.ok && !stoppedOnShortPage && maxPages > 1) {
+      if (remoteTotal !== undefined) {
+        const finalPageExclusive = Math.ceil(remoteTotal / pageSize);
+        const requestedFinalPageExclusive = Math.min(finalPageExclusive, pageStart + maxPages);
+        const remainingPages = Array.from({ length: Math.max(0, requestedFinalPageExclusive - pageStart - 1) }, (_, offset) => pageStart + offset + 1);
+        const settledPages = await mapWithConcurrency(remainingPages, pageConcurrency, (page) => fetchPage(page));
+        const fulfilledPages = settledPages
+          .map((result, index) => result.status === "fulfilled" ? result.value : {
+            page: remainingPages[index],
+            response: { ok: false, status: 0, data: null, error: result.reason instanceof Error ? result.reason.message : String(result.reason), source: planKey } satisfies RequestPlanResult,
+            pageListCount: 0,
+            pageTotal: remoteTotal,
+            ok: false
+          })
+          .sort((left, right) => left.page - right.page);
+        fulfilledPages.forEach(appendPage);
+      } else {
+        for (let page = pageStart + 1; page < pageStart + maxPages && !stoppedOnShortPage && !requestFailed; page += 1) {
+          appendPage(await fetchPage(page));
+        }
+      }
+    }
+    const fetchedPages = pageResponses.length;
+    const mergedRecordCount = pageResponses.flatMap((response) => firstArray({ [planKey]: response.data }, listPaths(payload.adapter))).length;
+    const { truncated, complete, coverageStatus } = paginationCoverage({ remoteTotal, mergedRecordCount, stoppedOnShortPage, requestFailed, fetchedPages, maxPages });
     if (pageResponses.length) {
       responses[planKey] = mergePagePayloads(planKey, pageResponses, payload.adapter);
       for (const key of Object.keys(responses)) {
@@ -795,17 +1013,36 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
       fetchedPages,
       pageSize,
       remoteTotal,
-      mergedRecordCount: pageResponses.flatMap((response) => firstArray({ [planKey]: response.data }, listPaths(payload.adapter))).length,
+      mergedRecordCount,
+      complete,
+      truncated,
+      coverageStatus,
       pages: pageRecords
     };
   }
 
   const normalizedResponses = Object.fromEntries(Object.entries(responses).map(([key, value]) => [key.split(":page:")[0], value]));
-  let records = extractRecords(store, normalizedResponses, requestContext, payload.adapter);
-  const associationResult = await associateProducts(payload, store, records, requestContext);
+  const rawRecords = extractRecords(store, normalizedResponses, requestContext, payload.adapter);
+  let records = rawRecords.filter((record) => recordInDateRange(record, dateContext));
+  const dateUnknownCount = rawRecords.filter((record) => !record.violationAt && !record.createdAt).length;
+  const dateCoverageIncomplete = dateContext.datePreset !== "all" && dateUnknownCount > 0;
+  const associationResult = await associateProducts(payload, store, records, requestContext, args);
   records = associationResult.records;
-  const responsePayload = payloadFromResponses(normalizedResponses);
-  const row = buildRow(store, records, dateContext, readTotal(responsePayload, payload.adapter));
+  const planCoverages = Object.values(pageSummary).map((value) => objectRecord(value));
+  const truncated = planCoverages.some((item) => item.truncated === true);
+  const complete = planCoverages.length > 0 && planCoverages.every((item) => item.complete === true);
+  const failedCoverage = planCoverages.some((item) => item.coverageStatus === "failed");
+  const partialCoverage = planCoverages.some((item) => item.coverageStatus === "partial");
+  const remoteTotals = planCoverages.map((item) => coerceNumber(item.remoteTotal)).filter((value): value is number => value !== undefined);
+  const coverage: StoreCoverage = {
+    coverageStatus: truncated ? "truncated" : failedCoverage ? (rawRecords.length ? "partial" : "failed") : partialCoverage || dateCoverageIncomplete ? "partial" : complete ? "complete" : "partial",
+    complete: complete && !dateCoverageIncomplete,
+    truncated,
+    fetchedAt: nowIso(),
+    ...(remoteTotals.length ? { remoteTotal: Math.max(...remoteTotals) } : {}),
+    fetchedRecords: rawRecords.length
+  };
+  const row = buildRow(store, records, dateContext, coverage);
   const responseSummary = summarizeResponses(normalizedResponses, payload.adapter);
   const sourceFailures = [...summarizeFailures(responseSummary, payload.adapter), ...associationResult.failures];
   const blockingSourceFailures = sourceFailures.filter((failure) => !failure.optional);
@@ -816,10 +1053,10 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
     .map(([key]) => key);
   const missingRequiredPlans = requiredPlans.filter((planKey) => !requestPlanResponseOk(normalizedResponses[planKey], payload.adapter, planKey, violationsDataMappings(payload.adapter)));
   const ok = requiredPlans.length ? missingRequiredPlans.length === 0 : successPlanKeys.length > 0;
-  const partial = ok && blockingSourceFailures.length > 0;
+  const partial = ok && (blockingSourceFailures.length > 0 || coverage.coverageStatus !== "complete");
   const message = !ok
     ? (firstErrorMessage(normalizedResponses, payload.adapter) || policyMessage(payload.adapter, "violationsData.messages.failed", "Violations data request failed"))
-    : blockingSourceFailures.length
+    : blockingSourceFailures.length || coverage.coverageStatus !== "complete"
       ? policyMessage(payload.adapter, "violationsData.messages.partialSourceStore", "Violations data synced with partial source errors")
       : summary.noRecord
         ? policyMessage(payload.adapter, "violationsData.messages.noRecordStore", "Violations data synced with no records")
@@ -844,6 +1081,9 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
       productAssociationEnabled: associationEnabled(payload.adapter),
       productAssociationResponses: associationResult.responses,
       pageSummary,
+      coverage,
+      dateUnknownCount,
+      dateMatchedCount: records.length,
       rowSummary: summary,
       datePreset: dateContext.datePreset,
       beginDate: dateContext.beginDate,
@@ -853,6 +1093,13 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
     total
   };
   await reportViolationsDataRow({ store, row, detail, summary, responseSummary, pageSummary });
+  dispatchDoudianProgress({
+    operationId: args.operationId || "",
+    taskType: "violationsData",
+    status: "running",
+    progress: Math.round((index / Math.max(1, total)) * 95),
+    message: `${store.shopName || store.shopId} ${index}/${total}`
+  });
   return { row, records, detail };
 }
 
@@ -871,6 +1118,7 @@ async function saveLatest(args: {
   fieldSchemaVersion: string;
   requestPlanHash: string;
   productLinkageVersion: string;
+  cacheRetentionDays: number;
 }) {
   const detailById = new Map(args.details.map((detail) => [text(detail.shopId), detail]));
   const recordsByShop = new Map<string, DoudianViolationRecord[]>();
@@ -880,9 +1128,9 @@ async function saveLatest(args: {
     recordsByShop.set(record.shopId, list);
   }
   const updatedAt = nowIso();
-  for (const row of args.rows) {
+  const latestRecords = args.rows.map((row) => {
     const detail = detailById.get(row.shopId);
-    await repositoryPut<ViolationsLatestRecord>("violations_latest", {
+    return {
       id: latestId(row.shopId, args.dateContext, args.adapterVersion, args.fieldSchemaVersion, args.requestPlanHash, args.productLinkageVersion),
       shopId: row.shopId,
       shopName: row.shopName,
@@ -901,8 +1149,10 @@ async function saveLatest(args: {
       requestPlanHash: args.requestPlanHash,
       productLinkageVersion: args.productLinkageVersion,
       updatedAt
-    });
-  }
+    } satisfies ViolationsLatestRecord;
+  });
+  await repositoryPutMany<ViolationsLatestRecord>("violations_latest", latestRecords);
+  void cleanupViolationsLatestCache(args.adapterVersion, args.fieldSchemaVersion, args.requestPlanHash, args.productLinkageVersion, args.cacheRetentionDays).catch(() => undefined);
 }
 
 export async function fetchViolationsData(args: ViolationsDataArgs = {}): Promise<DoudianViolationsDataResult> {
@@ -920,7 +1170,7 @@ export async function fetchViolationsData(args: ViolationsDataArgs = {}): Promis
   const runId = `violations-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   if (args.mockRecords?.length) {
-    const records = args.mockRecords;
+    const records = args.mockRecords.filter((record) => recordInDateRange(record, dateContext));
     const rows = targets.map((store) => buildRow(store, records.filter((record) => record.shopId === store.shopId), dateContext));
     const details = rows.map((row, index) => ({
       shopId: row.shopId,
@@ -932,7 +1182,7 @@ export async function fetchViolationsData(args: ViolationsDataArgs = {}): Promis
       index: index + 1,
       total: rows.length
     }));
-    await saveLatest({ rows, records, details, dateContext, adapterVersion, ruleVersion: scriptsVersion, fieldSchemaVersion: schemaVersion, requestPlanHash: hash, productLinkageVersion: linkageVersion });
+    await saveLatest({ rows, records, details, dateContext, adapterVersion, ruleVersion: scriptsVersion, fieldSchemaVersion: schemaVersion, requestPlanHash: hash, productLinkageVersion: linkageVersion, cacheRetentionDays: policyNumber(payload.adapter, "violationsData.cacheRetentionDays", 35) });
     return {
       ok: true,
       status: "ok",
@@ -946,6 +1196,11 @@ export async function fetchViolationsData(args: ViolationsDataArgs = {}): Promis
       failureCount: 0,
       partialSourceCount: 0,
       noRecordCount: rows.filter((row) => Number(row.totalRecords || 0) === 0).length,
+      coverageStatus: "complete",
+      complete: true,
+      truncated: false,
+      fetchedAt: nowIso(),
+      remoteTotal: records.length,
       dateRange: publicDateRange(dateContext),
       adapterVersion,
       scriptsVersion,
@@ -978,7 +1233,10 @@ export async function fetchViolationsData(args: ViolationsDataArgs = {}): Promis
 
   const defaultConcurrency = Math.max(1, Math.min(8, Math.floor(policyNumber(payload.adapter, "violationsData.concurrency", 2))));
   const concurrency = Math.max(1, Math.min(8, Math.floor(Number(args.concurrency || defaultConcurrency))));
-  const settled = await mapWithConcurrency(targets, concurrency, async (store, index) => collectForStore(payload, store, planKeys, dateContext, args, index + 1, targets.length));
+  const settled = await mapWithConcurrency(targets, concurrency, async (store, index) => {
+    throwIfCancelled(args);
+    return collectForStore(payload, store, planKeys, dateContext, args, index + 1, targets.length);
+  });
   const rows: DoudianViolationsDataRow[] = [];
   const records: DoudianViolationRecord[] = [];
   const details: DoudianRunDetail[] = [];
@@ -991,24 +1249,28 @@ export async function fetchViolationsData(args: ViolationsDataArgs = {}): Promis
       return;
     }
     const message = result.reason instanceof Error ? result.reason.message : String(result.reason || "Violations data request failed");
-    rows.push(emptyRow(store));
+    const failedRow = emptyRow(store);
+    failedRow.coverageStatus = "failed";
+    failedRow.fetchedAt = nowIso();
+    rows.push(failedRow);
     details.push({ shopId: store.shopId, shopName: store.shopName, status: "failed", ok: false, message, reason: "violations-data-request-failed", category: "api", diagnostic: { error: message }, index: index + 1, total: targets.length });
   });
 
   const successCount = details.filter((detail) => detail.ok).length;
   const failureCount = details.filter((detail) => !detail.ok).length;
-  const partialSourceCount = details.filter((detail) => Number(objectRecord(detail.diagnostic).blockingSourceFailureCount ?? objectRecord(detail.diagnostic).sourceFailureCount ?? 0) > 0).length;
+  const partialSourceCount = details.filter((detail) => detail.status === "partial" || Number(objectRecord(detail.diagnostic).blockingSourceFailureCount ?? objectRecord(detail.diagnostic).sourceFailureCount ?? 0) > 0).length;
   const noRecordCount = details.filter((detail) => objectRecord(objectRecord(detail.diagnostic).rowSummary).noRecord === true).length;
   const message = failureCount
     ? policyMessage(payload.adapter, "violationsData.messages.partial", "Violations data synced with {failureCount} failures", { successCount, failureCount })
     : partialSourceCount
       ? policyMessage(payload.adapter, "violationsData.messages.partialSources", "Violations data synced; {partialSourceCount} stores have source issues", { successCount, partialSourceCount })
       : policyMessage(payload.adapter, "violationsData.messages.done", "Violations data synced for {successCount} stores", { successCount });
+  const aggregateRemoteTotals = rows.map((row) => coerceNumber(row.remoteTotal)).filter((value): value is number => value !== undefined);
 
-  await saveLatest({ rows, records, details, dateContext, adapterVersion, ruleVersion: scriptsVersion, fieldSchemaVersion: schemaVersion, requestPlanHash: hash, productLinkageVersion: linkageVersion });
+  await saveLatest({ rows, records, details, dateContext, adapterVersion, ruleVersion: scriptsVersion, fieldSchemaVersion: schemaVersion, requestPlanHash: hash, productLinkageVersion: linkageVersion, cacheRetentionDays: policyNumber(payload.adapter, "violationsData.cacheRetentionDays", 35) });
 
   return {
-    ok: failureCount === 0,
+    ok: failureCount === 0 && partialSourceCount === 0,
     status: failureCount || partialSourceCount ? "partial" : "ok",
     message,
     runId,
@@ -1020,6 +1282,11 @@ export async function fetchViolationsData(args: ViolationsDataArgs = {}): Promis
     failureCount,
     partialSourceCount,
     noRecordCount,
+    coverageStatus: failureCount ? (successCount ? "partial" : "failed") : rows.some((row) => row.truncated === true) ? "truncated" : partialSourceCount ? "partial" : "complete",
+    complete: failureCount === 0 && partialSourceCount === 0 && rows.every((row) => row.complete === true),
+    truncated: rows.some((row) => row.truncated === true),
+    fetchedAt: rows.map((row) => String(row.fetchedAt || "")).filter(Boolean).sort().at(-1) || nowIso(),
+    ...(aggregateRemoteTotals.length ? { remoteTotal: aggregateRemoteTotals.reduce((sum, value) => sum + value, 0) } : {}),
     dateRange: publicDateRange(dateContext),
     adapterVersion,
     scriptsVersion,
@@ -1042,14 +1309,14 @@ export async function fetchViolationsDataLatest(args: ViolationsDataArgs = {}): 
   const schemaVersion = fieldSchemaVersion(payload.adapter);
   const hash = requestPlanHash(payload.adapter, planKeys);
   const linkageVersion = productLinkageVersion(payload.adapter);
-  const rows = (await repositoryGetAll<ViolationsLatestRecord>("violations_latest"))
-    .filter((record) => record.datePreset === dateContext.datePreset && record.beginDate === dateContext.beginDate && record.endDate === dateContext.endDate)
-    .filter((record) => record.adapterVersion === (payload.adapter.version || "") && record.fieldSchemaVersion === schemaVersion && record.requestPlanHash === hash && record.productLinkageVersion === linkageVersion)
+  const ids = targets.map((store) => latestId(store.shopId, dateContext, payload.adapter.version || "", schemaVersion, hash, linkageVersion));
+  const rows = (await repositoryGetMany<ViolationsLatestRecord>("violations_latest", ids))
     .filter((record) => !targetIds.size || targetIds.has(record.shopId));
+  void cleanupViolationsLatestCache(payload.adapter.version || "", schemaVersion, hash, linkageVersion, policyNumber(payload.adapter, "violationsData.cacheRetentionDays", 35)).catch(() => undefined);
   const details: DoudianRunDetail[] = rows.map((record, index) => ({
     shopId: record.shopId,
     shopName: record.shopName,
-    status: record.ok ? "ok" : "failed",
+    status: record.ok ? (record.row.complete === true ? "ok" : "partial") : "failed",
     ok: record.ok,
     message: record.message || (record.ok ? "Cached violations data ready" : "Cached violations data failed"),
     reason: record.ok ? "" : "violations-data-cached-failure",
@@ -1058,6 +1325,7 @@ export async function fetchViolationsDataLatest(args: ViolationsDataArgs = {}): 
     index: index + 1,
     total: rows.length
   }));
+  const aggregateRemoteTotals = rows.map((record) => coerceNumber(record.row.remoteTotal)).filter((value): value is number => value !== undefined);
   return {
     ok: true,
     status: rows.length ? "ready" : "empty",
@@ -1065,6 +1333,11 @@ export async function fetchViolationsDataLatest(args: ViolationsDataArgs = {}): 
     rows: rows.map((record) => record.row),
     records: rows.flatMap((record) => record.records || []),
     details,
+    coverageStatus: rows.some((record) => record.row.truncated === true) ? "truncated" : rows.some((record) => record.row.complete !== true) ? "partial" : "complete",
+    complete: rows.length > 0 && rows.every((record) => record.row.complete === true),
+    truncated: rows.some((record) => record.row.truncated === true),
+    fetchedAt: rows.map((record) => String(record.row.fetchedAt || record.updatedAt || "")).filter(Boolean).sort().at(-1) || "",
+    ...(aggregateRemoteTotals.length ? { remoteTotal: aggregateRemoteTotals.reduce((sum, value) => sum + value, 0) } : {}),
     dateRange: publicDateRange(dateContext),
     adapterVersion: payload.adapter.version || "",
     scriptsVersion: payload.scripts?.version || "",
@@ -1101,6 +1374,7 @@ export async function runDoudianViolationsDataSelfCheck(options: { doudianAdapte
       const dateContext = violationsDateContext(item, payload.adapter);
       checkedContexts.push(dateContext);
       const dueAt = formatDateTime(addDateDays(new Date(), item.dueOffset));
+      const violationAt = formatDateTime(new Date());
       const records = [{
         id: `${shopId}-${item.datePreset}`,
         shopId,
@@ -1116,6 +1390,8 @@ export async function runDoudianViolationsDataSelfCheck(options: { doudianAdapte
         associationStatus: "online",
         action: "review",
         dueAt,
+        violationAt,
+        createdAt: violationAt,
         penaltyAmount: 12,
         failureReason: "",
         source: "self-check"
@@ -1130,11 +1406,41 @@ export async function runDoudianViolationsDataSelfCheck(options: { doudianAdapte
         dateRangeOk: latest.dateRange?.beginDate === dateContext.beginDate && latest.dateRange?.endDate === dateContext.endDate
       });
     }
+    const fixtureStatuses = violationsResponseFixture.tickets.map((ticket) => resolveProcessStatus(ticket, payload.adapter));
+    const expectedStatuses = violationsResponseFixture.expectedStatuses;
+    const statusNormalizationOk = fixtureStatuses.every((status, index) => status === expectedStatuses[index]);
+    const completedDueAt = formatDateTime(addDateDays(new Date(), -1));
+    const completedRiskRow = buildRow({ shopId, shopName, platform: "doudian", partition: "", status: "online" }, [{
+      id: "completed-risk-check",
+      shopId,
+      shopName,
+      objectType: "店铺",
+      objectName: "completed",
+      productId: "",
+      reason: "completed",
+      severity: "low",
+      processStatus: "done",
+      productStatus: "无需关联",
+      action: "none",
+      dueAt: completedDueAt,
+      violationAt: formatDateTime(new Date()),
+      penaltyAmount: 0,
+      failureReason: "",
+      source: "self-check"
+    }], violationsDateContext({ datePreset: "all" }, payload.adapter));
+    const noTotalContinues = paginationCoverage({ mergedRecordCount: 50, stoppedOnShortPage: false, requestFailed: false, fetchedPages: 1, maxPages: 50 });
+    const noTotalCompletes = paginationCoverage({ mergedRecordCount: 75, stoppedOnShortPage: true, requestFailed: false, fetchedPages: 2, maxPages: 50 });
+    const maxPageTruncates = paginationCoverage({ mergedRecordCount: 2500, stoppedOnShortPage: false, requestFailed: false, fetchedPages: 50, maxPages: 50 });
     return {
-      ok: results.every((item) => item.fetchOk && item.latestOk && item.metadataOk && item.dateRangeOk),
+      ok: results.every((item) => item.fetchOk && item.latestOk && item.metadataOk && item.dateRangeOk) && statusNormalizationOk && completedRiskRow.overdueCount === 0 && !noTotalContinues.complete && noTotalCompletes.complete && maxPageTruncates.truncated,
       latestOk: results.every((item) => item.latestOk),
       datePresetOk: results.every((item) => item.dateRangeOk),
       metadataOk: results.every((item) => item.metadataOk),
+      statusNormalizationOk,
+      completedRiskOk: completedRiskRow.overdueCount === 0,
+      noTotalPaginationOk: !noTotalContinues.complete && !noTotalContinues.truncated && noTotalCompletes.complete,
+      maxPageTruncationOk: maxPageTruncates.truncated,
+      fixtureStatuses,
       cases: results
     };
   } finally {

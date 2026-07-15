@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import {
   AlertTriangle,
   Banknote,
-  CalendarDays,
   Check,
   ChevronDown,
   CircleDollarSign,
+  CircleStop,
   Download,
   Landmark,
   Loader2,
@@ -19,19 +20,20 @@ import {
   Store,
   WalletCards
 } from "lucide-react";
-import { fetchDoudianFundsData, fetchDoudianFundsDataLatest, listDoudianStores } from "../bridge/client";
+import { cancelDoudianStoreOperation, fetchDoudianFundsData, fetchDoudianFundsDataLatest, listDoudianStores } from "../bridge/client";
 import { loadDoudianAdapterPayload } from "../bridge/doudianAdapter";
 import { STORAGE_KEY_FUNDS_DATA_COLUMNS, storageGet, storageSet } from "../bridge/storage";
 import { addDoudianProgressListener } from "../domain/doudian";
 import { cn } from "../lib/utils";
 import type { DoudianFundsDataRow, DoudianRunDetail, DoudianStoreStatus, DoudianStoreSummary } from "../types";
 
-type DatePreset = "snapshot" | "today" | "7d" | "30d";
 type SortKey = string;
 type LoadState = "loading" | "ready" | "error";
 type FundsLoadState = "idle" | "loading" | "ready" | "error";
 type MetricTone = "default" | "blue" | "green" | "warning" | "danger";
 type ColumnFormat = "money" | "number";
+type FundsMetricState = "fresh" | "stale" | "unavailable";
+type ExportFormat = "Excel" | "CSV" | "TXT";
 
 const fundsMetricKeys = [
   "withdrawBalance",
@@ -75,6 +77,9 @@ type FundsRow = {
   status: DoudianStoreStatus;
   lastMessage?: string;
   ok?: boolean;
+  metricStates: Record<FundsMetricKey, FundsMetricState>;
+  metricUpdatedAt: Record<FundsMetricKey, string>;
+  dataUpdatedAt?: string;
 } & Record<FundsMetricKey, number>;
 
 interface MetricItem {
@@ -120,13 +125,6 @@ interface RemoteFundsFieldSchema {
   }>;
 }
 
-const datePresets: Array<{ key: DatePreset; label: string }> = [
-  { key: "snapshot", label: "当前" },
-  { key: "today", label: "今天" },
-  { key: "7d", label: "近7天" },
-  { key: "30d", label: "近30天" }
-];
-
 const statusCopy: Record<DoudianStoreStatus, { label: string; className: string }> = {
   online: { label: "在线", className: "border-[#bff0cf] bg-[#eafaf0] text-[#087443]" },
   offline: { label: "离线", className: "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" },
@@ -140,9 +138,9 @@ const tableColumns: DataColumn[] = [
   { key: "frozenBalance", label: "应冻结金额", format: "money", group: "账户", tone: (row) => row.frozenBalance > 0 ? "danger" : undefined },
   { key: "pendingSettleAmount", label: "待结算金额", format: "money", group: "账户", tone: "warning" },
   { key: "pendingSettleOrders", label: "结算订单数", format: "number", group: "待结算订单信息", tone: (row) => row.pendingSettleOrders > 0 ? "warning" : undefined },
-  { key: "marginBalance", label: "保证金余额", format: "money", group: "保证金" },
-  { key: "depositPayable", label: "应缴保证金", format: "money", group: "保证金", tone: (row) => row.depositPayable > 0 ? "danger" : undefined },
-  { key: "refundableMargin", label: "可退保证金", format: "money", group: "保证金", tone: "green" },
+  { key: "marginBalance", label: "体验保证金余额", format: "money", group: "保证金" },
+  { key: "depositPayable", label: "应缴体验保证金", format: "money", group: "保证金", tone: (row) => row.depositPayable > 0 ? "danger" : undefined },
+  { key: "refundableMargin", label: "可退体验保证金", format: "money", group: "保证金", tone: "green" },
   { key: "baseMarginBalance", label: "基础保证金", format: "money", group: "保证金", defaultVisible: false },
   { key: "baseDepositPayable", label: "基础待缴", format: "money", group: "保证金", defaultVisible: false, tone: (row) => row.baseDepositPayable > 0 ? "danger" : undefined },
   { key: "baseRefundableMargin", label: "基础可退", format: "money", group: "保证金", defaultVisible: false, tone: "green" },
@@ -166,9 +164,9 @@ const defaultSummaryMetrics: NonNullable<RemoteFundsFieldSchema["summaryMetrics"
   { key: "balance", label: "货款总金额", format: "money", detail: "账户中心余额" },
   { key: "pendingSettleAmount", label: "待结算金额", format: "money", detail: "货款账户", tone: "warning" },
   { key: "frozenBalance", label: "冻结金额", format: "money", detail: "资金受限", tone: "danger" },
-  { key: "marginBalance", label: "保证金余额", format: "money", detail: "基础 + 体验" },
-  { key: "depositPayable", label: "待缴保证金", format: "money", detail: "基础 / 体验待缴", tone: "danger" },
-  { key: "refundableMargin", label: "可退保证金", format: "money", detail: "可退额度", tone: "green" },
+  { key: "marginBalance", label: "体验保证金余额", format: "money", detail: "店铺保证金信息" },
+  { key: "depositPayable", label: "应缴体验保证金", format: "money", detail: "店铺保证金信息", tone: "danger" },
+  { key: "refundableMargin", label: "可退体验保证金", format: "money", detail: "店铺保证金信息", tone: "green" },
   { key: "riskCount", label: "资金风险", format: "number", detail: "店铺事项", tone: "danger" },
   { key: "subsidyTotal", label: "累计补贴", format: "money", detail: "佣金 + 千川", tone: "green" },
   { key: "compensationAmountToday", label: "今日赔付", format: "money", detail: "赔付单量", tone: "warning" },
@@ -177,6 +175,8 @@ const defaultSummaryMetrics: NonNullable<RemoteFundsFieldSchema["summaryMetrics"
   { key: "pendingSettleOrders", label: "结算订单数", format: "number", detail: "待结算订单", tone: "warning" }
 ];
 const fundsMetricKeySet = new Set<string>(fundsMetricKeys);
+const CURRENT_SNAPSHOT_LABEL = "当前资金快照";
+const DEFAULT_AUTO_REFRESH_TTL_MS = 5 * 60 * 1000;
 const columnFormatSet = new Set<string>(["money", "number"]);
 const toneSet = new Set<string>(["default", "blue", "green", "warning", "danger"]);
 const defaultSortOptions = [
@@ -219,6 +219,14 @@ function emptyMetrics(): Record<FundsMetricKey, number> {
   return Object.fromEntries(fundsMetricKeys.map((key) => [key, 0])) as Record<FundsMetricKey, number>;
 }
 
+function emptyMetricStates(state: FundsMetricState = "unavailable"): Record<FundsMetricKey, FundsMetricState> {
+  return Object.fromEntries(fundsMetricKeys.map((key) => [key, state])) as Record<FundsMetricKey, FundsMetricState>;
+}
+
+function emptyMetricUpdatedAt(value = ""): Record<FundsMetricKey, string> {
+  return Object.fromEntries(fundsMetricKeys.map((key) => [key, value])) as Record<FundsMetricKey, string>;
+}
+
 function fundRiskCount(row: Record<FundsMetricKey, number>) {
   return [
     row.frozenBalance > 0,
@@ -241,13 +249,45 @@ function zeroFundsRow(store: StoreOption): FundsRow {
     shopName: store.name,
     group: store.group,
     status: store.status,
+    metricStates: emptyMetricStates(),
+    metricUpdatedAt: emptyMetricUpdatedAt(),
     ...emptyMetrics()
   };
 }
 
-function fundsRowFromRemote(row: DoudianFundsDataRow, store?: StoreOption, detail?: DoudianRunDetail): FundsRow {
+function fundsRowFromRemote(row: DoudianFundsDataRow, store?: StoreOption, detail?: DoudianRunDetail, previous?: FundsRow, cachedStale = false): FundsRow {
   const metrics = emptyMetrics();
   for (const key of fundsMetricKeys) metrics[key] = numberValue(row[key]);
+  const diagnostic = detailDiagnostic(detail);
+  const metricSources = metricSourcesObject(diagnostic.metricSources);
+  const remoteMetricUpdatedAt = stringRecord(diagnostic.metricUpdatedAt);
+  const hasSourceMetadata = Object.keys(metricSources).length > 0;
+  const metricStates = emptyMetricStates();
+  const metricUpdatedAt = emptyMetricUpdatedAt();
+  const attemptedAt = detail?.attemptedAt || detail?.dataUpdatedAt || new Date().toISOString();
+  for (const key of fundsMetricKeys) {
+    const source = metricSources[key];
+    const available = source
+      ? source.available === true || (source.available === undefined && !!source.source && source.source !== "none")
+      : !hasSourceMetadata && metrics[key] !== 0;
+    metricStates[key] = available ? (cachedStale ? "stale" : "fresh") : "unavailable";
+    metricUpdatedAt[key] = remoteMetricUpdatedAt[key] || (available ? attemptedAt : "");
+    if (metricStates[key] === "unavailable" && previous && previous.metricStates[key] !== "unavailable") {
+      metrics[key] = previous[key];
+      metricStates[key] = "stale";
+      metricUpdatedAt[key] = previous.metricUpdatedAt[key] || previous.dataUpdatedAt || "";
+    }
+  }
+  const staleTimestamps = fundsMetricKeys
+    .filter((key) => metricStates[key] === "stale")
+    .map((key) => metricUpdatedAt[key])
+    .filter(Boolean)
+    .sort();
+  const freshTimestamps = fundsMetricKeys
+    .filter((key) => metricStates[key] === "fresh")
+    .map((key) => metricUpdatedAt[key])
+    .filter(Boolean)
+    .sort();
   return {
     shopId: String(row.shopId || store?.id || ""),
     shopName: String(row.shopName || store?.name || ""),
@@ -255,7 +295,10 @@ function fundsRowFromRemote(row: DoudianFundsDataRow, store?: StoreOption, detai
     status: normalizeStoreStatus(row.status || store?.status),
     lastMessage: detail?.message,
     ok: detail?.ok,
-    ...deriveFundsMetrics(metrics)
+    metricStates,
+    metricUpdatedAt,
+    dataUpdatedAt: staleTimestamps[0] || freshTimestamps.at(-1) || previous?.dataUpdatedAt || detail?.dataUpdatedAt,
+    ...metrics
   };
 }
 
@@ -289,12 +332,33 @@ function sampleFundsRow(store: StoreOption, index: number): FundsRow {
     status: store.status,
     lastMessage: "设计预览数据",
     ok: true,
+    metricStates: emptyMetricStates("fresh"),
+    metricUpdatedAt: emptyMetricUpdatedAt(new Date().toISOString()),
+    dataUpdatedAt: new Date().toISOString(),
     ...metrics
   };
 }
 
 function sampleFundsRows(stores: StoreOption[]) {
   return stores.map(sampleFundsRow);
+}
+
+function staleFundsRow(previous: FundsRow | undefined, store: StoreOption, message: string): FundsRow {
+  if (!previous) return { ...zeroFundsRow(store), lastMessage: message, ok: false };
+  const metricStates = emptyMetricStates();
+  for (const key of fundsMetricKeys) {
+    metricStates[key] = previous.metricStates[key] === "unavailable" ? "unavailable" : "stale";
+  }
+  return {
+    ...previous,
+    shopName: store.name,
+    group: store.group,
+    status: store.status,
+    lastMessage: message,
+    ok: false,
+    metricStates,
+    metricUpdatedAt: previous.metricUpdatedAt
+  };
 }
 
 function normalizeRemoteColumns(schema?: RemoteFundsFieldSchema): DataColumn[] {
@@ -370,39 +434,27 @@ function formatColumnValue(value: number, format: ColumnFormat) {
   return format === "money" ? formatMoney(value) : formatNumber(value);
 }
 
-function formatDate(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function addDays(date: Date, days: number) {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
-function dateRangeForPreset(preset: DatePreset) {
-  const today = new Date();
-  if (preset === "snapshot") return { label: "当前资金快照" };
-  if (preset === "today") {
-    const value = formatDate(today);
-    return { beginDate: value, endDate: value, label: `${value} - ${value}` };
-  }
-  const days = preset === "7d" ? 7 : 30;
-  const beginDate = formatDate(addDays(today, -days + 1));
-  const endDate = formatDate(today);
-  return { beginDate, endDate, label: `${beginDate} - ${endDate}` };
-}
-
 function aggregateRows(rows: FundsRow[]) {
   const totals = emptyMetrics();
+  const freshCounts = Object.fromEntries(fundsMetricKeys.map((key) => [key, 0])) as Record<FundsMetricKey, number>;
+  const staleCounts = Object.fromEntries(fundsMetricKeys.map((key) => [key, 0])) as Record<FundsMetricKey, number>;
   for (const row of rows) {
-    for (const key of fundsMetricKeys) totals[key] += Number(row[key] || 0);
+    for (const key of fundsMetricKeys) {
+      if (row.metricStates[key] !== "unavailable") {
+        totals[key] += Number(row[key] || 0);
+      }
+      if (row.metricStates[key] === "fresh") {
+        freshCounts[key] += 1;
+      } else if (row.metricStates[key] === "stale") {
+        staleCounts[key] += 1;
+      }
+    }
   }
-  return deriveFundsMetrics(totals);
+  return { totals, freshCounts, staleCounts };
 }
 
-function fundsRowHasMetric(row: FundsRow) {
-  return fundsMetricKeys.some((key) => Number(row[key] || 0) !== 0);
+function fundsRowHasKnownMetric(row: FundsRow) {
+  return fundsMetricKeys.some((key) => row.metricStates[key] !== "unavailable");
 }
 
 function detailDiagnostic(detail?: DoudianRunDetail) {
@@ -449,13 +501,34 @@ function metricSourceText(detail: DoudianRunDetail | undefined, columns: DataCol
 }
 
 function metricSourcesObject(value: unknown) {
-  return value && typeof value === "object" ? value as Record<string, { source?: string; path?: string; alias?: string; formula?: string }> : {};
+  return value && typeof value === "object" ? value as Record<string, { source?: string; path?: string; alias?: string; formula?: string; available?: boolean }> : {};
 }
 
-function exportRows(rows: FundsRow[], range: string, columns: DataColumn[], details: DoudianRunDetail[], adapterVersion: string, fieldSchemaVersion: string, preview: boolean) {
+function stringRecord(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {} as Record<string, string>;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, String(item || "")])) as Record<string, string>;
+}
+
+function formatDataTime(value?: string) {
+  const timestamp = Date.parse(value || "");
+  if (!Number.isFinite(timestamp)) return "";
+  return new Date(timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function downloadText(content: string, fileName: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportRows(rows: FundsRow[], range: string, columns: DataColumn[], details: DoudianRunDetail[], adapterVersion: string, fieldSchemaVersion: string, preview: boolean, exportFormat: ExportFormat) {
   const detailById = new Map(details.map((detail) => [String(detail.shopId || ""), detail]));
   const exportColumns = columns.filter((column) => column.export !== false);
-  const header = ["店铺名称", "店铺ID", "分组", "状态", "同步状态", "同步消息", "口径", "适配器版本", "字段版本", "来源异常", "未命中指标", "指标来源", ...exportColumns.map((column) => column.label)];
+  const header = ["店铺名称", "店铺ID", "分组", "状态", "同步状态", "同步消息", "口径", "数据时间", "适配器版本", "字段版本", "来源异常", "未命中指标", "指标来源", "指标状态", ...exportColumns.map((column) => column.label)];
   const body = rows.map((row) => {
     const detail = detailById.get(row.shopId);
     return [
@@ -466,24 +539,33 @@ function exportRows(rows: FundsRow[], range: string, columns: DataColumn[], deta
       preview ? "设计预览" : detail?.ok === false ? "失败" : detail?.status || "成功",
       detail?.message || row.lastMessage || "",
       range,
+      row.dataUpdatedAt || "",
       adapterVersion,
       fieldSchemaVersion,
       sourceFailureText(detail),
       missingMetricText(detail),
       metricSourceText(detail, exportColumns),
-      ...exportColumns.map((column) => formatColumnValue(row[column.key], column.format))
+      exportColumns.map((column) => `${column.key}:${row.metricStates[column.key]}`).join(" | "),
+      ...exportColumns.map((column) => row.metricStates[column.key] === "unavailable" ? "" : row[column.key])
     ];
   });
-  const csv = [header, ...body].map((line) => line.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
-  const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
   const now = new Date();
   const exportDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  anchor.download = `小尊宝_资金数据导出_${exportDate}csv下载.csv`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  const rowsForExport = [header, ...body];
+  if (exportFormat === "Excel") {
+    const workbook = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet(rowsForExport);
+    XLSX.utils.book_append_sheet(workbook, sheet, "资金数据");
+    XLSX.writeFile(workbook, `小尊宝_资金数据导出_${exportDate}.xlsx`);
+    return;
+  }
+  if (exportFormat === "TXT") {
+    const textContent = rowsForExport.map((line) => line.map((cell) => String(cell).replace(/[\t\r\n]+/g, " ")).join("\t")).join("\r\n");
+    downloadText(`\ufeff${textContent}`, `小尊宝_资金数据导出_${exportDate}.txt`, "text/plain;charset=utf-8");
+    return;
+  }
+  const csv = rowsForExport.map((line) => line.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  downloadText(`\ufeff${csv}`, `小尊宝_资金数据导出_${exportDate}.csv`, "text/csv;charset=utf-8");
 }
 
 function toneClass(tone?: MetricTone) {
@@ -556,7 +638,6 @@ export function FundsDataPage() {
   const [stores, setStores] = useState<StoreOption[]>(() => previewMode ? sampleStores : []);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(previewMode ? sampleStores.map((store) => store.id) : []));
   const [query, setQuery] = useState("");
-  const [datePreset, setDatePreset] = useState<DatePreset>("snapshot");
   const [sortKey, setSortKey] = useState<SortKey>("可提现金额");
   const [loadState, setLoadState] = useState<LoadState>(() => previewMode ? "ready" : "loading");
   const [loadMessage, setLoadMessage] = useState("");
@@ -564,21 +645,32 @@ export function FundsDataPage() {
   const [lastSyncAt, setLastSyncAt] = useState(() => new Date());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fundsRows, setFundsRows] = useState<FundsRow[]>(() => previewMode ? sampleFundsRows(sampleStores) : []);
+  const fundsRowsRef = useRef(fundsRows);
+  const requestGeneration = useRef(0);
+  const activeOperationIdRef = useRef("");
   const [fundsState, setFundsState] = useState<FundsLoadState>(() => previewMode ? "ready" : "idle");
   const [fundsMessage, setFundsMessage] = useState(() => previewMode ? "设计预览数据" : "");
   const [fundsDetails, setFundsDetails] = useState<DoudianRunDetail[]>([]);
   const [fundsProgress, setFundsProgress] = useState("");
+  const [activeOperationId, setActiveOperationId] = useState("");
   const [fieldSchema, setFieldSchema] = useState<RemoteFundsFieldSchema>({});
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<Set<string>>(() => visibleColumnKeySet(tableColumns));
   const [columnPanelOpen, setColumnPanelOpen] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [adapterVersion, setAdapterVersion] = useState("");
   const [fieldSchemaVersion, setFieldSchemaVersion] = useState("");
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("Excel");
+  const [autoRefreshTtlMs, setAutoRefreshTtlMs] = useState(DEFAULT_AUTO_REFRESH_TTL_MS);
+
+  function commitFundsRows(rows: FundsRow[]) {
+    fundsRowsRef.current = rows;
+    setFundsRows(rows);
+  }
 
   async function refreshStores() {
     if (previewMode) {
       setStores(sampleStores);
-      setFundsRows(sampleFundsRows(sampleStores));
+      commitFundsRows(sampleFundsRows(sampleStores));
       setSelectedIds(new Set(sampleStores.map((store) => store.id)));
       setLoadState("ready");
       setLastSyncAt(new Date());
@@ -586,7 +678,7 @@ export function FundsDataPage() {
     }
     if (bridgeMissing) {
       setStores([]);
-      setFundsRows([]);
+      commitFundsRows([]);
       setSelectedIds(new Set());
       setLoadState("error");
       setLoadMessage("生产环境未检测到本地店铺桥接，资金数据不会使用演示数据");
@@ -601,7 +693,9 @@ export function FundsDataPage() {
         setStores(nextStores);
         setFundsRows((currentRows) => {
           const byId = new Map(currentRows.map((row) => [row.shopId, row]));
-          return nextStores.map((store) => byId.get(store.id) || zeroFundsRow(store));
+          const nextRows = nextStores.map((store) => byId.get(store.id) || zeroFundsRow(store));
+          fundsRowsRef.current = nextRows;
+          return nextRows;
         });
         setSelectedIds((current) => {
           const validIds = new Set(nextStores.map((store) => store.id));
@@ -623,21 +717,24 @@ export function FundsDataPage() {
     }
   }
 
-  async function refreshFundsData(ids = selectedIds) {
+  async function refreshFundsData(ids = selectedIds, generation = ++requestGeneration.current) {
     const shopIds = [...ids];
     if (bridgeMissing) {
-      setFundsRows([]);
+      if (generation !== requestGeneration.current) return;
+      commitFundsRows([]);
       setFundsDetails([]);
       setFundsState("error");
       setFundsMessage("本地资金数据桥接不可用");
       return;
     }
     if (!shopIds.length) {
-      setFundsRows(stores.map(zeroFundsRow));
+      if (generation !== requestGeneration.current) return;
+      commitFundsRows(stores.map(zeroFundsRow));
       setFundsDetails([]);
       setFundsState("ready");
       return;
     }
+    if (generation !== requestGeneration.current) return;
     setSyncing(true);
     setFundsState("loading");
     setFundsMessage("");
@@ -646,75 +743,107 @@ export function FundsDataPage() {
       if (previewMode) {
         setFundsProgress("设计预览资金快照");
         await wait(260);
-        setFundsRows(sampleFundsRows(stores));
+        if (generation !== requestGeneration.current) return;
+        commitFundsRows(sampleFundsRows(stores));
         setFundsDetails([]);
         setFundsMessage("设计预览数据");
         setFundsState("ready");
         setLastSyncAt(new Date());
         return;
       }
-      const range = dateRangeForPreset(datePreset);
       const result = await fetchDoudianFundsData({
-        shopIds,
-        datePreset,
-        beginDate: range.beginDate,
-        endDate: range.endDate,
-        forceAdapter: true
+        shopIds
       });
+      if (generation !== requestGeneration.current) return;
+      if (result.status === "cancelled") {
+        setFundsState("ready");
+        setFundsMessage(result.message || "已取消资金数据同步");
+        return;
+      }
       const detailList = Array.isArray(result.details) ? result.details : [];
       const detailById = new Map(detailList.map((detail) => [String(detail.shopId || ""), detail]));
       const storeById = new Map(stores.map((store) => [store.id, store]));
       const rowById = new Map((result.rows || []).map((row) => [String(row.shopId), row]));
+      const previousById = new Map(fundsRowsRef.current.map((row) => [row.shopId, row]));
       const nextRows = stores.map((store) => {
         const row = rowById.get(store.id);
-        return row ? fundsRowFromRemote(row, store, detailById.get(store.id)) : zeroFundsRow(store);
+        const detail = detailById.get(store.id);
+        return row
+          ? fundsRowFromRemote(row, store, detail, previousById.get(store.id))
+          : staleFundsRow(previousById.get(store.id), store, detail?.message || "本次未返回资金数据");
       });
       for (const row of result.rows || []) {
         const id = String(row.shopId || "");
-        if (id && !storeById.has(id)) nextRows.push(fundsRowFromRemote(row, undefined, detailById.get(id)));
+        if (id && !storeById.has(id)) nextRows.push(fundsRowFromRemote(row, undefined, detailById.get(id), previousById.get(id)));
       }
-      setFundsRows(nextRows);
-      setFundsDetails(detailList);
+      commitFundsRows(nextRows);
+      setFundsDetails(detailList.map((detail) => ({
+        ...detail,
+        usingStaleCache: nextRows.find((row) => row.shopId === String(detail.shopId || ""))
+          ? fundsMetricKeys.some((key) => nextRows.find((row) => row.shopId === String(detail.shopId || ""))?.metricStates[key] === "stale")
+          : false
+      })));
       setFundsMessage(result.message || "");
       setAdapterVersion(result.adapterVersion || adapterVersion);
       setFieldSchemaVersion(result.fieldSchemaVersion || fieldSchemaVersion);
       setFundsState(result.ok || result.status === "partial" ? "ready" : "error");
       setLastSyncAt(new Date());
     } catch (error) {
+      if (generation !== requestGeneration.current) return;
+      const storeById = new Map(stores.map((store) => [store.id, store]));
+      commitFundsRows(fundsRowsRef.current.map((row) => staleFundsRow(
+        row,
+        storeById.get(row.shopId) || { id: row.shopId, name: row.shopName, group: row.group, status: row.status },
+        error instanceof Error ? error.message : String(error)
+      )));
       setFundsState("error");
       setFundsMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      setSyncing(false);
-      setFundsProgress("");
+      if (generation === requestGeneration.current) {
+        setSyncing(false);
+        setFundsProgress("");
+      }
     }
   }
 
-  async function hydrateLatestFundsData(ids = selectedIds) {
-    if (previewMode || !stores.length || !ids.size) return;
+  async function hydrateLatestFundsData(ids = selectedIds, generation = requestGeneration.current) {
+    if (previewMode || !stores.length || !ids.size) return false;
     try {
-      const range = dateRangeForPreset(datePreset);
       const result = await fetchDoudianFundsDataLatest({
-        shopIds: [...ids],
-        datePreset,
-        beginDate: range.beginDate,
-        endDate: range.endDate,
-        forceAdapter: true
+        shopIds: [...ids]
       });
-      if (!result.rows?.length) return;
+      if (generation !== requestGeneration.current) return false;
+      if (!result.rows?.length) return false;
       const detailList = Array.isArray(result.details) ? result.details : [];
       const detailById = new Map(detailList.map((detail) => [String(detail.shopId || ""), detail]));
       const rowById = new Map(result.rows.map((row) => [String(row.shopId), row]));
-      setFundsRows(stores.map((store) => {
+      const now = Date.now();
+      const cacheFresh = result.rows.length >= ids.size && [...ids].every((id) => {
+        const detail = detailById.get(id);
+        const updatedAt = Date.parse(detail?.dataUpdatedAt || detail?.attemptedAt || "");
+        return Number.isFinite(updatedAt) && now - updatedAt <= autoRefreshTtlMs;
+      });
+      commitFundsRows(stores.map((store) => {
         const row = rowById.get(store.id);
-        return row ? fundsRowFromRemote(row, store, detailById.get(store.id)) : zeroFundsRow(store);
+        const detail = detailById.get(store.id);
+        const updatedAt = Date.parse(detail?.dataUpdatedAt || detail?.attemptedAt || "");
+        const cachedStale = !Number.isFinite(updatedAt) || now - updatedAt > autoRefreshTtlMs;
+        return row ? fundsRowFromRemote(row, store, detail, undefined, cachedStale) : zeroFundsRow(store);
       }));
       setFundsDetails(detailList);
       setFundsMessage(result.message || "");
       setAdapterVersion(result.adapterVersion || adapterVersion);
       setFieldSchemaVersion(result.fieldSchemaVersion || fieldSchemaVersion);
       setFundsState("ready");
+      const latestTimestamp = detailList
+        .map((detail) => Date.parse(detail.dataUpdatedAt || detail.attemptedAt || ""))
+        .filter(Number.isFinite)
+        .sort((left, right) => right - left)[0];
+      if (latestTimestamp) setLastSyncAt(new Date(latestTimestamp));
+      return cacheFresh;
     } catch {
       // Latest cached data is optional; an explicit sync is authoritative.
+      return false;
     }
   }
 
@@ -732,6 +861,11 @@ export function FundsDataPage() {
         setFieldSchema(schema);
         setAdapterVersion(payload.adapter.version || "");
         setFieldSchemaVersion(schema.version || "");
+        const policies = payload.adapter.policies as Record<string, unknown> | undefined;
+        const fundsPolicy = policies?.fundsData && typeof policies.fundsData === "object" ? policies.fundsData as Record<string, unknown> : {};
+        const cachePolicy = fundsPolicy.cachePolicy && typeof fundsPolicy.cachePolicy === "object" ? fundsPolicy.cachePolicy as Record<string, unknown> : {};
+        const configuredTtl = Number(cachePolicy.autoRefreshTtlMs);
+        setAutoRefreshTtlMs(Number.isFinite(configuredTtl) && configuredTtl >= 0 ? configuredTtl : DEFAULT_AUTO_REFRESH_TTL_MS);
         setVisibleColumnKeys((current) => {
           const currentValid = [...current].filter((key) => columns.some((column) => column.key === key));
           const next = currentValid.length ? new Set(currentValid) : visibleColumnKeySet(columns, schema.version);
@@ -753,19 +887,52 @@ export function FundsDataPage() {
   useEffect(() => {
     if (previewMode) return;
     if (loadState !== "ready" || !stores.length) return;
-    void hydrateLatestFundsData();
-    void refreshFundsData();
-  }, [previewMode, loadState, stores.length, datePreset]);
+    const generation = ++requestGeneration.current;
+    void (async () => {
+      const cacheFresh = await hydrateLatestFundsData(selectedIds, generation);
+      if (!cacheFresh && generation === requestGeneration.current) await refreshFundsData(selectedIds, generation);
+    })();
+    return () => {
+      if (requestGeneration.current === generation) requestGeneration.current += 1;
+    };
+  }, [previewMode, loadState, stores, autoRefreshTtlMs]);
 
   useEffect(() => {
     return addDoudianProgressListener((event) => {
       const detail = event.detail || {};
       if (detail.taskType !== "fundsData") return;
+      const operationId = detail.operationId || "";
+      if (detail.status === "running") {
+        if (!activeOperationIdRef.current || detail.progress === 0 || activeOperationIdRef.current === operationId) {
+          activeOperationIdRef.current = operationId;
+          setActiveOperationId(operationId);
+        } else {
+          return;
+        }
+      } else if (activeOperationIdRef.current === operationId) {
+        activeOperationIdRef.current = "";
+        setActiveOperationId("");
+      } else {
+        return;
+      }
       const progress = Number.isFinite(detail.progress) ? `${Math.round(detail.progress)}%` : "";
       const message = detail.message || detail.resultSummary || detail.error || "";
       setFundsProgress([progress, message].filter(Boolean).join(" · "));
     });
   }, []);
+
+  async function cancelFundsSync() {
+    const operationId = activeOperationIdRef.current || activeOperationId;
+    if (!operationId) return;
+    await cancelDoudianStoreOperation(operationId);
+    requestGeneration.current += 1;
+    activeOperationIdRef.current = "";
+    setActiveOperationId("");
+    setSyncing(false);
+    setFundsProgress("");
+    setFundsState("ready");
+    setFundsMessage("已取消资金数据同步");
+  }
 
   const filteredStores = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -795,25 +962,37 @@ export function FundsDataPage() {
   const shopColumnWidth = 174;
   const tableMinWidth = Math.max(1120, shopColumnWidth + visibleColumns.length * 104);
   const summarySchema = useMemo(() => normalizeRemoteSummary(fieldSchema), [fieldSchema]);
-  const totals = useMemo(() => aggregateRows(selectedRows), [selectedRows]);
-  const range = dateRangeForPreset(datePreset);
+  const aggregate = useMemo(() => aggregateRows(selectedRows), [selectedRows]);
+  const { totals, freshCounts, staleCounts } = aggregate;
   const selectedVisibleCount = filteredStores.filter((store) => selectedIds.has(store.id)).length;
   const allVisibleSelected = filteredStores.length > 0 && selectedVisibleCount === filteredStores.length;
   const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
   const onlineSelectedCount = selectedRows.filter((row) => row.status === "online").length;
   const failedDetailCount = fundsDetails.filter((detail) => detail.ok === false).length;
-  const selectedRowsAllZero = fundsState === "ready" && selectedRows.length > 0 && selectedRows.every((row) => !fundsRowHasMetric(row));
+  const staleStoreCount = selectedRows.filter((row) => fundsMetricKeys.some((key) => row.metricStates[key] === "stale")).length;
+  const unavailableStoreCount = selectedRows.filter((row) => fundsMetricKeys.some((key) => row.metricStates[key] === "unavailable")).length;
+  const dataTimestamps = selectedRows.map((row) => Date.parse(row.dataUpdatedAt || "")).filter(Number.isFinite).sort((left, right) => left - right);
+  const displayedDataAt = dataTimestamps.length ? new Date(staleStoreCount ? dataTimestamps[0] : dataTimestamps.at(-1) || dataTimestamps[0]) : null;
+  const selectedRowsAllUnavailable = fundsState === "ready" && selectedRows.length > 0 && selectedRows.every((row) => !fundsRowHasKnownMetric(row));
   const riskStoreCount = selectedRows.filter((row) => row.riskCount > 0).length;
   const fundsWarningTitle = failedDetailCount
     ? `${failedDetailCount} 家同步失败`
-    : selectedRowsAllZero && !previewMode
+    : staleStoreCount
+      ? `${staleStoreCount} 家正在显示历史有效值`
+      : unavailableStoreCount
+        ? `${unavailableStoreCount} 家存在不可用指标`
+    : selectedRowsAllUnavailable && !previewMode
       ? `${selectedRows.length} 家未命中资金指标`
       : riskStoreCount
         ? `${riskStoreCount} 家存在资金事项`
         : "";
   const fundsWarningDetail = failedDetailCount
-    ? "请到店铺管理确认登录态，或重新同步资金数据。"
-    : selectedRowsAllZero && !previewMode
+    ? "本次同步失败，已保留最近成功数据；请确认登录态后重试。"
+    : staleStoreCount
+      ? "部分来源本次未取得数据，金额保留为最近成功值，数据时间见单元格提示。"
+      : unavailableStoreCount
+        ? "部分指标从未成功取得，页面以 -- 显示，不计为零。"
+    : selectedRowsAllUnavailable && !previewMode
       ? "资金桥接或字段映射尚未返回可展示的金额。"
       : riskStoreCount
         ? "存在冻结、待缴保证金或赔付动账。"
@@ -825,13 +1004,15 @@ export function FundsDataPage() {
     let detail = item.detail || "";
     if (key === "withdrawBalance") detail = `${onlineSelectedCount} 家在线`;
     if (key === "pendingSettleAmount") detail = "货款账户";
-    if (key === "marginBalance") detail = "基础 + 体验";
-    if (key === "depositPayable") detail = "基础 / 体验待缴";
+    if (key === "marginBalance") detail = "体验保证金";
+    if (key === "depositPayable") detail = "体验保证金待缴";
     if (key === "riskCount") detail = `${riskStoreCount} 家店铺`;
     if (key === "subsidyTotal") detail = "佣金 + 千川";
     if (key === "compensationAmountToday") detail = `${formatNumber(totals.compensationOrderCountToday)} 单`;
     if (key === "pendingSettleOrderAmount") detail = `${formatNumber(totals.pendingSettleOrders)} 笔待结算`;
     if (key === "pendingSettleOrders") detail = "待结算订单信息";
+    if (staleCounts[key] > 0) detail = `${staleCounts[key]} 家为历史有效值`;
+    else if (freshCounts[key] === 0) detail = "当前不可用";
     const alertingTone = (
       key === "frozenBalance" ||
       key === "depositPayable" ||
@@ -841,7 +1022,7 @@ export function FundsDataPage() {
     ) && totals[key] > 0 ? item.tone || "danger" : item.tone;
     return {
       label: item.label || key,
-      value: formatColumnValue(totals[key], format),
+      value: freshCounts[key] + staleCounts[key] > 0 ? formatColumnValue(totals[key], format) : "--",
       detail,
       tone: alertingTone
     };
@@ -981,33 +1162,24 @@ export function FundsDataPage() {
             ) : null}
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-2">
-            <div className="inline-flex h-8 items-center overflow-hidden rounded-md border border-[#dbe5f2] bg-white">
-              {datePresets.map((preset) => (
-                <button
-                  className={cn("h-full px-2.5 text-[12px] font-semibold transition-colors", datePreset === preset.key ? "bg-brand-fox text-white" : "text-[#667085] hover:bg-brand-foxSoft hover:text-brand-navy")}
-                  key={preset.key}
-                  type="button"
-                  onClick={() => setDatePreset(preset.key)}
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
             <div className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-medium text-[#667085]">
-              <CalendarDays className="size-[14px]" strokeWidth={2} />
-              <span>{range.label}</span>
+              <Landmark className="size-[14px]" strokeWidth={2} />
+              <span>{CURRENT_SNAPSHOT_LABEL}</span>
             </div>
             <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] disabled:opacity-50" type="button" disabled={syncing || !selectedIds.size} onClick={() => void refreshFundsData()}>
               <RefreshCw className={cn("size-[14px]", syncing ? "animate-spin" : "")} strokeWidth={2} />
               同步
             </button>
-            <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!selectedRows.length} onClick={() => exportRows(selectedRows, range.label, visibleColumns, fundsDetails, adapterVersion, fieldSchemaVersion, previewMode)}>
+            {syncing && activeOperationId ? (
+              <button className="grid size-8 place-items-center rounded-md border border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" type="button" aria-label="取消资金数据同步" title="取消资金数据同步" onClick={() => void cancelFundsSync()}>
+                <CircleStop className="size-[15px]" strokeWidth={2} />
+              </button>
+            ) : null}
+            <NativeSelect value={exportFormat} options={["Excel", "CSV", "TXT"]} onChange={(value) => setExportFormat(value as ExportFormat)} />
+            <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!selectedRows.length} onClick={() => exportRows(selectedRows, CURRENT_SNAPSHOT_LABEL, visibleColumns, fundsDetails, adapterVersion, fieldSchemaVersion, previewMode, exportFormat)}>
               <Download className="size-[14px]" strokeWidth={2} />
               批量导出
             </button>
-            <span className="rounded-md border border-[#ffdca8] bg-[#fff7e8] px-2 py-1 text-[12px] font-semibold text-[#b54708]" title="小尊宝资金模块存在平台下载/导出信号；当前按钮为本地 CSV 导出，平台导出仍需真实验收">
-              平台导出待验收
-            </span>
           </div>
         </div>
 
@@ -1091,9 +1263,22 @@ export function FundsDataPage() {
                     </td>
                     {visibleColumns.map((column) => {
                       const resolvedTone = typeof column.tone === "function" ? column.tone(row) : column.tone;
+                      const metricState = row.metricStates[column.key];
+                      const updatedAt = formatDataTime(row.metricUpdatedAt[column.key] || row.dataUpdatedAt);
                       return (
-                        <td className={cn("whitespace-nowrap px-3", toneClass(resolvedTone), resolvedTone ? "font-semibold" : "")} key={column.key}>
-                          {formatColumnValue(row[column.key], column.format)}
+                        <td
+                          className={cn("whitespace-nowrap px-3", toneClass(resolvedTone), resolvedTone ? "font-semibold" : "")}
+                          key={column.key}
+                          title={metricState === "unavailable" ? "本次未取得该指标" : metricState === "stale" ? `历史有效值${updatedAt ? `，数据截至 ${updatedAt}` : ""}` : updatedAt ? `数据时间 ${updatedAt}` : undefined}
+                        >
+                          {metricState === "unavailable" ? (
+                            <span className="text-[#98a2b3]">--</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5">
+                              <span>{formatColumnValue(row[column.key], column.format)}</span>
+                              {metricState === "stale" ? <span className="rounded-sm bg-[#fff1d6] px-1 text-[10px] font-semibold text-[#b54708]">旧</span> : null}
+                            </span>
+                          )}
                         </td>
                       );
                     })}
@@ -1107,7 +1292,7 @@ export function FundsDataPage() {
                           {fundsState === "loading" ? <Loader2 className="size-7 animate-spin" strokeWidth={2.2} /> : <CircleDollarSign className="size-7" strokeWidth={2.2} />}
                         </span>
                         <strong className="text-[14px] text-[#344054]">{fundsState === "loading" ? "正在同步" : "暂无数据"}</strong>
-                        <span className="text-[13px] leading-6">{fundsState === "loading" ? (fundsProgress || "正在读取资金数据") : "请选择左侧店铺或调整资金口径"}</span>
+                        <span className="text-[13px] leading-6">{fundsState === "loading" ? (fundsProgress || "正在读取资金数据") : "请从左侧选择店铺"}</span>
                       </div>
                     </td>
                   </tr>
@@ -1119,6 +1304,7 @@ export function FundsDataPage() {
           <div className="flex items-center justify-between gap-3 border-t border-[#edf1f6] px-4 text-[12px] text-[#667085]">
             <span className="min-w-0 truncate" title={fundsWarningDetail || fundsMessage}>
               共 {selectedRows.length} 家店铺，最近同步 {lastSyncAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}
+              {displayedDataAt ? `，数据截至 ${displayedDataAt.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}` : ""}
               {fundsWarningTitle ? `，${fundsWarningTitle}` : ""}
             </span>
             <span className="inline-flex items-center gap-2">
@@ -1127,7 +1313,7 @@ export function FundsDataPage() {
               <ReceiptText className="ml-2 size-[14px]" strokeWidth={2} />
               待结算 {formatMoney(totals.pendingSettleAmount)}
               <Landmark className="ml-2 size-[14px]" strokeWidth={2} />
-              保证金 {formatMoney(totals.marginBalance)}
+              体验保证金 {formatMoney(totals.marginBalance)}
             </span>
           </div>
         </section>

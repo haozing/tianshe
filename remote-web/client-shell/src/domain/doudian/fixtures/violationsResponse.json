@@ -1,0 +1,78 @@
+{
+  "tickets": [
+    {
+      "ticket_id": "fixture-appeal-success",
+      "object_id_type": 2,
+      "object_id": "900000000001",
+      "show_violation_reason": "商品信息不规范",
+      "circumstances_level": 2,
+      "all_exec_task_status": 1,
+      "appeal_status": 1,
+      "improve_status": -1,
+      "violation_time": 1784044800,
+      "deadline_time": 1784304000,
+      "product_info": {
+        "product_id": "900000000001",
+        "title": "脱敏样例商品 A",
+        "status": -2
+      }
+    },
+    {
+      "ticket_id": "fixture-rectification-done",
+      "object_id_type": 2,
+      "object_id": "900000000002",
+      "show_violation_reason": "商品资质待完善",
+      "circumstances_level": 3,
+      "all_exec_task_status": 1,
+      "appeal_status": -1,
+      "improve_status": 1,
+      "violation_time": 1784131200,
+      "deadline_time": 1784390400,
+      "product_info": {
+        "product_id": "900000000002",
+        "title": "脱敏样例商品 B",
+        "status": 0
+      }
+    },
+    {
+      "ticket_id": "fixture-unknown-status",
+      "object_id_type": 3,
+      "show_violation_reason": "店铺信息待核实",
+      "circumstances_level": 1,
+      "all_exec_task_status": 999,
+      "violation_time": 1784131200,
+      "deadline_time": 1784390400
+    },
+    {
+      "ticket_id": "fixture-appealing",
+      "object_id_type": 2,
+      "object_id": "900000000003",
+      "show_violation_reason": "申诉材料审核中",
+      "circumstances_level": 2,
+      "all_exec_task_status": 1,
+      "appeal_status": 0,
+      "improve_status": -1,
+      "violation_time": 1784131200,
+      "deadline_time": 1784390400
+    },
+    {
+      "ticket_id": "fixture-rectifying",
+      "object_id_type": 2,
+      "object_id": "900000000004",
+      "show_violation_reason": "整改材料审核中",
+      "circumstances_level": 2,
+      "all_exec_task_status": 1,
+      "appeal_status": -1,
+      "improve_status": 0,
+      "violation_time": 1784131200,
+      "deadline_time": 1784390400
+    }
+  ],
+  "expectedStatuses": [
+    "done",
+    "done",
+    "unknown",
+    "appealing",
+    "rectifying"
+  ]
+}

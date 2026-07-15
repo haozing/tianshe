@@ -20,13 +20,18 @@ function registerBusinessDatabaseHandlers() {
   ipcMain.handle("native:data:stores:tombstoneIdentity", request("stores.tombstoneIdentity", "write"));
 
   ipcMain.handle("native:data:records:put", request("records.put", "write"));
+  ipcMain.handle("native:data:records:putMany", request("records.putMany", "write"));
   ipcMain.handle("native:data:records:putLarge:start", request("records.putLarge.start", "write"));
   ipcMain.handle("native:data:records:putLarge:chunk", request("records.putLarge.chunk", "write"));
   ipcMain.handle("native:data:records:putLarge:commit", request("records.putLarge.commit", "write"));
   ipcMain.handle("native:data:records:putLarge:abort", request("records.putLarge.abort", "write"));
   ipcMain.handle("native:data:records:get", request("records.get", "interactive"));
+  ipcMain.handle("native:data:records:getMany", request("records.getMany", "interactive"));
   ipcMain.handle("native:data:records:list", request("records.list", "interactive"));
+  ipcMain.handle("native:data:records:queryOperations", request("records.queryOperations", "interactive"));
+  ipcMain.handle("native:data:records:cleanupOperations", request("records.cleanupOperations", "write"));
   ipcMain.handle("native:data:records:delete", request("records.delete", "write"));
+  ipcMain.handle("native:data:records:deleteMany", request("records.deleteMany", "write"));
 
   ipcMain.handle("native:data:catalogJobs:acquire", request("catalogJobs.acquire", "write"));
   ipcMain.handle("native:data:catalogJobs:reportPage", request("catalogJobs.reportPage", "write"));

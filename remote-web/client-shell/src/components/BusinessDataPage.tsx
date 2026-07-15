@@ -12,19 +12,20 @@ import {
   PanelLeftOpen,
   RefreshCw,
   Search,
+  CircleStop,
   SlidersHorizontal,
   Store,
   Truck,
   Users
 } from "lucide-react";
-import { fetchDoudianBusinessData, fetchDoudianBusinessDataLatest, listDoudianStores } from "../bridge/client";
+import { cancelDoudianStoreOperation, fetchDoudianBusinessData, fetchDoudianBusinessDataLatest, listDoudianStores } from "../bridge/client";
 import { loadDoudianAdapterPayload } from "../bridge/doudianAdapter";
 import { STORAGE_KEY_BUSINESS_DATA_COLUMNS, storageGet, storageSet } from "../bridge/storage";
 import { addDoudianProgressListener } from "../domain/doudian";
 import { cn } from "../lib/utils";
 import type { DoudianBusinessDataRow, DoudianRunDetail, DoudianStoreStatus, DoudianStoreSummary } from "../types";
 
-type DatePreset = "today" | "yesterday" | "7d" | "30d";
+type DatePreset = "today" | "yesterday" | "7d" | "30d" | "custom";
 type SortKey = "成交金额" | "成交订单数" | "待发货" | "近7日预警" | "体验分";
 type LoadState = "loading" | "ready" | "error";
 type BusinessLoadState = "idle" | "loading" | "ready" | "error";
@@ -90,6 +91,8 @@ interface BusinessDetailDiagnostic {
   sourceFailureCount?: number;
   blockingSourceFailureCount?: number;
   sourceFailures?: Array<{ key?: string; status?: number; message?: string; optional?: boolean }>;
+  coreMetricsComplete?: boolean;
+  missingCoreMetricPlans?: string[];
   rowSummary?: {
     allZero?: boolean;
     nonZeroFieldCount?: number;
@@ -139,7 +142,8 @@ const datePresets: Array<{ key: DatePreset; label: string }> = [
   { key: "today", label: "今天" },
   { key: "yesterday", label: "昨天" },
   { key: "7d", label: "近7天" },
-  { key: "30d", label: "近30天" }
+  { key: "30d", label: "近30天" },
+  { key: "custom", label: "自定义" }
 ];
 
 const statusCopy: Record<DoudianStoreStatus, { label: string; className: string }> = {
@@ -339,7 +343,10 @@ function formatColumnValue(value: number, format: ColumnFormat) {
 }
 
 function formatDate(date: Date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function addDays(date: Date, days: number) {
@@ -350,6 +357,10 @@ function addDays(date: Date, days: number) {
 
 function dateRangeForPreset(preset: DatePreset) {
   const today = new Date();
+  if (preset === "custom") {
+    const value = formatDate(today);
+    return { beginDate: value, endDate: value, label: `${value} - ${value}` };
+  }
   if (preset === "today") {
     const value = formatDate(today);
     return { beginDate: value, endDate: value, label: `${value} - ${value}` };
@@ -479,6 +490,9 @@ export function BusinessDataPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
   const [datePreset, setDatePreset] = useState<DatePreset>("today");
+  const [customBeginDate, setCustomBeginDate] = useState(() => formatDate(new Date()));
+  const [customEndDate, setCustomEndDate] = useState(() => formatDate(new Date()));
+  const [actualDateRange, setActualDateRange] = useState<{ beginDate: string; endDate: string } | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("成交金额");
   const [loadState, setLoadState] = useState<LoadState>(() => nativeBridge ? "loading" : "error");
   const [loadMessage, setLoadMessage] = useState(() => nativeBridge ? "" : "本地店铺桥接不可用，请在赤狐客户端内打开");
@@ -490,12 +504,43 @@ export function BusinessDataPage() {
   const [businessMessage, setBusinessMessage] = useState("");
   const [businessDetails, setBusinessDetails] = useState<DoudianRunDetail[]>([]);
   const [businessProgress, setBusinessProgress] = useState("");
+  const [activeOperationId, setActiveOperationId] = useState("");
   const [fieldSchema, setFieldSchema] = useState<RemoteBusinessFieldSchema>({});
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<Set<string>>(() => visibleColumnKeySet(tableColumns));
   const [columnPanelOpen, setColumnPanelOpen] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [adapterVersion, setAdapterVersion] = useState("");
   const businessRequestSeq = useRef(0);
+
+  const requestedRange = datePreset === "custom"
+    ? { beginDate: customBeginDate, endDate: customEndDate, label: `${customBeginDate} - ${customEndDate}` }
+    : dateRangeForPreset(datePreset);
+  const customRangeValid = datePreset !== "custom" || (!!customBeginDate && !!customEndDate && customBeginDate <= customEndDate);
+
+  function applyBusinessResult(result: Awaited<ReturnType<typeof fetchDoudianBusinessData>>, requestedShopIds: string[]) {
+    const detailList = Array.isArray(result.details) ? result.details : [];
+    const detailById = new Map(detailList.map((detail) => [String(detail.shopId || ""), detail]));
+    const storeById = new Map(stores.map((store) => [store.id, store]));
+    setBusinessRows((currentRows) => {
+      const byId = new Map(currentRows.map((row) => [row.shopId, row]));
+      for (const row of result.rows || []) {
+        const id = String(row.shopId || "");
+        if (!id) continue;
+        byId.set(id, businessRowFromRemote(row, storeById.get(id), detailById.get(id)));
+      }
+      return [...byId.values()].filter((row) => storeById.has(row.shopId) || requestedShopIds.includes(row.shopId));
+    });
+    setBusinessDetails((currentDetails) => {
+      const byId = new Map(currentDetails.map((detail) => [String(detail.shopId || ""), detail]));
+      detailList.forEach((detail) => byId.set(String(detail.shopId || ""), detail));
+      return [...byId.values()];
+    });
+    if (result.dateRange?.beginDate && result.dateRange?.endDate) {
+      setActualDateRange({ beginDate: result.dateRange.beginDate, endDate: result.dateRange.endDate });
+    }
+    setBusinessMessage(result.message || "");
+    setAdapterVersion(result.adapterVersion || adapterVersion);
+  }
 
   async function refreshStores() {
     if (!nativeBridge) {
@@ -511,8 +556,8 @@ export function BusinessDataPage() {
         const nextStores = (result.stores || []).map(mapStoreToOption).filter((store) => store.id);
         setStores(nextStores);
         setBusinessRows((currentRows) => {
-          const byId = new Map(currentRows.map((row) => [row.shopId, row]));
-          return nextStores.map((store) => byId.get(store.id) || zeroBusinessRow(store));
+          const validIds = new Set(nextStores.map((store) => store.id));
+          return currentRows.filter((row) => validIds.has(row.shopId));
         });
         setSelectedIds((current) => {
           const validIds = new Set(nextStores.map((store) => store.id));
@@ -534,19 +579,22 @@ export function BusinessDataPage() {
     }
   }
 
-  async function refreshBusinessData(ids = selectedIds) {
-    const requestSeq = businessRequestSeq.current + 1;
-    businessRequestSeq.current = requestSeq;
+  async function refreshBusinessData(ids = selectedIds, options: { preserveSequence?: boolean } = {}) {
+    const requestSeq = options.preserveSequence ? businessRequestSeq.current : businessRequestSeq.current + 1;
+    if (!options.preserveSequence) businessRequestSeq.current = requestSeq;
     if (!nativeBridge) {
       setBusinessState("error");
       setBusinessMessage("本地经营数据桥接不可用");
       return;
     }
+    if (!customRangeValid) {
+      setBusinessState("error");
+      setBusinessMessage("自定义日期的开始日期不能晚于结束日期");
+      return;
+    }
     const shopIds = [...ids];
     if (!shopIds.length) {
       if (requestSeq !== businessRequestSeq.current) return;
-      setBusinessRows(stores.map(zeroBusinessRow));
-      setBusinessDetails([]);
       setBusinessState("ready");
       return;
     }
@@ -558,26 +606,17 @@ export function BusinessDataPage() {
       const result = await fetchDoudianBusinessData({
         shopIds,
         datePreset,
+        ...(datePreset === "custom" ? { beginDate: customBeginDate, endDate: customEndDate } : {}),
         forceAdapter: true
       });
       if (requestSeq !== businessRequestSeq.current) return;
-      const detailList = Array.isArray(result.details) ? result.details : [];
-      const detailById = new Map(detailList.map((detail) => [String(detail.shopId || ""), detail]));
-      const storeById = new Map(stores.map((store) => [store.id, store]));
-      const rowById = new Map((result.rows || []).map((row) => [String(row.shopId), row]));
-      const nextRows = stores.map((store) => {
-        const row = rowById.get(store.id);
-        return row ? businessRowFromRemote(row, store, detailById.get(store.id)) : zeroBusinessRow(store);
-      });
-      for (const row of result.rows || []) {
-        const id = String(row.shopId || "");
-        if (id && !storeById.has(id)) nextRows.push(businessRowFromRemote(row, undefined, detailById.get(id)));
+      applyBusinessResult(result, shopIds);
+      if (result.status === "cancelled") {
+        setBusinessState("ready");
+        setBusinessMessage(result.message || "已取消经营数据同步");
+      } else {
+        setBusinessState(result.ok || result.status === "partial" ? "ready" : "error");
       }
-      setBusinessRows(nextRows);
-      setBusinessDetails(detailList);
-      setBusinessMessage(result.message || "");
-      setAdapterVersion(result.adapterVersion || adapterVersion);
-      setBusinessState(result.ok || result.status === "partial" ? "ready" : "error");
       setLastSyncAt(new Date());
     } catch (error) {
       if (requestSeq !== businessRequestSeq.current) return;
@@ -591,32 +630,26 @@ export function BusinessDataPage() {
     }
   }
 
-  async function hydrateLatestBusinessData(ids = selectedIds) {
-    if (!nativeBridge || !stores.length || !ids.size) return;
-    const requestSeq = businessRequestSeq.current;
+  async function hydrateLatestBusinessData(ids = selectedIds, requestSeq = businessRequestSeq.current) {
+    if (!nativeBridge || !stores.length || !ids.size) return [];
     try {
       const result = await fetchDoudianBusinessDataLatest({
         shopIds: [...ids],
         datePreset,
+        ...(datePreset === "custom" ? { beginDate: customBeginDate, endDate: customEndDate } : {}),
         forceAdapter: true
       });
-      if (!result.rows?.length) return;
-      if (requestSeq !== businessRequestSeq.current) return;
-      const detailList = Array.isArray(result.details) ? result.details : [];
-      const detailById = new Map(detailList.map((detail) => [String(detail.shopId || ""), detail]));
-      const rowById = new Map(result.rows.map((row) => [String(row.shopId), row]));
-      setBusinessRows(stores.map((store) => {
-        const row = rowById.get(store.id);
-        return row ? businessRowFromRemote(row, store, detailById.get(store.id)) : zeroBusinessRow(store);
-      }));
-      setBusinessDetails(detailList);
-      setBusinessMessage(result.message || "");
-      setAdapterVersion(result.adapterVersion || adapterVersion);
-      setBusinessState("ready");
+      if (!result.rows?.length) return [];
+      if (requestSeq !== businessRequestSeq.current) return [];
+      applyBusinessResult(result, [...ids]);
+      return result.rows.map((row) => String(row.shopId || "")).filter(Boolean);
     } catch {
       // Latest cached data is a convenience layer; remote refresh remains authoritative.
+      return [];
     }
   }
+
+  const storeIdKey = stores.map((store) => store.id).sort().join("|");
 
   useEffect(() => {
     void refreshStores();
@@ -648,19 +681,65 @@ export function BusinessDataPage() {
 
   useEffect(() => {
     if (!nativeBridge || loadState !== "ready" || !stores.length) return;
-    void hydrateLatestBusinessData();
-    void refreshBusinessData();
-  }, [nativeBridge, loadState, stores.length, datePreset]);
+    if (!customRangeValid) {
+      setBusinessState("error");
+      setBusinessMessage("自定义日期的开始日期不能晚于结束日期");
+      return;
+    }
+    const ids = new Set(selectedIds);
+    const requestSeq = businessRequestSeq.current + 1;
+    businessRequestSeq.current = requestSeq;
+    setBusinessRows([]);
+    setBusinessDetails([]);
+    setActualDateRange(null);
+    setBusinessState("loading");
+    void (async () => {
+      await hydrateLatestBusinessData(ids, requestSeq);
+      if (requestSeq !== businessRequestSeq.current) return;
+      await refreshBusinessData(ids, { preserveSequence: true });
+    })();
+  }, [nativeBridge, loadState, storeIdKey, datePreset, customBeginDate, customEndDate]);
+
+  const selectedIdKey = [...selectedIds].sort().join("|");
+  const loadedIdKey = businessRows.map((row) => row.shopId).sort().join("|");
+
+  useEffect(() => {
+    if (businessState === "loading" || loadState !== "ready") return;
+    const loadedIds = new Set(businessRows.map((row) => row.shopId));
+    const missingIds = [...selectedIds].filter((id) => !loadedIds.has(id));
+    if (!missingIds.length) return;
+    void (async () => {
+      const ids = new Set(missingIds);
+      const requestSeq = businessRequestSeq.current + 1;
+      businessRequestSeq.current = requestSeq;
+      await hydrateLatestBusinessData(ids, requestSeq);
+      if (requestSeq !== businessRequestSeq.current) return;
+      await refreshBusinessData(ids, { preserveSequence: true });
+    })();
+  }, [selectedIdKey, loadedIdKey, businessState, loadState]);
 
   useEffect(() => {
     return addDoudianProgressListener((event) => {
       const detail = event.detail || {};
       if (detail.taskType !== "businessData") return;
+      if (detail.status === "running") setActiveOperationId(detail.operationId || "");
+      else setActiveOperationId((current) => current === detail.operationId ? "" : current);
       const progress = Number.isFinite(detail.progress) ? `${Math.round(detail.progress)}%` : "";
       const message = detail.message || detail.resultSummary || detail.error || "";
       setBusinessProgress([progress, message].filter(Boolean).join(" · "));
     });
   }, []);
+
+  async function cancelBusinessSync() {
+    if (!activeOperationId) return;
+    await cancelDoudianStoreOperation(activeOperationId);
+    businessRequestSeq.current += 1;
+    setActiveOperationId("");
+    setSyncing(false);
+    setBusinessProgress("");
+    setBusinessState("ready");
+    setBusinessMessage("已取消经营数据同步");
+  }
 
   const filteredStores = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -688,17 +767,25 @@ export function BusinessDataPage() {
   const tableMinWidth = Math.max(1040, shopColumnWidth + visibleColumns.length * 92);
   const summarySchema = useMemo(() => normalizeRemoteSummary(fieldSchema), [fieldSchema]);
   const totals = useMemo(() => aggregateRows(selectedRows), [selectedRows]);
-  const range = dateRangeForPreset(datePreset);
+  const range = requestedRange;
+  const actualRangeLabel = actualDateRange ? `${actualDateRange.beginDate} - ${actualDateRange.endDate}` : "";
+  const rangeTitle = actualRangeLabel && actualRangeLabel !== range.label
+    ? `选择范围：${range.label}；平台实际查询：${actualRangeLabel}`
+    : `查询范围：${actualRangeLabel || range.label}`;
   const selectedVisibleCount = filteredStores.filter((store) => selectedIds.has(store.id)).length;
   const allVisibleSelected = filteredStores.length > 0 && selectedVisibleCount === filteredStores.length;
   const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
   const onlineSelectedCount = selectedRows.filter((row) => row.status === "online").length;
   const failedDetailCount = businessDetails.filter((detail) => detail.ok === false).length;
   const partialSourceCount = businessDetails.filter((detail) => blockingSourceCount(detail) > 0).length;
+  const coreIncompleteCount = businessDetails.filter((detail) => businessDetailDiagnostic(detail).coreMetricsComplete === false).length;
+  const missingSelectedCount = Math.max(0, selectedIds.size - selectedRows.length);
   const noMetricMatchCount = businessDetails.filter((detail) => businessDetailDiagnostic(detail).rowSummary?.allZero === true).length;
   const selectedRowsAllZero = businessState === "ready" && selectedRows.length > 0 && selectedRows.every((row) => !businessRowHasMetric(row));
   const metricMissCount = noMetricMatchCount || (selectedRowsAllZero ? selectedRows.length : 0);
   const businessWarningParts = [
+    missingSelectedCount ? `${missingSelectedCount} 家正在加载` : "",
+    coreIncompleteCount ? `${coreIncompleteCount} 家核心交易指标不完整` : "",
     partialSourceCount ? `${partialSourceCount} 家关键来源异常` : "",
     metricMissCount ? `${metricMissCount} 家未命中经营指标` : ""
   ].filter(Boolean);
@@ -707,6 +794,8 @@ export function BusinessDataPage() {
     ? "请到店铺管理确认登录态，或重新同步经营数据。"
     : businessWarningParts.length
       ? [
+        missingSelectedCount ? "新增选择的店铺尚未返回数据，不会用全零值代替。" : "",
+        coreIncompleteCount ? "核心交易接口未完整返回，当前仍保留评分、营销和商品等可用数据。" : "",
         partialSourceCount ? "关键来源未返回有效数据，辅助营销和商品来源不会再污染总状态。" : "",
         metricMissCount ? "远程接口有返回，但当前映射没有读到可展示的经营指标。" : ""
       ].filter(Boolean).join(" ")
@@ -882,14 +971,26 @@ export function BusinessDataPage() {
                 </button>
               ))}
             </div>
-            <div className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-medium text-[#667085]">
+            {datePreset === "custom" ? (
+              <div className="inline-flex h-8 items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-1.5 text-[12px] text-[#344054]">
+                <input className="w-[112px] bg-transparent outline-none" type="date" value={customBeginDate} max={customEndDate || undefined} onChange={(event) => setCustomBeginDate(event.target.value)} />
+                <span className="text-[#98a2b3]">至</span>
+                <input className="w-[112px] bg-transparent outline-none" type="date" value={customEndDate} min={customBeginDate || undefined} onChange={(event) => setCustomEndDate(event.target.value)} />
+              </div>
+            ) : null}
+            <div className="inline-flex h-8 max-w-[330px] items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-medium text-[#667085]" title={rangeTitle}>
               <CalendarDays className="size-[14px]" strokeWidth={2} />
-              <span>{range.label}</span>
+              <span className="truncate">{actualRangeLabel && actualRangeLabel !== range.label ? `平台 ${actualRangeLabel}` : range.label}</span>
             </div>
-            <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] disabled:opacity-50" type="button" disabled={syncing || !selectedIds.size} onClick={() => void refreshBusinessData()}>
+            <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] disabled:opacity-50" type="button" disabled={syncing || !selectedIds.size || !customRangeValid} onClick={() => void refreshBusinessData()}>
               <RefreshCw className={cn("size-[14px]", syncing ? "animate-spin" : "")} strokeWidth={2} />
               刷新
             </button>
+            {syncing && activeOperationId ? (
+              <button className="grid size-8 place-items-center rounded-md border border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" type="button" aria-label="取消经营数据同步" title="取消经营数据同步" onClick={() => void cancelBusinessSync()}>
+                <CircleStop className="size-[15px]" strokeWidth={2} />
+              </button>
+            ) : null}
             <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!selectedRows.length} onClick={() => exportRows(selectedRows, range.label, visibleColumns, businessDetails, adapterVersion)}>
               <Download className="size-[14px]" strokeWidth={2} />
               批量导出

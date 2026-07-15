@@ -9,6 +9,8 @@ const root = resolve(__dirname, "..");
 const repoRoot = resolve(root, "..");
 const manifestPath = join(root, "new-remote-web", "release-manifest.json");
 const chihuConfigPath = join(root, "new-remote-web", "config", "chihu-config.json");
+const sourceManifestPath = join(root, "client-shell", "public", "release-manifest.json");
+const sourceChihuConfigPath = join(root, "client-shell", "public", "config", "chihu-config.json");
 const indexPath = join(root, "new-remote-web", "index.html");
 const signingKeyPath = join(root, "signing-key.local.pem");
 
@@ -176,6 +178,8 @@ for (const artifact of manifest.artifacts || []) {
 
 const signed = signManifest(manifest);
 writeJson(manifestPath, manifest);
+writeJson(sourceManifestPath, manifest);
+writeJson(sourceChihuConfigPath, chihuConfig);
 
 console.log("UPDATE_RELEASE_MANIFEST_OK");
 console.log(JSON.stringify({
@@ -183,6 +187,7 @@ console.log(JSON.stringify({
   buildTime,
   gitCommit: commit,
   manifestPath: manifestPath.replace(`${dirname(root)}\\`, "").replace(/\\/g, "/"),
+  sourceManifestPath: sourceManifestPath.replace(`${dirname(root)}\\`, "").replace(/\\/g, "/"),
   chihuConfigPath: chihuConfigPath.replace(`${dirname(root)}\\`, "").replace(/\\/g, "/"),
   signed,
   artifactCount: (manifest.artifacts || []).length

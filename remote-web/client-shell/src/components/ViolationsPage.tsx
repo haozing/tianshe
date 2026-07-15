@@ -3,13 +3,15 @@ import {
   AlertTriangle,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
+  CircleStop,
   Download,
   ExternalLink,
   FileWarning,
   Filter,
   Loader2,
-  PackageCheck,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
@@ -19,7 +21,7 @@ import {
   Store,
   Workflow
 } from "lucide-react";
-import { fetchDoudianViolationsData, fetchDoudianViolationsDataLatest, listDoudianStores } from "../bridge/client";
+import { cancelDoudianStoreOperation, fetchDoudianViolationsData, fetchDoudianViolationsDataLatest, listDoudianStores, openDoudianStore } from "../bridge/client";
 import { loadDoudianAdapterPayload } from "../bridge/doudianAdapter";
 import { STORAGE_KEY_VIOLATIONS_COLUMNS, storageGet, storageSet } from "../bridge/storage";
 import { addDoudianProgressListener } from "../domain/doudian";
@@ -27,11 +29,11 @@ import { cn } from "../lib/utils";
 import type { DoudianRunDetail, DoudianStoreStatus, DoudianStoreSummary, DoudianViolationRecord, DoudianViolationsDataResult, DoudianViolationsDataRow } from "../types";
 
 type LoadState = "loading" | "ready" | "error";
-type ViolationLoadState = "idle" | "loading" | "ready" | "error";
+type ViolationLoadState = "idle" | "loading" | "ready" | "partial" | "error";
 type MetricTone = "default" | "blue" | "green" | "warning" | "danger";
 type ColumnFormat = "number" | "money" | "text" | "date";
 type SeverityFilter = "all" | "high" | "medium" | "low";
-type ProcessFilter = "all" | "pending" | "appealing" | "rectifying" | "done" | "failed";
+type ProcessFilter = "all" | "pending" | "appealing" | "rectifying" | "done" | "failed" | "unknown";
 type SortKey = string;
 
 const violationMetricKeys = [
@@ -68,11 +70,13 @@ interface ViolationRecord {
   productId: string;
   reason: string;
   severity: "high" | "medium" | "low";
-  processStatus: "pending" | "appealing" | "rectifying" | "done" | "failed";
+  processStatus: "pending" | "appealing" | "rectifying" | "done" | "failed" | "unknown";
   productStatus: "在售" | "已下架" | "回收站" | "未关联" | "未查询" | "无需关联";
   associationStatus?: string;
   action: string;
   dueAt: string;
+  violationAt?: string;
+  createdAt?: string;
   penaltyAmount: number;
   failureReason: string;
   source: "违规处罚列表" | "商品库关联" | "处理结果";
@@ -85,7 +89,19 @@ type ViolationRow = {
   status: DoudianStoreStatus;
   lastMessage?: string;
   ok?: boolean;
+  coverageStatus?: string;
+  complete?: boolean;
+  truncated?: boolean;
+  fetchedAt?: string;
+  remoteTotal?: number;
 } & Record<ViolationMetricKey, number>;
+
+interface ViolationsCapabilities {
+  productAssociation: boolean;
+  platformNavigation: boolean;
+  platformUrl: string;
+  governanceActions: boolean;
+}
 
 interface MetricItem {
   label: string;
@@ -148,7 +164,8 @@ const processCopy: Record<ViolationRecord["processStatus"], { label: string; cla
   appealing: { label: "申诉中", className: "border-[#bdd2ef] bg-[#f0f6ff] text-brand-navy" },
   rectifying: { label: "整改中", className: "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" },
   done: { label: "已处理", className: "border-[#bff0cf] bg-[#eafaf0] text-[#087443]" },
-  failed: { label: "处理失败", className: "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" }
+  failed: { label: "处理失败", className: "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" },
+  unknown: { label: "状态未知", className: "border-[#dbe5f2] bg-white text-[#667085]" }
 };
 
 const productStatusClass: Record<ViolationRecord["productStatus"], string> = {
@@ -174,8 +191,12 @@ const processFilterOptions: Array<{ value: ProcessFilter; label: string }> = [
   { value: "appealing", label: "申诉中" },
   { value: "rectifying", label: "整改中" },
   { value: "done", label: "已处理" },
-  { value: "failed", label: "处理失败" }
+  { value: "failed", label: "处理失败" },
+  { value: "unknown", label: "状态未知" }
 ];
+
+const productMetricKeys = new Set<ViolationMetricKey>(["productLinkedCount", "productMissingCount", "offlineProductCount"]);
+const DETAIL_PAGE_SIZE = 100;
 
 const tableColumns: DataColumn[] = [
   { key: "totalRecords", label: "违规记录", format: "number", group: "处罚列表", tone: "blue" },
@@ -411,6 +432,24 @@ function getViolationsFieldSchema(adapter: unknown): RemoteViolationsFieldSchema
   return schema && typeof schema === "object" ? schema as RemoteViolationsFieldSchema : {};
 }
 
+function acceptedGate(value: unknown) {
+  return ["passed", "accepted", "ready", "complete"].includes(String(value || "").toLowerCase());
+}
+
+function getViolationsCapabilities(adapter: unknown): ViolationsCapabilities {
+  const policies = adapter && typeof adapter === "object" ? (adapter as { policies?: Record<string, unknown> }).policies : undefined;
+  const violationsData = policies?.violationsData && typeof policies.violationsData === "object" ? policies.violationsData as Record<string, unknown> : {};
+  const gates = violationsData.acceptanceGates && typeof violationsData.acceptanceGates === "object" ? violationsData.acceptanceGates as Record<string, unknown> : {};
+  const association = violationsData.productAssociation && typeof violationsData.productAssociation === "object" ? violationsData.productAssociation as Record<string, unknown> : {};
+  const actions = violationsData.violationActions && typeof violationsData.violationActions === "object" ? violationsData.violationActions as Record<string, unknown> : {};
+  const platformLinks = Array.isArray(violationsData.platformLinks) ? violationsData.platformLinks : [];
+  const platformUrl = String((platformLinks.find((item) => item && typeof item === "object" && (item as Record<string, unknown>).key === "penaltyCenter") as Record<string, unknown> | undefined)?.url || "");
+  const productAssociation = association.enabled === true && acceptedGate(gates.productAssociation);
+  const platformNavigation = acceptedGate(gates.realLoginSampling) && Boolean(platformUrl);
+  const governanceActions = actions.enabled === true && acceptedGate(gates.writePreviewConfirm) && Array.isArray(actions.requestPlans) && actions.requestPlans.length > 0;
+  return { productAssociation, platformNavigation, platformUrl, governanceActions };
+}
+
 function violationsColumnStorageKey(schemaVersion?: string) {
   const suffix = String(schemaVersion || "fallback").toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
   return `${STORAGE_KEY_VIOLATIONS_COLUMNS}_${suffix || "fallback"}`;
@@ -451,21 +490,6 @@ function dueText(value: string) {
   return `剩余 ${Math.ceil(hours / 24)}天`;
 }
 
-function sameDate(value: string, date: Date) {
-  const target = toDate(value);
-  return target.getFullYear() === date.getFullYear() && target.getMonth() === date.getMonth() && target.getDate() === date.getDate();
-}
-
-function recordInPreset(record: ViolationRecord, preset: typeof datePresets[number]) {
-  if (preset === "全部") return true;
-  const due = toDate(record.dueAt).getTime();
-  if (!Number.isFinite(due)) return true;
-  const now = Date.now();
-  if (preset === "今天") return sameDate(record.dueAt, new Date());
-  const days = preset === "近7天" ? 7 : 30;
-  return due >= now - days * 864e5 && due <= now + days * 864e5;
-}
-
 function datePresetKey(preset: DatePreset) {
   if (preset === "今天") return "today";
   if (preset === "近7天") return "7d";
@@ -474,7 +498,7 @@ function datePresetKey(preset: DatePreset) {
 }
 
 function formatDate(date: Date) {
-  return date.toISOString().slice(0, 10);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function addDays(date: Date, days: number) {
@@ -506,8 +530,8 @@ function rowsFromRecords(stores: StoreOption[], records: ViolationRecord[]) {
     row.appealCount = matched.filter((record) => record.processStatus === "appealing").length;
     row.rectificationCount = matched.filter((record) => record.processStatus === "rectifying").length;
     row.highRiskCount = matched.filter((record) => record.severity === "high").length;
-    row.dueSoonCount = matched.filter((record) => isDueSoon(record.dueAt)).length;
-    row.overdueCount = matched.filter((record) => isOverdue(record.dueAt)).length;
+    row.dueSoonCount = matched.filter((record) => record.processStatus !== "done" && isDueSoon(record.dueAt)).length;
+    row.overdueCount = matched.filter((record) => record.processStatus !== "done" && isOverdue(record.dueAt)).length;
     row.productLinkedCount = matched.filter((record) => ["online", "offline", "recycled"].includes(String(record.associationStatus || "")) || (record.productStatus !== "未关联" && record.productStatus !== "未查询" && record.productStatus !== "无需关联")).length;
     row.productMissingCount = matched.filter((record) => record.productStatus === "未关联").length;
     row.offlineProductCount = matched.filter((record) => record.productStatus === "已下架" || record.productStatus === "回收站").length;
@@ -524,7 +548,7 @@ function normalizeSeverity(value: unknown): ViolationRecord["severity"] {
 }
 
 function normalizeProcessStatus(value: unknown): ViolationRecord["processStatus"] {
-  return value === "pending" || value === "appealing" || value === "rectifying" || value === "done" || value === "failed" ? value : "pending";
+  return value === "pending" || value === "appealing" || value === "rectifying" || value === "done" || value === "failed" || value === "unknown" ? value : "unknown";
 }
 
 function normalizeObjectType(value: unknown): ViolationRecord["objectType"] {
@@ -548,6 +572,11 @@ function rowFromRemote(row: DoudianViolationsDataRow, store?: StoreOption, detai
     status: normalizeStoreStatus(row.status || store?.status),
     ok: detail?.ok ?? true,
     lastMessage: detail?.message || "",
+    coverageStatus: String(row.coverageStatus || "not_queried"),
+    complete: row.complete === true,
+    truncated: row.truncated === true,
+    fetchedAt: String(row.fetchedAt || ""),
+    remoteTotal: row.remoteTotal === undefined ? undefined : numberValue(row.remoteTotal),
     ...emptyMetrics()
   };
   for (const key of violationMetricKeys) next[key] = numberValue(row[key]);
@@ -576,6 +605,8 @@ function recordFromRemote(record: DoudianViolationRecord): ViolationRecord {
     associationStatus: String(record.associationStatus || ""),
     action: String(record.action || "待人工确认"),
     dueAt: String(record.dueAt || ""),
+    violationAt: String(record.violationAt || ""),
+    createdAt: String(record.createdAt || ""),
     penaltyAmount: numberValue(record.penaltyAmount),
     failureReason: String(record.failureReason || ""),
     source: String(record.source || "违规处罚列表") as ViolationRecord["source"]
@@ -681,17 +712,22 @@ function exportRows(
   records: ViolationRecord[],
   columns: DataColumn[],
   details: DoudianRunDetail[],
-  meta: { adapterVersion: string; fieldSchemaVersion: string; requestPlanHash: string; productLinkageVersion: string; preview: boolean }
+  meta: { adapterVersion: string; fieldSchemaVersion: string; requestPlanHash: string; productLinkageVersion: string; preview: boolean; productAssociation: boolean }
 ) {
   const exportColumns = columns.filter((column) => column.export !== false);
   const detailById = new Map(details.map((detail) => [String(detail.shopId || ""), detail]));
-  const header = ["店铺名称", "店铺ID", "分组", "状态", "同步状态", "同步消息", "adapterVersion", "fieldSchemaVersion", "requestPlanHash", "productLinkageVersion", ...exportColumns.map((column) => column.label)];
+  const header = ["店铺名称", "店铺ID", "分组", "状态", "同步状态", "覆盖状态", "完整", "已截断", "远端总数", "抓取时间", "同步消息", "adapterVersion", "fieldSchemaVersion", "requestPlanHash", "productLinkageVersion", ...exportColumns.map((column) => column.label)];
   const rowBody = rows.map((row) => [
     row.shopName,
     row.shopId,
     row.group,
     statusCopy[row.status]?.label || statusCopy.unknown.label,
     meta.preview ? "设计预览" : row.ok === false ? "有失败项" : detailById.get(row.shopId)?.status || "成功",
+    row.coverageStatus || "not_queried",
+    row.complete === true ? "是" : "否",
+    row.truncated === true ? "是" : "否",
+    row.remoteTotal ?? "",
+    row.fetchedAt || "",
     detailById.get(row.shopId)?.message || row.lastMessage || "",
     meta.adapterVersion,
     meta.fieldSchemaVersion,
@@ -699,17 +735,18 @@ function exportRows(
     meta.productLinkageVersion,
     ...exportColumns.map((column) => formatColumnValue(row[column.key], column.format))
   ]);
-  const detailHeader = ["违规ID", "店铺名称", "处罚对象", "商品ID", "违规原因", "风险等级", "处理状态", "商品状态", "关联状态", "建议动作", "处理时限", "处罚金额", "失败原因", "adapterVersion", "fieldSchemaVersion", "requestPlanHash", "productLinkageVersion"];
+  const detailHeader = ["违规ID", "店铺名称", "处罚对象", "商品ID", "违规原因", "违规时间", "创建时间", "风险等级", "处理状态", ...(meta.productAssociation ? ["商品状态", "关联状态"] : []), "建议动作", "处理时限", "处罚金额", "失败原因", "adapterVersion", "fieldSchemaVersion", "requestPlanHash", "productLinkageVersion"];
   const detailBody = records.map((record) => [
     record.id,
     record.shopName,
     `${record.objectType} / ${record.objectName}`,
     record.productId || "-",
     record.reason,
+    record.violationAt || "",
+    record.createdAt || "",
     severityCopy[record.severity].label,
     processCopy[record.processStatus].label,
-    record.productStatus,
-    record.associationStatus || "",
+    ...(meta.productAssociation ? [record.productStatus, record.associationStatus || ""] : []),
     record.action,
     record.dueAt,
     formatMoney(record.penaltyAmount),
@@ -757,6 +794,7 @@ export function ViolationsPage() {
   const [violationState, setViolationState] = useState<ViolationLoadState>(() => previewMode ? "ready" : "idle");
   const [violationMessage, setViolationMessage] = useState(() => previewMode ? "设计预览数据" : "");
   const [violationProgress, setViolationProgress] = useState("");
+  const [activeOperationId, setActiveOperationId] = useState("");
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<Set<string>>(() => visibleColumnKeySet());
   const [columnPanelOpen, setColumnPanelOpen] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
@@ -768,6 +806,8 @@ export function ViolationsPage() {
   const [fieldSchemaVersion, setFieldSchemaVersion] = useState("");
   const [requestPlanHash, setRequestPlanHash] = useState("");
   const [productLinkageVersion, setProductLinkageVersion] = useState("");
+  const [capabilities, setCapabilities] = useState<ViolationsCapabilities>({ productAssociation: false, platformNavigation: false, platformUrl: "", governanceActions: false });
+  const [detailPage, setDetailPage] = useState(1);
 
   function applyViolationsResult(result: DoudianViolationsDataResult, baseStores = stores) {
     const details = detailArray(result.details);
@@ -802,7 +842,9 @@ export function ViolationsPage() {
     setFieldSchemaVersion(result.fieldSchemaVersion || fieldSchemaVersion);
     setRequestPlanHash(result.requestPlanHash || requestPlanHash);
     setProductLinkageVersion(result.productLinkageVersion || productLinkageVersion);
-    setViolationState(result.ok || nextRows.some((row) => row.totalRecords > 0) || nextRecords.length ? "ready" : "error");
+    const hasUsableData = nextRows.some((row) => row.totalRecords > 0) || nextRecords.length > 0;
+    const partial = result.status === "partial" || result.complete === false || result.truncated === true || details.some((detail) => detail.ok === false);
+    setViolationState(partial && (result.ok || hasUsableData) ? "partial" : result.ok || hasUsableData ? "ready" : "error");
     setViolationMessage(result.message || "");
   }
 
@@ -881,6 +923,11 @@ export function ViolationsPage() {
         endDate: range.endDate,
         forceAdapter: true
       });
+      if (result.status === "cancelled") {
+        setViolationState("ready");
+        setViolationMessage(result.message || "已取消违规数据同步");
+        return;
+      }
       applyViolationsResult(result);
     } catch (error) {
       setViolationState("error");
@@ -902,8 +949,10 @@ export function ViolationsPage() {
       .then((payload) => {
         if (cancelled) return;
         const schema = getViolationsFieldSchema(payload.adapter);
+        const nextCapabilities = getViolationsCapabilities(payload.adapter);
         const columns = normalizeRemoteColumns(schema);
         setFieldSchema(schema);
+        setCapabilities(nextCapabilities);
         setAdapterVersion(payload.adapter.version || "");
         setFieldSchemaVersion(schema.version || "");
         setVisibleColumnKeys((current) => {
@@ -946,6 +995,11 @@ export function ViolationsPage() {
   useEffect(() => {
     if (previewMode || violationsBridgeMissing) return;
     if (loadState !== "ready" || !stores.length) return;
+    setRecords([]);
+    setStoreRows([]);
+    setViolationDetails([]);
+    setViolationState("idle");
+    setViolationMessage("");
     void hydrateLatestViolationsData();
   }, [previewMode, violationsBridgeMissing, loadState, stores.length, datePreset]);
 
@@ -953,11 +1007,23 @@ export function ViolationsPage() {
     return addDoudianProgressListener((event) => {
       const detail = event.detail || {};
       if (detail.taskType !== "violationsData") return;
+      if (detail.status === "running") setActiveOperationId(detail.operationId || "");
+      else setActiveOperationId((current) => current === detail.operationId ? "" : current);
       const progress = Number.isFinite(detail.progress) ? `${Math.round(detail.progress)}%` : "";
       const message = detail.message || detail.resultSummary || detail.error || "";
       setViolationProgress([progress, message].filter(Boolean).join(" · "));
     });
   }, []);
+
+  async function cancelViolationsSync() {
+    if (!activeOperationId) return;
+    await cancelDoudianStoreOperation(activeOperationId);
+    setActiveOperationId("");
+    setSyncing(false);
+    setViolationProgress("");
+    setViolationState("ready");
+    setViolationMessage("已取消违规数据同步");
+  }
 
   const filteredStores = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -973,14 +1039,13 @@ export function ViolationsPage() {
     const selected = new Set(selectedIds);
     return records.filter((record) => {
       if (!selected.has(record.shopId)) return false;
-      if (!recordInPreset(record, datePreset)) return false;
       if (severityFilter !== "all" && record.severity !== severityFilter) return false;
       if (processFilter !== "all" && record.processStatus !== processFilter) return false;
       return true;
     });
-  }, [datePreset, processFilter, records, selectedIds, severityFilter]);
+  }, [processFilter, records, selectedIds, severityFilter]);
 
-  const schemaColumns = useMemo(() => normalizeRemoteColumns(fieldSchema), [fieldSchema]);
+  const schemaColumns = useMemo(() => normalizeRemoteColumns(fieldSchema).filter((column) => capabilities.productAssociation || !productMetricKeys.has(column.key)), [capabilities.productAssociation, fieldSchema]);
   const columnStorageKey = violationsColumnStorageKey(fieldSchema.version || fieldSchemaVersion);
   const visibleColumns = useMemo(() => {
     const next = schemaColumns.filter((column) => visibleColumnKeys.has(column.key));
@@ -995,7 +1060,7 @@ export function ViolationsPage() {
       if (selectedSort?.key === "dueSoonCount") return (toDate(first.dueAt).getTime() - toDate(second.dueAt).getTime()) * (selectedSort.direction === "asc" ? 1 : -1);
       if (selectedSort?.key === "penaltyAmount") return (first.penaltyAmount - second.penaltyAmount) * direction;
       if (selectedSort?.key === "failedCount") return (Number(Boolean(first.failureReason)) - Number(Boolean(second.failureReason))) * direction;
-      const priority = { pending: 5, failed: 4, rectifying: 3, appealing: 2, done: 1 };
+      const priority: Record<ViolationRecord["processStatus"], number> = { pending: 6, failed: 5, rectifying: 4, appealing: 3, unknown: 2, done: 1 };
       return (priority[first.processStatus] - priority[second.processStatus]) * direction || (Number(first.severity === "high") - Number(second.severity === "high")) * direction;
     });
   }, [filteredRecords, selectedSort?.direction, selectedSort?.key]);
@@ -1003,18 +1068,41 @@ export function ViolationsPage() {
   const selectedStores = stores.filter((store) => selectedIds.has(store.id));
   const rows = useMemo(() => {
     const rowById = new Map(storeRows.map((row) => [row.shopId, row]));
-    const remoteRows = selectedStores.map((store) => rowById.get(store.id)).filter(Boolean) as ViolationRow[];
-    if (remoteRows.length) return selectedStores.map((store) => rowById.get(store.id) || zeroViolationRow(store));
-    if (records.length) return rowsFromRecords(selectedStores, sortedRecords);
-    return selectedStores.map(zeroViolationRow);
-  }, [records.length, selectedStores, sortedRecords, storeRows]);
+    const calculated = rowsFromRecords(selectedStores, filteredRecords).map((row) => {
+      const remote = rowById.get(row.shopId);
+      return remote ? {
+        ...row,
+        status: remote.status,
+        ok: remote.ok,
+        lastMessage: remote.lastMessage,
+        coverageStatus: remote.coverageStatus,
+        complete: remote.complete,
+        truncated: remote.truncated,
+        fetchedAt: remote.fetchedAt,
+        remoteTotal: remote.remoteTotal
+      } : row;
+    });
+    const direction = selectedSort?.direction === "asc" ? 1 : -1;
+    return calculated.sort((left, right) => ((left[selectedSort?.key || "pendingCount"] || 0) - (right[selectedSort?.key || "pendingCount"] || 0)) * direction || left.shopName.localeCompare(right.shopName, "zh-CN"));
+  }, [filteredRecords, selectedSort?.direction, selectedSort?.key, selectedStores, storeRows]);
   const totals = aggregateRows(rows);
+  const failedStoreCount = rows.filter((row) => row.ok === false).length;
+  const truncatedStoreCount = rows.filter((row) => row.truncated === true).length;
+  const detailPageCount = Math.max(1, Math.ceil(sortedRecords.length / DETAIL_PAGE_SIZE));
+  const pagedRecords = useMemo(() => sortedRecords.slice((detailPage - 1) * DETAIL_PAGE_SIZE, detailPage * DETAIL_PAGE_SIZE), [detailPage, sortedRecords]);
+  useEffect(() => {
+    setDetailPage((current) => Math.min(current, detailPageCount));
+  }, [detailPageCount]);
+  useEffect(() => {
+    setDetailPage(1);
+  }, [datePreset, processFilter, selectedIds, severityFilter, sortKey]);
   const tableMinWidth = Math.max(980, 260 + visibleColumns.length * 112);
   const shopColumnWidth = 260;
   const riskStoreCount = rows.filter((row) => row.pendingCount || row.highRiskCount || row.overdueCount || row.failedCount).length;
   const selectedRowsAllEmpty = rows.length > 0 && rows.every((row) => row.totalRecords === 0);
-  const detailColSpan = 10;
-  const summarySchema = useMemo(() => normalizeRemoteSummary(fieldSchema), [fieldSchema]);
+  const showOperationColumn = capabilities.platformNavigation;
+  const detailColSpan = 8 + Number(capabilities.productAssociation) + Number(showOperationColumn);
+  const summarySchema = useMemo(() => normalizeRemoteSummary(fieldSchema).filter((item) => capabilities.productAssociation || !productMetricKeys.has(item.key as ViolationMetricKey)), [capabilities.productAssociation, fieldSchema]);
   const metrics: MetricItem[] = summarySchema.map((item) => {
     const key = item.key as ViolationMetricKey;
     const format = (item.format || "number") as ColumnFormat;
@@ -1033,7 +1121,13 @@ export function ViolationsPage() {
   const summaryHiddenCount = Math.max(0, metrics.length - 8);
   const warningTitle = violationState === "error"
     ? violationMessage || "违规列表同步失败"
-    : totals.overdueCount
+    : failedStoreCount
+      ? `${formatNumber(failedStoreCount)} 家店铺查询失败`
+      : truncatedStoreCount
+        ? `${formatNumber(truncatedStoreCount)} 家店铺数据已截断`
+        : violationState === "partial"
+          ? violationMessage || "部分店铺数据不完整"
+      : totals.overdueCount
       ? `${formatNumber(totals.overdueCount)} 条已超时`
       : totals.failedCount
         ? `${formatNumber(totals.failedCount)} 条失败日志`
@@ -1042,7 +1136,9 @@ export function ViolationsPage() {
           : selectedRowsAllEmpty && violationState === "ready" && !previewMode
             ? "暂无违规记录"
             : "";
-  const warningDetail = totals.overdueCount
+  const warningDetail = failedStoreCount || truncatedStoreCount
+    ? violationMessage || "部分店铺未完成全量抓取，请重试后再据此执行治理动作。"
+    : totals.overdueCount
     ? "请先处理已超时和高危违规，再处理普通整改项。"
     : totals.failedCount
       ? "违规列表失败、商品查询异常、商品处理失败会进入失败日志。"
@@ -1200,7 +1296,12 @@ export function ViolationsPage() {
               <RefreshCw className={cn("size-[14px]", syncing ? "animate-spin" : "")} strokeWidth={2} />
               查询
             </button>
-            <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!rows.length} onClick={() => exportRows(rows, sortedRecords, visibleColumns, violationDetails, { adapterVersion, fieldSchemaVersion, requestPlanHash, productLinkageVersion, preview: previewMode })}>
+            {syncing && activeOperationId ? (
+              <button className="grid size-8 place-items-center rounded-md border border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" type="button" aria-label="取消违规数据同步" title="取消违规数据同步" onClick={() => void cancelViolationsSync()}>
+                <CircleStop className="size-[15px]" strokeWidth={2} />
+              </button>
+            ) : null}
+            <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!rows.length} onClick={() => exportRows(rows, sortedRecords, visibleColumns, violationDetails, { adapterVersion, fieldSchemaVersion, requestPlanHash, productLinkageVersion, preview: previewMode, productAssociation: capabilities.productAssociation })}>
               <Download className="size-[14px]" strokeWidth={2} />
               导出日志
             </button>
@@ -1224,7 +1325,7 @@ export function ViolationsPage() {
                   <span className="truncate">{violationProgress || "同步中"}</span>
                 </span>
               ) : warningTitle ? (
-                <span className={cn("inline-flex h-6 max-w-[440px] items-center gap-1 rounded-md border px-2 text-[12px] font-semibold", violationState === "error" || totals.failedCount || totals.overdueCount ? "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" : "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]")} title={warningDetail}>
+                <span className={cn("inline-flex h-6 max-w-[440px] items-center gap-1 rounded-md border px-2 text-[12px] font-semibold", violationState === "error" || failedStoreCount || totals.failedCount || totals.overdueCount ? "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" : "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]")} title={warningDetail}>
                   <AlertTriangle className="size-[13px] shrink-0" strokeWidth={2} />
                   <span className="truncate">{warningTitle}</span>
                 </span>
@@ -1279,7 +1380,10 @@ export function ViolationsPage() {
                       <td className="sticky left-0 z-10 bg-white px-3 shadow-[inset_-1px_0_0_#edf1f6] group-hover:bg-[#f8fbff]" style={{ width: shopColumnWidth, minWidth: shopColumnWidth, maxWidth: shopColumnWidth }}>
                         <div className="min-w-0">
                           <div className="truncate font-semibold text-[#1d2939]" title={row.shopName}>{row.shopName}</div>
-                          <div className="truncate font-mono text-[12px] text-[#667085]">{row.shopId}</div>
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <span className="truncate font-mono text-[12px] text-[#667085]">{row.shopId}</span>
+                            {row.ok === false ? <span className="shrink-0 text-[11px] font-semibold text-[#b42318]">查询失败</span> : row.truncated ? <span className="shrink-0 text-[11px] font-semibold text-[#b54708]">已截断</span> : row.complete === false ? <span className="shrink-0 text-[11px] font-semibold text-[#b54708]">数据不完整</span> : null}
+                          </div>
                         </div>
                       </td>
                       {visibleColumns.map((column) => {
@@ -1314,6 +1418,7 @@ export function ViolationsPage() {
                 <FileWarning className="size-[15px] text-brand-navy" strokeWidth={2.2} />
                 违规处罚记录
                 <span className="rounded-md border border-[#dbe5f2] bg-white px-2 py-1 text-[11px] text-[#667085]">{sortedRecords.length} 条</span>
+                {sortedRecords.length ? <span className="text-[11px] font-normal text-[#98a2b3]">当前 {Math.min(sortedRecords.length, (detailPage - 1) * DETAIL_PAGE_SIZE + 1)}-{Math.min(sortedRecords.length, detailPage * DETAIL_PAGE_SIZE)}</span> : null}
               </div>
               <table className="w-full border-separate border-spacing-0 text-left text-[12px]">
                 <thead className="bg-[#fbfcff] text-[#344054] shadow-[inset_0_-1px_0_#e6ebf3]">
@@ -1323,15 +1428,15 @@ export function ViolationsPage() {
                     <th className="px-3 font-semibold">违规原因</th>
                     <th className="px-3 font-semibold">风险</th>
                     <th className="px-3 font-semibold">处理状态</th>
-                    <th className="px-3 font-semibold">商品状态</th>
+                    {capabilities.productAssociation ? <th className="px-3 font-semibold">商品状态</th> : null}
                     <th className="px-3 font-semibold">处理时限</th>
                     <th className="px-3 font-semibold">建议动作</th>
                     <th className="px-3 font-semibold">失败原因</th>
-                    <th className="px-3 font-semibold">操作</th>
+                    {showOperationColumn ? <th className="px-3 font-semibold">操作</th> : null}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#edf1f6]">
-                  {sortedRecords.map((record) => (
+                  {pagedRecords.map((record) => (
                     <tr className="group h-[54px] hover:bg-[#f8fbff]" key={record.id}>
                       <td className="px-3">
                         <div className="font-semibold text-[#1d2939]">{record.shopName}</div>
@@ -1344,23 +1449,20 @@ export function ViolationsPage() {
                       <td className="max-w-[180px] truncate px-3 font-medium text-[#344054]" title={record.reason}>{record.reason}</td>
                       <td className="px-3"><CompactTag label={severityCopy[record.severity].label} className={severityCopy[record.severity].className} /></td>
                       <td className="px-3"><CompactTag label={processCopy[record.processStatus].label} className={processCopy[record.processStatus].className} /></td>
-                      <td className={cn("whitespace-nowrap px-3 font-semibold", productStatusClass[record.productStatus])}>{record.productStatus}</td>
-                      <td className={cn("whitespace-nowrap px-3 font-semibold", isOverdue(record.dueAt) ? "text-[#b42318]" : isDueSoon(record.dueAt) ? "text-[#b54708]" : "text-[#344054]")}>
-                        <div>{dueText(record.dueAt)}</div>
+                      {capabilities.productAssociation ? <td className={cn("whitespace-nowrap px-3 font-semibold", productStatusClass[record.productStatus])}>{record.productStatus}</td> : null}
+                      <td className={cn("whitespace-nowrap px-3 font-semibold", record.processStatus !== "done" && isOverdue(record.dueAt) ? "text-[#b42318]" : record.processStatus !== "done" && isDueSoon(record.dueAt) ? "text-[#b54708]" : "text-[#344054]")}>
+                        <div>{record.processStatus === "done" ? "已完成" : dueText(record.dueAt)}</div>
                         <div className="font-mono text-[11px] text-[#98a2b3]">{record.dueAt}</div>
                       </td>
                       <td className="max-w-[220px] truncate px-3 text-[#344054]" title={record.action}>{record.action}</td>
                       <td className={cn("max-w-[180px] truncate px-3", record.failureReason ? "font-semibold text-[#b42318]" : "text-[#98a2b3]")} title={record.failureReason}>{record.failureReason || "-"}</td>
-                      <td className="px-3">
+                      {showOperationColumn ? <td className="px-3">
                         <div className="flex items-center gap-1.5">
-                          <button className="grid size-7 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054] transition-colors hover:bg-brand-foxSoft hover:text-brand-navy" type="button" aria-label="打开平台处理页" title="打开平台处理页">
+                          {capabilities.platformNavigation ? <button className="grid size-7 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054] transition-colors hover:bg-brand-foxSoft hover:text-brand-navy" type="button" aria-label="打开平台处理页" title="打开平台处理页" onClick={() => void openDoudianStore(record.shopId, capabilities.platformUrl)}>
                             <ExternalLink className="size-[14px]" strokeWidth={2} />
-                          </button>
-                          <button className="grid size-7 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054] transition-colors hover:bg-brand-foxSoft hover:text-brand-navy" type="button" aria-label="查看商品关联" title="查看商品关联">
-                            <PackageCheck className="size-[14px]" strokeWidth={2} />
-                          </button>
+                          </button> : null}
                         </div>
-                      </td>
+                      </td> : null}
                     </tr>
                   ))}
                   {!sortedRecords.length ? (
@@ -1378,6 +1480,17 @@ export function ViolationsPage() {
                   ) : null}
                 </tbody>
               </table>
+              {detailPageCount > 1 ? (
+                <div className="flex h-11 items-center justify-end gap-2 border-t border-[#edf1f6] px-3">
+                  <button className="grid size-7 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054] disabled:opacity-40" type="button" aria-label="上一页" title="上一页" disabled={detailPage <= 1} onClick={() => setDetailPage((page) => Math.max(1, page - 1))}>
+                    <ChevronLeft className="size-4" strokeWidth={2} />
+                  </button>
+                  <span className="min-w-[76px] text-center text-[12px] font-semibold text-[#667085]">{detailPage} / {detailPageCount}</span>
+                  <button className="grid size-7 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054] disabled:opacity-40" type="button" aria-label="下一页" title="下一页" disabled={detailPage >= detailPageCount} onClick={() => setDetailPage((page) => Math.min(detailPageCount, page + 1))}>
+                    <ChevronRight className="size-4" strokeWidth={2} />
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
 

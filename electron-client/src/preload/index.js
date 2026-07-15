@@ -173,9 +173,14 @@ const nativeData = {
   },
   records: {
     put: putNativeDataRecord,
+    putMany: invoke("native:data:records:putMany"),
     get: invoke("native:data:records:get"),
+    getMany: invoke("native:data:records:getMany"),
     list: invoke("native:data:records:list"),
-    delete: invoke("native:data:records:delete")
+    queryOperations: invoke("native:data:records:queryOperations"),
+    cleanupOperations: invoke("native:data:records:cleanupOperations"),
+    delete: invoke("native:data:records:delete"),
+    deleteMany: invoke("native:data:records:deleteMany")
   },
   catalogJobs: {
     acquire: invoke("native:data:catalogJobs:acquire"),

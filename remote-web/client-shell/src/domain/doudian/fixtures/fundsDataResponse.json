@@ -1,0 +1,78 @@
+{
+  "responses": {
+    "fundAccountList": {
+      "code": 0,
+      "data": {
+        "withdraw_balance": 12345,
+        "balance": 45678,
+        "frozen_balance": 234,
+        "pending_settle_amount": 8901
+      }
+    },
+    "fundPledgeCash": {
+      "code": 0,
+      "data": {
+        "pledge_cash": 50000,
+        "new_conf": { "pre_pay": 1200 },
+        "refund_pledge_cash": 48800
+      }
+    },
+    "fundPledgePayable": {
+      "code": 0,
+      "data": {
+        "risk_detail": {
+          "basic_balance": 30000,
+          "basic_payable": 5000
+        }
+      }
+    },
+    "fundShopAwardOverview": {
+      "code": 0,
+      "data": {
+        "data_overview": {
+          "subsidy_data": {
+            "total_amount": { "amount": "300", "unit": "元" },
+            "commission_data": { "commission_amount": { "amount": "100元", "unit": "元" } },
+            "qianchuan_data": { "qianchuan_amount": { "amount": "0.02", "unit": "万" } }
+          }
+        }
+      }
+    },
+    "fundCompensateStatistics": {
+      "code": 0,
+      "data": {
+        "order_count": 2,
+        "order_amount": 1234,
+        "order_count_7days": 7,
+        "order_amount_7days": 5678
+      }
+    },
+    "fundBillQuery": {
+      "code": 0,
+      "aggregation_res": { "total_unsettled_amount": 98765 },
+      "total": 9
+    }
+  },
+  "expected": {
+    "withdrawBalance": 123.45,
+    "balance": 456.78,
+    "frozenBalance": 2.34,
+    "pendingSettleAmount": 89.01,
+    "marginBalance": 500,
+    "depositPayable": 12,
+    "refundableMargin": 488,
+    "baseMarginBalance": 300,
+    "baseDepositPayable": 50,
+    "baseRefundableMargin": 250,
+    "subsidyTotal": 300,
+    "commissionSubsidy": 100,
+    "qianchuanSubsidy": 200,
+    "compensationOrderCountToday": 2,
+    "compensationOrderCount7d": 7,
+    "compensationAmountToday": 12.34,
+    "compensationAmount7d": 56.78,
+    "pendingSettleOrderAmount": 987.65,
+    "pendingSettleOrders": 9,
+    "riskCount": 3
+  }
+}

@@ -35,6 +35,8 @@ type TaskWaiter = {
 };
 
 const waiters = new Map<string, TaskWaiter[]>();
+const taskStartLocks = new Map<string, Promise<DoudianOperationRecord>>();
+const ACTIVE_TASK_DEDUPE_MAX_AGE_MS = 30 * 60 * 1000;
 
 function estimateJsonBytes(value: unknown) {
   try {
@@ -196,7 +198,7 @@ async function openRunnerWindow(operationId: string) {
     title: "Chihu Doudian Task Runner",
     partition: DEFAULT_RUNNER_PARTITION,
     show: false,
-    waitForLoad: false,
+    waitForLoad: true,
     width: 480,
     height: 360,
     nodeIntegration: false,
@@ -218,7 +220,34 @@ async function evalRunnerStart(winId: number, message: DoudianTaskMessage) {
   }
 }
 
-export async function startDoudianTask(task: DoudianTaskRequest): Promise<DoudianOperationRecord> {
+function taskDedupeKey(task: DoudianTaskRequest) {
+  const value = task.metadata?.dedupeKey;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+async function findDeduplicatedOperation(task: DoudianTaskRequest) {
+  const dedupeKey = taskDedupeKey(task);
+  if (!dedupeKey) return null;
+  const cutoff = Date.now() - ACTIVE_TASK_DEDUPE_MAX_AGE_MS;
+  const active = await listActiveOperations();
+  return active.find((record) => (
+    record.taskType === task.taskType &&
+    record.metadata?.dedupeKey === dedupeKey &&
+    Date.parse(record.updatedAt) >= cutoff
+  )) || null;
+}
+
+async function startDoudianTaskInternal(task: DoudianTaskRequest): Promise<DoudianOperationRecord> {
+  const existing = await findDeduplicatedOperation(task);
+  if (existing) {
+    getChannel();
+    return existing;
+  }
+  if (task.metadata?.replaceActive === true) {
+    const active = await listActiveOperations();
+    const superseded = active.filter((record) => record.taskType === task.taskType);
+    for (const record of superseded) await cancelDoudianTask(record.operationId).catch(() => null);
+  }
   const operationId = task.operationId || operationIdFor(task.taskType);
   getChannel();
   const operation = createOperation({
@@ -249,6 +278,26 @@ export async function startDoudianTask(task: DoudianTaskRequest): Promise<Doudia
   void evalRunnerStart(winId, startMessage);
   getChannel().postMessage(startMessage);
   return runningOperation;
+}
+
+export async function startDoudianTask(task: DoudianTaskRequest): Promise<DoudianOperationRecord> {
+  const dedupeKey = taskDedupeKey(task);
+  if (!dedupeKey) return startDoudianTaskInternal(task);
+  const lockKey = task.metadata?.replaceActive === true ? task.taskType : `${task.taskType}:${dedupeKey}`;
+  const existing = taskStartLocks.get(lockKey);
+  if (existing) {
+    const started = await existing;
+    if (started.metadata?.dedupeKey === dedupeKey) return started;
+    if (taskStartLocks.get(lockKey) === existing) taskStartLocks.delete(lockKey);
+    return startDoudianTask(task);
+  }
+  const pending = startDoudianTaskInternal(task);
+  taskStartLocks.set(lockKey, pending);
+  try {
+    return await pending;
+  } finally {
+    if (taskStartLocks.get(lockKey) === pending) taskStartLocks.delete(lockKey);
+  }
 }
 
 async function stopRunnerWindow(operationId: string) {

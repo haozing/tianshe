@@ -310,6 +310,9 @@ export interface DoudianRunDetail {
   reason?: string;
   category?: string;
   diagnostic?: unknown;
+  dataUpdatedAt?: string;
+  attemptedAt?: string;
+  usingStaleCache?: boolean;
   index?: number;
   total?: number;
 }
@@ -389,6 +392,7 @@ export interface DoudianBusinessDataResult extends DoudianStoreResult {
   failureCount?: number;
   partialSourceCount?: number;
   noMetricMatchCount?: number;
+  coreIncompleteCount?: number;
   cached?: boolean;
   cachedRows?: unknown[];
   dateRange?: {
@@ -436,6 +440,7 @@ export interface DoudianFundsDataResult extends DoudianStoreResult {
   failureCount?: number;
   partialSourceCount?: number;
   noMetricMatchCount?: number;
+  incompleteMetricCount?: number;
   fieldSchemaVersion?: string;
   requestPlanHash?: string;
   cached?: boolean;
@@ -458,11 +463,13 @@ export interface DoudianViolationRecord {
   productId: string;
   reason: string;
   severity: "high" | "medium" | "low" | string;
-  processStatus: "pending" | "appealing" | "rectifying" | "done" | "failed" | string;
+  processStatus: "pending" | "appealing" | "rectifying" | "done" | "failed" | "unknown" | string;
   productStatus: "在售" | "已下架" | "回收站" | "未关联" | "未查询" | "无需关联" | string;
   associationStatus?: "not_checked" | "linked" | "not_found" | "recycled" | "offline" | "online" | "not_required" | "unknown" | string;
   action: string;
   dueAt: string;
+  violationAt?: string;
+  createdAt?: string;
   penaltyAmount: number;
   failureReason: string;
   source: string;
@@ -486,6 +493,12 @@ export interface DoudianViolationsDataRow {
   offlineProductCount: number;
   failedCount: number;
   penaltyAmount: number;
+  coverageStatus?: "complete" | "truncated" | "partial" | "failed" | "not_queried" | string;
+  complete?: boolean;
+  truncated?: boolean;
+  fetchedAt?: string;
+  remoteTotal?: number;
+  fetchedRecords?: number;
   [key: string]: unknown;
 }
 
@@ -499,6 +512,12 @@ export interface DoudianViolationsDataResult extends DoudianStoreResult {
   fieldSchemaVersion?: string;
   requestPlanHash?: string;
   productLinkageVersion?: string;
+  coverageStatus?: "complete" | "truncated" | "partial" | "failed" | "not_queried" | string;
+  complete?: boolean;
+  truncated?: boolean;
+  fetchedAt?: string;
+  remoteTotal?: number;
+  recordsDeferred?: boolean;
   cached?: boolean;
   cachedRows?: unknown[];
   dateRange?: {
@@ -535,7 +554,10 @@ export interface DoudianStaleGoodsRules {
   noSalesDays: number;
   skipListedDaysEnabled?: boolean;
   listedDays?: number;
+  perStoreLimit?: number;
   trafficPeriod: "7d" | "30d" | "90d";
+  productSource?: "selling" | "offline" | "importedIds";
+  importedProductIds?: string[];
   noSalesType: "balanced" | "strict" | "trafficWaste";
   requireLowRating: boolean;
   requireLowInfo: boolean;
@@ -580,6 +602,9 @@ export interface DoudianStaleGoodsCandidate {
   action: DoudianStaleGoodsAction | string;
   reasons: string[];
   source: string;
+  metricAvailability?: Record<string, boolean>;
+  compassMatched?: boolean;
+  recommendThresholds?: number[];
   [key: string]: unknown;
 }
 
@@ -616,6 +641,7 @@ export interface DoudianStaleGoodsExecution {
   ok: boolean;
   message: string;
   planKey?: string;
+  stage?: "offline" | "recycle" | "delete" | string;
 }
 
 export interface DoudianStaleGoodsCleanupResult extends DoudianStoreResult {
@@ -734,6 +760,24 @@ export interface DoudianBulkDeleteExecution {
   message: string;
   planKey?: string;
   stage?: "recycle" | "delete" | string;
+  stages?: Array<{
+    stage: "recycle" | "delete" | string;
+    status: string;
+    ok: boolean;
+    message: string;
+    planKey?: string;
+  }>;
+}
+
+export interface DoudianBulkDeleteProgress {
+  phase: "scan" | "recycle" | "delete" | "execute" | "done" | string;
+  completed: number;
+  total: number;
+  percent: number;
+  shopId?: string;
+  batchIndex?: number;
+  totalBatches?: number;
+  message?: string;
 }
 
 export interface DoudianBulkDeleteResult extends DoudianStoreResult {

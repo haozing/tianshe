@@ -121,12 +121,39 @@ export interface NativeDataRecordPutResult<T = Record<string, unknown>> {
   largePayload?: boolean;
 }
 
+export interface NativeDataRecordPutManyResult<T = Record<string, unknown>> {
+  ok: boolean;
+  storeName: NativeDataRecordStoreName;
+  count: number;
+  records?: T[];
+  payloadBytes?: number;
+}
+
 export interface NativeDataRecordDeleteResult {
   ok: boolean;
   storeName: NativeDataRecordStoreName;
   recordId: string;
   deleted: number;
   deletedAt: string;
+}
+
+export interface NativeDataRecordDeleteManyResult {
+  ok: boolean;
+  storeName: NativeDataRecordStoreName;
+  requested?: number;
+  deleted: number;
+  missing?: number;
+  deletedAt: string;
+}
+
+export interface NativeDataOperationCleanupResult {
+  ok: boolean;
+  deleted: number;
+  expired: number;
+  overflow: number;
+  cutoff: string;
+  retentionDays: number;
+  maxTerminalRecords: number;
 }
 
 export interface StoreIdentityArgs {
@@ -470,9 +497,14 @@ export interface NativeDataApi {
   };
   records: {
     put: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; record: T }) => Promise<NativeDataRecordPutResult<T>>;
+    putMany?: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; records: T[]; omitRecords?: boolean }) => Promise<NativeDataRecordPutManyResult<T>>;
     get: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; id: string }) => Promise<T | null>;
+    getMany?: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; ids: string[] }) => Promise<T[]>;
     list: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; cursor?: string; limit?: number }) => Promise<CursorPage<T>>;
+    queryOperations?: <T extends Record<string, unknown>>(args: { statuses?: string[]; taskType?: string; updatedAfter?: string; limit?: number }) => Promise<T[]>;
+    cleanupOperations?: (args: { retentionDays?: number; maxTerminalRecords?: number }) => Promise<NativeDataOperationCleanupResult>;
     delete: (args: { storeName: NativeDataRecordStoreName; id: string; reason?: string }) => Promise<NativeDataRecordDeleteResult>;
+    deleteMany?: (args: { storeName: NativeDataRecordStoreName; ids: string[]; reason?: string }) => Promise<NativeDataRecordDeleteManyResult>;
   };
   catalogJobs: {
     acquire: (args: ProductCatalogTaskArgs) => Promise<CatalogJobHandle>;

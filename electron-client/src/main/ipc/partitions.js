@@ -11,11 +11,16 @@ function getCachePartitions(appDataPath) {
 async function cleanInvalidPartitions(currentPartitons = [], prefixes = []) {
   const appDataPath = app.getPath("userData");
   const allPartitions = getCachePartitions(appDataPath);
-  const valid = currentPartitons.map((item) => String(item).replace("persist:", "").toLowerCase());
+  const valid = currentPartitons.map((item) => String(item).replace(/^persist:/i, "").toLowerCase());
+  const normalizedPrefixes = prefixes
+    .map((item) => String(item || "").replace(/^persist:/i, "").toLowerCase())
+    .filter(Boolean);
   const deleted = [];
+  const pending = [];
 
   for (const partition of allPartitions) {
-    const isTarget = prefixes.some((prefix) => partition.startsWith(prefix));
+    const normalizedPartition = partition.toLowerCase();
+    const isTarget = normalizedPrefixes.some((prefix) => normalizedPartition.startsWith(prefix));
     if (!isTarget || valid.includes(partition.toLowerCase())) continue;
 
     const partitionSession = session.fromPartition(partition);
@@ -24,12 +29,17 @@ async function cleanInvalidPartitions(currentPartitons = [], prefixes = []) {
 
     const partitionPath = path.join(appDataPath, "Partitions", partition);
     if (fs.existsSync(partitionPath)) {
-      fs.rmSync(partitionPath, { recursive: true, force: true });
-      deleted.push(partition);
+      try {
+        fs.rmSync(partitionPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 120 });
+        deleted.push(partition);
+      } catch (error) {
+        if (error?.code !== "EPERM" && error?.code !== "EBUSY") throw error;
+        pending.push(partition);
+      }
     }
   }
 
-  return { deleted };
+  return { deleted, pending };
 }
 
 function registerPartitionHandlers() {

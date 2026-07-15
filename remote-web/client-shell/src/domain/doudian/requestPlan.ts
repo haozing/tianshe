@@ -2,6 +2,7 @@ import type { DoudianAdapterConfig, DoudianAdapterPayload } from "../../types";
 import { requireChihuNative } from "../../native/client";
 import { signDoudianRequest } from "./signer";
 import { XZB_SIGN_USER_AGENT } from "./xzbSigner";
+import { detailedDoudianLoggingEnabled, reportDoudianDiagnostic } from "./diagnosticLog";
 
 export interface RequestPlanResult {
   ok: boolean;
@@ -80,6 +81,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   planKey: string;
   headers?: Record<string, string>;
   context?: Record<string, unknown>;
+  trackWindow?: (winId: number) => void;
 }): Promise<RequestPlanResult> {
   const adapter = payload.adapter;
   const plan = (adapter.requestPlans?.[args.planKey] || {}) as Record<string, unknown>;
@@ -90,12 +92,12 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   const context = args.context || {};
   const url = buildPlanUrl(adapter, endpoint, plan, context);
   if (plan.prepareBeforeRequest === true) {
-    await prepareRequestPlanContext(args.partition, args.planKey, plan, adapter, context, url);
+    await prepareRequestPlanContext(args.partition, args.planKey, plan, adapter, context, url, args.trackWindow);
   }
   const runRequest = async (attempt: number | string = 0) => {
     let result: RequestPlanResult;
     if (plan.requestMode === "page-fetch") {
-      result = await pageFetchJson(args.partition, url, args.planKey, plan, context);
+      result = await pageFetchJson(args.partition, url, args.planKey, plan, context, args.trackWindow);
     } else {
       let requestUrl = url;
       if (plan.sign === true) {
@@ -104,14 +106,15 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
           partition: args.partition,
           planKey: args.planKey,
           plan,
-          context
+          context,
+          trackWindow: args.trackWindow
         });
         if (sign.ok && sign.query) {
           const signedUrl = new URL(url);
           signedUrl.search = sign.query.startsWith("?") ? sign.query : `?${sign.query}`;
           requestUrl = signedUrl.toString();
         } else if (plan.pageFetchOnSignFailure === true) {
-          result = await pageFetchJson(args.partition, url, args.planKey, plan, context);
+          result = await pageFetchJson(args.partition, url, args.planKey, plan, context, args.trackWindow);
           await reportPlanSummary(args.planKey, args.partition, attempt, result, adapter, plan);
           return result;
         } else {
@@ -147,7 +150,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
     await reportPlanRetry(args.planKey, args.partition, "prepare", attempt + 1, response);
     const delayMs = retryDelayMs(plan, attempt + 1, "prepareRetryDelayMs", "prepareRetryBackoff", 0);
     if (delayMs) await delay(delayMs);
-    await prepareRequestPlanContext(args.partition, args.planKey, plan, adapter, context, url);
+    await prepareRequestPlanContext(args.partition, args.planKey, plan, adapter, context, url, args.trackWindow);
     response = await runRequest(`prepare-${attempt + 1}`);
     if (response.nonRetryable) return response;
   }
@@ -387,7 +390,7 @@ async function removePlanCookies(
     removed += Number(result?.removed || 0);
   }
   if (removed > 0) {
-    await native.logs.report({
+    await reportDoudianDiagnostic({
       category: "doudian-request-plan",
       event: "cookies-removed",
       planKey,
@@ -395,7 +398,7 @@ async function removePlanCookies(
       phase,
       names,
       removed
-    }).catch(() => undefined);
+    });
   }
 }
 
@@ -534,7 +537,8 @@ async function prepareRequestPlanContext(
   plan: Record<string, unknown>,
   adapter: DoudianAdapterConfig,
   context: Record<string, unknown>,
-  fallbackUrl: string
+  fallbackUrl: string,
+  trackWindow?: (winId: number) => void
 ) {
   const prepareUrl = planWindowUrl(plan, fallbackUrl, context, ["prepareUrl", "signerUrl"]);
   if (!prepareUrl) return false;
@@ -553,19 +557,20 @@ async function prepareRequestPlanContext(
       nodeIntegration: false,
       contextIsolation: true
     });
+    trackWindow?.(winId);
     const waitMs = Math.max(0, Number(plan.prepareWaitMs || adapter.timeouts?.loadMs || 0));
     if (waitMs) await delay(waitMs);
-    await native.logs.report({
+    await reportDoudianDiagnostic({
       category: "doudian-request-plan",
       event: "prepared",
       planKey,
       partition,
       openUrl: prepareUrl,
       targetUrl: prepareUrl
-    }).catch(() => undefined);
+    });
     return true;
   } catch (error) {
-    await native.logs.report({
+    await reportDoudianDiagnostic({
       category: "doudian-request-plan",
       event: "prepare-failed",
       planKey,
@@ -573,7 +578,7 @@ async function prepareRequestPlanContext(
       openUrl: prepareUrl,
       targetUrl: prepareUrl,
       message: error instanceof Error ? error.message : String(error)
-    }).catch(() => undefined);
+    }, true);
     return false;
   } finally {
     if (winId != null) await native.windows.destroy({ winId }).catch(() => undefined);
@@ -590,10 +595,12 @@ async function reportPlanSummary(
 ) {
   const successPaths = arrayText(plan.successPaths);
   const hasSuccessPath = successPaths.some((path) => getPathValue(response.data, path) !== undefined);
-  const cookieState = await requestPlanCookieState(partition, planKey);
   const contractOk = requestPlanResponseOk(response, adapter, planKey);
+  const alwaysReport = !contractOk || responseHasHttpError(response);
+  if (!alwaysReport && !detailedDoudianLoggingEnabled()) return;
+  const cookieState = await requestPlanCookieState(partition, planKey);
   const shouldReportResponseDiagnostic = responseHasHttpError(response) || !contractOk;
-  await requireChihuNative().logs.report({
+  await reportDoudianDiagnostic({
     category: "doudian-request-plan",
     event: "result",
     planKey,
@@ -616,11 +623,11 @@ async function reportPlanSummary(
     ...(response.nonRetryable ? { nonRetryable: true } : {}),
     ...(response.signFailureReason ? { signFailureReason: response.signFailureReason } : {}),
     ...cookieState
-  }).catch(() => undefined);
+  }, alwaysReport);
 }
 
 async function reportPlanRetry(planKey: string, partition: string, kind: string, attempt: number, response: RequestPlanResult) {
-  await requireChihuNative().logs.report({
+  await reportDoudianDiagnostic({
     category: "doudian-request-plan",
     event: "retry",
     planKey,
@@ -636,7 +643,7 @@ async function reportPlanRetry(planKey: string, partition: string, kind: string,
     pageTitle: response.pageTitle,
     ...(response.nonRetryable ? { nonRetryable: true } : {}),
     ...(response.signFailureReason ? { signFailureReason: response.signFailureReason } : {})
-  }).catch(() => undefined);
+  }, true);
 }
 
 function interpolate(value: unknown, context: Record<string, unknown>): string {
@@ -676,13 +683,14 @@ function buildPlanUrl(adapter: DoudianAdapterConfig, endpoint: string, plan: Rec
 async function requestJson(partition: string, url: string, headers: Record<string, string>, source: string, plan: Record<string, unknown> = {}, context: Record<string, unknown> = {}): Promise<RequestPlanResult> {
   const method = String(plan.method || "GET").toUpperCase() as "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   const body = method === "GET" ? undefined : interpolateDeep(plan.body, context);
+  const responseType = plan.responseType === "base64" || plan.responseType === "arrayBuffer" || plan.responseType === "text" ? plan.responseType : "json";
   const response = await requireChihuNative().http.request({
     partition,
     url,
     method,
     headers,
     body,
-    responseType: "json",
+    responseType,
     timeoutMs: 15000
   });
   const result = response as { ok?: boolean; status?: number; data?: unknown; error?: { message?: string } | string };
@@ -697,7 +705,7 @@ async function requestJson(partition: string, url: string, headers: Record<strin
   };
 }
 
-async function pageFetchJson(partition: string, url: string, source: string, plan: Record<string, unknown> = {}, context: Record<string, unknown> = {}): Promise<RequestPlanResult> {
+async function pageFetchJson(partition: string, url: string, source: string, plan: Record<string, unknown> = {}, context: Record<string, unknown> = {}, trackWindow?: (winId: number) => void): Promise<RequestPlanResult> {
   const native = requireChihuNative();
   const method = String(plan.method || "GET").toUpperCase() as "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   const body = method === "GET" ? undefined : interpolateDeep(plan.body, context);
@@ -720,6 +728,7 @@ async function pageFetchJson(partition: string, url: string, source: string, pla
       nodeIntegration: false,
       contextIsolation: true
     });
+    trackWindow?.(winId);
     const bootWaitMs = Math.max(0, Number(plan.pageFetchBootWaitMs ?? 800));
     if (bootWaitMs) await delay(bootWaitMs);
     const code = `

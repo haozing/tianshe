@@ -53,6 +53,14 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.length > 0 && value.every((item) => isString(item));
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isOptionalStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => isString(item));
+}
+
 function isStringRecordArray(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const fields = value as Record<string, unknown>;
@@ -158,6 +166,132 @@ function isValidPolicies(value: unknown): boolean {
   return value === undefined || (!!value && typeof value === "object" && !Array.isArray(value));
 }
 
+const FUNDS_CONTRACT_FIELDS = new Set([
+  "withdrawBalance", "balance", "frozenBalance", "pendingSettleAmount",
+  "marginBalance", "depositPayable", "refundableMargin",
+  "baseMarginBalance", "baseDepositPayable", "baseRefundableMargin",
+  "experienceMarginBalance", "experienceDepositPayable", "experienceRefundableMargin",
+  "subsidyTotal", "commissionSubsidy", "qianchuanSubsidy",
+  "compensationOrderCountToday", "compensationOrderCount7d",
+  "compensationAmountToday", "compensationAmount7d",
+  "pendingSettleOrderAmount", "pendingSettleOrders", "riskCount"
+]);
+
+const VIOLATIONS_CONTRACT_FIELDS = new Set([
+  "totalRecords", "pendingCount", "appealCount", "rectificationCount",
+  "highRiskCount", "dueSoonCount", "overdueCount", "productLinkedCount",
+  "productMissingCount", "offlineProductCount", "failedCount", "penaltyAmount"
+]);
+
+function isValidFundsContract(config: DoudianAdapterConfig) {
+  const responseMappings = config.responseMappings as unknown as Record<string, unknown>;
+  const mappings = isPlainObject(responseMappings.fundsData) ? responseMappings.fundsData : null;
+  const policies = config.policies as unknown as Record<string, unknown>;
+  const fundsPolicy = isPlainObject(policies?.fundsData) ? policies.fundsData : null;
+  if (!mappings || !fundsPolicy || !isString(fundsPolicy.contractVersion)) return false;
+
+  const requestPlans = fundsPolicy.requestPlans;
+  const requiredPlans = fundsPolicy.requiredPlans;
+  const optionalPlans = fundsPolicy.optionalPlans;
+  const criticalPlans = fundsPolicy.criticalPlans;
+  const diagnosticPlans = fundsPolicy.diagnosticPlans;
+  if (![requestPlans, requiredPlans, optionalPlans, criticalPlans, diagnosticPlans].every(isOptionalStringList)) return false;
+  if (!(requestPlans as string[]).length || !(criticalPlans as string[]).length) return false;
+  const requestPlanSet = new Set(requestPlans as string[]);
+  if ([...(requiredPlans as string[]), ...(optionalPlans as string[]), ...(criticalPlans as string[]), ...(diagnosticPlans as string[])].some((key) => !requestPlanSet.has(key))) return false;
+  if ((criticalPlans as string[]).some((key) => (optionalPlans as string[]).includes(key) || (diagnosticPlans as string[]).includes(key))) return false;
+  if ([...requestPlanSet].some((key) => !isPlainObject(config.requestPlans?.[key]))) return false;
+
+  const groups = fundsPolicy.requestPlanGroups;
+  if (!Array.isArray(groups) || !groups.every((group) => isOptionalStringList(group) && group.every((key) => requestPlanSet.has(key)))) return false;
+  const groupedPlans = groups.flatMap((group) => group as string[]);
+  if (new Set(groupedPlans).size !== groupedPlans.length) return false;
+
+  const fields = isPlainObject(mappings.fields) ? mappings.fields : null;
+  const scales = isPlainObject(mappings.fieldScales) ? mappings.fieldScales : null;
+  if (!fields || !scales) return false;
+  for (const [key, rawConfig] of Object.entries(fields)) {
+    if (!FUNDS_CONTRACT_FIELDS.has(key) || !isPlainObject(rawConfig)) return false;
+    if (!isOptionalStringList(rawConfig.paths) || !isOptionalStringList(rawConfig.aliases)) return false;
+    if (!(rawConfig.paths.length || rawConfig.aliases.length)) return false;
+    if (rawConfig.moneyText !== undefined && typeof rawConfig.moneyText !== "boolean") return false;
+    if (rawConfig.scale !== undefined && !(Number.isFinite(Number(rawConfig.scale)) && Number(rawConfig.scale) > 0)) return false;
+  }
+  if (Object.entries(scales).some(([key, value]) => !FUNDS_CONTRACT_FIELDS.has(key) || !Number.isFinite(Number(value)) || Number(value) <= 0)) return false;
+
+  const derivedFields = fundsPolicy.derivedFields;
+  if (!Array.isArray(derivedFields)) return false;
+  const derivedKeys = new Set<string>();
+  for (const value of derivedFields) {
+    if (!isPlainObject(value) || !isString(value.key) || !FUNDS_CONTRACT_FIELDS.has(value.key) || derivedKeys.has(value.key)) return false;
+    if (!isOptionalStringList(value.sources) || !value.sources.length || value.sources.some((source) => !FUNDS_CONTRACT_FIELDS.has(source))) return false;
+    if (!isString(value.formula) || !["sum", "subtract", "countPositive"].includes(value.formula)) return false;
+    derivedKeys.add(value.key);
+  }
+
+  const schema = isPlainObject(fundsPolicy.fieldSchema) ? fundsPolicy.fieldSchema : null;
+  const columns = schema && Array.isArray(schema.columns) ? schema.columns : [];
+  const summaries = schema && Array.isArray(schema.summaryMetrics) ? schema.summaryMetrics : [];
+  if (!schema || !isString(schema.version) || !columns.length || !summaries.length) return false;
+  const columnKeys: string[] = [];
+  for (const value of [...columns, ...summaries]) {
+    if (!isPlainObject(value) || !isString(value.key) || !FUNDS_CONTRACT_FIELDS.has(value.key)) return false;
+    if (!isPlainObject(fields[value.key]) && !derivedKeys.has(value.key)) return false;
+    if (!isString(value.label) || !["money", "number"].includes(String(value.format || ""))) return false;
+    if (columns.includes(value)) columnKeys.push(value.key);
+  }
+  return new Set(columnKeys).size === columnKeys.length;
+}
+
+function isValidViolationsContract(config: DoudianAdapterConfig) {
+  const responseMappings = config.responseMappings as unknown as Record<string, unknown>;
+  const mappings = isPlainObject(responseMappings.violationsData) ? responseMappings.violationsData : null;
+  const policies = config.policies as unknown as Record<string, unknown>;
+  const violationsPolicy = isPlainObject(policies?.violationsData) ? policies.violationsData : null;
+  if (!mappings || !violationsPolicy) return false;
+
+  if (!isStringArray(mappings.listPaths) || !isOptionalStringList(mappings.totalPaths)) return false;
+  const fields = isPlainObject(mappings.fields) ? mappings.fields : null;
+  if (!fields) return false;
+  const requiredFields = ["id", "violationAt", "processStatus", "penaltyStatus", "appealStatus", "rectificationStatus", "dueAt"];
+  if (requiredFields.some((key) => !isPlainObject(fields[key]) || !isStringArray(fields[key].paths))) return false;
+  if (Object.values(fields).some((value) => !isPlainObject(value) || !isStringArray(value.paths))) return false;
+
+  const requestPlans = violationsPolicy.requestPlans;
+  const requiredPlans = violationsPolicy.requiredPlans;
+  const optionalPlans = violationsPolicy.optionalPlans;
+  const criticalPlans = violationsPolicy.criticalPlans;
+  if (![requestPlans, requiredPlans, optionalPlans, criticalPlans].every(isOptionalStringList)) return false;
+  if (!(requestPlans as string[]).length || !(requiredPlans as string[]).length) return false;
+  const planSet = new Set(requestPlans as string[]);
+  if ([...(requiredPlans as string[]), ...(optionalPlans as string[]), ...(criticalPlans as string[])].some((key) => !planSet.has(key))) return false;
+  if ([...planSet].some((key) => !isPlainObject(config.requestPlans?.[key]))) return false;
+
+  if (violationsPolicy.dateField !== "violationAt" || violationsPolicy.filterMode !== "local-after-complete-fetch") return false;
+  for (const key of ["concurrency", "pageConcurrency", "maxPages", "cacheRetentionDays"]) {
+    if (!Number.isFinite(Number(violationsPolicy[key])) || Number(violationsPolicy[key]) <= 0) return false;
+  }
+
+  const schema = isPlainObject(violationsPolicy.fieldSchema) ? violationsPolicy.fieldSchema : null;
+  const columns = schema && Array.isArray(schema.columns) ? schema.columns : [];
+  if (!schema || !isString(schema.version) || !columns.length) return false;
+  const columnKeys: string[] = [];
+  for (const value of columns) {
+    if (!isPlainObject(value) || !isString(value.key) || !VIOLATIONS_CONTRACT_FIELDS.has(value.key) || !isString(value.label)) return false;
+    columnKeys.push(value.key);
+  }
+  if (new Set(columnKeys).size !== columnKeys.length) return false;
+
+  const association = isPlainObject(violationsPolicy.productAssociation) ? violationsPolicy.productAssociation : null;
+  if (!association || typeof association.enabled !== "boolean" || !isOptionalStringList(association.requestPlans)) return false;
+  if (association.enabled && !(association.requestPlans as string[]).length) return false;
+  if ((association.requestPlans as string[]).some((key) => !isPlainObject(config.requestPlans?.[key]))) return false;
+  const actions = isPlainObject(violationsPolicy.violationActions) ? violationsPolicy.violationActions : null;
+  if (!actions || typeof actions.enabled !== "boolean" || !isOptionalStringList(actions.requestPlans) || !isOptionalStringList(actions.allowedActions)) return false;
+  if (actions.enabled && (!(actions.requestPlans as string[]).length || !(actions.allowedActions as string[]).length)) return false;
+  return true;
+}
+
 export function isDoudianAdapterConfig(value: unknown): value is DoudianAdapterConfig {
   const config = value as DoudianAdapterConfig;
   return !!(
@@ -191,7 +325,9 @@ export function isDoudianAdapterConfig(value: unknown): value is DoudianAdapterC
     isStringArray(config.blockedSchemes) &&
     isValidSignConfig(config.sign) &&
     isValidStrategies(config.strategies) &&
-    isValidPolicies(config.policies)
+    isValidPolicies(config.policies) &&
+    isValidFundsContract(config) &&
+    isValidViolationsContract(config)
   );
 }
 

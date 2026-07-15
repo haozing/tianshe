@@ -174,7 +174,9 @@ function normalizeLifecycleStatus(value: unknown) {
   return "unknown";
 }
 
-function liveLookupPlanKey(adapter: DoudianAdapterConfig) {
+function liveLookupPlanKey(adapter: DoudianAdapterConfig, feature: string) {
+  if (feature === "bulk-delete" && adapter.requestPlans?.bulkDeleteProductList) return "bulkDeleteProductList";
+  if (feature === "stale-goods-cleanup" && adapter.requestPlans?.staleGoodsProductList) return "staleGoodsProductList";
   if (adapter.requestPlans?.violationProductLookup) return "violationProductLookup";
   if (adapter.requestPlans?.bulkDeleteProductList) return "bulkDeleteProductList";
   return "";
@@ -200,9 +202,9 @@ function liveLookupContext(productId: string) {
   };
 }
 
-async function liveLookupProduct(payload: DoudianAdapterPayload, store: DoudianStoreSummary, productId: string): Promise<LiveLookupResult> {
+async function liveLookupProduct(payload: DoudianAdapterPayload, store: DoudianStoreSummary, productId: string, feature: string): Promise<LiveLookupResult> {
   const adapter = payload.adapter;
-  const planKey = liveLookupPlanKey(adapter);
+  const planKey = liveLookupPlanKey(adapter, feature);
   if (!planKey) {
     return { ok: false, found: false, planKey, lifecycleStatus: "unknown", message: "live lookup request plan missing" };
   }
@@ -249,6 +251,9 @@ function allowedStatus(action: string, stage: string | undefined, lifecycleStatu
       : { ok: true, allowed: false, reason: "not-recycled", message: `Product is ${lifecycleStatus}, complete delete skipped` };
   }
   if (action === "recycle" || action === "delete" || stage === "recycle") {
+    if (lifecycleStatus === "recycle") {
+      return { ok: true, allowed: false, reason: "already-recycled", message: "Product is already in recycle bin" };
+    }
     return lifecycleStatus === "selling" || lifecycleStatus === "offline"
       ? { ok: true, allowed: true, reason: "", message: "" }
       : { ok: true, allowed: false, reason: "not-recyclable", message: `Product is ${lifecycleStatus}, recycle skipped` };
@@ -298,6 +303,11 @@ export async function prepareMutationSafety<T extends MutationCandidateInput>(ar
   stage?: string;
   planKey?: string;
   dryRun?: boolean;
+  protectMode?: "includeSelling" | "skipSelling";
+  lookupConcurrency?: number;
+  confirmAttempts?: number;
+  confirmDelayMs?: number;
+  shouldCancel?: () => boolean;
   extraKey?: (item: T) => string;
 }) {
   const productIds = Array.from(new Set(args.candidates.map((item) => text(item.productId)).filter(Boolean)));
@@ -336,12 +346,36 @@ export async function prepareMutationSafety<T extends MutationCandidateInput>(ar
   const mutations: CatalogMutationRecordInput[] = [];
   const requestHash = mutationRequestHash({ action: args.action, stage: args.stage, planKey: args.planKey, productIds });
 
-  for (const item of args.candidates) {
+  const lookupResults = new Array<LiveLookupResult>(args.candidates.length);
+  const concurrency = Math.max(1, Math.min(args.candidates.length || 1, Math.floor(Number(args.lookupConcurrency || 4))));
+  const confirmAttempts = args.stage === "delete" ? Math.max(1, Math.min(10, Math.floor(Number(args.confirmAttempts || 1)))) : 1;
+  const confirmDelayMs = Math.max(0, Math.min(10000, Math.floor(Number(args.confirmDelayMs || 0))));
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= args.candidates.length) return;
+      if (args.shouldCancel?.()) throw new Error("bulk delete operation cancelled");
+      const productId = text(args.candidates[index].productId);
+      let live = await liveLookupProduct(args.payload, args.store, productId, args.feature);
+      for (let attempt = 1; attempt < confirmAttempts && live.ok && live.lifecycleStatus !== "recycle"; attempt += 1) {
+        if (args.shouldCancel?.()) throw new Error("bulk delete operation cancelled");
+        if (confirmDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, confirmDelayMs));
+        live = await liveLookupProduct(args.payload, args.store, productId, args.feature);
+      }
+      lookupResults[index] = live;
+    }
+  }));
+
+  for (const [index, item] of args.candidates.entries()) {
     const productId = text(item.productId);
     const mutationKey = mutationKeyFor({ ...args, shopId: args.store.shopId, productId, extraKey: args.extraKey?.(item) });
-    const live = await liveLookupProduct(args.payload, args.store, productId);
+    const live = lookupResults[index];
     const latestRow = latest.get(productId);
-    const statusCheck = live.ok && live.found
+    const statusCheck = args.protectMode === "skipSelling" && live.ok && live.lifecycleStatus === "selling" && (args.action === "recycle" || args.stage === "recycle")
+      ? { ok: true, allowed: false, reason: "selling-protected", message: "Selling product is protected by the source scan policy" }
+      : live.ok && live.found
       ? allowedStatus(args.action, args.stage, live.lifecycleStatus)
       : live.ok
         ? { ok: true, allowed: false, reason: "live-not-found", message: live.message }

@@ -7,10 +7,11 @@ import type {
 } from "../../types";
 import { requireChihuNative } from "../../native/client";
 import { listStoreLedger, upsertStoreLedgers } from "./storeGroups";
-import { firstPathValue, getPathValue, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
+import { firstPathValue, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { dispatchDoudianProgress } from "./progress";
 import { loadDoudianAdapterPayload } from "../../bridge/doudianAdapter";
 import { runRefreshDoudianStoreStatusTask } from "./storeStatus";
+import { currentShopFromResponse, currentShopState, normalizeShopItem, objectRecord, policyNumber, text } from "./storeResponse";
 
 interface FetchStoresPayload {
   operationId: string;
@@ -54,10 +55,6 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function text(value: unknown) {
-  return String(value || "").trim();
-}
-
 function partitionToken(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
@@ -79,6 +76,23 @@ function sourcePartition(adapter: DoudianAdapterPayload, operationId: string) {
 function shopPartition(adapter: DoudianAdapterPayload, shop: Partial<DoudianStoreSummary>, index = 0) {
   const id = text(shop.shopId || shop.shopName || `shop_${index}`);
   return `${adapter.adapter.shopPartitionPrefix || "persist:chihu_doudian_shop_"}${partitionToken(id)}_${Date.now()}`;
+}
+
+function shopPartitionPrefix(adapter: DoudianAdapterPayload) {
+  return adapter.adapter.shopPartitionPrefix || "persist:chihu_doudian_shop_";
+}
+
+async function cleanDoudianPartitions(
+  native: ReturnType<typeof requireChihuNative>,
+  adapter: DoudianAdapterPayload,
+  stores?: DoudianStoreSummary[]
+) {
+  const keepStores = stores || (await listStoreLedger()).stores || [];
+  const currentPartitions = keepStores.map((store) => text(store.partition)).filter(Boolean);
+  await native.partitions.cleanInvalid({
+    currentPartitions,
+    prefixes: [shopPartitionPrefix(adapter)]
+  }).catch(() => null);
 }
 
 function normalizeStore(input: Partial<DoudianStoreSummary>, adapter: DoudianAdapterPayload, partition: string, index = 0): DoudianStoreSummary | null {
@@ -110,27 +124,13 @@ function normalizeStore(input: Partial<DoudianStoreSummary>, adapter: DoudianAda
   };
 }
 
-function normalizeShopItem(item: unknown): Partial<DoudianStoreSummary> | null {
-  if (!item || typeof item !== "object") return null;
-  const row = item as Record<string, unknown>;
-  const shopId = text(row.shopId || row.shop_id || row.mallId || row.mall_id || row.id);
-  const shopName = text(row.shopName || row.shop_name || row.mallName || row.mall_name || row.name || row.label || row.title);
-  if (!shopId && !shopName) return null;
-  return {
-    shopId,
-    shopName,
-    operateStatus: text(row.operateStatus || row.operate_status || row.operateStatusStr || row.operate_status_str),
-    shopInfoSummary: row as DoudianStoreSummary["shopInfoSummary"]
-  };
-}
-
 function storesFromResponses(shopListData: unknown, currentData: unknown, adapter: DoudianAdapterPayload) {
   const mappings = adapter.adapter.responseMappings;
   const listValue = firstPathValue(shopListData, mappings?.shopListPaths || []);
   const list = Array.isArray(listValue) ? listValue : Array.isArray(shopListData) ? shopListData : [];
-  const stores = list.map(normalizeShopItem).filter((item): item is Partial<DoudianStoreSummary> => !!item);
+  const stores = list.map((item) => normalizeShopItem(item, adapter.adapter)).filter((item): item is Partial<DoudianStoreSummary> => !!item);
   const currentObject = firstPathValue(currentData, mappings?.currentShopObjectPaths || []);
-  const current = normalizeShopItem(currentObject);
+  const current = normalizeShopItem(currentObject, adapter.adapter);
   if (current && !stores.some((store) => store.shopId && store.shopId === current.shopId)) stores.unshift(current);
   return stores;
 }
@@ -202,28 +202,6 @@ function failureDetail(store: DoudianStoreSummary, message: string, diagnostic: 
   };
 }
 
-function objectRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function policy(adapter: DoudianAdapterConfig, path: string, fallback: unknown = undefined): unknown {
-  const value = getPathValue(adapter.policies || {}, path);
-  return value === undefined ? fallback : value;
-}
-
-function policyNumber(adapter: DoudianAdapterConfig, path: string, fallback: number) {
-  const value = Number(policy(adapter, path, fallback));
-  return Number.isFinite(value) ? value : fallback;
-}
-
-function policyBool(adapter: DoudianAdapterConfig, path: string, fallback: boolean) {
-  const value = policy(adapter, path);
-  if (value === undefined) return fallback;
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") return !["false", "0", "no"].includes(value.toLowerCase());
-  return Boolean(value);
-}
-
 function adapterTimeout(adapter: DoudianAdapterConfig, key: string, fallback: number) {
   const value = Number(adapter.timeouts?.[key]);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -245,36 +223,6 @@ async function readCurrentShop(adapter: DoudianAdapterPayload, store: DoudianSto
     error: error instanceof Error ? error.message : String(error),
     source: "currentShop"
   }) as RequestPlanResult);
-}
-
-function currentShopFromResponse(response: RequestPlanResult, adapter: DoudianAdapterConfig): Partial<DoudianStoreSummary> | null {
-  const currentObject = firstPathValue(response.data, adapter.responseMappings?.currentShopObjectPaths || []);
-  const current = normalizeShopItem(currentObject);
-  if (current) return current;
-  const shopId = text(firstPathValue(response.data, adapter.responseMappings?.currentShopIdPaths || []));
-  if (!shopId) return null;
-  return {
-    shopId,
-    shopInfoSummary: { id: shopId }
-  };
-}
-
-function currentShopState(response: RequestPlanResult, adapter: DoudianAdapterConfig, target: DoudianStoreSummary) {
-  const confirmedStore = currentShopFromResponse(response, adapter);
-  const currentShopId = text(confirmedStore?.shopId || confirmedStore?.shopInfoSummary?.id || firstPathValue(response.data, adapter.responseMappings?.currentShopIdPaths || []));
-  const currentShopName = text(confirmedStore?.shopName || confirmedStore?.shopInfoSummary?.shop_name);
-  const targetShopId = text(target.shopId);
-  const targetShopName = text(target.shopName);
-  const idMatched = policyBool(adapter, "activateStore.matchById", true) && targetShopId && currentShopId === targetShopId;
-  const nameMatched = policyBool(adapter, "activateStore.matchByName", true) && targetShopName && (
-    currentShopName === targetShopName
-  );
-  return {
-    ok: Boolean(idMatched || nameMatched),
-    currentShopId,
-    currentShopName,
-    confirmedStore: confirmedStore || undefined
-  };
 }
 
 function withActivationIdFallback(state: ReturnType<typeof currentShopState>, target: DoudianStoreSummary, switchResult: unknown) {
@@ -602,6 +550,7 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
     const records: DoudianStoreSummary[] = [];
     const failed: DoudianRunDetail[] = [];
     for (const [index, shop] of sourceStores.entries()) {
+      if (args.isCancelled?.()) throw new Error("cancelled");
       const targetPartition = shopPartition(adapter, shop, index);
       await native.cookies.copy({
         fromPartition: partition,
@@ -650,6 +599,8 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
     };
   } finally {
     if (loginWinId) await native.windows.destroy({ winId: loginWinId }).catch(() => null);
+    await native.cookies.clear({ partition }).catch(() => null);
+    await cleanDoudianPartitions(native, adapter).catch(() => null);
   }
 }
 

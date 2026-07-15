@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.04.client-shell",
+  "version": "2026.07.15.violations-v2",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -11,10 +11,18 @@
     "shellVersion": "client-shell"
   },
   "features": {
-    "diagnostics": { "enabled": true },
-    "bridgeSelfCheck": { "enabled": true },
-    "storageHealth": { "enabled": true },
-    "businessSlot": { "enabled": true }
+    "diagnostics": {
+      "enabled": true
+    },
+    "bridgeSelfCheck": {
+      "enabled": true
+    },
+    "storageHealth": {
+      "enabled": true
+    },
+    "businessSlot": {
+      "enabled": true
+    }
   },
   "assets": {
     "shellEntry": "./app.js",
@@ -26,7 +34,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "local-client-shell",
-    "buildTime": "2026-07-04T00:00:00+08:00"
+    "gitCommit": "7ff27e4-dirty",
+    "buildTime": "2026-07-15T10:11:40.785Z"
   }
 }

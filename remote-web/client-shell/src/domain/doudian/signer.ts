@@ -1,6 +1,7 @@
 import type { DoudianAdapterPayload } from "../../types";
 import { requireChihuNative } from "../../native/client";
 import { signWithXzbMstoken } from "./xzbSigner";
+import { reportDoudianDiagnostic } from "./diagnosticLog";
 
 export interface SignRequest {
   targetUrl: string;
@@ -8,6 +9,7 @@ export interface SignRequest {
   planKey?: string;
   plan?: Record<string, unknown>;
   context?: Record<string, unknown>;
+  trackWindow?: (winId: number) => void;
 }
 
 interface SignResult {
@@ -47,7 +49,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
   if (plan.signStrategy === "mstoken-myargs" || plan.localSigner === true) {
     const localResult = await signWithXzbMstoken(payload, request);
     if (localResult.ok) {
-      await requireChihuNative().logs.report({
+      await reportDoudianDiagnostic({
         category: "doudian-request-plan",
         event: "signed",
         planKey: request.planKey,
@@ -61,11 +63,11 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
         hasMsToken: !!localResult.detail?.hasMsToken,
         queryLength: localResult.detail?.queryLength,
         bodyLength: localResult.detail?.bodyLength
-      }).catch(() => undefined);
+      });
       return localResult;
     }
 
-    await requireChihuNative().logs.report({
+    await reportDoudianDiagnostic({
       category: "doudian-request-plan",
       event: "sign-failed",
       planKey: request.planKey,
@@ -79,7 +81,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
       queryLength: localResult.detail?.queryLength,
       bodyLength: localResult.detail?.bodyLength,
       message: localResult.error
-    }).catch(() => undefined);
+    }, true);
     if (plan.localSigner === true || plan.localSignerOnly === true) return localResult;
   }
 
@@ -107,6 +109,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
       nodeIntegration: false,
       contextIsolation: true
     });
+    request.trackWindow?.(winId);
     if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
 
     const payloadForPage = {
@@ -128,7 +131,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
     const query = text(result?.query || result?.myargs);
     const signature = text(result?.signature);
     if (result?.ok === true && (query || signature)) {
-      await native.logs.report({
+      await reportDoudianDiagnostic({
         category: "doudian-request-plan",
         event: "signed",
         planKey: request.planKey,
@@ -139,7 +142,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
         mode: text(result.mode),
         hasQuery: !!query,
         hasSignature: !!signature
-      }).catch(() => undefined);
+      });
       return {
         ok: true,
         targetUrl: request.targetUrl,
@@ -149,7 +152,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
         mode: text(result.mode)
       };
     }
-    await native.logs.report({
+    await reportDoudianDiagnostic({
       category: "doudian-request-plan",
       event: "sign-failed",
       planKey: request.planKey,
@@ -159,7 +162,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
       reason: text(result?.reason || "empty-signature"),
       source: text(result?.source),
       mode: text(result?.mode)
-    }).catch(() => undefined);
+    }, true);
     return {
       ok: false,
       reason: text(result?.reason || "empty-signature"),
@@ -169,7 +172,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await native.logs.report({
+    await reportDoudianDiagnostic({
       category: "doudian-request-plan",
       event: "sign-failed",
       planKey: request.planKey,
@@ -178,7 +181,7 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
       targetUrl: request.targetUrl,
       reason: "signer-window-error",
       message
-    }).catch(() => undefined);
+    }, true);
     return {
       ok: false,
       reason: "signer-window-error",

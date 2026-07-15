@@ -9,6 +9,9 @@ import { runFetchDoudianStoresTask } from "./storeImport";
 import { runProductCatalogSyncTask } from "./productCatalog";
 import { runRefreshDoudianStoreStatusTask } from "./storeStatus";
 import { cancelOpportunityPipelineSubmitTask, runOpportunityPipelineSubmitTask } from "./opportunityReport";
+import { fetchBusinessData } from "./businessData";
+import { fetchFundsData } from "./fundsData";
+import { fetchViolationsData } from "./violationsData";
 
 interface RunningTask {
   cancelled: boolean;
@@ -22,6 +25,13 @@ const runningTasks = new Map<string, RunningTask>();
 
 function post(channel: BroadcastChannel, message: DoudianTaskMessage) {
   channel.postMessage(message);
+}
+
+function channelResult(task: DoudianTaskRequest, result: unknown) {
+  if (task.taskType !== "violationsData" || !result || typeof result !== "object") return result;
+  const record = result as Record<string, unknown>;
+  const records = Array.isArray(record.records) ? record.records : [];
+  return records.length ? { ...record, records: [], recordsDeferred: true } : result;
 }
 
 function installProgressForwarder(channel: BroadcastChannel) {
@@ -134,6 +144,21 @@ async function runDomainTask(channel: BroadcastChannel, operationId: string, tas
         operationId,
         ...payload
       } as unknown as Parameters<typeof runProductCatalogSyncTask>[0]);
+    } else if (task.taskType === "businessData") {
+      result = await fetchBusinessData({
+        operationId,
+        ...payload
+      } as unknown as Parameters<typeof fetchBusinessData>[0]);
+    } else if (task.taskType === "fundsData") {
+      result = await fetchFundsData({
+        operationId,
+        ...payload
+      } as unknown as Parameters<typeof fetchFundsData>[0]);
+    } else if (task.taskType === "violationsData") {
+      result = await fetchViolationsData({
+        operationId,
+        ...payload
+      } as unknown as Parameters<typeof fetchViolationsData>[0]);
     } else if (task.taskType === "opportunityPipelineSubmit") {
       state.cancelCleanup = async () => {
         await cancelOpportunityPipelineSubmitTask({
@@ -151,7 +176,7 @@ async function runDomainTask(channel: BroadcastChannel, operationId: string, tas
     if (state.cancelled) {
       post(channel, { type: "task:result", operationId, resultSummary: "cancelled", result: { ok: false, status: "cancelled", message: "已取消任务" } });
     } else {
-      post(channel, { type: "task:result", operationId, resultSummary: "completed", result });
+      post(channel, { type: "task:result", operationId, resultSummary: "completed", result: channelResult(task, result) });
     }
   } catch (error) {
     post(channel, { type: "task:error", operationId, error: error instanceof Error ? error.message : String(error) });

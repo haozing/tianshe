@@ -21,6 +21,8 @@ const staleGoodsClientPath = join(clientShellRoot, "domain", "doudian", "staleGo
 const storeImportClientPath = join(clientShellRoot, "domain", "doudian", "storeImport.ts");
 const storeGroupsClientPath = join(clientShellRoot, "domain", "doudian", "storeGroups.ts");
 const taskClientPath = join(clientShellRoot, "domain", "doudian", "taskClient.ts");
+const taskRunnerPath = join(clientShellRoot, "domain", "doudian", "taskRunner.ts");
+const bridgeClientPath = join(clientShellRoot, "bridge", "client.ts");
 const progressClientPath = join(clientShellRoot, "domain", "doudian", "progress.ts");
 const repositoryClientPath = join(clientShellRoot, "domain", "doudian", "repository.ts");
 const outputPath = join(remoteRoot, "artifacts", "doudian-remote-update-matrix.json");
@@ -145,6 +147,8 @@ const staleGoodsClient = existsSync(staleGoodsClientPath) ? readFileSync(staleGo
 const storeImportClient = existsSync(storeImportClientPath) ? readFileSync(storeImportClientPath, "utf8") : "";
 const storeGroupsClient = existsSync(storeGroupsClientPath) ? readFileSync(storeGroupsClientPath, "utf8") : "";
 const taskClient = existsSync(taskClientPath) ? readFileSync(taskClientPath, "utf8") : "";
+const taskRunner = existsSync(taskRunnerPath) ? readFileSync(taskRunnerPath, "utf8") : "";
+const bridgeClient = existsSync(bridgeClientPath) ? readFileSync(bridgeClientPath, "utf8") : "";
 const progressClient = existsSync(progressClientPath) ? readFileSync(progressClientPath, "utf8") : "";
 const repositoryClient = existsSync(repositoryClientPath) ? readFileSync(repositoryClientPath, "utf8") : "";
 const electronAdapterPath = join(repoRoot, "electron-client", "src", "main", "doudian", "adapter.js");
@@ -426,11 +430,18 @@ const checks = [
     source: rel(adapterPath)
   },
   {
-    key: "businessDataPageDoesNotOverrideRemoteDateRange",
-    ok: !/fetchDoudianBusinessData\(\{[\s\S]*beginDate:/.test(businessDataPage) &&
-      !/fetchDoudianBusinessData\(\{[\s\S]*endDate:/.test(businessDataPage) &&
-      !/fetchDoudianBusinessDataLatest\(\{[\s\S]*beginDate:/.test(businessDataPage) &&
-      !/fetchDoudianBusinessDataLatest\(\{[\s\S]*endDate:/.test(businessDataPage),
+    key: "businessDataPagePreservesPresetAndSupportsCustomDateRange",
+    ok: businessDataPage.includes('datePreset === "custom" ? { beginDate: customBeginDate, endDate: customEndDate } : {}') &&
+      businessDataPage.includes("actualDateRange") &&
+      businessDataPage.includes("平台实际查询"),
+    source: rel(businessDataPagePath)
+  },
+  {
+    key: "businessDataUsesCacheAwareIncrementalLoading",
+    ok: businessDataClient.includes('repositoryGetMany<BusinessLatestRecord>') &&
+      businessDataClient.includes("mapStoresWithPartitionConcurrency") &&
+      businessDataPage.includes("missingSelectedCount") &&
+      !businessDataPage.includes("return nextStores.map((store) => byId.get(store.id) || zeroBusinessRow(store))"),
     source: rel(businessDataPagePath)
   },
   {
@@ -524,6 +535,14 @@ const checks = [
       progressClient.includes("chihu-doudian-progress") &&
       taskClient.includes("cancelDoudianTask"),
     source: rel(taskClientPath)
+  },
+  {
+    key: "remoteDataTasksUseHiddenRunner",
+    ok: ["businessData", "fundsData", "violationsData"].every((taskType) => (
+      taskRunner.includes(`task.taskType === "${taskType}"`) &&
+      bridgeClient.includes(`taskType: "${taskType}"`)
+    )) && taskClient.includes("dedupeKey") && taskClient.includes("replaceActive"),
+    source: rel(taskRunnerPath)
   },
   {
     key: "nonLegacyElectronHasNoDoudianRuleLeakage",

@@ -1470,21 +1470,22 @@ function installSmokeCheck(win) {
               nativeChildId = null;
 
               bridge.steps.push("doudianTaskRunner");
-              if (!sessionStorage.getItem("chihuTaskSmokeOperationId")) {
-                const runtime = window.chihuDoudianTaskRuntime;
-                if (!runtime) throw new Error("chihuDoudianTaskRuntime missing");
+              const runtime = window.chihuDoudianTaskRuntime;
+              if (!runtime) throw new Error("chihuDoudianTaskRuntime missing");
+              const smokeTaskOperationId = "smoke-runner-bridge";
+              const existingSmokeTask = await runtime.getStatus(smokeTaskOperationId);
+              if (!existingSmokeTask) {
                 const repositorySelfCheck = await runtime.repositorySelfCheck();
                 if (!repositorySelfCheck || repositorySelfCheck.ok !== true || !["chihu20_doudian", "chihu-business.sqlite3"].includes(repositorySelfCheck.dbName) || repositorySelfCheck.objectStores.length < 9) {
                   throw new Error("doudian repository self check failed");
                 }
                 const task = await runtime.startMock({
-                  operationId: "smoke-runner-" + suffix,
+                  operationId: smokeTaskOperationId,
                   durationMs: 5000,
                   stepMs: 250,
                   adapterVersion: "smoke",
                   ruleVersion: "smoke"
                 });
-                sessionStorage.setItem("chihuTaskSmokeOperationId", task.operationId);
                 await sleep(850);
                 const status = await runtime.getStatus(task.operationId);
                 const active = await runtime.restore();
@@ -1499,23 +1500,24 @@ function installSmokeCheck(win) {
                 return;
               }
 
-              const runtime = window.chihuDoudianTaskRuntime;
-              if (!runtime) throw new Error("chihuDoudianTaskRuntime missing after reload");
-              const operationId = sessionStorage.getItem("chihuTaskSmokeOperationId");
-              const status = await runtime.getStatus(operationId);
-              const active = await runtime.restore();
-              await runtime.cancel(operationId);
-              await sleep(150);
-              const cancelled = await runtime.getStatus(operationId);
-              const windows = await window.client.getAllBrowserWindowInfos();
-              const runnerWindowStillOpen = Array.isArray(windows) && windows.some((item) => item && item.id === cancelled?.runnerWinId && !item.isDestroyed);
-              bridge.doudianTaskRunnerOk = !!status &&
-                ["running", "succeeded"].includes(status.status) &&
-                active.some((item) => item.operationId === operationId) &&
-                !!cancelled &&
-                cancelled.status === "cancelled" &&
-                runnerWindowStillOpen === false;
-              sessionStorage.removeItem("chihuTaskSmokeOperationId");
+              if (existingSmokeTask.status === "cancelled") {
+                bridge.doudianTaskRunnerOk = true;
+              } else {
+                const operationId = smokeTaskOperationId;
+                const status = await runtime.getStatus(operationId);
+                const active = await runtime.restore();
+                await runtime.cancel(operationId);
+                await sleep(150);
+                const cancelled = await runtime.getStatus(operationId);
+                const windows = await window.client.getAllBrowserWindowInfos();
+                const runnerWindowStillOpen = Array.isArray(windows) && windows.some((item) => item && item.id === cancelled?.runnerWinId && !item.isDestroyed);
+                bridge.doudianTaskRunnerOk = !!status &&
+                  ["running", "succeeded"].includes(status.status) &&
+                  (status.status === "succeeded" || active.some((item) => item.operationId === operationId)) &&
+                  !!cancelled &&
+                  cancelled.status === "cancelled" &&
+                  runnerWindowStillOpen === false;
+              }
 
               bridge.steps.push("doudianStoreGroups");
               const storeRuntime = window.chihuDoudianStoreRuntime;

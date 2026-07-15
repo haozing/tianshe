@@ -44,7 +44,8 @@ type OperationKey = "fetchStores" | "refreshStatus" | "deleteStores" | "updateGr
 type NoticeTone = "success" | "warning" | "info" | "error";
 type StoreListState = "loading" | "ready" | "error";
 const STORE_PAGE_SIZE = 80;
-const AUTO_LOGIN_REFRESH_TTL_MS = 60 * 1000;
+const AUTO_LOGIN_REFRESH_TTL_MS = 10 * 60 * 1000;
+const AUTO_LOGIN_REFRESH_MAX_ROWS = 30;
 
 interface StoreRow {
   id: string;
@@ -83,6 +84,15 @@ interface RunDetail {
   reason?: string;
   category?: string;
   diagnostic?: unknown;
+}
+
+interface OperationRunSummary {
+  title: string;
+  tone: NoticeTone;
+  summary: string;
+  details: RunDetail[];
+  result?: DoudianStoreResult;
+  at: string;
 }
 
 interface MetricCard {
@@ -298,6 +308,28 @@ function summarizeDetails(result: DoudianStoreResult): RunDetail[] {
   return [...imported, ...failed];
 }
 
+function detailFailed(detail: RunDetail) {
+  return detail.ok === false || detail.status === "offline" || detail.status === "check_failed" || !!detail.reason;
+}
+
+function runFailedShopIds(run: OperationRunSummary) {
+  return Array.from(new Set(run.details.filter(detailFailed).map((detail) => detail.shopId || "").filter(Boolean)));
+}
+
+function diagnosticSummary(diagnostic: unknown) {
+  if (!diagnostic || typeof diagnostic !== "object" || Array.isArray(diagnostic)) return diagnostic ? String(diagnostic) : "";
+  const record = diagnostic as Record<string, unknown>;
+  const current = [record.currentShopName, record.currentShopId].map((item) => String(item || "").trim()).filter(Boolean).join(" / ");
+  const target = [record.targetShopName, record.targetShopId].map((item) => String(item || "").trim()).filter(Boolean).join(" / ");
+  const parts = [
+    current ? `当前：${current}` : "",
+    target ? `目标：${target}` : "",
+    record.error ? `错误：${String(record.error)}` : "",
+    record.signFailureReason ? `签名：${String(record.signFailureReason)}` : ""
+  ].filter(Boolean);
+  return parts.join("；");
+}
+
 function timestamp(value: string) {
   if (!value) return 0;
   const time = new Date(value).getTime();
@@ -403,6 +435,72 @@ function OperationNotice({ tone, message, onClose }: { tone: NoticeTone; message
       <button className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-white/60" type="button" aria-label="关闭提示" onClick={onClose}>
         <X className="size-[14px]" strokeWidth={2} />
       </button>
+    </div>
+  );
+}
+
+function RunDetailsSummary({
+  run,
+  busy,
+  onClose,
+  onRetryFailed
+}: {
+  run: OperationRunSummary | null;
+  busy: boolean;
+  onClose: () => void;
+  onRetryFailed: (ids: string[]) => void;
+}) {
+  if (!run) return null;
+  const failed = run.details.filter(detailFailed);
+  const successCount = run.details.filter((detail) => detail.ok !== false).length;
+  const failedIds = runFailedShopIds(run);
+  const visibleDetails = (failed.length ? failed : run.details).slice(0, 5);
+  const Icon = failed.length ? AlertTriangle : CheckCircle2;
+  const style = failed.length
+    ? "border-[#ffdca8] bg-[#fffaf0] text-[#92400e]"
+    : "border-[#cdebd7] bg-[#f3fff7] text-[#087443]";
+
+  return (
+    <div className={cn("border-b px-4 py-3", style)}>
+      <div className="flex flex-wrap items-center gap-3">
+        <Icon className="size-[17px] shrink-0" strokeWidth={2.2} />
+        <div className="min-w-[220px] flex-1">
+          <div className="truncate text-[13px] font-semibold text-[#101828]">{run.title}</div>
+          <div className="mt-0.5 text-[12px] text-[#475467]">
+            {run.summary}
+            {run.details.length ? ` · 成功 ${successCount} 项，失败 ${failed.length} 项` : ""}
+            {run.result?.status ? ` · 状态 ${run.result.status}` : ""}
+          </div>
+        </div>
+        {failedIds.length ? (
+          <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#ffdca8] bg-white px-3 text-[12px] font-semibold text-[#b54708] disabled:opacity-50" type="button" disabled={busy} onClick={() => onRetryFailed(failedIds)}>
+            <KeyRound className="size-[13px]" strokeWidth={2} />
+            重试失败
+          </button>
+        ) : null}
+        <button className="grid size-8 place-items-center rounded-md border border-white/70 bg-white/70 text-[#667085]" type="button" aria-label="关闭任务详情" onClick={onClose}>
+          <X className="size-[14px]" strokeWidth={2} />
+        </button>
+      </div>
+      {visibleDetails.length ? (
+        <div className="mt-2 grid gap-1.5">
+          {visibleDetails.map((detail, index) => {
+            const diagnostic = diagnosticSummary(detail.diagnostic);
+            return (
+              <div className="grid gap-0.5 rounded-md bg-white/70 px-3 py-2 text-[12px] text-[#344054]" key={`${detail.shopId || detail.shopName || index}-${index}`}>
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span className="font-semibold text-[#101828]">{detail.shopName || detail.shopId || "未知店铺"}</span>
+                  {detail.reason ? <span className="rounded bg-[#fff1e6] px-1.5 py-0.5 text-[#b54708]">{detail.reason}</span> : null}
+                  <span className={cn("rounded px-1.5 py-0.5", detailFailed(detail) ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eafaf0] text-[#087443]")}>
+                    {detailFailed(detail) ? "失败" : "成功"}
+                  </span>
+                </div>
+                <div className="truncate text-[#475467]" title={[detail.message, diagnostic].filter(Boolean).join("；")}>{[detail.message, diagnostic].filter(Boolean).join("；")}</div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -600,6 +698,7 @@ export function StoreManagementPage() {
   const [storeListMessage, setStoreListMessage] = useState("");
   const [page, setPage] = useState(1);
   const [notice, setNotice] = useState<{ tone: NoticeTone; message: string } | null>(null);
+  const [lastRun, setLastRun] = useState<OperationRunSummary | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -804,18 +903,23 @@ export function StoreManagementPage() {
 
   function rememberRun(title: string, tone: NoticeTone, summary: string, details: RunDetail[], result?: DoudianStoreResult) {
     setNotice({ tone, message: summary });
+    setLastRun({ title, tone, summary, details, result, at: new Date().toISOString() });
   }
 
   async function runAutoLoginRefresh(nextRows: StoreRow[]) {
     if (!nativeBridge || autoLoginRefreshStartedRef.current || !nextRows.length) return;
-    const staleRows = nextRows.filter((row) => rowNeedsAutoLoginRefresh(row));
+    const allStaleRows = nextRows.filter((row) => rowNeedsAutoLoginRefresh(row));
+    const staleRows = allStaleRows.slice(0, AUTO_LOGIN_REFRESH_MAX_ROWS);
     if (!staleRows.length) return;
     autoLoginRefreshStartedRef.current = true;
     const operationId = createStoreOperationId();
     const ids = staleRows.map((row) => row.id);
     setActiveOperationId(operationId);
     setOperationBusy(true);
-    setNotice({ tone: "info", message: `正在自动校验 ${ids.length} 家店铺登录态，1 分钟内已校验的店铺会跳过。` });
+    setNotice({
+      tone: "info",
+      message: `正在自动校验 ${ids.length} 家店铺登录态，10 分钟内已校验的店铺会跳过${allStaleRows.length > ids.length ? "，其余店铺可手动刷新" : ""}。`
+    });
     try {
       const result = await refreshDoudianStoreStatus(ids, operationId);
       applyStores(result);
@@ -1116,7 +1220,15 @@ export function StoreManagementPage() {
 
       <div className="grid min-h-0 grid-cols-1 gap-3 overflow-hidden">
         <div className="min-h-0 min-w-0 overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-          <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_44px]">
+          <div className={cn("grid h-full min-h-0", lastRun ? "grid-rows-[auto_minmax(0,1fr)_44px]" : "grid-rows-[minmax(0,1fr)_44px]")}>
+          {lastRun ? (
+            <RunDetailsSummary
+              run={lastRun}
+              busy={operationBusy}
+              onClose={() => setLastRun(null)}
+              onRetryFailed={(ids) => void runRepairStores(ids)}
+            />
+          ) : null}
           <div className="min-h-0 overflow-auto">
             <table className="w-full min-w-[1320px] border-collapse text-left text-[13px]">
               <thead className="bg-[#fbfcff] text-[#344054]">
@@ -1150,11 +1262,11 @@ export function StoreManagementPage() {
                     <td className="whitespace-nowrap px-3 text-[#667085]">{toDateTime(row.lastLoginCheckAt)}</td>
                     <td className="px-3">
                       <div className="flex items-center gap-2">
-                        <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#1d2939] disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={activeRowId === row.id} onClick={() => handleOpenStore(row)}>
+                        <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#1d2939] disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={operationBusy || activeRowId === row.id} onClick={() => handleOpenStore(row)}>
                           {activeRowId === row.id ? <Loader2 className="size-[13px] animate-spin" strokeWidth={2.2} /> : <ExternalLink className="size-[13px]" strokeWidth={2.1} />}
                           打开
                         </button>
-                        <button className="grid size-8 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054] disabled:cursor-not-allowed disabled:opacity-50" type="button" aria-label={`刷新 ${row.name}`} disabled={activeRowId === row.id} onClick={() => handleRefreshOne(row)}>
+                        <button className="grid size-8 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054] disabled:cursor-not-allowed disabled:opacity-50" type="button" aria-label={`刷新 ${row.name}`} disabled={operationBusy || activeRowId === row.id} onClick={() => handleRefreshOne(row)}>
                           <RefreshCw className={cn("size-[14px]", activeRowId === row.id ? "animate-spin" : "")} strokeWidth={2} />
                         </button>
                         <button className={cn("grid size-8 place-items-center rounded-md border bg-white disabled:cursor-not-allowed disabled:opacity-50", rowNeedsAttention(row) ? "border-[#ffdca8] text-[#b54708]" : "border-[#dbe5f2] text-[#344054]")} type="button" aria-label={`重新登录 ${row.name}`} title="重新登录/重建登录态" disabled={operationBusy || activeRowId === row.id} onClick={() => void runRepairStores([row.id])}>

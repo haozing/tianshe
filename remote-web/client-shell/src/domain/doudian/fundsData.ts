@@ -6,9 +6,19 @@ import type {
   DoudianRunDetail,
   DoudianStoreSummary
 } from "../../types";
-import { repositoryDelete, repositoryGetAll, repositoryPut } from "./repository";
+import {
+  repositoryDelete,
+  repositoryDeleteMany,
+  repositoryGet,
+  repositoryGetAll,
+  repositoryGetMany,
+  repositoryPut,
+  repositoryPutMany
+} from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
+import { dispatchDoudianProgress } from "./progress";
+import fundsResponseFixture from "./fixtures/fundsDataResponse.json";
 
 const FUNDS_DATA_FIELDS = [
   "withdrawBalance",
@@ -41,12 +51,12 @@ type FundsField = typeof FUNDS_DATA_FIELDS[number];
 interface FundsDataArgs {
   doudianAdapter?: DoudianAdapterPayload;
   shopIds?: string[];
-  datePreset?: string;
-  beginDate?: string;
-  endDate?: string;
   operationId?: string;
   concurrency?: number;
+  includeDiagnostics?: boolean;
   mockRows?: DoudianFundsDataRow[];
+  isCancelled?: () => boolean;
+  trackWindow?: (winId: number) => void;
 }
 
 interface DateContext {
@@ -82,6 +92,7 @@ interface FundsLatestRecord {
   scriptsVersion: string;
   fieldSchemaVersion: string;
   requestPlanHash: string;
+  metricUpdatedAt?: Partial<Record<FundsField, string>>;
   updatedAt: string;
 }
 
@@ -95,6 +106,22 @@ interface SourceFailure {
   code?: unknown;
   message?: string;
 }
+
+interface MetricSource {
+  value: number;
+  source: "path" | "alias" | "derived" | "none";
+  available: boolean;
+  path?: string;
+  alias?: string;
+  formula?: string;
+  sources?: string[];
+}
+
+const FUNDS_CURRENT_ID_PREFIX = "funds-current::";
+const FUNDS_CACHE_MIGRATION_ID = "funds-cache-current-v1";
+let fundsCacheMigrationPromise: Promise<void> | null = null;
+let fundsCacheCleanupKey = "";
+let fundsCacheCleanupPromise: Promise<void> | null = null;
 
 function nowIso() {
   return new Date().toISOString();
@@ -158,11 +185,6 @@ function policyNumber(adapter: DoudianAdapterConfig, path: string, fallback: num
   return Number.isFinite(value) ? value : fallback;
 }
 
-function policyBool(adapter: DoudianAdapterConfig, path: string, fallback = false) {
-  const value = policy(adapter, path, fallback);
-  return typeof value === "boolean" ? value : fallback;
-}
-
 function policyMessage(adapter: DoudianAdapterConfig, path: string, fallback: string, values: Record<string, unknown> = {}) {
   return policyText(adapter, path, fallback).replace(/\{([^}]+)\}/g, (_match, key) => String(values[key] ?? ""));
 }
@@ -199,18 +221,13 @@ function resolveDatePreset(adapter: DoudianAdapterConfig, value = "snapshot") {
   return matched ? matched[0] : key;
 }
 
-function fundsDateContext(args: FundsDataArgs, adapter: DoudianAdapterConfig): DateContext {
-  const preset = resolveDatePreset(adapter, args.datePreset || "snapshot");
+function fundsDateContext(adapter: DoudianAdapterConfig): DateContext {
+  const preset = resolveDatePreset(adapter, "snapshot");
   const today = new Date();
-  let beginDate = validIsoDate(args.beginDate);
-  let endDate = validIsoDate(args.endDate);
-  if (!beginDate || !endDate) {
-    const fallbackStart = preset === "7d" ? -6 : preset === "30d" ? -29 : 0;
-    const fallbackEnd = 0;
-    beginDate = formatLocalIsoDate(addDateDays(today, dataPresetNumber(adapter, preset, "startOffsetDays", fallbackStart)));
-    endDate = formatLocalIsoDate(addDateDays(today, dataPresetNumber(adapter, preset, "endOffsetDays", fallbackEnd)));
-    if (dataPresetPolicy(adapter, preset).sameDay === true) endDate = beginDate;
-  }
+  const beginDate = formatLocalIsoDate(addDateDays(today, dataPresetNumber(adapter, preset, "startOffsetDays", 0)));
+  const endDate = dataPresetPolicy(adapter, preset).sameDay === true
+    ? beginDate
+    : formatLocalIsoDate(addDateDays(today, dataPresetNumber(adapter, preset, "endOffsetDays", 0)));
 
   const dateType = dataPresetText(adapter, preset, "dateType", policyText(adapter, `fundsData.datePresetMap.${preset}`, preset));
   const legacyDateType = dataPresetText(adapter, preset, "legacyDateType", "999");
@@ -351,7 +368,21 @@ function findDeepByAlias(value: unknown, aliasLookup: Map<string, string>, depth
   return null;
 }
 
+function moneyTextValue(value: unknown, scale: number) {
+  const record = objectRecord(value);
+  const structured = Object.keys(record).length > 0;
+  const amount = record.amount ?? record.value ?? record.val ?? value;
+  const number = coerceNumber(amount);
+  if (number === undefined) return undefined;
+  const unitText = `${String(amount ?? "")} ${String(record.unit ?? "")}`.replace(/\s+/g, "");
+  if (unitText.includes("万")) return number * 10000;
+  if (unitText.includes("分")) return number / 100;
+  if (unitText.includes("角")) return number / 10;
+  return structured || typeof value === "string" ? number : number / scale;
+}
+
 function fundsMetricValue(value: unknown, fieldConfig: Record<string, unknown>, scale: number) {
+  if (fieldConfig.moneyText === true) return moneyTextValue(value, scale);
   const number = coerceNumber(value);
   return number !== undefined ? number / scale : undefined;
 }
@@ -362,7 +393,7 @@ function readFundsMetric(payload: Record<string, unknown>, adapter: DoudianAdapt
   for (const path of fundsFieldPaths(adapter, field)) {
     const value = getPathValue(payload, path);
     const number = fundsMetricValue(value, config, scale);
-    if (number !== undefined) return { value: number, source: { value: number, source: "path", path } };
+    if (number !== undefined) return { value: number, source: { value: number, source: "path", path, available: true } satisfies MetricSource };
   }
   const aliases = fundsFieldAliases(adapter, field);
   if (aliases.length) {
@@ -373,9 +404,9 @@ function readFundsMetric(payload: Record<string, unknown>, adapter: DoudianAdapt
     }
     const match = findDeepByAlias(payload, aliasLookup);
     const number = fundsMetricValue(match?.value, config, scale);
-    if (number !== undefined) return { value: number, source: { value: number, source: "alias", alias: match?.alias } };
+    if (number !== undefined) return { value: number, source: { value: number, source: "alias", alias: match?.alias, available: true } satisfies MetricSource };
   }
-  return { value: 0, source: { value: 0, source: "none" } };
+  return { value: 0, source: { value: 0, source: "none", available: false } satisfies MetricSource };
 }
 
 function emptyFundsDataRow(store: DoudianStoreSummary): DoudianFundsDataRow {
@@ -437,7 +468,7 @@ function derivedFieldConfigs(adapter: DoudianAdapterConfig) {
   ];
 }
 
-function applyDerivedFields(row: DoudianFundsDataRow, metricSources: Record<string, Record<string, unknown>>, adapter: DoudianAdapterConfig) {
+function applyDerivedFields(row: DoudianFundsDataRow, metricSources: Record<string, MetricSource>, adapter: DoudianAdapterConfig) {
   for (const config of derivedFieldConfigs(adapter)) {
     if (!config.sources.length) continue;
     if (config.onlyWhenZero && rowNumber(row, config.key) !== 0) continue;
@@ -447,7 +478,13 @@ function applyDerivedFields(row: DoudianFundsDataRow, metricSources: Record<stri
         ? config.sources.reduce((nextValue, source, index) => index === 0 ? rowNumber(row, source) : nextValue - rowNumber(row, source), 0)
         : config.sources.reduce((sum, source) => sum + rowNumber(row, source), 0);
     row[config.key] = value;
-    metricSources[config.key] = { value, source: "derived", formula: config.formula, sources: config.sources };
+    metricSources[config.key] = {
+      value,
+      source: "derived",
+      formula: config.formula,
+      sources: config.sources,
+      available: config.sources.every((source) => metricSources[source]?.available === true)
+    };
   }
 }
 
@@ -460,7 +497,7 @@ function responsePayload(responses: Record<string, RequestPlanResult>) {
 function buildFundsDataResult(store: DoudianStoreSummary, responses: Record<string, RequestPlanResult>, adapter: DoudianAdapterConfig) {
   const payload = responsePayload(responses);
   const row = emptyFundsDataRow(store);
-  const metricSources: Record<string, Record<string, unknown>> = {};
+  const metricSources: Record<string, MetricSource> = {};
   for (const field of FUNDS_DATA_FIELDS) {
     const metric = readFundsMetric(payload, adapter, field);
     row[field] = metric.value;
@@ -532,18 +569,34 @@ function firstErrorMessage(responses: Record<string, RequestPlanResult>, adapter
   return "";
 }
 
-function rowSummary(row: DoudianFundsDataRow) {
+function displayMetricFields(adapter: DoudianAdapterConfig) {
+  const schema = objectRecord(policy(adapter, "fundsData.fieldSchema", {}));
+  const columns = Array.isArray(schema.columns) ? schema.columns : [];
+  const fields = columns
+    .map((column) => text(objectRecord(column).key))
+    .filter((field): field is FundsField => FUNDS_DATA_FIELDS.includes(field as FundsField));
+  return fields.length ? Array.from(new Set(fields)) : [...FUNDS_DATA_FIELDS];
+}
+
+function rowSummary(row: DoudianFundsDataRow, metricSources?: Record<string, MetricSource>, expectedFields: FundsField[] = [...FUNDS_DATA_FIELDS]) {
   const nonZeroFields = FUNDS_DATA_FIELDS.filter((field) => Number(row[field] || 0) !== 0);
+  const availableFields = expectedFields.filter((field) => metricSources ? metricSources[field]?.available === true : true);
+  const unavailableFields = expectedFields.filter((field) => !availableFields.includes(field));
   return {
     nonZeroFieldCount: nonZeroFields.length,
     nonZeroFields,
-    allZero: nonZeroFields.length === 0
+    allZero: nonZeroFields.length === 0,
+    availableFieldCount: availableFields.length,
+    availableFields,
+    unavailableFieldCount: unavailableFields.length,
+    unavailableFields,
+    allUnavailable: availableFields.length === 0
   };
 }
 
-function requestPlanKeys(adapter: DoudianAdapterConfig) {
+function requestPlanKeys(adapter: DoudianAdapterConfig, includeDiagnostics = false) {
   const policyPlans = policyArray(adapter, "fundsData.requestPlans");
-  if (policyPlans.length) return Array.from(new Set(policyPlans));
+  if (policyPlans.length) return Array.from(new Set(policyPlans)).filter((key) => includeDiagnostics || !planDiagnosticOnly(adapter, key));
   const operationPlans = objectRecord(adapter.operationPlans);
   const fetchPlan = objectRecord(operationPlans.fetchFundsData);
   const actions = Array.isArray(fetchPlan.actions) ? fetchPlan.actions : [];
@@ -551,7 +604,22 @@ function requestPlanKeys(adapter: DoudianAdapterConfig) {
     const record = objectRecord(action);
     if (Array.isArray(record.requestPlans)) return record.requestPlans.map((item) => text(item)).filter(Boolean);
     return text(record.requestPlan) ? [text(record.requestPlan)] : [];
-  })));
+  }))).filter((key) => includeDiagnostics || !planDiagnosticOnly(adapter, key));
+}
+
+function requestPlanGroups(adapter: DoudianAdapterConfig, planKeys: string[]) {
+  const requested = new Set(planKeys);
+  const configured = policyArrayRaw(adapter, "fundsData.requestPlanGroups")
+    .map((group) => Array.isArray(group) ? group.map((item) => text(item)).filter((key) => requested.has(key)) : [])
+    .filter((group) => group.length);
+  const grouped = new Set(configured.flat());
+  const remaining = planKeys.filter((key) => !grouped.has(key));
+  if (!configured.length) return planKeys.map((key) => [key]);
+  return remaining.length ? [...configured, remaining] : configured;
+}
+
+function wait(ms: number) {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
 function fieldSchemaVersion(adapter: DoudianAdapterConfig) {
@@ -565,19 +633,80 @@ function stableStringify(value: unknown): string {
   return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(",")}}`;
 }
 
-function requestPlanHash(adapter: DoudianAdapterConfig, planKeys: string[]) {
+function requestPlanHash(adapter: DoudianAdapterConfig, planKeys: string[], scriptsVersion = "") {
   const textValue = stableStringify({
     adapterVersion: adapter.version || "",
+    scriptsVersion,
     fieldSchemaVersion: fieldSchemaVersion(adapter),
-    plans: planKeys.map((key) => ({ key, endpoint: adapter.endpoints?.[text(objectRecord(adapter.requestPlans?.[key]).endpointKey || key)] || "", plan: adapter.requestPlans?.[key] || {} }))
+    plans: planKeys.map((key) => ({ key, endpoint: adapter.endpoints?.[text(objectRecord(adapter.requestPlans?.[key]).endpointKey || key)] || "", plan: adapter.requestPlans?.[key] || {} })),
+    mappings: fundsDataMappings(adapter),
+    policies: {
+      contractVersion: policyText(adapter, "fundsData.contractVersion", ""),
+      requestPlans: policyArray(adapter, "fundsData.requestPlans"),
+      requestPlanGroups: policyArrayRaw(adapter, "fundsData.requestPlanGroups"),
+      requestPlanGroupConcurrency: policyNumber(adapter, "fundsData.requestPlanGroupConcurrency", 1),
+      requestPlanGroupDelayMs: policyNumber(adapter, "fundsData.requestPlanGroupDelayMs", 0),
+      requiredPlans: policyArray(adapter, "fundsData.requiredPlans"),
+      optionalPlans: policyArray(adapter, "fundsData.optionalPlans"),
+      criticalPlans: policyArray(adapter, "fundsData.criticalPlans"),
+      derivedFields: policyArrayRaw(adapter, "fundsData.derivedFields"),
+      fieldSchema: policy(adapter, "fundsData.fieldSchema", {})
+    }
   });
   let hash = 0;
   for (let index = 0; index < textValue.length; index += 1) hash = ((hash << 5) - hash + textValue.charCodeAt(index)) | 0;
   return Math.abs(hash).toString(16).padStart(8, "0");
 }
 
-function latestId(shopId: string, dateContext: DateContext, adapterVersion: string, schemaVersion: string) {
-  return `${shopId}::${dateContext.datePreset}::${dateContext.beginDate}::${dateContext.endDate}::${adapterVersion}::${schemaVersion}`;
+function latestId(shopId: string) {
+  return `${FUNDS_CURRENT_ID_PREFIX}${shopId}`;
+}
+
+async function migrateLegacyFundsCache() {
+  if (fundsCacheMigrationPromise) return fundsCacheMigrationPromise;
+  fundsCacheMigrationPromise = (async () => {
+    const marker = await repositoryGet<{ id: string }>("runtime_meta", FUNDS_CACHE_MIGRATION_ID);
+    if (marker) return;
+    const records = await repositoryGetAll<FundsLatestRecord>("funds_latest");
+    const legacyIds = records.map((record) => record.id).filter((id) => !id.startsWith(FUNDS_CURRENT_ID_PREFIX));
+    await repositoryDeleteMany("funds_latest", legacyIds);
+    await repositoryPut("runtime_meta", {
+      id: FUNDS_CACHE_MIGRATION_ID,
+      migratedAt: nowIso(),
+      deletedLegacyRecords: legacyIds.length
+    });
+  })();
+  return fundsCacheMigrationPromise;
+}
+
+async function cleanupFundsCache(stores: DoudianStoreSummary[], contract: {
+  adapterVersion: string;
+  scriptsVersion: string;
+  fieldSchemaVersion: string;
+  requestPlanHash: string;
+}) {
+  const key = stableStringify({ shopIds: stores.map((store) => store.shopId).sort(), ...contract });
+  if (fundsCacheCleanupKey === key) return fundsCacheCleanupPromise || Promise.resolve();
+  fundsCacheCleanupKey = key;
+  fundsCacheCleanupPromise = (async () => {
+    const validShopIds = new Set(stores.map((store) => store.shopId));
+    const records = await repositoryGetAll<FundsLatestRecord>("funds_latest");
+    const obsoleteIds = records
+      .filter((record) => (
+        !record.id.startsWith(FUNDS_CURRENT_ID_PREFIX) ||
+        !validShopIds.has(record.shopId) ||
+        record.adapterVersion !== contract.adapterVersion ||
+        record.scriptsVersion !== contract.scriptsVersion ||
+        record.fieldSchemaVersion !== contract.fieldSchemaVersion ||
+        record.requestPlanHash !== contract.requestPlanHash
+      ))
+      .map((record) => record.id);
+    await repositoryDeleteMany("funds_latest", obsoleteIds);
+  })().catch((error) => {
+    fundsCacheCleanupKey = "";
+    throw error;
+  });
+  return fundsCacheCleanupPromise;
 }
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
@@ -603,23 +732,43 @@ function targetStores(stores: DoudianStoreSummary[], shopIds: string[] = []) {
   return requested.size ? stores.filter((store) => requested.has(store.shopId)) : stores;
 }
 
-async function collectFundsDataForStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, planKeys: string[], dateContext: DateContext, index: number, total: number) {
+function throwIfCancelled(args: FundsDataArgs) {
+  if (args.isCancelled?.()) throw new Error("cancelled");
+}
+
+async function collectFundsDataForStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, planKeys: string[], dateContext: DateContext, index: number, total: number, args: FundsDataArgs) {
   if (!store.partition) throw new Error("store partition missing");
+  throwIfCancelled(args);
   const responses: Record<string, RequestPlanResult> = {};
   const context = { ...dateContext, shopId: store.shopId, shopName: store.shopName };
-  for (const planKey of planKeys) {
-    responses[planKey] = await runDoudianRequestPlan(payload, {
-      partition: store.partition,
+  const groups = requestPlanGroups(payload.adapter, planKeys);
+  const groupConcurrency = Math.max(1, Math.min(6, Math.floor(policyNumber(payload.adapter, "fundsData.requestPlanGroupConcurrency", 3))));
+  const groupDelayMs = Math.max(0, Math.floor(policyNumber(payload.adapter, "fundsData.requestPlanGroupDelayMs", 0)));
+  for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+    throwIfCancelled(args);
+    const group = groups[groupIndex];
+    const settled = await mapWithConcurrency(group, groupConcurrency, async (planKey) => ({
       planKey,
-      context
-    });
+      response: await runDoudianRequestPlan(payload, {
+        partition: store.partition,
+        planKey,
+        context,
+        trackWindow: args.trackWindow
+      })
+    }));
+    for (const result of settled) {
+      if (result.status === "rejected") throw result.reason;
+      responses[result.value.planKey] = result.value.response;
+    }
+    if (groupIndex < groups.length - 1) await wait(groupDelayMs);
   }
 
   const { row, metricSources } = buildFundsDataResult(store, responses, payload.adapter);
   const responseSummary = summarizeResponses(responses, payload.adapter);
   const sourceFailures = summarizeFailures(responseSummary, payload.adapter);
-  const blockingSourceFailures = sourceFailures.filter((failure) => !failure.optional);
-  const summary = rowSummary(row);
+  const dataSourceFailures = sourceFailures.filter((failure) => !failure.diagnosticOnly);
+  const blockingSourceFailures = dataSourceFailures.filter((failure) => !failure.optional);
+  const summary = rowSummary(row, metricSources, displayMetricFields(payload.adapter));
   const requiredPlans = policyArray(payload.adapter, "fundsData.requiredPlans");
   const criticalPlans = policyArray(payload.adapter, "fundsData.criticalPlans");
   const successPlanKeys = Object.entries(responses)
@@ -635,12 +784,12 @@ async function collectFundsDataForStore(payload: DoudianAdapterPayload, store: D
     : requiredPlans.length
       ? missingRequiredPlans.length === 0
       : countedSuccessPlanKeys.length > 0;
-  const partial = ok && (blockingSourceFailures.length > 0 || summary.allZero);
+  const partial = ok && (dataSourceFailures.length > 0 || summary.unavailableFieldCount > 0);
   const message = !ok
     ? (firstErrorMessage(responses, payload.adapter) || policyMessage(payload.adapter, "fundsData.messages.failed", "Funds data request failed"))
-    : blockingSourceFailures.length
+    : dataSourceFailures.length
       ? policyMessage(payload.adapter, "fundsData.messages.partialSourceStore", "Funds data synced with partial source errors")
-      : summary.allZero
+      : summary.unavailableFieldCount > 0
         ? policyMessage(payload.adapter, "fundsData.messages.noMetricMatchStore", "Funds data synced but no metric fields matched")
         : policyMessage(payload.adapter, "fundsData.messages.synced", "Funds data synced");
 
@@ -650,8 +799,9 @@ async function collectFundsDataForStore(payload: DoudianAdapterPayload, store: D
     status: ok ? (partial ? "partial" : "ok") : "failed",
     ok,
     message,
-    reason: ok ? (blockingSourceFailures.length ? "funds-data-partial-source-failure" : summary.allZero ? "funds-data-no-metric-match" : "") : "funds-data-request-failed",
+    reason: ok ? (dataSourceFailures.length ? "funds-data-partial-source-failure" : summary.unavailableFieldCount > 0 ? "funds-data-no-metric-match" : "") : "funds-data-request-failed",
     category: ok ? (partial ? "api-partial" : "") : "api",
+    attemptedAt: nowIso(),
     diagnostic: {
       responses: responseSummary,
       okCount: countedSuccessPlanKeys.length,
@@ -662,6 +812,7 @@ async function collectFundsDataForStore(payload: DoudianAdapterPayload, store: D
       criticalPlans,
       missingCriticalPlans,
       sourceFailureCount: sourceFailures.length,
+      dataSourceFailureCount: dataSourceFailures.length,
       blockingSourceFailureCount: blockingSourceFailures.length,
       sourceFailures,
       rowSummary: summary,
@@ -693,16 +844,21 @@ async function saveFundsLatestRows(args: {
 }) {
   const detailById = new Map(args.details.map((detail) => [text(detail.shopId), detail]));
   const updatedAt = nowIso();
-  for (const row of args.rows) {
+  const records = args.rows.map((row) => {
     const detail = detailById.get(row.shopId);
-    await repositoryPut<FundsLatestRecord>("funds_latest", {
-      id: latestId(row.shopId, args.dateContext, args.adapterVersion, args.fieldSchemaVersion),
+    const diagnostic = objectRecord(detail?.diagnostic);
+    const metricSources = objectRecord(diagnostic.metricSources);
+    const metricUpdatedAt = Object.fromEntries(FUNDS_DATA_FIELDS
+      .filter((field) => objectRecord(metricSources[field]).available === true)
+      .map((field) => [field, detail?.attemptedAt || updatedAt])) as Partial<Record<FundsField, string>>;
+    return {
+      id: latestId(row.shopId),
       shopId: row.shopId,
       shopName: row.shopName,
       ok: detail?.ok !== false,
       message: detail?.message || "",
       row,
-      diagnostic: detail?.diagnostic,
+      diagnostic: { ...diagnostic, metricUpdatedAt },
       datePreset: args.dateContext.datePreset,
       beginDate: args.dateContext.beginDate,
       endDate: args.dateContext.endDate,
@@ -712,22 +868,31 @@ async function saveFundsLatestRows(args: {
       scriptsVersion: args.ruleVersion,
       fieldSchemaVersion: args.fieldSchemaVersion,
       requestPlanHash: args.requestPlanHash,
+      metricUpdatedAt,
       updatedAt
-    });
-  }
+    } satisfies FundsLatestRecord;
+  });
+  await repositoryPutMany<FundsLatestRecord>("funds_latest", records);
 }
 
 export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianFundsDataResult> {
   const payload = adapterPayload(args);
+  await migrateLegacyFundsCache();
   const ledger = await listStoreLedger();
   const stores = ledger.stores || [];
   const targets = targetStores(stores, args.shopIds || []);
-  const dateContext = fundsDateContext(args, payload.adapter);
-  const planKeys = requestPlanKeys(payload.adapter);
+  const dateContext = fundsDateContext(payload.adapter);
+  const planKeys = requestPlanKeys(payload.adapter, args.includeDiagnostics === true);
   const adapterVersion = payload.adapter.version || "";
   const scriptsVersion = payload.scripts?.version || "";
   const schemaVersion = fieldSchemaVersion(payload.adapter);
-  const hash = requestPlanHash(payload.adapter, planKeys);
+  const hash = requestPlanHash(payload.adapter, planKeys, scriptsVersion);
+  await cleanupFundsCache(stores, {
+    adapterVersion,
+    scriptsVersion,
+    fieldSchemaVersion: schemaVersion,
+    requestPlanHash: hash
+  });
   const runId = `funds-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   if (args.mockRows?.length) {
@@ -738,7 +903,15 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
       status: "ok",
       ok: true,
       message: "Mock funds data synced",
-      diagnostic: { rowSummary: rowSummary(row) },
+      diagnostic: {
+        rowSummary: rowSummary(row),
+        metricSources: Object.fromEntries(FUNDS_DATA_FIELDS.map((field) => [field, {
+          value: Number(row[field] || 0),
+          source: "path",
+          path: "mock",
+          available: true
+        }]))
+      },
       index: index + 1,
       total: rows.length
     }));
@@ -784,7 +957,22 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
 
   const defaultConcurrency = Math.max(1, Math.min(8, Math.floor(policyNumber(payload.adapter, "fundsData.concurrency", 2))));
   const concurrency = Math.max(1, Math.min(8, Math.floor(Number(args.concurrency || defaultConcurrency))));
-  const settled = await mapWithConcurrency(targets, concurrency, async (store, index) => collectFundsDataForStore(payload, store, planKeys, dateContext, index + 1, targets.length));
+  let completedCount = 0;
+  const settled = await mapWithConcurrency(targets, concurrency, async (store, index) => {
+    try {
+      throwIfCancelled(args);
+      return await collectFundsDataForStore(payload, store, planKeys, dateContext, index + 1, targets.length, args);
+    } finally {
+      completedCount += 1;
+      dispatchDoudianProgress({
+        operationId: args.operationId || "",
+        taskType: "fundsData",
+        status: "running",
+        progress: Math.round((completedCount / Math.max(1, targets.length)) * 95),
+        message: `${store.shopName || store.shopId} ${completedCount}/${targets.length}`
+      });
+    }
+  });
   const rows: DoudianFundsDataRow[] = [];
   const details: DoudianRunDetail[] = [];
 
@@ -806,6 +994,7 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
       reason: "funds-data-request-failed",
       category: "api",
       diagnostic: { error: message },
+      attemptedAt: nowIso(),
       index: index + 1,
       total: targets.length
     });
@@ -815,10 +1004,11 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
   const failureCount = details.filter((detail) => !detail.ok).length;
   const partialSourceCount = details.filter((detail) => {
     const diagnostic = objectRecord(detail.diagnostic);
-    return Number(diagnostic.blockingSourceFailureCount ?? diagnostic.sourceFailureCount ?? 0) > 0;
+    return Number(diagnostic.dataSourceFailureCount ?? diagnostic.blockingSourceFailureCount ?? 0) > 0;
   }).length;
-  const noMetricMatchCount = details.filter((detail) => objectRecord(objectRecord(detail.diagnostic).rowSummary).allZero === true).length;
-  const partialIssueCount = partialSourceCount + noMetricMatchCount;
+  const noMetricMatchCount = details.filter((detail) => objectRecord(objectRecord(detail.diagnostic).rowSummary).allUnavailable === true).length;
+  const incompleteMetricCount = details.filter((detail) => Number(objectRecord(objectRecord(detail.diagnostic).rowSummary).unavailableFieldCount || 0) > 0).length;
+  const partialIssueCount = partialSourceCount + incompleteMetricCount;
   const message = failureCount
     ? policyMessage(payload.adapter, "fundsData.messages.partial", "Funds data synced with {failureCount} failures", { successCount, failureCount })
     : partialIssueCount
@@ -829,13 +1019,13 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
       })
       : policyMessage(payload.adapter, "fundsData.messages.done", "Funds data synced for {successCount} stores", { successCount });
 
-  const rowsToSave = policyBool(payload.adapter, "fundsData.cachePolicy.skipAllZeroWhenCriticalMissing", false)
-    ? rows.filter((row) => {
-      const detail = details.find((item) => text(item.shopId) === row.shopId);
-      const diagnostic = objectRecord(detail?.diagnostic);
-      return !(objectRecord(diagnostic.rowSummary).allZero === true && Array.isArray(diagnostic.missingCriticalPlans) && diagnostic.missingCriticalPlans.length);
-    })
-    : rows;
+  const detailByShopId = new Map(details.map((detail) => [text(detail.shopId), detail]));
+  const rowsToSave = rows.filter((row) => {
+    const detail = detailByShopId.get(row.shopId);
+    const diagnostic = objectRecord(detail?.diagnostic);
+    const summary = objectRecord(diagnostic.rowSummary);
+    return detail?.ok === true && Number(diagnostic.dataSourceFailureCount || 0) === 0 && Number(summary.unavailableFieldCount || 0) === 0;
+  });
   await saveFundsLatestRows({ rows: rowsToSave, details, dateContext, adapterVersion, ruleVersion: scriptsVersion, fieldSchemaVersion: schemaVersion, requestPlanHash: hash });
 
   return {
@@ -850,6 +1040,7 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
     failureCount,
     partialSourceCount,
     noMetricMatchCount,
+    incompleteMetricCount,
     dateRange: publicDateRange(dateContext),
     adapterVersion,
     scriptsVersion,
@@ -862,16 +1053,23 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
 
 export async function fetchFundsDataLatest(args: FundsDataArgs = {}): Promise<DoudianFundsDataResult> {
   const payload = adapterPayload(args);
+  await migrateLegacyFundsCache();
   const ledger = await listStoreLedger();
   const stores = ledger.stores || [];
   const targets = targetStores(stores, args.shopIds || []);
-  const targetIds = new Set(targets.map((store) => store.shopId));
-  const dateContext = fundsDateContext(args, payload.adapter);
+  const dateContext = fundsDateContext(payload.adapter);
   const schemaVersion = fieldSchemaVersion(payload.adapter);
-  const rows = (await repositoryGetAll<FundsLatestRecord>("funds_latest"))
-    .filter((record) => record.datePreset === dateContext.datePreset && record.beginDate === dateContext.beginDate && record.endDate === dateContext.endDate)
+  const planKeys = requestPlanKeys(payload.adapter, args.includeDiagnostics === true);
+  const hash = requestPlanHash(payload.adapter, planKeys, payload.scripts?.version || "");
+  await cleanupFundsCache(stores, {
+    adapterVersion: payload.adapter.version || "",
+    scriptsVersion: payload.scripts?.version || "",
+    fieldSchemaVersion: schemaVersion,
+    requestPlanHash: hash
+  });
+  const rows = (await repositoryGetMany<FundsLatestRecord>("funds_latest", targets.map((store) => latestId(store.shopId))))
     .filter((record) => record.adapterVersion === (payload.adapter.version || "") && record.fieldSchemaVersion === schemaVersion)
-    .filter((record) => !targetIds.size || targetIds.has(record.shopId));
+    .filter((record) => record.scriptsVersion === (payload.scripts?.version || "") && record.requestPlanHash === hash);
   const details: DoudianRunDetail[] = rows.map((record, index) => ({
     shopId: record.shopId,
     shopName: record.shopName,
@@ -880,13 +1078,12 @@ export async function fetchFundsDataLatest(args: FundsDataArgs = {}): Promise<Do
     message: record.message || (record.ok ? "Cached funds data ready" : "Cached funds data failed"),
     reason: record.ok ? "" : "funds-data-cached-failure",
     category: record.ok ? "" : "api",
-    diagnostic: record.diagnostic,
+    diagnostic: { ...objectRecord(record.diagnostic), metricUpdatedAt: record.metricUpdatedAt || objectRecord(objectRecord(record.diagnostic).metricUpdatedAt) },
+    dataUpdatedAt: record.updatedAt,
+    attemptedAt: record.updatedAt,
     index: index + 1,
     total: rows.length
   }));
-  const planKeys = requestPlanKeys(payload.adapter);
-  const hash = rows[0]?.requestPlanHash || requestPlanHash(payload.adapter, planKeys);
-
   return {
     ok: true,
     status: rows.length ? "ready" : "empty",
@@ -910,7 +1107,6 @@ export async function runDoudianFundsDataSelfCheck(options: { doudianAdapter?: D
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const shopId = `funds-self-check-${suffix}`;
   const shopName = `Funds Self Check ${suffix}`;
-  const checkedContexts: DateContext[] = [];
   const schemaVersion = fieldSchemaVersion(payload.adapter);
 
   try {
@@ -924,60 +1120,80 @@ export async function runDoudianFundsDataSelfCheck(options: { doudianAdapter?: D
       adapterVersion: payload.adapter.version
     });
 
-    const cases = [
-      { datePreset: "snapshot", withdrawBalance: 1000 },
-      { datePreset: "today", withdrawBalance: 2000 },
-      { datePreset: "7d", withdrawBalance: 3000 }
-    ];
-    const results = [];
-    for (const item of cases) {
-      const dateContext = fundsDateContext(item, payload.adapter);
-      checkedContexts.push(dateContext);
-      const row = {
-        ...emptyFundsDataRow({
-          shopId,
-          shopName,
-          platform: "doudian",
-          partition: `persist:chihu-funds-self-check-${suffix}`,
-          status: "online",
-          groupName: "Self Check"
-        }),
-        withdrawBalance: item.withdrawBalance,
-        balance: item.withdrawBalance + 50,
-        frozenBalance: item.datePreset === "7d" ? 25 : 0,
-        datePreset: dateContext.datePreset,
-        beginDate: dateContext.beginDate,
-        endDate: dateContext.endDate
-      };
-      const fetched = await fetchFundsData({
-        doudianAdapter: payload,
-        shopIds: [shopId],
-        datePreset: item.datePreset,
-        mockRows: [row]
-      });
-      const latest = await fetchFundsDataLatest({
-        doudianAdapter: payload,
-        shopIds: [shopId],
-        datePreset: item.datePreset
-      });
-      results.push({
-        preset: item.datePreset,
-        fetchOk: fetched.ok === true,
-        latestOk: latest.ok === true && latest.rows?.[0]?.shopId === shopId && latest.rows?.[0]?.withdrawBalance === item.withdrawBalance,
-        metadataOk: latest.adapterVersion === payload.adapter.version && latest.scriptsVersion === (payload.scripts?.version || "") && latest.fieldSchemaVersion === schemaVersion,
-        dateRangeOk: latest.dateRange?.beginDate === dateContext.beginDate && latest.dateRange?.endDate === dateContext.endDate
-      });
-    }
+    const dateContext = fundsDateContext(payload.adapter);
+    const store: DoudianStoreSummary = {
+      shopId,
+      shopName,
+      platform: "doudian",
+      partition: `persist:chihu-funds-self-check-${suffix}`,
+      status: "online",
+      groupName: "Self Check"
+    };
+    const fixtureResponses = Object.fromEntries(Object.entries(fundsResponseFixture.responses).map(([key, data]) => [key, {
+      ok: true,
+      status: 200,
+      source: key,
+      data
+    } satisfies RequestPlanResult]));
+    const parsed = buildFundsDataResult(store, fixtureResponses, payload.adapter);
+    const expected = fundsResponseFixture.expected as Partial<Record<FundsField, number>>;
+    const cases = Object.entries(expected).map(([field, value]) => ({
+      field,
+      expected: value,
+      actual: parsed.row[field]
+    }));
+    const attemptedAt = nowIso();
+    const detail: DoudianRunDetail = {
+      shopId,
+      shopName,
+      status: "ok",
+      ok: true,
+      message: "Funds fixture parsed",
+      attemptedAt,
+      diagnostic: {
+        rowSummary: rowSummary(parsed.row, parsed.metricSources, displayMetricFields(payload.adapter)),
+        metricSources: parsed.metricSources
+      }
+    };
+    const planKeys = requestPlanKeys(payload.adapter);
+    const hash = requestPlanHash(payload.adapter, planKeys, payload.scripts?.version || "");
+    await saveFundsLatestRows({
+      rows: [parsed.row],
+      details: [detail],
+      dateContext,
+      adapterVersion: payload.adapter.version || "",
+      ruleVersion: payload.scripts?.version || "",
+      fieldSchemaVersion: schemaVersion,
+      requestPlanHash: hash
+    });
+    const latest = await fetchFundsDataLatest({ doudianAdapter: payload, shopIds: [shopId] });
+    const moneyCases = [
+      { value: { amount: "100", unit: "元" }, expected: 100 },
+      { value: { amount: "1", unit: "万" }, expected: 10000 },
+      { value: { amount: "1万", unit: "元" }, expected: 10000 },
+      { value: { amount: "250", unit: "分" }, expected: 2.5 },
+      { value: { amount: "15", unit: "角" }, expected: 1.5 },
+      { value: 12345, expected: 123.45 }
+    ].map((item) => ({
+      ...item,
+      actual: fundsMetricValue(item.value, { moneyText: true }, 100)
+    }));
+    const partialResponses = { ...fixtureResponses };
+    delete partialResponses.fundShopAwardOverview;
+    const partial = buildFundsDataResult(store, partialResponses, payload.adapter);
+    const partialSourceOk = ["subsidyTotal", "commissionSubsidy", "qianchuanSubsidy"]
+      .every((field) => partial.metricSources[field]?.available === false);
+    const fixtureOk = cases.every((item) => item.actual === item.expected);
 
     return {
-      ok: results.every((item) => item.fetchOk && item.latestOk && item.metadataOk && item.dateRangeOk),
-      latestOk: results.every((item) => item.latestOk),
-      datePresetOk: results.every((item) => item.dateRangeOk),
-      metadataOk: results.every((item) => item.metadataOk),
-      cases: results
+      ok: fixtureOk && partialSourceOk && latest.rows?.[0]?.withdrawBalance === expected.withdrawBalance && moneyCases.every((item) => item.actual === item.expected),
+      latestOk: latest.ok === true && latest.rows?.[0]?.shopId === shopId,
+      datePresetOk: latest.dateRange?.datePreset === "snapshot" && dateContext.beginDate === dateContext.endDate,
+      metadataOk: latest.adapterVersion === payload.adapter.version && latest.scriptsVersion === (payload.scripts?.version || "") && latest.fieldSchemaVersion === schemaVersion,
+      cases: [...cases, ...moneyCases.map((item, index) => ({ field: `moneyText-${index + 1}`, expected: item.expected, actual: item.actual })), { field: "partial-source-availability", expected: true, actual: partialSourceOk }]
     };
   } finally {
     await deleteStoreLedger([shopId]).catch(() => undefined);
-    await Promise.all(checkedContexts.map((context) => repositoryDelete("funds_latest", latestId(shopId, context, payload.adapter.version || "", schemaVersion)).catch(() => undefined)));
+    await repositoryDelete("funds_latest", latestId(shopId)).catch(() => undefined);
   }
 }

@@ -7,9 +7,11 @@ import type {
   DoudianStoreSummary
 } from "../../types";
 import { requireChihuNative } from "../../native/client";
-import { repositoryDelete, repositoryGetAll, repositoryPut } from "./repository";
+import { repositoryDelete, repositoryGetAll, repositoryGetMany, repositoryPutMany } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
+import { dispatchDoudianProgress } from "./progress";
+import { reportDoudianDiagnostic } from "./diagnosticLog";
 
 const BUSINESS_DATA_FIELDS = [
   "dealAmount",
@@ -58,6 +60,8 @@ interface BusinessDataArgs {
   operationId?: string;
   concurrency?: number;
   mockRows?: DoudianBusinessDataRow[];
+  isCancelled?: () => boolean;
+  trackWindow?: (winId: number) => void;
 }
 
 interface BusinessLatestRecord {
@@ -525,9 +529,11 @@ function normalizeBusinessMetricValue(field: BusinessField, value: number) {
   return value;
 }
 
-function preferredBusinessMetric(candidates: BusinessMetric[]) {
+function preferredBusinessMetric(candidates: BusinessMetric[], preferNonZero = false) {
   if (!candidates.length) return null;
-  const selected = candidates.find((candidate) => Number(candidate.value || 0) !== 0) || candidates[0];
+  const selected = preferNonZero
+    ? candidates.find((candidate) => Number(candidate.value || 0) !== 0) || candidates[0]
+    : candidates[0];
   const nonZeroCandidateCount = candidates.filter((candidate) => Number(candidate.value || 0) !== 0).length;
   return {
     value: selected.value,
@@ -541,6 +547,7 @@ function preferredBusinessMetric(candidates: BusinessMetric[]) {
 }
 
 function readBusinessMetric(payload: Record<string, unknown>, adapter: DoudianAdapterConfig, field: BusinessField): BusinessMetric {
+  const preferNonZero = businessFieldConfig(adapter, field).preferNonZeroCandidate === true;
   const pathCandidates = new Map<string, BusinessMetric[]>();
   const pathPlanOrder: string[] = [];
   for (const path of businessFieldPaths(adapter, field)) {
@@ -562,8 +569,10 @@ function readBusinessMetric(payload: Record<string, unknown>, adapter: DoudianAd
   }
   if (pathPlanOrder.length) {
     const groups = pathPlanOrder.map((planKey) => pathCandidates.get(planKey) || []).filter((group) => group.length);
-    const selectedGroup = groups.find((group) => group.some((candidate) => Number(candidate.value || 0) !== 0)) || groups[0] || [];
-    return preferredBusinessMetric(selectedGroup) || { value: 0, source: { value: 0, source: "none" } };
+    const selectedGroup = preferNonZero
+      ? groups.find((group) => group.some((candidate) => Number(candidate.value || 0) !== 0)) || groups[0] || []
+      : groups[0] || [];
+    return preferredBusinessMetric(selectedGroup, preferNonZero) || { value: 0, source: { value: 0, source: "none" } };
   }
 
   const aliases = businessFieldAliases(adapter, field);
@@ -588,7 +597,7 @@ function readBusinessMetric(payload: Record<string, unknown>, adapter: DoudianAd
     }
   }
 
-  return preferredBusinessMetric(candidates) || { value: 0, source: { value: 0, source: "none" } };
+  return preferredBusinessMetric(candidates, preferNonZero) || { value: 0, source: { value: 0, source: "none" } };
 }
 
 function emptyBusinessDataRow(store: DoudianStoreSummary): DoudianBusinessDataRow {
@@ -727,7 +736,7 @@ async function reportBusinessDataRow(args: {
   adapter: DoudianAdapterConfig;
 }) {
   try {
-    await requireChihuNative().logs.report({
+    await reportDoudianDiagnostic({
       category: "doudian-business-data",
       event: "row",
       shopId: args.store.shopId,
@@ -743,7 +752,7 @@ async function reportBusinessDataRow(args: {
       activation: objectRecord(args.detail.diagnostic).activation || null,
       coreShape: businessCoreShape(args.responses, args.adapter),
       responses: args.responseSummary
-    }).catch(() => undefined);
+    }, args.detail.ok !== true || args.detail.status === "partial");
   } catch {
     // Diagnostics must never block syncing.
   }
@@ -842,10 +851,10 @@ function switchShopEvalCode(switchFactory: string, payload: unknown, timeoutMs: 
   `;
 }
 
-async function activateStoreView(payload: DoudianAdapterPayload, store: DoudianStoreSummary, context: Record<string, unknown>): Promise<StoreActivationResult> {
+async function activateStoreView(payload: DoudianAdapterPayload, store: DoudianStoreSummary, context: Record<string, unknown>, trackWindow?: (winId: number) => void): Promise<StoreActivationResult> {
   const native = requireChihuNative();
   const report = async (activation: StoreActivationResult) => {
-    await native.logs.report(activationLogPayload(store, activation)).catch(() => undefined);
+    await reportDoudianDiagnostic(activationLogPayload(store, activation), activation.ok !== true);
     return activation;
   };
   const before = await runDoudianRequestPlan(payload, {
@@ -894,6 +903,7 @@ async function activateStoreView(payload: DoudianAdapterPayload, store: DoudianS
       nodeIntegration: false,
       contextIsolation: true
     });
+    trackWindow?.(winId);
     const bootWaitMs = Math.max(0, policyNumber(payload.adapter, "businessData.activateBootWaitMs", 1200));
     if (bootWaitMs) await new Promise((resolve) => window.setTimeout(resolve, bootWaitMs));
     const switchTimeoutMs = Math.max(2000, policyNumber(payload.adapter, "businessData.activateScriptTimeoutMs", 5000));
@@ -991,12 +1001,35 @@ function requestPlanKeys(adapter: DoudianAdapterConfig) {
   })));
 }
 
-function latestId(shopId: string, dateContext: DateContext) {
-  return `${shopId}::${dateContext.datePreset}::${dateContext.beginDate}::${dateContext.endDate}`;
+function fieldSchemaVersion(adapter: DoudianAdapterConfig) {
+  return text(objectRecord(policy(adapter, "businessData.fieldSchema", {})).version);
+}
+
+function latestId(shopId: string, dateContext: DateContext, adapterVersion: string, schemaVersion: string, planHash: string) {
+  return `${shopId}::${dateContext.datePreset}::${dateContext.beginDate}::${dateContext.endDate}::${adapterVersion}::${schemaVersion}::${planHash}`;
 }
 
 function requestPlanHash(planKeys: string[]) {
   return planKeys.join("|");
+}
+
+let lastBusinessCacheCleanupDay = "";
+
+async function cleanupBusinessLatestCache(adapterVersion: string, schemaVersion: string, planHash: string) {
+  const cleanupDay = formatLocalIsoDate(new Date());
+  if (lastBusinessCacheCleanupDay === cleanupDay) return;
+  lastBusinessCacheCleanupDay = cleanupDay;
+  const cutoff = Date.now() - 35 * 24 * 60 * 60 * 1000;
+  const records = await repositoryGetAll<BusinessLatestRecord>("business_latest");
+  const stale = records.filter((record) => (
+    record.adapterVersion !== adapterVersion ||
+    text(objectRecord(record.dateRange).datePreset) !== record.datePreset ||
+    record.requestPlanHash !== planHash ||
+    !record.id.includes(`::${schemaVersion}::`) ||
+    !Number.isFinite(Date.parse(record.updatedAt)) ||
+    Date.parse(record.updatedAt) < cutoff
+  ));
+  await Promise.all(stale.map((record) => repositoryDelete("business_latest", record.id).catch(() => undefined)));
 }
 
 function publicDateRange(dateContext: DateContext) {
@@ -1010,26 +1043,63 @@ function publicDateRange(dateContext: DateContext) {
   };
 }
 
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
-  const results = new Array<PromiseSettledResult<R>>(items.length);
-  let nextIndex = 0;
+async function mapStoresWithPartitionConcurrency<R>(
+  stores: DoudianStoreSummary[],
+  concurrency: number,
+  mapper: (store: DoudianStoreSummary, index: number) => Promise<R>
+): Promise<PromiseSettledResult<R>[]> {
+  const results = new Array<PromiseSettledResult<R>>(stores.length);
+  const queues = new Map<string, Array<{ store: DoudianStoreSummary; index: number }>>();
+  stores.forEach((store, index) => {
+    const key = store.partition || `missing:${index}`;
+    const queue = queues.get(key) || [];
+    queue.push({ store, index });
+    queues.set(key, queue);
+  });
+  const partitionQueues = [...queues.values()];
+  let nextQueue = 0;
   async function worker() {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      try {
-        results[index] = { status: "fulfilled", value: await mapper(items[index], index) };
-      } catch (reason) {
-        results[index] = { status: "rejected", reason };
+    for (;;) {
+      const queueIndex = nextQueue;
+      nextQueue += 1;
+      if (queueIndex >= partitionQueues.length) return;
+      for (const item of partitionQueues[queueIndex]) {
+        try {
+          results[item.index] = { status: "fulfilled", value: await mapper(item.store, item.index) };
+        } catch (reason) {
+          results[item.index] = { status: "rejected", reason };
+        }
       }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, items.length)) }, () => worker()));
+  await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, partitionQueues.length)) }, () => worker()));
   return results;
 }
 
-async function collectStoreBusinessData(payload: DoudianAdapterPayload, store: DoudianStoreSummary, planKeys: string[], dateContext: DateContext, index: number, total: number) {
+function configuredRequestPlanGroups(adapter: DoudianAdapterConfig, planKeys: string[]) {
+  const configured = policy(adapter, "businessData.requestPlanGroups", []);
+  if (!Array.isArray(configured)) return planKeys.map((key) => [key]);
+  const allowed = new Set(planKeys);
+  const seen = new Set<string>();
+  const groups: string[][] = [];
+  for (const configuredGroup of configured) {
+    if (!Array.isArray(configuredGroup)) continue;
+    const group = configuredGroup.map((key) => text(key)).filter((key) => allowed.has(key) && !seen.has(key));
+    if (!group.length) continue;
+    group.forEach((key) => seen.add(key));
+    groups.push(group);
+  }
+  for (const key of planKeys) if (!seen.has(key)) groups.push([key]);
+  return groups;
+}
+
+function throwIfCancelled(args: BusinessDataArgs) {
+  if (args.isCancelled?.()) throw new Error("cancelled");
+}
+
+async function collectStoreBusinessData(payload: DoudianAdapterPayload, store: DoudianStoreSummary, planKeys: string[], dateContext: DateContext, index: number, total: number, args: BusinessDataArgs) {
   if (!store.partition) throw new Error("store partition missing");
+  throwIfCancelled(args);
   const responses: Record<string, RequestPlanResult> = {};
   const context = {
     ...dateContext,
@@ -1038,14 +1108,21 @@ async function collectStoreBusinessData(payload: DoudianAdapterPayload, store: D
   };
   const activation = policy(payload.adapter, "businessData.activateBeforeFetch", true) === false
     ? { ok: true, skipped: true, message: "disabled" }
-    : await activateStoreView(payload, store, context);
+    : await activateStoreView(payload, store, context, args.trackWindow);
 
-  for (const planKey of planKeys) {
-    responses[planKey] = await runDoudianRequestPlan(payload, {
+  const planGroups = configuredRequestPlanGroups(payload.adapter, planKeys);
+  const planGroupDelayMs = Math.max(0, policyNumber(payload.adapter, "businessData.requestPlanGroupDelayMs", 0));
+  for (let groupIndex = 0; groupIndex < planGroups.length; groupIndex += 1) {
+    const group = planGroups[groupIndex];
+    throwIfCancelled(args);
+    if (groupIndex > 0 && planGroupDelayMs) await new Promise((resolve) => window.setTimeout(resolve, planGroupDelayMs));
+    const groupResponses = await Promise.all(group.map(async (planKey) => [planKey, await runDoudianRequestPlan(payload, {
       partition: store.partition,
       planKey,
-      context
-    });
+      context,
+      trackWindow: args.trackWindow
+    })] as const));
+    for (const [planKey, response] of groupResponses) responses[planKey] = response;
   }
 
   const responseSummary = summarizeResponses(responses, payload.adapter);
@@ -1061,6 +1138,11 @@ async function collectStoreBusinessData(payload: DoudianAdapterPayload, store: D
   const blockingSourceFailures = sourceFailures.filter((failure) => !failure.optional);
   const summary = rowSummary(row);
   const requiredPlans = policyArray(payload.adapter, "businessData.requiredPlans");
+  const coreMetricPlans = policyArray(payload.adapter, "businessData.coreMetricPlans").length
+    ? policyArray(payload.adapter, "businessData.coreMetricPlans")
+    : ["businessCoreIndex"];
+  const missingCoreMetricPlans = coreMetricPlans.filter((planKey) => !requestPlanResponseOk(responses[planKey], payload.adapter, planKey, businessDataMappings(payload.adapter)));
+  const coreMetricsComplete = missingCoreMetricPlans.length === 0;
   const missingRequiredPlans = requiredPlans.filter((planKey) => requestPlanResponseOk(responses[planKey], payload.adapter, planKey, businessDataMappings(payload.adapter)) !== true);
   const okCount = Object.entries(responses).filter(([key, response]) => requestPlanResponseOk(response, payload.adapter, key, businessDataMappings(payload.adapter))).length;
   const ok = requiredPlans.length ? missingRequiredPlans.length === 0 : okCount > 0;
@@ -1085,6 +1167,9 @@ async function collectStoreBusinessData(payload: DoudianAdapterPayload, store: D
       okCount,
       requiredPlans,
       missingRequiredPlans,
+      coreMetricPlans,
+      missingCoreMetricPlans,
+      coreMetricsComplete,
       sourceFailureCount: sourceFailures.length,
       blockingSourceFailureCount: blockingSourceFailures.length,
       sourceFailures,
@@ -1100,6 +1185,13 @@ async function collectStoreBusinessData(payload: DoudianAdapterPayload, store: D
   };
 
   await reportBusinessDataRow({ store, row, detail, summary, metricSources, responseSummary, responses, adapter: payload.adapter });
+  dispatchDoudianProgress({
+    operationId: args.operationId || "",
+    taskType: "businessData",
+    status: "running",
+    progress: Math.round((index / Math.max(1, total)) * 95),
+    message: `${store.shopName || store.shopId} ${index}/${total}`
+  });
   return { row, detail };
 }
 
@@ -1115,13 +1207,14 @@ async function saveBusinessLatestRows(args: {
   adapterVersion: string;
   ruleVersion: string;
   requestPlanHash: string;
+  fieldSchemaVersion: string;
 }) {
   const detailById = new Map(args.details.map((detail) => [text(detail.shopId), detail]));
   const updatedAt = nowIso();
-  for (const row of args.rows) {
+  const records = args.rows.map((row) => {
     const detail = detailById.get(row.shopId);
-    await repositoryPut<BusinessLatestRecord>("business_latest", {
-      id: latestId(row.shopId, args.dateContext),
+    return {
+      id: latestId(row.shopId, args.dateContext, args.adapterVersion, args.fieldSchemaVersion, args.requestPlanHash),
       shopId: row.shopId,
       shopName: row.shopName,
       ok: detail?.ok !== false,
@@ -1137,8 +1230,9 @@ async function saveBusinessLatestRows(args: {
       scriptsVersion: args.ruleVersion,
       requestPlanHash: args.requestPlanHash,
       updatedAt
-    });
-  }
+    } satisfies BusinessLatestRecord;
+  });
+  await repositoryPutMany<BusinessLatestRecord>("business_latest", records);
 }
 
 function adapterPayload(args: BusinessDataArgs): DoudianAdapterPayload {
@@ -1155,6 +1249,8 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
   const planKeys = requestPlanKeys(payload.adapter);
   const adapterVersion = payload.adapter.version || "";
   const scriptsVersion = payload.scripts?.version || "";
+  const schemaVersion = fieldSchemaVersion(payload.adapter);
+  const planHash = requestPlanHash(planKeys);
   const runId = `business-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   if (args.mockRows?.length) {
@@ -1169,7 +1265,7 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
       index: index + 1,
       total: rows.length
     }));
-    await saveBusinessLatestRows({ rows, details, dateContext, adapterVersion, ruleVersion: scriptsVersion, requestPlanHash: "mock" });
+    await saveBusinessLatestRows({ rows, details, dateContext, adapterVersion, ruleVersion: scriptsVersion, fieldSchemaVersion: schemaVersion, requestPlanHash: planHash });
     return {
       ok: true,
       status: "ok",
@@ -1182,6 +1278,7 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
       failureCount: 0,
       partialSourceCount: 0,
       noMetricMatchCount: 0,
+      coreIncompleteCount: 0,
       dateRange: publicDateRange(dateContext),
       adapterVersion,
       scriptsVersion,
@@ -1207,9 +1304,12 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
 
   const activateBeforeFetch = policy(payload.adapter, "businessData.activateBeforeFetch", true) !== false;
   const defaultConcurrency = Math.max(1, Math.min(8, Math.floor(policyNumber(payload.adapter, "businessData.concurrency", activateBeforeFetch ? 1 : 3))));
-  const concurrencyCap = activateBeforeFetch ? 1 : 8;
+  const concurrencyCap = activateBeforeFetch ? 3 : 8;
   const concurrency = Math.max(1, Math.min(concurrencyCap, Math.floor(Number(args.concurrency || defaultConcurrency))));
-  const settled = await mapWithConcurrency(targets, concurrency, async (store, index) => collectStoreBusinessData(payload, store, planKeys, dateContext, index + 1, targets.length));
+  const settled = await mapStoresWithPartitionConcurrency(targets, concurrency, async (store, index) => {
+    throwIfCancelled(args);
+    return collectStoreBusinessData(payload, store, planKeys, dateContext, index + 1, targets.length, args);
+  });
   const rows: DoudianBusinessDataRow[] = [];
   const details: DoudianRunDetail[] = [];
 
@@ -1244,6 +1344,7 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
     return Number(diagnostic.blockingSourceFailureCount ?? diagnostic.sourceFailureCount ?? 0) > 0;
   }).length;
   const noMetricMatchCount = details.filter((detail) => objectRecord(objectRecord(detail.diagnostic).rowSummary).allZero === true).length;
+  const coreIncompleteCount = details.filter((detail) => objectRecord(detail.diagnostic).coreMetricsComplete === false).length;
   const partialIssueCount = partialSourceCount + noMetricMatchCount;
   const message = failureCount
     ? policyMessage(payload.adapter, "businessData.messages.partial", "Business data synced with {failureCount} failures", { successCount, failureCount })
@@ -1261,8 +1362,10 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
     dateContext,
     adapterVersion,
     ruleVersion: scriptsVersion,
-    requestPlanHash: requestPlanHash(planKeys)
+    fieldSchemaVersion: schemaVersion,
+    requestPlanHash: planHash
   });
+  await cleanupBusinessLatestCache(adapterVersion, schemaVersion, planHash);
 
   return {
     ok: failureCount === 0,
@@ -1276,6 +1379,7 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
     failureCount,
     partialSourceCount,
     noMetricMatchCount,
+    coreIncompleteCount,
     dateRange: publicDateRange(dateContext),
     adapterVersion,
     scriptsVersion,
@@ -1291,9 +1395,14 @@ export async function fetchBusinessDataLatest(args: BusinessDataArgs = {}): Prom
   const targets = targetStores(stores, args.shopIds || []);
   const targetIds = new Set(targets.map((store) => store.shopId));
   const dateContext = dataDateContext(args, payload.adapter);
-  const rows = (await repositoryGetAll<BusinessLatestRecord>("business_latest"))
-    .filter((record) => record.datePreset === dateContext.datePreset && record.beginDate === dateContext.beginDate && record.endDate === dateContext.endDate)
+  const planKeys = requestPlanKeys(payload.adapter);
+  const adapterVersion = payload.adapter.version || "";
+  const schemaVersion = fieldSchemaVersion(payload.adapter);
+  const planHash = requestPlanHash(planKeys);
+  const ids = targets.map((store) => latestId(store.shopId, dateContext, adapterVersion, schemaVersion, planHash));
+  const rows = (await repositoryGetMany<BusinessLatestRecord>("business_latest", ids))
     .filter((record) => !targetIds.size || targetIds.has(record.shopId));
+  void cleanupBusinessLatestCache(adapterVersion, schemaVersion, planHash).catch(() => undefined);
   const details: DoudianRunDetail[] = rows.map((record, index) => ({
     shopId: record.shopId,
     shopName: record.shopName,
@@ -1314,7 +1423,7 @@ export async function fetchBusinessDataLatest(args: BusinessDataArgs = {}): Prom
     rows: rows.map((record) => record.row),
     details,
     dateRange: publicDateRange(dateContext),
-    adapterVersion: rows[0]?.adapterVersion || payload.adapter.version || "",
+    adapterVersion: rows[0]?.adapterVersion || adapterVersion,
     scriptsVersion: rows[0]?.scriptsVersion || payload.scripts?.version || "",
     stores,
     groups: ledger.groups || [],
@@ -1401,6 +1510,10 @@ export async function runDoudianBusinessDataSelfCheck(options: { doudianAdapter?
     };
   } finally {
     await deleteStoreLedger([shopId]).catch(() => undefined);
-    await Promise.all(checkedContexts.map((context) => repositoryDelete("business_latest", latestId(shopId, context)).catch(() => undefined)));
+    const planKeys = requestPlanKeys(payload.adapter);
+    const adapterVersion = payload.adapter.version || "";
+    const schemaVersion = fieldSchemaVersion(payload.adapter);
+    const planHash = requestPlanHash(planKeys);
+    await Promise.all(checkedContexts.map((context) => repositoryDelete("business_latest", latestId(shopId, context, adapterVersion, schemaVersion, planHash)).catch(() => undefined)));
   }
 }
