@@ -1,4 +1,4 @@
-import { repositoryCleanupOperations, repositoryGet, repositoryPut, repositoryQueryOperations } from "./repository";
+import { repositoryAcquireOperation, repositoryCleanupOperations, repositoryGet, repositoryPut, repositoryQueryOperations } from "./repository";
 
 export type DoudianOperationStatus = "created" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -53,6 +53,24 @@ export function createOperation(input: {
 
 export async function saveOperation(record: DoudianOperationRecord) {
   await repositoryPut("operations", { ...record, id: record.operationId, updatedAt: now() });
+}
+
+export async function acquireOperation(record: DoudianOperationRecord, maxAgeMs: number) {
+  const acquired = await repositoryAcquireOperation(
+    record as unknown as Record<string, unknown>,
+    new Date(Date.now() - Math.max(1000, maxAgeMs)).toISOString()
+  );
+  if (acquired) {
+    return {
+      acquired: acquired.acquired,
+      operation: acquired.operation as unknown as DoudianOperationRecord
+    };
+  }
+  const dedupeKey = String(record.metadata?.dedupeKey || "");
+  const existing = (await listActiveOperations()).find((item) => item.taskType === record.taskType && item.metadata?.dedupeKey === dedupeKey);
+  if (existing) return { acquired: false, operation: existing };
+  await saveOperation(record);
+  return { acquired: true, operation: record };
 }
 
 export async function getOperation(operationId: string): Promise<DoudianOperationRecord | null> {

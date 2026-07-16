@@ -174,13 +174,23 @@ const nativeData = {
   records: {
     put: putNativeDataRecord,
     putMany: invoke("native:data:records:putMany"),
+    acquireOperation: invoke("native:data:records:acquireOperation"),
+    claimOpportunitySubmitTask: invoke("native:data:records:claimOpportunitySubmitTask"),
     get: invoke("native:data:records:get"),
     getMany: invoke("native:data:records:getMany"),
     list: invoke("native:data:records:list"),
+    latest: invoke("native:data:records:latest"),
     queryOperations: invoke("native:data:records:queryOperations"),
     cleanupOperations: invoke("native:data:records:cleanupOperations"),
     delete: invoke("native:data:records:delete"),
     deleteMany: invoke("native:data:records:deleteMany")
+  },
+  opportunityAttempts: {
+    putMany: invoke("native:data:opportunityAttempts:putMany"),
+    count: invoke("native:data:opportunityAttempts:count"),
+    listDedupeKeys: invoke("native:data:opportunityAttempts:listDedupeKeys"),
+    findDedupeKeys: invoke("native:data:opportunityAttempts:findDedupeKeys"),
+    cleanup: invoke("native:data:opportunityAttempts:cleanup")
   },
   catalogJobs: {
     acquire: invoke("native:data:catalogJobs:acquire"),

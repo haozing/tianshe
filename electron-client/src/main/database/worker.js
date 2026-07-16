@@ -131,6 +131,47 @@ function applyForwardCompatibleFixups(database) {
   if (!tableHasColumn(database, "catalog_pages", "transaction_id")) {
     database.exec("ALTER TABLE catalog_pages ADD COLUMN transaction_id TEXT NOT NULL DEFAULT ''");
   }
+  const attemptColumns = [
+    ["business_date", "TEXT NOT NULL DEFAULT ''"],
+    ["tenant_id", "TEXT NOT NULL DEFAULT 'local-user'"],
+    ["shop_id", "TEXT NOT NULL DEFAULT ''"],
+    ["clue_id", "TEXT NOT NULL DEFAULT ''"],
+    ["product_id", "TEXT NOT NULL DEFAULT ''"],
+    ["clue_category_id", "TEXT NOT NULL DEFAULT ''"],
+    ["relation_key", "TEXT NOT NULL DEFAULT ''"],
+    ["clue_key", "TEXT NOT NULL DEFAULT ''"],
+    ["clue_category_key", "TEXT NOT NULL DEFAULT ''"]
+  ];
+  for (const [column, definition] of attemptColumns) {
+    if (!tableHasColumn(database, "opportunity_submit_attempts_v2", column)) {
+      database.exec(`ALTER TABLE opportunity_submit_attempts_v2 ADD COLUMN ${column} ${definition}`);
+    }
+  }
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_opportunity_attempts_date_shop
+      ON opportunity_submit_attempts_v2 (business_date, shop_id, counts_against_daily_limit);
+    CREATE INDEX IF NOT EXISTS idx_opportunity_attempts_relation_status
+      ON opportunity_submit_attempts_v2 (relation_key, status);
+    CREATE INDEX IF NOT EXISTS idx_opportunity_attempts_clue_status
+      ON opportunity_submit_attempts_v2 (clue_key, status);
+    CREATE INDEX IF NOT EXISTS idx_opportunity_attempts_category_status
+      ON opportunity_submit_attempts_v2 (clue_category_key, status);
+    CREATE INDEX IF NOT EXISTS idx_opportunity_submit_tasks_active
+      ON native_records (
+        json_extract(payload_json, '$.concurrencyKey'),
+        json_extract(payload_json, '$.status'),
+        json_extract(payload_json, '$.leaseExpiresAt')
+      )
+      WHERE store_name = 'opportunity_pipeline_submit_tasks_v2';
+    CREATE INDEX IF NOT EXISTS idx_operations_active_dedupe
+      ON native_records (
+        json_extract(payload_json, '$.taskType'),
+        json_extract(payload_json, '$.metadata.dedupeKey'),
+        json_extract(payload_json, '$.status'),
+        updated_at
+      )
+      WHERE store_name = 'operations';
+  `);
 }
 
 function tableExists(database, tableName) {
@@ -270,6 +311,7 @@ function initializeDatabase(args = {}) {
         applyConnectionPragmas(database);
         database.exec("BEGIN IMMEDIATE");
         database.exec(loadSchemaSql());
+        applyForwardCompatibleFixups(database);
         database.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         const ts = nowIso();
         writeRuntimeMeta(database, "schema", { schemaVersion: SCHEMA_VERSION, initializedAt: ts, recoveredFromCorruption: true }, ts);
@@ -717,6 +759,238 @@ function putManyNativeRecords(args = {}) {
     database.exec("ROLLBACK");
     throw error;
   }
+}
+
+function acquireNativeOperation(args = {}) {
+  const database = ensureDb();
+  const operation = normalizeRecordPayload(args.operation || args.record);
+  const operationId = normalizeString(operation.operationId || operation.id);
+  const taskType = normalizeString(operation.taskType);
+  const dedupeKey = normalizeString(operation.metadata && operation.metadata.dedupeKey);
+  const cutoff = normalizeString(args.updatedAfter) || new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  if (!operationId || !taskType || !dedupeKey) {
+    throw createError("NATIVE_DATA_BAD_ARGUMENT", "Operation acquire requires operationId, taskType and dedupeKey");
+  }
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const existingRow = database.prepare(`
+      SELECT * FROM native_records
+      WHERE store_name = 'operations'
+        AND updated_at >= ?
+        AND json_valid(payload_json)
+        AND json_extract(payload_json, '$.taskType') = ?
+        AND json_extract(payload_json, '$.metadata.dedupeKey') = ?
+        AND json_extract(payload_json, '$.status') IN ('created', 'running')
+      ORDER BY updated_at DESC, record_id DESC
+      LIMIT 1
+    `).get(cutoff, taskType, dedupeKey);
+    if (existingRow) {
+      database.exec("COMMIT");
+      return { acquired: false, operation: formatNativeRecord(existingRow) };
+    }
+    const ts = nowIso();
+    const record = { ...operation, id: operationId, operationId, updatedAt: ts };
+    database.prepare(`
+      INSERT INTO native_records (store_name, record_id, payload_json, created_at, updated_at)
+      VALUES ('operations', ?, ?, ?, ?)
+    `).run(operationId, encodeJson(record), normalizeString(record.createdAt) || ts, ts);
+    database.exec("COMMIT");
+    return { acquired: true, operation: record };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function claimOpportunitySubmitTask(args = {}) {
+  const database = ensureDb();
+  const taskId = normalizeString(args.taskId || args.id);
+  const ownerRunId = normalizeString(args.ownerRunId);
+  const leaseExpiresAt = normalizeString(args.leaseExpiresAt);
+  const now = normalizeString(args.now) || nowIso();
+  if (!taskId || !ownerRunId || !leaseExpiresAt) {
+    throw createError("NATIVE_DATA_BAD_ARGUMENT", "Submit task claim requires taskId, ownerRunId and leaseExpiresAt");
+  }
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const row = database.prepare(`
+      SELECT * FROM native_records
+      WHERE store_name = 'opportunity_pipeline_submit_tasks_v2' AND record_id = ?
+    `).get(taskId);
+    if (!row) {
+      database.exec("COMMIT");
+      return { claimed: false, reason: "missing", task: null };
+    }
+    const task = formatNativeRecord(row);
+    const claimable = task.status === "queued" || (task.status === "running" && (!task.leaseExpiresAt || String(task.leaseExpiresAt) < now));
+    if (!claimable) {
+      database.exec("COMMIT");
+      return { claimed: false, reason: "not-claimable", task };
+    }
+    const activeRow = database.prepare(`
+      SELECT * FROM native_records
+      WHERE store_name = 'opportunity_pipeline_submit_tasks_v2'
+        AND record_id <> ?
+        AND json_valid(payload_json)
+        AND json_extract(payload_json, '$.concurrencyKey') = ?
+        AND json_extract(payload_json, '$.status') = 'running'
+        AND COALESCE(json_extract(payload_json, '$.leaseExpiresAt'), '') >= ?
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(taskId, normalizeString(task.concurrencyKey) || "", now);
+    if (activeRow) {
+      database.exec("COMMIT");
+      return { claimed: false, reason: "concurrency-active", task: formatNativeRecord(activeRow) };
+    }
+    const claimedTask = {
+      ...task,
+      status: "running",
+      ownerRunId,
+      startedAt: task.startedAt || now,
+      leaseExpiresAt,
+      updatedAt: now
+    };
+    database.prepare(`
+      UPDATE native_records SET payload_json = ?, updated_at = ?
+      WHERE store_name = 'opportunity_pipeline_submit_tasks_v2' AND record_id = ?
+    `).run(encodeJson(claimedTask), now, taskId);
+    database.exec("COMMIT");
+    return { claimed: true, reason: "claimed", task: claimedTask };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+const OPPORTUNITY_ATTEMPT_STATUSES = new Set(["prepared", "sending", "accepted", "rejected", "unknown", "confirmed", "failed", "cancelled"]);
+
+function normalizeOpportunityAttemptStatus(value) {
+  const status = normalizeString(value) || "unknown";
+  return OPPORTUNITY_ATTEMPT_STATUSES.has(status) ? status : "unknown";
+}
+
+function putOpportunitySubmitAttempts(args = {}) {
+  const database = ensureDb();
+  const inputs = Array.isArray(args.attempts || args.records) ? (args.attempts || args.records) : [];
+  if (!inputs.length) return { ok: true, count: 0 };
+  const statement = database.prepare(`
+    INSERT INTO opportunity_submit_attempts_v2 (
+      attempt_id, attempt_key, execute_run_id, business_date, tenant_id, shop_id, clue_id,
+      product_id, clue_category_id, relation_key, clue_key, clue_category_key, status,
+      counts_against_daily_limit, request_hash, payload_json, created_at, updated_at, sent_at, resolved_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(attempt_key) DO UPDATE SET
+      status = excluded.status,
+      counts_against_daily_limit = excluded.counts_against_daily_limit,
+      request_hash = excluded.request_hash,
+      payload_json = excluded.payload_json,
+      updated_at = excluded.updated_at,
+      sent_at = COALESCE(excluded.sent_at, opportunity_submit_attempts_v2.sent_at),
+      resolved_at = COALESCE(excluded.resolved_at, opportunity_submit_attempts_v2.resolved_at)
+  `);
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    for (const input of inputs) {
+      const attempt = normalizeRecordPayload(input);
+      const attemptId = normalizeString(attempt.attemptId || attempt.id);
+      const attemptKey = normalizeString(attempt.attemptKey) || attemptId;
+      if (!attemptId || !attemptKey) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Opportunity attempt requires attemptId and attemptKey");
+      const createdAt = normalizeString(attempt.createdAt) || nowIso();
+      const updatedAt = normalizeString(attempt.updatedAt) || createdAt;
+      statement.run(
+        attemptId,
+        attemptKey,
+        normalizeString(attempt.executeRunId),
+        normalizeString(attempt.businessDate || attempt.date) || businessDate(new Date(createdAt)),
+        normalizeString(attempt.tenantId) || DEFAULT_TENANT_ID,
+        normalizeString(attempt.shopId) || "",
+        normalizeString(attempt.clueId) || "",
+        normalizeString(attempt.productId) || "",
+        normalizeString(attempt.clueCategoryId || attempt.clueLastCategoryId) || "",
+        normalizeString(attempt.relationKey) || "",
+        normalizeString(attempt.clueKey) || "",
+        normalizeString(attempt.clueCategoryKey) || "",
+        normalizeOpportunityAttemptStatus(attempt.status),
+        attempt.countsAgainstDailyLimit === false ? 0 : 1,
+        normalizeString(attempt.requestHash) || "",
+        encodeJson(attempt),
+        createdAt,
+        updatedAt,
+        normalizeString(attempt.sentAt) || createdAt,
+        normalizeString(attempt.resolvedAt) || updatedAt
+      );
+    }
+    database.exec("COMMIT");
+    return { ok: true, count: inputs.length };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function countOpportunitySubmitAttempts(args = {}) {
+  const businessDateValue = normalizeString(args.businessDate || args.date) || businessDate();
+  const shopId = normalizeString(args.shopId);
+  const row = shopId
+    ? ensureDb().prepare(`
+        SELECT COUNT(*) AS count FROM opportunity_submit_attempts_v2
+        WHERE business_date = ? AND shop_id = ? AND counts_against_daily_limit = 1
+      `).get(businessDateValue, shopId)
+    : ensureDb().prepare(`
+        SELECT shop_id, COUNT(*) AS count FROM opportunity_submit_attempts_v2
+        WHERE business_date = ? AND counts_against_daily_limit = 1
+        GROUP BY shop_id
+      `).all(businessDateValue);
+  return shopId
+    ? { businessDate: businessDateValue, shopId, count: Number(row && row.count || 0) }
+    : { businessDate: businessDateValue, counts: Object.fromEntries(row.map((item) => [item.shop_id, Number(item.count || 0)])) };
+}
+
+function listOpportunitySubmitDedupeKeys() {
+  const rows = ensureDb().prepare(`
+    SELECT relation_key, clue_key, clue_category_key
+    FROM opportunity_submit_attempts_v2
+    WHERE status IN ('accepted', 'confirmed')
+  `).all();
+  return {
+    relationKeys: Array.from(new Set(rows.map((row) => row.relation_key).filter(Boolean))),
+    clueKeys: Array.from(new Set(rows.map((row) => row.clue_key).filter(Boolean))),
+    clueCategoryKeys: Array.from(new Set(rows.map((row) => row.clue_category_key).filter(Boolean)))
+  };
+}
+
+function findOpportunitySubmitDedupeKeys(args = {}) {
+  const database = ensureDb();
+  const findKeys = (column, values) => {
+    const requested = Array.from(new Set((Array.isArray(values) ? values : []).map(normalizeString).filter(Boolean)));
+    const found = [];
+    for (let index = 0; index < requested.length; index += 400) {
+      const batch = requested.slice(index, index + 400);
+      const placeholders = batch.map(() => "?").join(", ");
+      const rows = database.prepare(`
+        SELECT ${column} AS value FROM opportunity_submit_attempts_v2
+        WHERE status IN ('accepted', 'confirmed') AND ${column} IN (${placeholders})
+        GROUP BY ${column}
+      `).all(...batch);
+      found.push(...rows.map((row) => row.value).filter(Boolean));
+    }
+    return found;
+  };
+  return {
+    relationKeys: findKeys("relation_key", args.relationKeys),
+    clueKeys: findKeys("clue_key", args.clueKeys),
+    clueCategoryKeys: findKeys("clue_category_key", args.clueCategoryKeys)
+  };
+}
+
+function cleanupOpportunitySubmitAttempts(args = {}) {
+  const retentionDays = Math.max(1, Math.min(3650, Math.trunc(Number(args.failedRetentionDays || 90))));
+  const cutoff = new Date(Date.now() - retentionDays * 86400000).toISOString();
+  const result = ensureDb().prepare(`
+    DELETE FROM opportunity_submit_attempts_v2
+    WHERE status NOT IN ('accepted', 'confirmed') AND updated_at < ?
+  `).run(cutoff);
+  return { ok: true, deleted: result.changes, cutoff };
 }
 
 function cleanupLargeRecordSessions() {
@@ -2364,6 +2638,8 @@ function handle(method, args = {}) {
     case "stores.tombstoneIdentity": return tombstoneStoreIdentity(args);
     case "records.put": return putNativeRecord(args);
     case "records.putMany": return putManyNativeRecords(args);
+    case "records.acquireOperation": return acquireNativeOperation(args);
+    case "records.claimOpportunitySubmitTask": return claimOpportunitySubmitTask(args);
     case "records.putLarge.start": return startLargeNativeRecordPut(args);
     case "records.putLarge.chunk": return putLargeNativeRecordChunk(args);
     case "records.putLarge.commit": return commitLargeNativeRecordPut(args);
@@ -2371,10 +2647,16 @@ function handle(method, args = {}) {
     case "records.get": return getNativeRecord(args);
     case "records.getMany": return getManyNativeRecords(args);
     case "records.list": return listNativeRecords(args);
+    case "records.latest": return latestNativeRecord(normalizeRecordStoreName(args.storeName || args.store));
     case "records.queryOperations": return queryNativeOperations(args);
     case "records.cleanupOperations": return cleanupNativeOperations(args);
     case "records.delete": return deleteNativeRecord(args);
     case "records.deleteMany": return deleteManyNativeRecords(args);
+    case "opportunityAttempts.putMany": return putOpportunitySubmitAttempts(args);
+    case "opportunityAttempts.count": return countOpportunitySubmitAttempts(args);
+    case "opportunityAttempts.listDedupeKeys": return listOpportunitySubmitDedupeKeys(args);
+    case "opportunityAttempts.findDedupeKeys": return findOpportunitySubmitDedupeKeys(args);
+    case "opportunityAttempts.cleanup": return cleanupOpportunitySubmitAttempts(args);
     case "catalogJobs.acquire": return acquireCatalogJob(args);
     case "catalogJobs.get": return getCatalogJob(args);
     case "catalogJobs.cancel": return cancelCatalogJob(args);

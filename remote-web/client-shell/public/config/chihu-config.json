@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.15.violations-v2",
+  "version": "2026.07.16.opportunity-pipeline-v1",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"

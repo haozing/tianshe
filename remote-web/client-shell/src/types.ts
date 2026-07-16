@@ -1025,6 +1025,14 @@ export interface DoudianOpportunityExecution {
 
 export interface DoudianOpportunityReportResult extends DoudianStoreResult {
   mode?: DoudianOpportunityReportMode | string;
+  pipelineStatus?: string;
+  resultSource?: "live" | "cached";
+  shopIds?: string[];
+  pipelineOptions?: {
+    skipSubmittedClueCategory?: boolean;
+    skipSubmittedClue?: boolean;
+    skipSubmittedProductInSameClue?: boolean;
+  };
   submitMode?: DoudianOpportunitySubmitMode;
   goodsMatchType?: DoudianOpportunityGoodsMatchType;
   sourceRunId?: string;

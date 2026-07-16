@@ -4,9 +4,10 @@ import {
   ChevronRight,
   Loader2,
   RefreshCw,
-  Send
+  Send,
+  Square
 } from "lucide-react";
-import { fetchDoudianOpportunityPipelineRun, fetchDoudianOpportunityReportLatest, listDoudianOpportunityCandidatesPage, listDoudianOpportunityStoreCategories, listDoudianStores, runDoudianOpportunityPipelineTask } from "../bridge/client";
+import { cancelDoudianStoreOperation, fetchDoudianOpportunityPipelineRun, fetchDoudianOpportunityPipelineSummary, fetchDoudianOpportunityReportLatest, listDoudianOpportunityCandidatesPage, listDoudianOpportunityStoreCategories, listDoudianStores, restoreDoudianOpportunityPipelineTask, runDoudianOpportunityPipelineTask } from "../bridge/client";
 import { addDoudianProgressListener } from "../domain/doudian/progress";
 import { cn } from "../lib/utils";
 import type {
@@ -192,6 +193,8 @@ function submitStatusInfo(item: DoudianOpportunityPrematchCandidate) {
   if (item.submittedAt || status === "submitted") return { label: "已提报", className: "bg-[#eafaf0] text-[#087443]" };
   if (status === "failed") return { label: "失败", className: "bg-[#fff1ef] text-[#b42318]" };
   if (status === "skipped") return { label: "跳过", className: "bg-[#fff7e8] text-[#b54708]" };
+  if (status === "queued") return { label: "待提报", className: "bg-brand-foxSoft text-brand-fox" };
+  if (status === "cancelled") return { label: "已取消", className: "bg-[#f2f4f7] text-[#667085]" };
   if (item.alternative || status === "alternative") return { label: "备选", className: "bg-[#eef4ff] text-[#175cd3]" };
   if (item.eligible && status === "ready") return { label: "待提报", className: "bg-brand-foxSoft text-brand-fox" };
   return { label: status || "--", className: "bg-[#f2f4f7] text-[#667085]" };
@@ -286,6 +289,8 @@ export function OpportunityProductPrematchPage() {
   const actionLockRef = useRef(false);
   const activePipelineOperationIdRef = useRef("");
   const lastPipelineSnapshotRefreshRef = useRef(0);
+  const pipelineSnapshotRequestSeqRef = useRef(0);
+  const pipelineSnapshotInFlightRef = useRef(false);
 
   const filters = useMemo<DoudianOpportunityFilters>(() => ({
     activeKey: activeRank,
@@ -427,8 +432,7 @@ export function OpportunityProductPrematchPage() {
   }, [storeCategories]);
 
   useEffect(() => {
-    void refreshStores();
-    void restoreLatest();
+    void initializePage();
   }, []);
 
   useEffect(() => addDoudianProgressListener((event) => {
@@ -441,7 +445,7 @@ export function OpportunityProductPrematchPage() {
       const now = Date.now();
       if (now - lastPipelineSnapshotRefreshRef.current >= 10000) {
         lastPipelineSnapshotRefreshRef.current = now;
-        void restorePipelineRun(activePipelineOperationIdRef.current, { silent: true, includeCandidates: false, updatePipelineLog: true });
+        void restorePipelineRun(activePipelineOperationIdRef.current, { silent: true, includeCandidates: false, updatePipelineLog: true, summaryOnly: true });
       }
       return;
     }
@@ -471,7 +475,7 @@ export function OpportunityProductPrematchPage() {
     const timer = window.setInterval(() => {
       if (cancelled) return;
       lastPipelineSnapshotRefreshRef.current = Date.now();
-      void restorePipelineRun(runId, { silent: true, includeCandidates: false, updatePipelineLog: true });
+      void restorePipelineRun(runId, { silent: true, includeCandidates: false, updatePipelineLog: true, summaryOnly: true });
     }, 10000);
     return () => {
       cancelled = true;
@@ -487,6 +491,25 @@ export function OpportunityProductPrematchPage() {
     setAutoSubmitPage((current) => Math.min(current, autoSubmitPageCount - 1));
   }, [autoSubmitPageCount]);
 
+  async function initializePage() {
+    await refreshStores();
+    await restoreLatest();
+    const operation = await restoreDoudianOpportunityPipelineTask().catch(() => null);
+    if (!operation) return;
+    actionLockRef.current = true;
+    activePipelineOperationIdRef.current = operation.operationId;
+    setMatchRunId(operation.operationId);
+    setPipelineInFlight(true);
+    setPipelineLog("已恢复运行中的商机提报任务");
+    await restorePipelineRun(operation.operationId, {
+      silent: true,
+      includeCandidates: false,
+      updatePipelineLog: true,
+      summaryOnly: true,
+      restoreConfiguration: true
+    });
+  }
+
   async function refreshStores() {
     setLoading((current) => current || "stores");
     try {
@@ -499,11 +522,17 @@ export function OpportunityProductPrematchPage() {
     }
   }
 
-  async function refreshStoreCategories() {
-    const shopIds = Array.from(selectedShopIds);
-    const rows = await listDoudianOpportunityStoreCategories({ shopIds }).catch(() => []);
-    setStoreCategories(rows);
-    setSelectedStoreCategoryKeys((current) => current.filter((key) => rows.some((row) => row.categoryKey === key)));
+  async function refreshStoreCategories(requestedShopIds = Array.from(selectedShopIds)) {
+    try {
+      const rows = await listDoudianOpportunityStoreCategories({ shopIds: requestedShopIds });
+      setStoreCategories(rows);
+      setSelectedStoreCategoryKeys((current) => current.filter((key) => rows.some((row) => row.categoryKey === key)));
+      return true;
+    } catch (error) {
+      console.error("店铺类目加载失败", error);
+      setPipelineLog("店铺类目刷新失败，已保留当前筛选");
+      return false;
+    }
   }
 
   async function loadCandidatePageForRun(runId: string, pageIndex: number, cursor: string | null, summary: Record<string, number> = {}) {
@@ -552,7 +581,7 @@ export function OpportunityProductPrematchPage() {
 
   async function applyRestoredOpportunityResult(
     result: Awaited<ReturnType<typeof fetchDoudianOpportunityReportLatest>>,
-    options: { includeCandidates?: boolean; refreshCategories?: boolean; updatePipelineLog?: boolean } = {}
+    options: { includeCandidates?: boolean; refreshCategories?: boolean; updatePipelineLog?: boolean; restoreConfiguration?: boolean } = {}
   ) {
     const details = Array.isArray(result.details)
       ? result.details
@@ -564,35 +593,69 @@ export function OpportunityProductPrematchPage() {
     setResultSummary(result.summary || {});
     setProductRunId(result.productRunId || "");
     setClueRunId(result.clueRunId || "");
+    if (options.restoreConfiguration) {
+      const restoredFilters = result.filters || {};
+      const restoredRules = result.matchRules || {};
+      if (restoredFilters.activeKey) setActiveRank(restoredFilters.activeKey);
+      setSelectedReasonIds([...(restoredFilters.tagIdList || [])]);
+      setSelectedBenefitIds([...(restoredFilters.profitIdList || [])]);
+      if (restoredFilters.recentlyDayType !== undefined) setRecentlyDayType(Number(restoredFilters.recentlyDayType));
+      setSelectedStoreCategoryKeys([...(restoredRules.storeCategoryKeys || [])]);
+      setSkipSubmittedClueCategory(result.pipelineOptions?.skipSubmittedClueCategory === true);
+      setSkipSubmittedClue(result.pipelineOptions?.skipSubmittedClue === true);
+      setSkipSubmittedProductInSameClue(result.pipelineOptions?.skipSubmittedProductInSameClue !== false);
+      if (result.shopIds?.length) setSelectedShopIds(new Set(result.shopIds));
+    }
     if (options.updatePipelineLog) setPipelineLog(pipelineSnapshotLog(details, result.summary || {}));
     const runId = result.matchRunId || result.runId || "";
     setMatchRunId(runId);
+    const pipelineStatus = String(result.pipelineStatus || result.status || "");
+    if (runId && activePipelineOperationIdRef.current === runId) {
+      if (pipelineStatus === "running") {
+        actionLockRef.current = true;
+        setPipelineInFlight(true);
+      } else if (["ok", "partial", "failed", "cancelled"].includes(pipelineStatus)) {
+        actionLockRef.current = false;
+        activePipelineOperationIdRef.current = "";
+        setPipelineInFlight(false);
+      }
+    }
     if (options.includeCandidates !== false) await loadCandidatePageForRun(runId, 0, null, result.summary || {});
-    if (options.refreshCategories !== false) await refreshStoreCategories();
+    if (options.refreshCategories !== false) await refreshStoreCategories(result.shopIds?.length ? result.shopIds : Array.from(selectedShopIds));
     return runId;
   }
 
-  async function restorePipelineRun(runId: string, options: { silent?: boolean; includeCandidates?: boolean; updatePipelineLog?: boolean } = {}) {
+  async function restorePipelineRun(runId: string, options: { silent?: boolean; includeCandidates?: boolean; updatePipelineLog?: boolean; summaryOnly?: boolean; restoreConfiguration?: boolean } = {}) {
     const id = runId.trim();
     if (!id) return;
+    if (options.summaryOnly && pipelineSnapshotInFlightRef.current) return;
+    const requestSeq = ++pipelineSnapshotRequestSeqRef.current;
+    if (options.summaryOnly) pipelineSnapshotInFlightRef.current = true;
     if (!options.silent) setLoading((current) => current || "latest");
     try {
-      const result = await fetchDoudianOpportunityPipelineRun({ runId: id });
+      const result = options.summaryOnly
+        ? await fetchDoudianOpportunityPipelineSummary({ runId: id })
+        : await fetchDoudianOpportunityPipelineRun({ runId: id });
+      if (requestSeq !== pipelineSnapshotRequestSeqRef.current) return;
       await applyRestoredOpportunityResult(result, {
         includeCandidates: options.includeCandidates !== false,
         refreshCategories: options.includeCandidates !== false,
-        updatePipelineLog: options.updatePipelineLog === true
+        updatePipelineLog: options.updatePipelineLog === true,
+        restoreConfiguration: options.restoreConfiguration === true
       });
     } finally {
+      if (options.summaryOnly) pipelineSnapshotInFlightRef.current = false;
       if (!options.silent) setLoading("");
     }
   }
 
   async function restoreLatest() {
+    const requestSeq = ++pipelineSnapshotRequestSeqRef.current;
     setLoading((current) => current || "latest");
     try {
-      const result = await fetchDoudianOpportunityReportLatest({ filters, matchRules });
-      await applyRestoredOpportunityResult(result);
+      const result = await fetchDoudianOpportunityReportLatest();
+      if (requestSeq !== pipelineSnapshotRequestSeqRef.current) return;
+      await applyRestoredOpportunityResult(result, { restoreConfiguration: true });
     } finally {
       setLoading("");
     }
@@ -617,6 +680,23 @@ export function OpportunityProductPrematchPage() {
 
   function toggleStoreCategory(key: string) {
     setSelectedStoreCategoryKeys((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
+  }
+
+  async function cancelPipelineSubmit() {
+    const operationId = activePipelineOperationIdRef.current;
+    if (!operationId) return;
+    setPipelineLog("正在取消商机提报任务");
+    pipelineSnapshotRequestSeqRef.current += 1;
+    try {
+      await cancelDoudianStoreOperation(operationId);
+      actionLockRef.current = false;
+      activePipelineOperationIdRef.current = "";
+      setPipelineInFlight(false);
+      setPipelineLog("商机提报任务已取消");
+      await restorePipelineRun(operationId, { silent: true, updatePipelineLog: true });
+    } catch (error) {
+      setPipelineLog(`取消失败：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   function runPipelineSubmit() {
@@ -648,8 +728,15 @@ export function OpportunityProductPrematchPage() {
       operationId
     });
     promise.then((operation) => {
-      setMatchRunId(operation.operationId || operationId);
-      setPipelineLog("0% · 后台任务已创建，等待扫描店铺");
+      const activeOperationId = operation.operationId || operationId;
+      activePipelineOperationIdRef.current = activeOperationId;
+      setMatchRunId(activeOperationId);
+      if (activeOperationId !== operationId) {
+        setPipelineLog("已连接到运行中的商机提报任务");
+        void restorePipelineRun(activeOperationId, { silent: true, includeCandidates: false, updatePipelineLog: true, summaryOnly: true, restoreConfiguration: true });
+      } else {
+        setPipelineLog("0% · 后台任务已创建，等待扫描店铺");
+      }
     }).catch((error) => {
       console.error("商机提报任务启动失败", error);
       actionLockRef.current = false;
@@ -756,6 +843,12 @@ export function OpportunityProductPrematchPage() {
                           {pipelineBusy ? <Loader2 className="size-[16px] animate-spin" strokeWidth={2} /> : <Send className="size-[16px]" strokeWidth={2} />}
                           {pipelineBusy ? "后台运行" : "一键提报"}
                         </button>
+                        {pipelineBusy ? (
+                          <button className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-[#fda29b] bg-white px-3 text-[13px] font-semibold text-[#b42318] transition-colors hover:bg-[#fff1ef]" type="button" onClick={cancelPipelineSubmit}>
+                            <Square className="size-[14px]" fill="currentColor" strokeWidth={2} />
+                            取消
+                          </button>
+                        ) : null}
                         <div className={cn("flex min-w-0 flex-1 items-center gap-2 rounded-md border px-3 py-2 text-[12px] font-semibold", pipelineBusy ? "border-[#fedf89] bg-[#fffbeb] text-[#b54708]" : "border-[#edf1f6] bg-white text-[#667085]")}>
                           {pipelineBusy ? <Loader2 className="size-[14px] shrink-0 animate-spin" strokeWidth={2} /> : <span className="size-2 shrink-0 rounded-full bg-[#98a2b3]" />}
                           <span className="min-w-0 truncate" title={pipelineLog}>{pipelineLog}</span>
@@ -774,7 +867,7 @@ export function OpportunityProductPrematchPage() {
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="text-[13px] font-semibold text-[#475467]">店铺类目</span>
                           <div className="flex items-center gap-2">
-                            <button className="inline-flex h-8 items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#526a91] transition-colors hover:border-brand-fox hover:text-brand-fox disabled:opacity-50" type="button" onClick={refreshStoreCategories} disabled={busy}>
+                            <button className="inline-flex h-8 items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#526a91] transition-colors hover:border-brand-fox hover:text-brand-fox disabled:opacity-50" type="button" onClick={() => void refreshStoreCategories()} disabled={busy}>
                               <RefreshCw className="size-[13px]" strokeWidth={2} />
                               刷新
                             </button>

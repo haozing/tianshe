@@ -45,7 +45,27 @@ export type DoudianObjectStoreName = typeof DOUDIAN_OBJECT_STORES[number];
 
 const REPOSITORY_WRITE_CONCURRENCY = 16;
 const REPOSITORY_READ_CONCURRENCY = 24;
-const NATIVE_BATCH_WRITE_STORES = new Set<DoudianObjectStoreName>(["stores", "groups", "business_latest", "funds_latest", "violations_latest", "stale_candidates", "bulk_delete_candidates_v1"]);
+const NATIVE_BATCH_WRITE_STORES = new Set<DoudianObjectStoreName>([
+  "stores",
+  "groups",
+  "business_latest",
+  "funds_latest",
+  "violations_latest",
+  "stale_candidates",
+  "bulk_delete_candidates_v1",
+  "opportunity_clue_candidates_v1",
+  "opportunity_product_candidates_v1",
+  "opportunity_prematch_candidates_v1",
+  "opportunity_submit_attempts_v1",
+  "opportunity_pipeline_store_runs_v2",
+  "opportunity_store_category_snapshots_v2",
+  "opportunity_store_category_ledger_v2",
+  "opportunity_clue_cache_shards_v2",
+  "opportunity_clue_word_cache_shards_v2",
+  "opportunity_pipeline_candidates_v2",
+  "opportunity_pipeline_submit_tasks_v2",
+  "opportunity_pipeline_operation_events_v2"
+]);
 const NATIVE_BATCH_RECORD_LIMIT = 500;
 const NATIVE_BATCH_PAYLOAD_LIMIT = 4 * 1024 * 1024;
 
@@ -163,8 +183,32 @@ export async function repositoryPutMany<T extends { id: string }>(
   return output;
 }
 
+export async function repositoryAcquireOperation<T extends Record<string, unknown>>(operation: T, updatedAfter: string) {
+  const acquire = requireNativeData().records.acquireOperation;
+  if (!acquire) return null;
+  return acquire({ operation, updatedAfter });
+}
+
+export async function repositoryClaimOpportunitySubmitTask<T extends Record<string, unknown>>(args: {
+  taskId: string;
+  ownerRunId: string;
+  leaseExpiresAt: string;
+  now: string;
+}) {
+  const claim = requireNativeData().records.claimOpportunitySubmitTask;
+  if (!claim) return null;
+  return claim<T>(args);
+}
+
 export async function repositoryGet<T>(storeName: DoudianObjectStoreName, id: string): Promise<T | null> {
   return requireNativeData().records.get<T & Record<string, unknown>>({ storeName, id }) as Promise<T | null>;
+}
+
+export async function repositoryLatest<T>(storeName: DoudianObjectStoreName): Promise<T | null> {
+  const latest = requireNativeData().records.latest;
+  if (latest) return latest<T & Record<string, unknown>>({ storeName }) as Promise<T | null>;
+  const records = await repositoryGetAll<T & { updatedAt?: string; createdAt?: string }>(storeName);
+  return records.sort((left, right) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")))[0] || null;
 }
 
 export async function repositoryGetMany<T>(storeName: DoudianObjectStoreName, ids: string[]): Promise<T[]> {

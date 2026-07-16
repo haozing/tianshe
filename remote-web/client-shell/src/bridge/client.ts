@@ -31,6 +31,7 @@ import {
   fetchBusinessDataLatest,
   fetchFundsDataLatest,
   fetchOpportunityPipelineRun,
+  fetchOpportunityPipelineSummary,
   fetchOpportunityReport,
   fetchOpportunityReportLatest,
   listOpportunityPipelineCandidatesPage,
@@ -43,6 +44,7 @@ import {
   runDoudianStoreTask,
   cancelDoudianTask,
   renameStoreGroup,
+  restoreDoudianTasks,
   runProductCatalogSyncTask,
   updateStoreGroup,
   type DoudianOperationRecord
@@ -541,6 +543,7 @@ export async function runDoudianOpportunityPipelineTask(args: {
     adapterVersion: nextArgs.doudianAdapter.adapter.version,
     ruleVersion: nextArgs.doudianAdapter.scripts?.version || "",
     metadata: {
+      dedupeKey: "opportunity-pipeline-submit",
       shopCount: nextArgs.shopIds?.length || 0,
       mode: "pipeline-submit"
     },
@@ -574,6 +577,21 @@ export async function fetchDoudianOpportunityPipelineRun(args: {
     ...(args.matchRules ? { matchRules: args.matchRules } : {})
   }, { force: args.forceAdapter === true });
   return fetchOpportunityPipelineRun(nextArgs);
+}
+
+export async function fetchDoudianOpportunityPipelineSummary(args: { runId?: string; forceAdapter?: boolean } = {}): Promise<DoudianOpportunityReportResult> {
+  const nextArgs = await withDoudianAdapter({
+    mode: "latest",
+    ...(args.runId ? { runId: args.runId, operationId: args.runId } : {})
+  }, { force: args.forceAdapter === true });
+  return fetchOpportunityPipelineSummary(nextArgs);
+}
+
+export async function restoreDoudianOpportunityPipelineTask(): Promise<DoudianOperationRecord | null> {
+  const records = await restoreDoudianTasks();
+  return records
+    .filter((record) => record.taskType === "opportunityPipelineSubmit")
+    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
 }
 
 export async function listDoudianOpportunityCandidatesPage(args: {

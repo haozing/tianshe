@@ -1,7 +1,7 @@
 {
   "name": "chihu-electron-client",
   "private": true,
-  "version": "2.1.10-phase2",
+  "version": "2.1.11-phase2",
   "description": "Readable Electron client source for CHIHU remote web migration",
   "author": "赤狐管家",
   "chihuLicense": {
@@ -29,10 +29,11 @@
     "check:desktop-ui-manual-evidence": "node scripts/check-desktop-ui-manual-evidence.js",
     "check:desktop-ui-manual-ready": "node scripts/check-desktop-ui-manual-evidence.js --require-complete",
     "record:desktop-ui-manual-evidence": "node scripts/record-desktop-ui-manual-evidence.js",
-    "check": "node scripts/check-syntax.js && node scripts/check-contract.js && node scripts/check-assets.js",
+    "check": "node scripts/check-syntax.js && node scripts/check-contract.js && node scripts/check-assets.js && node scripts/check-opportunity-data.js",
     "check:syntax": "node scripts/check-syntax.js",
     "check:contract": "node scripts/check-contract.js",
-    "check:assets": "node scripts/check-assets.js"
+    "check:assets": "node scripts/check-assets.js",
+    "check:opportunity-data": "node scripts/check-opportunity-data.js"
   },
   "dependencies": {
     "@node-rs/jieba": "^2.0.1",

@@ -1,6 +1,7 @@
 import { getChihuNative } from "../../native/client";
 import { getPreferences } from "../../bridge/storage";
 import {
+  acquireOperation,
   createOperation,
   getOperation,
   listActiveOperations,
@@ -225,24 +226,7 @@ function taskDedupeKey(task: DoudianTaskRequest) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-async function findDeduplicatedOperation(task: DoudianTaskRequest) {
-  const dedupeKey = taskDedupeKey(task);
-  if (!dedupeKey) return null;
-  const cutoff = Date.now() - ACTIVE_TASK_DEDUPE_MAX_AGE_MS;
-  const active = await listActiveOperations();
-  return active.find((record) => (
-    record.taskType === task.taskType &&
-    record.metadata?.dedupeKey === dedupeKey &&
-    Date.parse(record.updatedAt) >= cutoff
-  )) || null;
-}
-
 async function startDoudianTaskInternal(task: DoudianTaskRequest): Promise<DoudianOperationRecord> {
-  const existing = await findDeduplicatedOperation(task);
-  if (existing) {
-    getChannel();
-    return existing;
-  }
   if (task.metadata?.replaceActive === true) {
     const active = await listActiveOperations();
     const superseded = active.filter((record) => record.taskType === task.taskType);
@@ -257,8 +241,23 @@ async function startDoudianTaskInternal(task: DoudianTaskRequest): Promise<Doudi
     ruleVersion: task.ruleVersion,
     metadata: task.metadata
   });
-  await saveOperation(operation);
-  const winId = await openRunnerWindow(operationId);
+  const dedupeKey = taskDedupeKey(task);
+  if (dedupeKey) {
+    const acquired = await acquireOperation(operation, ACTIVE_TASK_DEDUPE_MAX_AGE_MS);
+    if (!acquired.acquired) {
+      getChannel();
+      return acquired.operation;
+    }
+  } else {
+    await saveOperation(operation);
+  }
+  let winId: number;
+  try {
+    winId = await openRunnerWindow(operationId);
+  } catch (error) {
+    await markOperationError(operationId, error instanceof Error ? error.message : String(error)).catch(() => null);
+    throw error;
+  }
   const runningOperation = { ...operation, status: "running" as const, runnerWinId: winId };
   dispatchDoudianProgress({
     operationId,
@@ -349,6 +348,7 @@ export async function getDoudianTaskStatus(operationId: string) {
 }
 
 export async function restoreDoudianTasks() {
+  getChannel();
   const records = await listActiveOperations();
   return records;
 }

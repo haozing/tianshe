@@ -19,12 +19,14 @@ import type {
   DoudianRunDetail,
   DoudianStoreSummary
 } from "../../types";
-import { repositoryDelete, repositoryGet, repositoryGetAll, repositoryGetAllByPrefix, repositoryGetMany, repositoryListByPrefix, repositoryPut, repositoryPutMany } from "./repository";
+import { repositoryClaimOpportunitySubmitTask, repositoryDelete, repositoryDeleteMany, repositoryGet, repositoryGetAll, repositoryGetAllByPrefix, repositoryGetMany, repositoryLatest, repositoryListByPrefix, repositoryPut, repositoryPutMany } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
 import { getChihuNative } from "../../native/client";
+import { getNativeData } from "../../nativeData/client";
 import { dispatchDoudianProgress } from "./progress";
+import { businessDateDaysAgo, businessDateKey } from "./businessDate";
 import {
   AhoTokenMatcher,
   compareCandidatesByEvidence,
@@ -109,6 +111,7 @@ interface OpportunityArgs {
   dryRun?: boolean;
   pageSize?: number;
   maxPages?: number;
+  includeCandidates?: boolean;
   mockClues?: Array<Record<string, unknown>>;
   mockProducts?: Array<Record<string, unknown>>;
   isCancelled?: () => boolean;
@@ -237,6 +240,11 @@ interface PipelineRunRecord {
   mode: "pipeline-submit";
   filters: DoudianOpportunityFilters;
   matchRules: DoudianOpportunityMatchRules;
+  pipelineOptions?: {
+    skipSubmittedClueCategory?: boolean;
+    skipSubmittedClue?: boolean;
+    skipSubmittedProductInSameClue?: boolean;
+  };
   shopIds: string[];
   tenantId: string;
   clientCapability: Record<string, unknown>;
@@ -727,7 +735,7 @@ function normalizeDate(value: unknown) {
   if (value == null || value === "") return "";
   if (typeof value === "number" && Number.isFinite(value)) {
     const ms = value > 1e12 ? value : value > 1e9 ? value * 1000 : value;
-    return new Date(ms).toISOString().slice(0, 10);
+    return businessDateKey(new Date(ms));
   }
   const next = text(value);
   if (/^\d+$/.test(next)) return normalizeDate(Number(next));
@@ -1182,10 +1190,11 @@ function buildClueSearchBody(filters: DoudianOpportunityFilters = {}, current = 
 }
 
 function thirtyDaysAgo() {
-  const date = new Date();
-  date.setDate(date.getDate() - 30);
-  return date.toISOString().slice(0, 10);
+  return businessDateDaysAgo(30);
 }
+
+let submitAttemptMigrationPromise: Promise<boolean> | null = null;
+const submitAttemptMigrationMetaId = "opportunity-submit-attempts-v2-migration";
 
 function productListContext(filters: DoudianOpportunityFilters = {}, page: number, pageSize: number, categoryLeafId = "") {
   return {
@@ -1194,7 +1203,7 @@ function productListContext(filters: DoudianOpportunityFilters = {}, page: numbe
     keyword: text(filters.keyword),
     categoryLeafId: text(categoryLeafId || filters.categoryLeafId),
     startTime: text(filters.startTime || thirtyDaysAgo()),
-    endTime: text(filters.endTime || new Date().toISOString().slice(0, 10))
+    endTime: text(filters.endTime || businessDateKey())
   };
 }
 
@@ -1230,7 +1239,7 @@ async function scanCluesForStore(payload: DoudianAdapterPayload, store: DoudianS
   }
 
   const rows = rawRows.map((row, rowIndex) => normalizeClue(store, row, payload.adapter, runId, rowIndex)).filter((row): row is DoudianOpportunityClueRow => Boolean(row));
-  const ok = args.mockClues?.length ? true : sourceHealth.some((item) => item.ok === true);
+  const ok = args.mockClues?.length ? true : sourceHealth.length > 0 && sourceHealth.every((item) => item.ok === true);
   const detail: DoudianRunDetail = {
     shopId: store.shopId,
     shopName: store.shopName,
@@ -1306,7 +1315,7 @@ async function scanProductsForStore(
       diagnostic: categoryDiagnostic
     });
   }
-  const ok = args.mockProducts?.length ? true : sourceHealth.some((item) => item.ok === true);
+  const ok = args.mockProducts?.length ? true : sourceHealth.length > 0 && sourceHealth.every((item) => item.ok === true);
   const detail: DoudianRunDetail = {
     shopId: store.shopId,
     shopName: store.shopName,
@@ -1522,7 +1531,89 @@ function clueCacheKey(args: {
 }
 
 function wordCacheKey(clueCacheKeyValue: string, tokenizerVersion: string, stopwordVersion: string) {
-  return stableHash(["word-v2", clueCacheKeyValue, tokenizerVersion, stopwordVersion].join("|"));
+  return `${clueCacheKeyValue}::${stableHash(["word-v2", clueCacheKeyValue, tokenizerVersion, stopwordVersion].join("|"))}`;
+}
+
+const opportunityRetentionMetaId = "opportunity-retention-v1";
+
+function expiredHistoryRecords<T extends { id: string; createdAt?: string; updatedAt?: string; status?: string }>(records: T[], cutoffMs: number, maxRecords: number) {
+  const terminal = records
+    .filter((item) => item.status !== "running" && item.status !== "queued")
+    .sort((left, right) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")));
+  return terminal.filter((item, index) => {
+    const timestamp = Date.parse(String(item.updatedAt || item.createdAt || ""));
+    return index >= maxRecords || (Number.isFinite(timestamp) && timestamp < cutoffMs);
+  });
+}
+
+async function deleteStoreRecordsByPrefix(storeName: Parameters<typeof repositoryGetAllByPrefix>[0], prefix: string) {
+  for (;;) {
+    const records = await repositoryGetAllByPrefix<{ id: string }>(storeName, prefix, { pageSize: 1000, maxItems: 5000 }).catch(() => []);
+    if (!records.length) return;
+    await repositoryDeleteMany(storeName, records.map((item) => item.id));
+    if (records.length < 5000) return;
+  }
+}
+
+async function cleanupOpportunityData(adapter: DoudianAdapterConfig) {
+  await ensureStructuredSubmitAttempts();
+  const meta = await repositoryGet<{ id: string; cleanedAt?: string }>("runtime_meta", opportunityRetentionMetaId).catch(() => null);
+  const cleanedAtMs = Date.parse(String(meta?.cleanedAt || ""));
+  if (Number.isFinite(cleanedAtMs) && Date.now() - cleanedAtMs < 24 * 60 * 60 * 1000) return;
+
+  const retentionDays = policyNumber(adapter, "opportunityReport.historyRetentionDays", 30, 1, 3650);
+  const maxRuns = policyNumber(adapter, "opportunityReport.maxHistoryRuns", 200, 10, 5000);
+  const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const [pipelineRuns, clueRuns, productRuns, prematchRuns, executeRuns, clueCaches, wordCaches] = await Promise.all([
+    repositoryGetAll<PipelineRunRecord>(pipelineRunStore).catch(() => []),
+    repositoryGetAll<ClueScanRunRecord>(clueScanStore).catch(() => []),
+    repositoryGetAll<ProductScanRunRecord>(productScanStore).catch(() => []),
+    repositoryGetAll<PrematchRunRecord>(prematchRunStore).catch(() => []),
+    repositoryGetAll<ExecuteRunRecord>(opportunityExecuteStore).catch(() => []),
+    repositoryGetAll<ClueCacheRecord>(clueCacheStore).catch(() => []),
+    repositoryGetAll<ClueWordCacheRecord>(clueWordCacheStore).catch(() => [])
+  ]);
+
+  const stalePipelineRuns = expiredHistoryRecords(pipelineRuns, cutoffMs, maxRuns);
+  for (const run of stalePipelineRuns) {
+    const prefix = pipelineRunRecordPrefix(run.runId);
+    await Promise.all([
+      deleteStoreRecordsByPrefix(pipelineStoreRunStore, prefix),
+      deleteStoreRecordsByPrefix(storeCategorySnapshotStore, prefix),
+      deleteStoreRecordsByPrefix(pipelineCandidateStore, prefix),
+      deleteStoreRecordsByPrefix(pipelineSubmitTaskStore, prefix),
+      deleteStoreRecordsByPrefix(pipelineOperationEventStore, prefix)
+    ]);
+  }
+  if (stalePipelineRuns.length) await repositoryDeleteMany(pipelineRunStore, stalePipelineRuns.map((run) => run.id));
+
+  const legacyRunGroups: Array<[typeof clueScanStore | typeof productScanStore | typeof prematchRunStore | typeof opportunityExecuteStore, typeof clueCandidateStore | typeof productCandidateStore | typeof prematchCandidateStore | null, Array<{ id: string; runId: string; createdAt?: string; updatedAt?: string; status?: string }>]> = [
+    [clueScanStore, clueCandidateStore, clueRuns],
+    [productScanStore, productCandidateStore, productRuns],
+    [prematchRunStore, prematchCandidateStore, prematchRuns],
+    [opportunityExecuteStore, null, executeRuns]
+  ];
+  for (const [runStore, childStore, runs] of legacyRunGroups) {
+    const staleRuns = expiredHistoryRecords(runs, cutoffMs, maxRuns);
+    if (childStore) {
+      for (const run of staleRuns) await deleteStoreRecordsByPrefix(childStore, `${run.runId}-`);
+    }
+    if (staleRuns.length) await repositoryDeleteMany(runStore, staleRuns.map((run) => run.id));
+  }
+
+  const now = nowIso();
+  const staleClueCaches = clueCaches.filter((cache) => (cache.expiresAt && cache.expiresAt <= now) || Date.parse(cache.updatedAt || cache.createdAt) < cutoffMs);
+  const staleClueIds = new Set(staleClueCaches.map((cache) => cache.id));
+  const staleWordCaches = wordCaches.filter((cache) => staleClueIds.has(cache.clueCacheKey) || Date.parse(cache.updatedAt || cache.createdAt) < cutoffMs);
+  for (const cache of staleClueCaches) await deleteStoreRecordsByPrefix(clueCacheShardStore, `${cache.id}-`);
+  for (const cache of staleWordCaches) await deleteStoreRecordsByPrefix(clueWordCacheShardStore, `${cache.id}-`);
+  if (staleClueCaches.length) await repositoryDeleteMany(clueCacheStore, staleClueCaches.map((cache) => cache.id));
+  if (staleWordCaches.length) await repositoryDeleteMany(clueWordCacheStore, staleWordCaches.map((cache) => cache.id));
+
+  await getNativeData()?.opportunityAttempts?.cleanup({
+    failedRetentionDays: policyNumber(adapter, "opportunityReport.failedAttemptRetentionDays", 90, 1, 3650)
+  }).catch(() => undefined);
+  await repositoryPut("runtime_meta", { id: opportunityRetentionMetaId, cleanedAt: now });
 }
 
 function cacheableClueRow(clue: DoudianOpportunityClueRow): DoudianOpportunityClueRow {
@@ -1578,14 +1669,13 @@ function materializeCachedClue(row: DoudianOpportunityClueRow, store: DoudianSto
 }
 
 async function loadClueCacheRows(cacheKey: string, store: DoudianStoreSummary, runId: string) {
-  const shards = (await repositoryGetAll<ClueCacheShardRecord>(clueCacheShardStore).catch(() => []))
-    .filter((item) => item.clueCacheKey === cacheKey)
+  const shards = (await repositoryGetAllByPrefix<ClueCacheShardRecord>(clueCacheShardStore, `${cacheKey}-`, { pageSize: 500, maxItems: 10000 }).catch(() => []))
     .sort((left, right) => left.shardNo - right.shardNo);
   return shards.flatMap((shard) => shard.rows || []).map((row, index) => materializeCachedClue(row, store, runId, index));
 }
 
-function sourceHealthSucceeded(sourceHealth: Array<Record<string, unknown>> = []) {
-  return sourceHealth.some((item) => {
+function sourceHealthComplete(sourceHealth: Array<Record<string, unknown>> = []) {
+  return sourceHealth.length > 0 && sourceHealth.every((item) => {
     const status = Number(item.status || 0);
     return item.ok === true && (!status || (status >= 200 && status < 400));
   });
@@ -1663,7 +1753,7 @@ async function loadCluesByCategoryWithCache(args: {
   const cacheScope = pipelineCacheScope(args.payload.adapter);
   const scopeId = pipelineScopeId(cacheScope, args.identity);
   if (!categoryKey) {
-    return { cacheKey: "", cacheScope, scopeId, rows: [] as DoudianOpportunityClueRow[], sourceHealth: [], remoteTotal: 0, cacheHit: false, skipReason: "missing-category-id" };
+    return { cacheKey: "", cacheScope, scopeId, rows: [] as DoudianOpportunityClueRow[], sourceHealth: [], remoteTotal: 0, cacheHit: false, ok: true, skipReason: "missing-category-id" };
   }
   const filterHash = stableFilterHash(args.filters, args.payload.adapter);
   const planHash = requestPlanHash(args.payload.adapter);
@@ -1688,7 +1778,8 @@ async function loadCluesByCategoryWithCache(args: {
         rows: cachedRows,
         sourceHealth: [{ key: "opportunityClueCache", ok: true, cacheHit: true, categoryKey, cacheScope, scopeId, rowCount: cachedRows.length }],
         remoteTotal: cached.remoteTotal,
-        cacheHit: true
+        cacheHit: true,
+        ok: true
       };
     }
   }
@@ -1702,9 +1793,9 @@ async function loadCluesByCategoryWithCache(args: {
     dryRun: args.dryRun,
     mockClues: args.mockClues
   });
-  const fetchedSourceOk = args.mockClues?.length ? true : sourceHealthSucceeded(fetched.sourceHealth);
+  const fetchedSourceOk = args.mockClues?.length ? true : sourceHealthComplete(fetched.sourceHealth);
   if (!fetchedSourceOk) {
-    return { cacheKey: key, cacheScope, scopeId, rows: [], sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, cacheHit: false };
+    return { cacheKey: key, cacheScope, scopeId, rows: [], sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, cacheHit: false, ok: false };
   }
   const rows: DoudianOpportunityClueRow[] = [];
   let clueWordsApiCount = 0;
@@ -1720,7 +1811,7 @@ async function loadCluesByCategoryWithCache(args: {
   }
   const allowEmptyCacheWrite = policyBoolean(args.payload.adapter, "opportunityReport.allowEmptyClueCacheWrite", false);
   if (!rows.length && !allowEmptyCacheWrite) {
-    return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, cacheHit: false };
+    return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, cacheHit: false, ok: true };
   }
   const cacheRows = rows.map(cacheableClueRow);
   const shards = chunk(cacheRows, 100).map((items, index) => ({
@@ -1763,7 +1854,7 @@ async function loadCluesByCategoryWithCache(args: {
     updatedAt: now
   } satisfies ClueCacheRecord);
   await repositoryPutMany(clueCacheShardStore, shards, { concurrency: 2 });
-  return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, cacheHit: false };
+  return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, cacheHit: false, ok: true };
 }
 
 function clueTokenSources(clue: DoudianOpportunityClueRow) {
@@ -1805,8 +1896,7 @@ async function segmentTextsWithNative(
 async function loadTokenIndexFromCache(wordCacheKeyValue: string): Promise<TokenIndex | null> {
   const record = await repositoryGet<ClueWordCacheRecord>(clueWordCacheStore, wordCacheKeyValue).catch(() => null);
   if (!record) return null;
-  const shards = (await repositoryGetAll<ClueWordCacheShardRecord>(clueWordCacheShardStore).catch(() => []))
-    .filter((item) => item.wordCacheKey === wordCacheKeyValue)
+  const shards = (await repositoryGetAllByPrefix<ClueWordCacheShardRecord>(clueWordCacheShardStore, `${wordCacheKeyValue}-`, { pageSize: 500, maxItems: 10000 }).catch(() => []))
     .sort((left, right) => left.shardNo - right.shardNo);
   const tokenToClueIds: Record<string, string[]> = {};
   const clueTokens: Record<string, string[]> = {};
@@ -1835,8 +1925,7 @@ async function tokenizeCluesWithCache(args: {
   scopeId: string;
   allowTokenizerFallback?: boolean;
 }) {
-  const existing = (await repositoryGetAll<ClueWordCacheRecord>(clueWordCacheStore).catch(() => []))
-    .filter((item) => item.clueCacheKey === args.clueCacheKey)
+  const existing = (await repositoryGetAllByPrefix<ClueWordCacheRecord>(clueWordCacheStore, `${args.clueCacheKey}::`, { pageSize: 20, maxItems: 100 }).catch(() => []))
     .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0];
   if (existing) {
     const cached = await loadTokenIndexFromCache(existing.id);
@@ -2569,7 +2658,15 @@ function prematchMode(args: OpportunityArgs): DoudianOpportunityPrematchMode {
 }
 
 function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+  return businessDateKey();
+}
+
+function pipelineOptions(args: OpportunityArgs) {
+  return {
+    skipSubmittedClueCategory: args.skipSubmittedClueCategory === true,
+    skipSubmittedClue: args.skipSubmittedClue === true,
+    skipSubmittedProductInSameClue: args.skipSubmittedProductInSameClue !== false
+  };
 }
 
 function dailyAttemptLimit(args: OpportunityArgs, adapter: DoudianAdapterConfig) {
@@ -2601,25 +2698,6 @@ function clueCategoryKey(value: { shopId?: string; clueLastCategoryId?: string }
   return [value.shopId, value.clueLastCategoryId].map(text).join("::");
 }
 
-async function listSubmitAttempts(date = todayKey(), shopId = "") {
-  const attempts = await repositoryGetAll<SubmitAttemptRecord>(submitAttemptStore).catch(() => []);
-  const targetShopId = text(shopId);
-  return attempts.filter((item) => item.date === date && (!targetShopId || item.shopId === targetShopId));
-}
-
-async function submitAttemptCountsByShop(date = todayKey()) {
-  const attempts = await listSubmitAttempts(date);
-  const counts = new Map<string, number>();
-  for (const attempt of attempts) {
-    counts.set(attempt.shopId, (counts.get(attempt.shopId) || 0) + 1);
-  }
-  return counts;
-}
-
-async function submitAttemptCountForShop(shopId: string, date = todayKey()) {
-  return (await listSubmitAttempts(date, shopId)).length;
-}
-
 interface SubmitDedupeIndex {
   relationKeys: Set<string>;
   clueKeys: Set<string>;
@@ -2630,7 +2708,117 @@ function submittedForDedupe(value: { ok?: boolean; status?: string }) {
   return value.ok === true || ["submitted", "success", "ok"].includes(text(value.status).toLocaleLowerCase());
 }
 
-async function submittedDedupeIndex(): Promise<SubmitDedupeIndex> {
+function structuredAttemptStatus(value: { ok?: boolean; status?: string }) {
+  if (submittedForDedupe(value)) return "accepted";
+  const status = text(value.status).toLocaleLowerCase();
+  if (status === "cancelled") return "cancelled";
+  if (status === "unknown") return "unknown";
+  return "failed";
+}
+
+function structuredSubmitAttempt(record: SubmitAttemptRecord, countsAgainstDailyLimit = true) {
+  return {
+    ...record,
+    attemptId: record.id,
+    attemptKey: record.id,
+    executeRunId: undefined,
+    businessDate: record.date,
+    tenantId: "local-user",
+    clueCategoryId: record.clueLastCategoryId || "",
+    relationKey: relationKey(record),
+    clueKey: clueKey(record),
+    clueCategoryKey: record.clueLastCategoryId ? clueCategoryKey(record) : "",
+    status: structuredAttemptStatus(record),
+    countsAgainstDailyLimit,
+    updatedAt: record.createdAt,
+    sentAt: record.createdAt,
+    resolvedAt: record.createdAt
+  };
+}
+
+async function ensureStructuredSubmitAttempts() {
+  const api = getNativeData()?.opportunityAttempts;
+  if (!api) return false;
+  if (submitAttemptMigrationPromise) return submitAttemptMigrationPromise;
+  submitAttemptMigrationPromise = (async () => {
+    const marker = await repositoryGet<{ id: string; completedAt?: string }>("runtime_meta", submitAttemptMigrationMetaId).catch(() => null);
+    if (marker?.completedAt) return true;
+    const [legacyAttempts, executeRuns] = await Promise.all([
+      repositoryGetAll<SubmitAttemptRecord>(submitAttemptStore).catch(() => []),
+      repositoryGetAll<ExecuteRunRecord>(opportunityExecuteStore).catch(() => [])
+    ]);
+    const migrated: Array<Record<string, unknown>> = legacyAttempts.map((attempt) => structuredSubmitAttempt(attempt));
+    for (const run of executeRuns) {
+      for (const execution of run.executions || []) {
+        if (execution.stage !== "submit" || execution.planKey !== "opportunitySubmitClue" || !submittedForDedupe(execution)) continue;
+        const createdAt = run.updatedAt || run.createdAt;
+        const attempt: SubmitAttemptRecord = {
+          id: `legacy-execution-${run.runId}-${execution.id}`,
+          date: businessDateKey(new Date(createdAt)),
+          runId: run.runId,
+          matchRunId: run.sourceRunId,
+          shopId: execution.shopId,
+          shopName: execution.shopName,
+          clueId: execution.clueId || "",
+          clueName: execution.clueName || "",
+          productId: execution.productId || "",
+          title: execution.title || "",
+          status: execution.status,
+          ok: execution.ok,
+          message: execution.message,
+          createdAt
+        };
+        migrated.push(structuredSubmitAttempt(attempt, false));
+      }
+    }
+    for (const batch of chunk(migrated, 500)) await api.putMany({ attempts: batch });
+    if (legacyAttempts.length) await repositoryDeleteMany(submitAttemptStore, legacyAttempts.map((item) => item.id));
+    await api.cleanup({ failedRetentionDays: 90 }).catch(() => undefined);
+    await repositoryPut("runtime_meta", {
+      id: submitAttemptMigrationMetaId,
+      completedAt: nowIso(),
+      legacyAttemptCount: legacyAttempts.length,
+      legacyExecutionAttemptCount: migrated.length - legacyAttempts.length
+    });
+    return true;
+  })().catch(() => false);
+  return submitAttemptMigrationPromise;
+}
+
+async function submitAttemptCountsByShop(date = todayKey()) {
+  if (await ensureStructuredSubmitAttempts()) {
+    const result = await getNativeData()!.opportunityAttempts!.count({ businessDate: date });
+    return new Map(Object.entries(result.counts || {}).map(([shopId, count]) => [shopId, Number(count || 0)]));
+  }
+  const attempts = await repositoryGetAll<SubmitAttemptRecord>(submitAttemptStore).catch(() => []);
+  const counts = new Map<string, number>();
+  attempts.filter((item) => item.date === date).forEach((item) => counts.set(item.shopId, (counts.get(item.shopId) || 0) + 1));
+  return counts;
+}
+
+async function submitAttemptCountForShop(shopId: string, date = todayKey()) {
+  if (await ensureStructuredSubmitAttempts()) {
+    const result = await getNativeData()!.opportunityAttempts!.count({ businessDate: date, shopId });
+    return Number(result.count || 0);
+  }
+  const attempts = await repositoryGetAll<SubmitAttemptRecord>(submitAttemptStore).catch(() => []);
+  return attempts.filter((item) => item.date === date && item.shopId === shopId).length;
+}
+
+async function submittedDedupeIndex(values: Array<{ shopId?: string; clueId?: string; productId?: string; clueLastCategoryId?: string }> = []): Promise<SubmitDedupeIndex> {
+  if (!values.length) return { relationKeys: new Set(), clueKeys: new Set(), clueCategoryKeys: new Set() };
+  if (await ensureStructuredSubmitAttempts()) {
+    const keys = await getNativeData()!.opportunityAttempts!.findDedupeKeys({
+      relationKeys: uniqueText(values.map(relationKey)),
+      clueKeys: uniqueText(values.map(clueKey)),
+      clueCategoryKeys: uniqueText(values.filter((item) => item.clueLastCategoryId).map(clueCategoryKey))
+    });
+    return {
+      relationKeys: new Set(keys.relationKeys || []),
+      clueKeys: new Set(keys.clueKeys || []),
+      clueCategoryKeys: new Set(keys.clueCategoryKeys || [])
+    };
+  }
   const relationKeys = new Set<string>();
   const clueKeys = new Set<string>();
   const clueCategoryKeys = new Set<string>();
@@ -2651,10 +2839,6 @@ async function submittedDedupeIndex(): Promise<SubmitDedupeIndex> {
     }
   }
   return { relationKeys, clueKeys, clueCategoryKeys };
-}
-
-async function attemptedRelationKeys() {
-  return (await submittedDedupeIndex()).relationKeys;
 }
 
 function shouldSkipSubmittedCandidate(
@@ -3187,7 +3371,6 @@ async function fetchProductPrematch(payload: DoudianAdapterPayload, args: Opport
     productsByShop.set(product.shopId, list);
   }
 
-  const dedupeIndex = await submittedDedupeIndex();
   const candidates: DoudianOpportunityPrematchCandidate[] = [];
   const wordCache = new Map<string, string[]>();
   for (const clue of limitedClues) {
@@ -3197,20 +3380,8 @@ async function fetchProductPrematch(payload: DoudianAdapterPayload, args: Opport
       const shopProducts = productsByShop.get(shop.shopId) || [];
       for (const product of shopProducts) {
         const scored = scorePrematchCandidate({ product, clue, words, mode });
-        let eligible = scored.eligible;
-        let skipReason = scored.skipReason;
-        const submittedSkipReason = eligible
-          ? shouldSkipSubmittedCandidate(args, dedupeIndex, {
-            shopId: product.shopId,
-            clueId: clue.clueId,
-            productId: product.productId,
-            clueLastCategoryId: clue.lastCategoryId
-          })
-          : "";
-        if (submittedSkipReason) {
-          eligible = false;
-          skipReason = submittedSkipReason;
-        }
+        const eligible = scored.eligible;
+        const skipReason = scored.skipReason;
         if (scored.matchScore <= 0 && !eligible) continue;
         candidates.push(candidateFromMatch({
           runId,
@@ -3231,9 +3402,17 @@ async function fetchProductPrematch(payload: DoudianAdapterPayload, args: Opport
     }
   }
 
-  const sorted = candidates.sort((left, right) => right.matchScore - left.matchScore);
+  const sorted = candidates.sort((left, right) => right.matchScore - left.matchScore).slice(0, maxCandidates);
+  const dedupeIndex = await submittedDedupeIndex(sorted);
+  const historyFiltered = sorted.map((candidate) => {
+    if (!candidate.eligible) return candidate;
+    const submittedSkipReason = shouldSkipSubmittedCandidate(args, dedupeIndex, candidate);
+    return submittedSkipReason
+      ? { ...candidate, eligible: false, estimatedCost: 0, status: "skipped" as const, skipReason: submittedSkipReason }
+      : candidate;
+  });
   const bestByProduct = new Set<string>();
-  const deduped = sorted.map((candidate) => {
+  const deduped = historyFiltered.map((candidate) => {
     if (mode !== "precise" || !candidate.eligible) return candidate;
     const key = `${candidate.shopId}::${candidate.productId}`;
     if (!bestByProduct.has(key)) {
@@ -3247,7 +3426,7 @@ async function fetchProductPrematch(payload: DoudianAdapterPayload, args: Opport
       status: "skipped",
       skipReason: "同商品已有更高分商机"
     };
-  }).slice(0, maxCandidates);
+  });
 
   const details: DoudianRunDetail[] = Array.from(new Map(deduped.map((candidate) => [candidate.shopId, candidate.shopName])).entries()).map(([shopId, shopName], index, list) => {
     const shopCandidates = deduped.filter((candidate) => candidate.shopId === shopId);
@@ -3826,6 +4005,7 @@ async function submitProductsForClue(args: {
     action: "submit",
     stage: "submit",
     planKey: "opportunitySubmitClue",
+    extraKey: () => args.clue.clueId,
     dryRun: args.dryRun
   });
   if (safety.rejected.length) {
@@ -4265,7 +4445,13 @@ async function recordSubmitAttempts(args: {
       } satisfies SubmitAttemptRecord);
     }
   }
-  await repositoryPutMany(submitAttemptStore, records);
+  if (await ensureStructuredSubmitAttempts()) {
+    for (const batch of chunk(records.map((record) => structuredSubmitAttempt(record)), 500)) {
+      await getNativeData()!.opportunityAttempts!.putMany({ attempts: batch });
+    }
+  } else {
+    await repositoryPutMany(submitAttemptStore, records);
+  }
   return records.length;
 }
 
@@ -4282,10 +4468,10 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
   const updatePosition = titleUpdatePosition(args);
   const limit = dailyAttemptLimit(args, payload.adapter);
   const usedByShop = await submitAttemptCountsByShop();
-  const dedupeIndex = await submittedDedupeIndex();
   const candidates = (await loadPrematchCandidates(args))
     .filter((candidate) => candidate.eligible && candidate.status !== "submitted")
     .sort((left, right) => right.matchScore - left.matchScore);
+  const dedupeIndex = await submittedDedupeIndex(candidates);
   const executions: DoudianOpportunityExecution[] = [];
   const details: DoudianRunDetail[] = [];
   const updatedCandidates: DoudianOpportunityPrematchCandidate[] = [];
@@ -4678,6 +4864,7 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
     const ledger = await listStoreLedger();
     const stores = ledger.stores || [];
     const scopedRunId = text(args.runId || args.operationId || args.sourceRunId);
+    const workerId = `${scopedRunId || "global"}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     let processed = 0;
     while (true) {
       const nowMs = Date.now();
@@ -4691,17 +4878,31 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
       if (!tasks.length) break;
       const activeKeys = new Set<string>();
       let processedThisPass = 0;
-      for (const task of tasks) {
+      for (let task of tasks) {
       if (activeKeys.has(task.concurrencyKey)) continue;
       activeKeys.add(task.concurrencyKey);
       const startedAt = nowIso();
-      await repositoryPut(pipelineSubmitTaskStore, {
-        ...task,
-        status: "running",
-        startedAt: task.startedAt || startedAt,
-        leaseExpiresAt: submitLeaseExpiresAt(payload.adapter),
-        updatedAt: startedAt
-      } satisfies PipelineSubmitTaskRecord);
+      const leaseExpiresAt = submitLeaseExpiresAt(payload.adapter);
+      const claimed = await repositoryClaimOpportunitySubmitTask<PipelineSubmitTaskRecord & Record<string, unknown>>({
+        taskId: task.id,
+        ownerRunId: workerId,
+        leaseExpiresAt,
+        now: startedAt
+      });
+      if (claimed) {
+        if (!claimed.claimed || !claimed.task) continue;
+        task = claimed.task;
+      } else {
+        task = {
+          ...task,
+          status: "running",
+          ownerRunId: workerId,
+          startedAt: task.startedAt || startedAt,
+          leaseExpiresAt,
+          updatedAt: startedAt
+        } satisfies PipelineSubmitTaskRecord;
+        await repositoryPut(pipelineSubmitTaskStore, task);
+      }
       const store = stores.find((item) => item.shopId === task.shopId);
       const loadedTaskCandidates = await repositoryGetMany<DoudianOpportunityPrematchCandidate>(pipelineCandidateStore, task.candidateIds).catch(() => []);
       const taskCandidateById = new Map(loadedTaskCandidates.map((candidate) => [candidate.id, candidate]));
@@ -4718,9 +4919,10 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
       const processedCandidateIds = new Set<string>();
       try {
         if (!store) throw new Error("Selected store is missing login partition");
+        if (taskCandidates.length !== task.candidateIds.length) throw new Error("Submit task candidate snapshot is incomplete");
         const limit = dailyAttemptLimit(args, payload.adapter);
         let used = await submitAttemptCountForShop(store.shopId);
-        const dedupeIndex = await submittedDedupeIndex();
+        const dedupeIndex = await submittedDedupeIndex(taskCandidates);
         const leaseRenewalIntervalMs = submitLeaseRenewalMs(payload.adapter);
         let lastLeaseRenewalMs = Date.now();
         await updatePipelineStoreRunProgress(task.storeRunId, {
@@ -5085,6 +5287,8 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     };
   }
 
+  await cleanupOpportunityData(payload.adapter).catch(() => undefined);
+
   const now = nowIso();
   const details: DoudianRunDetail[] = [];
   const sourceHealth: Array<Record<string, unknown>> = [];
@@ -5105,8 +5309,6 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   let fallbackSubmitCandidateCount = 0;
   const pipelineClues: DoudianOpportunityClueRow[] = [];
   const matchRulesHash = stableMatchRulesHash(args);
-  const dedupeIndex = await submittedDedupeIndex();
-
   await repositoryPut(pipelineRunStore, {
     id: runId,
     runId,
@@ -5114,6 +5316,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     mode: "pipeline-submit",
     filters,
     matchRules,
+    pipelineOptions: pipelineOptions(args),
     shopIds: targets.map((store) => store.shopId),
     tenantId: normalizePipelineStoreIdentity(targets[0]).tenantId,
     clientCapability,
@@ -5175,6 +5378,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       mode: "pipeline-submit",
       filters,
       matchRules,
+      pipelineOptions: pipelineOptions(args),
       shopIds: targets.map((item) => item.shopId),
       tenantId: normalizePipelineStoreIdentity(targets[0]).tenantId,
       clientCapability,
@@ -5222,6 +5426,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     const identity = normalizePipelineStoreIdentity(store);
     const id = storeRunId(runId, identity);
     const startedAt = nowIso();
+    let failurePhase: PipelineStoreRunRecord["phase"] = "product-scan";
     await repositoryPut(pipelineStoreRunStore, {
       id,
       runId,
@@ -5246,8 +5451,9 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       dispatchPipelineProgress(args, 5 + (index / targets.length) * 70, `扫描店铺商品：${store.shopName || store.shopId}`);
       const scan = await scanProductsForStore(payload, store, args, runId, index + 1, targets.length);
       if (pipelineCancelled(args)) return finishCancelled();
-      products.push(...scan.products);
       sourceHealth.push(...scan.sourceHealth);
+      if (!scan.detail.ok) throw new Error(scan.detail.message || "opportunity product scan failed");
+      products.push(...scan.products);
       const storeDailyAttemptLimit = dailyAttemptLimit(args, payload.adapter);
       const quotaUsedBefore = await submitAttemptCountForShop(identity.shopId);
       const quotaRemainingBefore = Math.max(0, storeDailyAttemptLimit - quotaUsedBefore);
@@ -5258,6 +5464,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         maxTopK: storeDailyAttemptLimit
       });
       const extracted = extractCurrentStoreCategories(scan.products);
+      failurePhase = "category-ledger";
       const effective = effectiveStoreCategories(extracted.categories, matchRules);
       const productsByCategoryKey = groupProductsByCategoryKey(scan.products);
       currentCategoryCount += extracted.categories.length;
@@ -5326,6 +5533,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         }
         const categoryProducts = productsByCategoryKey.get(categoryKey) || [];
         if (!categoryProducts.length) continue;
+        failurePhase = "clue-load";
         const clueResult = await loadCluesByCategoryWithCache({
           payload,
           store,
@@ -5338,6 +5546,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         });
         storeSourceHealth.push(...clueResult.sourceHealth);
         sourceHealth.push(...clueResult.sourceHealth);
+        if (clueResult.ok === false) throw new Error("opportunity clue loading failed");
         if (!clueResult.rows.length || !clueResult.cacheKey) continue;
         pipelineClues.push(...clueResult.rows);
         storeClueCount += clueResult.rows.length;
@@ -5348,6 +5557,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           effectiveCategoryCount: effective.length,
           clueCount: storeClueCount
         }).catch(() => null);
+        failurePhase = "tokenize";
         const tokenIndex = await tokenizeCluesWithCache({
           clues: clueResult.rows,
           clueCacheKey: clueResult.cacheKey,
@@ -5367,6 +5577,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           tokenCount: storeTokenCount
         }).catch(() => null);
         dispatchPipelineProgress(args, 12 + ((index + 0.35) / targets.length) * 70, `匹配商机词：${identity.shopName || identity.shopId}`);
+        failurePhase = "match";
         const matchResult = matchCategoryProductsByAhoTokens({
           runId,
           storeRunId: id,
@@ -5387,6 +5598,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         mergeMatchDiagnostics(storeDiagnostics, matchResult.diagnostics);
       }
       if (pipelineCancelled(args)) return finishCancelled();
+      const dedupeIndex = await submittedDedupeIndex(storeCandidates);
       const rankedStoreCandidates = markProductRanks({
         candidates: storeCandidates,
         topKPerProduct: storeTopKPerProduct,
@@ -5406,21 +5618,37 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       storeDiagnostics.alternativeCandidateCount = alternativeCount;
       storeDiagnostics.droppedByTopKCount = Math.max(0, storeDiagnostics.passedThresholdCount - plannedStoreCandidates.length);
       const compactedStoreCandidates = plannedStoreCandidates.map(compactPipelineCandidate);
-      if (plannedStoreCandidates.length) {
-        await repositoryPutMany(pipelineCandidateStore, compactedStoreCandidates, { concurrency: 2 });
-      }
       const task = await enqueueStoreSubmit({
         runId,
         storeRunId: id,
         identity,
         candidates: compactedStoreCandidates
       });
+      const persistedCandidates = task
+        ? compactedStoreCandidates.map((candidate) => candidate.eligible && candidate.status === "ready"
+          ? { ...candidate, submitTaskId: task.id, submitStatus: "queued" }
+          : candidate)
+        : compactedStoreCandidates;
+      if (persistedCandidates.length) {
+        try {
+          await repositoryPutMany(pipelineCandidateStore, persistedCandidates, { concurrency: 2 });
+        } catch (error) {
+          if (task) {
+            const failedAt = nowIso();
+            await repositoryPut(pipelineSubmitTaskStore, {
+              ...task,
+              status: "failed",
+              failedCount: Math.max(1, task.failedCount),
+              lastError: error instanceof Error ? error.message : String(error),
+              finishedAt: failedAt,
+              updatedAt: failedAt
+            } satisfies PipelineSubmitTaskRecord).catch(() => undefined);
+          }
+          throw error;
+        }
+      }
       if (task) {
         submitTaskCount += 1;
-        const queuedCandidates = compactedStoreCandidates.map((candidate) => candidate.eligible && candidate.status === "ready"
-          ? { ...candidate, submitTaskId: task.id, submitStatus: "queued" }
-          : candidate);
-        await repositoryPutMany(pipelineCandidateStore, queuedCandidates, { concurrency: 2 });
       }
       if (pipelineCancelled(args)) return finishCancelled();
       let skipReason = "";
@@ -5544,6 +5772,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     } catch (error) {
       failedCount += 1;
       const failedAt = nowIso();
+      const failureReason = failurePhase === "product-scan" ? "pipeline-product-scan-failed" : `pipeline-${failurePhase}-failed`;
       await repositoryPut(pipelineStoreRunStore, {
         id,
         runId,
@@ -5561,7 +5790,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         plannedSubmitCandidateCount: 0,
         submittedCount: 0,
         failedCount: 1,
-        skipReason: "pipeline-product-scan-failed",
+        skipReason: failureReason,
         startedAt,
         updatedAt: failedAt,
         finishedAt: failedAt
@@ -5573,7 +5802,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         level: "error",
         event: "pipeline-store-failed",
         message: error instanceof Error ? error.message : String(error),
-        detail: { phase: "product-scan" }
+        detail: { phase: failurePhase }
       }).catch(() => undefined);
       details.push({
         shopId: store.shopId,
@@ -5581,7 +5810,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         status: "failed",
         ok: false,
         message: error instanceof Error ? error.message : String(error),
-        reason: "pipeline-product-scan-failed",
+        reason: failureReason,
         category: "api",
         index: index + 1,
         total: targets.length
@@ -5626,6 +5855,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     mode: "pipeline-submit",
     filters,
     matchRules,
+    pipelineOptions: pipelineOptions(args),
     shopIds: targets.map((store) => store.shopId),
     tenantId: normalizePipelineStoreIdentity(targets[0]).tenantId,
     clientCapability,
@@ -5681,6 +5911,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     sourceHealth,
     filters,
     matchRules,
+    pipelineOptions: pipelineOptions(args),
     requestPlanHash: requestPlanHash(payload.adapter)
   };
 }
@@ -5742,7 +5973,9 @@ async function buildPipelineRunCachedResult(
   const ledger = await listStoreLedger();
   const [pipelineStoreRuns, pipelineCandidates] = await Promise.all([
     loadPipelineStoreRunsForRun(pipelineRun.runId),
-    loadPipelineCandidatesForRun(pipelineRun.runId, latestPipelineCandidatePreviewLimit)
+    args.includeCandidates === false
+      ? Promise.resolve([] as DoudianOpportunityPrematchCandidate[])
+      : loadPipelineCandidatesForRun(pipelineRun.runId, latestPipelineCandidatePreviewLimit)
   ]);
   const storeRuns = pipelineStoreRuns.filter((item) => item.runId === pipelineRun.runId);
   const prematches = pipelineCandidates.filter((item) => item.pipelineRunId === pipelineRun.runId || item.sourceRunId === pipelineRun.runId);
@@ -5756,12 +5989,15 @@ async function buildPipelineRunCachedResult(
   return {
     ...ledger,
     ok: pipelineRun.status === "ok",
-    status: "cached",
+    status: pipelineRun.status,
+    pipelineStatus: pipelineRun.status,
+    resultSource: "cached",
     mode: "latest",
     message,
     runId: pipelineRun.runId,
     operationId: pipelineRun.operationId,
     sourceRunId: pipelineRun.runId,
+    shopIds: pipelineRun.shopIds,
     rows: [],
     clues: [],
     products: [],
@@ -5805,6 +6041,7 @@ async function buildPipelineRunCachedResult(
     sourceHealth: [],
     filters: args.filters || pipelineRun.filters,
     matchRules: args.matchRules || pipelineRun.matchRules,
+    pipelineOptions: pipelineRun.pipelineOptions,
     requestPlanHash: pipelineRun.requestPlanHash
   };
 }
@@ -5839,11 +6076,14 @@ export async function fetchOpportunityPipelineRun(args: OpportunityArgs = {}): P
   };
 }
 
+export async function fetchOpportunityPipelineSummary(args: OpportunityArgs = {}): Promise<DoudianOpportunityReportResult> {
+  return fetchOpportunityPipelineRun({ ...args, includeCandidates: false });
+}
+
 export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): Promise<DoudianOpportunityReportResult> {
   const ledger = await listStoreLedger();
   const payload = adapterPayload(args);
-  const pipelineRuns = await repositoryGetAll<PipelineRunRecord>(pipelineRunStore).catch(() => []);
-  const latestPipeline = pipelineRuns.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  const latestPipeline = await repositoryLatest<PipelineRunRecord>(pipelineRunStore).catch(() => null);
   if (latestPipeline) {
     const [pipelineStoreRuns, pipelineCandidates] = await Promise.all([
       loadPipelineStoreRunsForRun(latestPipeline.runId),
@@ -5861,12 +6101,15 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
     return {
       ...ledger,
       ok: latestPipeline.status === "ok",
-      status: "cached",
+      status: latestPipeline.status,
+      pipelineStatus: latestPipeline.status,
+      resultSource: "cached",
       mode: "latest",
       message: "已恢复最近一次商机提报数据",
       runId: latestPipeline.runId,
       operationId: latestPipeline.operationId,
       sourceRunId: latestPipeline.runId,
+      shopIds: latestPipeline.shopIds,
       rows: [],
       clues: [],
       products: [],
@@ -5914,15 +6157,15 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
     };
   }
   const [clueRuns, productRuns, prematchRuns, executeRuns] = await Promise.all([
-    repositoryGetAll<ClueScanRunRecord>(clueScanStore).catch(() => []),
-    repositoryGetAll<ProductScanRunRecord>(productScanStore).catch(() => []),
-    repositoryGetAll<PrematchRunRecord>(prematchRunStore).catch(() => []),
-    repositoryGetAll<ExecuteRunRecord>(opportunityExecuteStore).catch(() => [])
+    repositoryLatest<ClueScanRunRecord>(clueScanStore).catch(() => null),
+    repositoryLatest<ProductScanRunRecord>(productScanStore).catch(() => null),
+    repositoryLatest<PrematchRunRecord>(prematchRunStore).catch(() => null),
+    repositoryLatest<ExecuteRunRecord>(opportunityExecuteStore).catch(() => null)
   ]);
-  const latestClue = clueRuns.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
-  const latestProduct = productRuns.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
-  const latestPrematch = prematchRuns.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
-  const latestExecute = executeRuns.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  const latestClue = clueRuns;
+  const latestProduct = productRuns;
+  const latestPrematch = prematchRuns;
+  const latestExecute = executeRuns;
   const latestClues = latestClue?.rows?.length ? latestClue.rows : await loadCluesForRun(latestClue?.runId || "");
   const latestProducts = latestProduct?.products?.length ? latestProduct.products : await loadProductsForRun(latestProduct?.runId || "");
   const latestPrematches = latestPrematch?.candidates?.length ? latestPrematch.candidates : await loadPrematchesForRun(latestPrematch?.runId || "");
@@ -6009,24 +6252,21 @@ export async function listOpportunityStoreCategoryLedger(args: { shopIds?: strin
 }
 
 export async function restoreLatestOpportunityClueScan() {
-  const runs = await repositoryGetAll<ClueScanRunRecord>(clueScanStore);
-  const latest = runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  const latest = await repositoryLatest<ClueScanRunRecord>(clueScanStore);
   if (!latest) return null;
   if (latest.rows?.length) return latest;
   return { ...latest, rows: await loadCluesForRun(latest.runId) };
 }
 
 export async function restoreLatestOpportunityProductScan() {
-  const runs = await repositoryGetAll<ProductScanRunRecord>(productScanStore);
-  const latest = runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  const latest = await repositoryLatest<ProductScanRunRecord>(productScanStore);
   if (!latest) return null;
   if (latest.products?.length) return latest;
   return { ...latest, products: await loadProductsForRun(latest.runId) };
 }
 
 export async function restoreLatestOpportunityExecute() {
-  const runs = await repositoryGetAll<ExecuteRunRecord>(opportunityExecuteStore);
-  return runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  return repositoryLatest<ExecuteRunRecord>(opportunityExecuteStore);
 }
 
 export async function runDoudianOpportunityReportSelfCheck(options: { doudianAdapter?: DoudianAdapterPayload } = {}) {
@@ -6126,21 +6366,29 @@ export async function runDoudianOpportunityReportSelfCheck(options: { doudianAda
     await runSubmitWorker(payload, { doudianAdapter: payload, dryRun: true }).catch(() => undefined);
     const pipelineLatest = await fetchOpportunityReportLatest({ doudianAdapter: payload, matchRules: { minTokenHitRatio: 0.33 } });
     const restored = await fetchOpportunityReportLatest({ doudianAdapter: payload });
+    const businessDateBoundaryOk = businessDateKey(new Date("2026-07-14T16:00:00.000Z")) === "2026-07-15" &&
+      businessDateKey(new Date("2026-07-14T15:59:59.999Z")) === "2026-07-14";
+    const sourceFailureClassificationOk = sourceHealthComplete([{ ok: true, status: 200 }, { ok: false, status: 500 }]) === false;
     return {
       ok: clueScan.ok === true &&
         productScan.ok === true &&
         submit.ok === true &&
         collect.ok === true &&
         (pipeline.prematches || []).length > 0 &&
-        pipelineLatest.status === "cached" &&
-        restored.status === "cached",
+        pipelineLatest.status === pipeline.status &&
+        pipelineLatest.resultSource === "cached" &&
+        restored.status === pipeline.status &&
+        businessDateBoundaryOk &&
+        sourceFailureClassificationOk,
       clueScanOk: clueScan.ok === true,
       productScanOk: productScan.ok === true,
       submitDryRunOk: submit.executions?.every((item) => item.status === "dry_run" || item.status === "skipped") === true,
       collectDryRunOk: collect.executions?.some((item) => item.status === "dry_run") === true,
       pipelineDryRunOk: (pipeline.prematches || []).length > 0,
-      pipelineRestoreOk: pipelineLatest.status === "cached",
-      restoreOk: restored.status === "cached",
+      pipelineRestoreOk: pipelineLatest.status === pipeline.status && pipelineLatest.resultSource === "cached",
+      restoreOk: restored.status === pipeline.status,
+      businessDateBoundaryOk,
+      sourceFailureClassificationOk,
       clueRunId,
       productRunId,
       pipelineRunId,

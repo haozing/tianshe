@@ -498,13 +498,23 @@ export interface NativeDataApi {
   records: {
     put: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; record: T }) => Promise<NativeDataRecordPutResult<T>>;
     putMany?: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; records: T[]; omitRecords?: boolean }) => Promise<NativeDataRecordPutManyResult<T>>;
+    acquireOperation?: <T extends Record<string, unknown>>(args: { operation: T; updatedAfter: string }) => Promise<{ acquired: boolean; operation: T }>;
+    claimOpportunitySubmitTask?: <T extends Record<string, unknown>>(args: { taskId: string; ownerRunId: string; leaseExpiresAt: string; now: string }) => Promise<{ claimed: boolean; reason: string; task: T | null }>;
     get: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; id: string }) => Promise<T | null>;
     getMany?: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; ids: string[] }) => Promise<T[]>;
     list: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; cursor?: string; limit?: number }) => Promise<CursorPage<T>>;
+    latest?: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName }) => Promise<T | null>;
     queryOperations?: <T extends Record<string, unknown>>(args: { statuses?: string[]; taskType?: string; updatedAfter?: string; limit?: number }) => Promise<T[]>;
     cleanupOperations?: (args: { retentionDays?: number; maxTerminalRecords?: number }) => Promise<NativeDataOperationCleanupResult>;
     delete: (args: { storeName: NativeDataRecordStoreName; id: string; reason?: string }) => Promise<NativeDataRecordDeleteResult>;
     deleteMany?: (args: { storeName: NativeDataRecordStoreName; ids: string[]; reason?: string }) => Promise<NativeDataRecordDeleteManyResult>;
+  };
+  opportunityAttempts?: {
+    putMany: (args: { attempts: Array<Record<string, unknown>> }) => Promise<{ ok: boolean; count: number }>;
+    count: (args: { businessDate: string; shopId?: string }) => Promise<{ businessDate: string; shopId?: string; count?: number; counts?: Record<string, number> }>;
+    listDedupeKeys: () => Promise<{ relationKeys: string[]; clueKeys: string[]; clueCategoryKeys: string[] }>;
+    findDedupeKeys: (args: { relationKeys?: string[]; clueKeys?: string[]; clueCategoryKeys?: string[] }) => Promise<{ relationKeys: string[]; clueKeys: string[]; clueCategoryKeys: string[] }>;
+    cleanup: (args?: { failedRetentionDays?: number }) => Promise<{ ok: boolean; deleted: number; cutoff: string }>;
   };
   catalogJobs: {
     acquire: (args: ProductCatalogTaskArgs) => Promise<CatalogJobHandle>;

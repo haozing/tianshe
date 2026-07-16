@@ -21,6 +21,8 @@ function registerBusinessDatabaseHandlers() {
 
   ipcMain.handle("native:data:records:put", request("records.put", "write"));
   ipcMain.handle("native:data:records:putMany", request("records.putMany", "write"));
+  ipcMain.handle("native:data:records:acquireOperation", request("records.acquireOperation", "write"));
+  ipcMain.handle("native:data:records:claimOpportunitySubmitTask", request("records.claimOpportunitySubmitTask", "write"));
   ipcMain.handle("native:data:records:putLarge:start", request("records.putLarge.start", "write"));
   ipcMain.handle("native:data:records:putLarge:chunk", request("records.putLarge.chunk", "write"));
   ipcMain.handle("native:data:records:putLarge:commit", request("records.putLarge.commit", "write"));
@@ -28,10 +30,17 @@ function registerBusinessDatabaseHandlers() {
   ipcMain.handle("native:data:records:get", request("records.get", "interactive"));
   ipcMain.handle("native:data:records:getMany", request("records.getMany", "interactive"));
   ipcMain.handle("native:data:records:list", request("records.list", "interactive"));
+  ipcMain.handle("native:data:records:latest", request("records.latest", "interactive"));
   ipcMain.handle("native:data:records:queryOperations", request("records.queryOperations", "interactive"));
   ipcMain.handle("native:data:records:cleanupOperations", request("records.cleanupOperations", "write"));
   ipcMain.handle("native:data:records:delete", request("records.delete", "write"));
   ipcMain.handle("native:data:records:deleteMany", request("records.deleteMany", "write"));
+
+  ipcMain.handle("native:data:opportunityAttempts:putMany", request("opportunityAttempts.putMany", "write"));
+  ipcMain.handle("native:data:opportunityAttempts:count", request("opportunityAttempts.count", "interactive"));
+  ipcMain.handle("native:data:opportunityAttempts:listDedupeKeys", request("opportunityAttempts.listDedupeKeys", "interactive"));
+  ipcMain.handle("native:data:opportunityAttempts:findDedupeKeys", request("opportunityAttempts.findDedupeKeys", "interactive"));
+  ipcMain.handle("native:data:opportunityAttempts:cleanup", request("opportunityAttempts.cleanup", "write"));
 
   ipcMain.handle("native:data:catalogJobs:acquire", request("catalogJobs.acquire", "write"));
   ipcMain.handle("native:data:catalogJobs:reportPage", request("catalogJobs.reportPage", "write"));

@@ -111,20 +111,20 @@ const REMOTE_RELEASE_PATH_PATTERN = /\/remote-web\/(current|beta)\//;
 const fallbackUpdateNotes: UpdateNotesDocument = {
   schemaVersion: 1,
   productName: "赤狐管家",
-  currentVersion: "2.1.7-phase2",
-  updatedAt: "2026-07-10T00:00:00+08:00",
-  summary: "本次补齐更新说明、检查更新、启动静默检测和手动下载安装能力。",
+  currentVersion: "2.1.11-phase2",
+  updatedAt: "2026-07-16T00:00:00+08:00",
+  summary: "本次集中修复商机中心提报流程的并发、跨日统计、历史数据和批量写入问题。",
   releases: [
     {
-      version: "2.1.7-phase2",
-      date: "2026-07-10",
+      version: "2.1.11-phase2",
+      date: "2026-07-16",
       sections: [
         {
-          title: "新增",
+          title: "修复",
           items: [
-            "新增更新说明弹窗。",
-            "新增桌面本体版本检查。",
-            "启动后静默检测一次本体版本，检测到更新后可手动下载并安装。"
+            "修复商机提报可能重复提交、错误未上报和跨日统计偏差的问题。",
+            "修复历史提报记录退化及任务恢复状态不准确的问题。",
+            "优化批量写入、缓存保留和后台轮询开销。"
           ]
         }
       ]
