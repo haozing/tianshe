@@ -80,6 +80,12 @@ function identityForStore(store: DoudianStoreSummary) {
   };
 }
 
+export async function assertMutationStoreActive(store: DoudianStoreSummary) {
+  const assertActive = getNativeData()?.stores.assertActiveIdentity;
+  if (!assertActive) return { ok: true, compatibilityFallback: true };
+  return assertActive(identityForStore(store));
+}
+
 function responseSummary(response: RequestPlanResult | undefined) {
   return response
     ? { status: response.status, ok: response.ok, source: response.source, error: response.error || "" }
@@ -395,6 +401,8 @@ export async function prepareMutationSafety<T extends MutationCandidateInput>(ar
       lookupResults[index] = live;
     }
   }));
+
+  await assertMutationStoreActive(args.store);
 
   for (const [index, item] of args.candidates.entries()) {
     const productId = text(item.productId);

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.17.bulk-delete-safety-v1",
+  "version": "2026.07.17.store-lifecycle-sync-v1",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -34,7 +34,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "d1d265d",
-    "buildTime": "2026-07-17T08:51:29.886Z"
+    "gitCommit": "37ce7dc-dirty",
+    "buildTime": "2026-07-17T10:25:59.903Z"
   }
 }

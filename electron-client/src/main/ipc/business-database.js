@@ -17,6 +17,7 @@ function registerBusinessDatabaseHandlers() {
   ipcMain.handle("native:data:maintenance:recoverOpenJobs", request("maintenance.recoverOpenJobs", "maintenance"));
 
   ipcMain.handle("native:data:stores:upsertIdentity", request("stores.upsertIdentity", "write"));
+  ipcMain.handle("native:data:stores:assertActiveIdentity", request("stores.assertActiveIdentity", "interactive"));
   ipcMain.handle("native:data:stores:tombstoneIdentity", request("stores.tombstoneIdentity", "write"));
 
   ipcMain.handle("native:data:records:put", request("records.put", "write"));

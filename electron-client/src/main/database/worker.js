@@ -498,6 +498,8 @@ function tombstoneStoreIdentity(args = {}) {
       )
     `).run(ts, String(args.reason || "store-tombstone"), ts, identity.tenantId, identity.shopId, identity.storeGeneration);
 
+    const opportunityCleanup = cancelStoreOpportunityState(database, identity, ts, String(args.reason || "store-tombstone"));
+
     database.exec("COMMIT");
     return {
       ok: true,
@@ -505,6 +507,7 @@ function tombstoneStoreIdentity(args = {}) {
       cancelledJobs: jobs.changes,
       cancelledRuns: runs.changes,
       deletedHeads: heads.changes,
+      opportunityCleanup,
       tenantId: identity.tenantId,
       shopId: identity.shopId,
       storeGeneration: identity.storeGeneration,
@@ -822,6 +825,25 @@ function claimOpportunitySubmitTask(args = {}) {
       return { claimed: false, reason: "missing", task: null };
     }
     const task = formatNativeRecord(row);
+    const hasStoreIdentityFence = Boolean(normalizeString(task.tenantId) && normalizeInteger(task.storeGeneration || task.generation));
+    const identity = hasStoreIdentityFence ? normalizeIdentity(task) : null;
+    const storeIdentity = identity ? getStoreIdentity(identity) : null;
+    if (identity && (!storeIdentity || storeIdentity.lifecycle !== "active")) {
+      const cancelledTask = {
+        ...task,
+        status: "cancelled",
+        leaseExpiresAt: undefined,
+        lastError: storeIdentity ? "store generation is tombstoned" : "store identity is missing",
+        finishedAt: task.finishedAt || now,
+        updatedAt: now
+      };
+      database.prepare(`
+        UPDATE native_records SET payload_json = ?, updated_at = ?
+        WHERE store_name = 'opportunity_pipeline_submit_tasks_v2' AND record_id = ?
+      `).run(encodeJson(cancelledTask), now, taskId);
+      database.exec("COMMIT");
+      return { claimed: false, reason: storeIdentity ? "store-tombstoned" : "store-missing", task: cancelledTask };
+    }
     const claimable = task.status === "queued" || (task.status === "running" && (!task.leaseExpiresAt || String(task.leaseExpiresAt) < now));
     if (!claimable) {
       database.exec("COMMIT");
@@ -897,10 +919,14 @@ function putOpportunitySubmitAttempts(args = {}) {
       if (!attemptId || !attemptKey) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Opportunity attempt requires attemptId and attemptKey");
       const createdAt = normalizeString(attempt.createdAt) || nowIso();
       const updatedAt = normalizeString(attempt.updatedAt) || createdAt;
+      const requestedExecuteRunId = normalizeString(attempt.executeRunId);
+      const executeRunId = requestedExecuteRunId && database.prepare("SELECT 1 FROM opportunity_execute_runs_v2 WHERE run_id = ?").get(requestedExecuteRunId)
+        ? requestedExecuteRunId
+        : null;
       statement.run(
         attemptId,
         attemptKey,
-        normalizeString(attempt.executeRunId),
+        executeRunId,
         normalizeString(attempt.businessDate || attempt.date) || businessDate(new Date(createdAt)),
         normalizeString(attempt.tenantId) || DEFAULT_TENANT_ID,
         normalizeString(attempt.shopId) || "",
@@ -1271,12 +1297,193 @@ function cleanupNativeOperations(args = {}) {
   }
 }
 
+function nativeRecordRows(database, storeName) {
+  return database.prepare("SELECT * FROM native_records WHERE store_name = ? ORDER BY record_id").all(storeName);
+}
+
+function nativeRecordMatchesIdentity(record, identity) {
+  return normalizeTenantId(record) === identity.tenantId &&
+    normalizeString(record.shopId) === identity.shopId &&
+    (normalizeInteger(record.storeGeneration || record.generation) || 1) === identity.storeGeneration;
+}
+
+function updateNativeRecordPayload(database, row, record, ts) {
+  database.prepare(`
+    UPDATE native_records SET payload_json = ?, updated_at = ?
+    WHERE store_name = ? AND record_id = ?
+  `).run(encodeJson(record), ts, row.store_name, row.record_id);
+}
+
+function deleteNativeRecordRow(database, row) {
+  return database.prepare("DELETE FROM native_records WHERE store_name = ? AND record_id = ?")
+    .run(row.store_name, row.record_id).changes;
+}
+
+// Keep all UI-facing opportunity state consistent with the store tombstone in this transaction.
+function cancelStoreOpportunityState(database, identity, ts, reason = "store-ledger-delete") {
+  const affectedRunIds = new Set();
+  const affectedTaskIds = new Set();
+  const deletedClueCacheIds = new Set();
+  const deletedWordCacheIds = new Set();
+  const summary = {
+    cancelledStoreRuns: 0,
+    cancelledSubmitTasks: 0,
+    cancelledCandidates: 0,
+    unknownCandidates: 0,
+    deletedCategoryRecords: 0,
+    deletedCacheRecords: 0,
+    finalizedPipelineRuns: 0,
+    finalizedOperations: 0
+  };
+
+  for (const row of nativeRecordRows(database, "opportunity_pipeline_store_runs_v2")) {
+    const record = formatNativeRecord(row);
+    if (!nativeRecordMatchesIdentity(record, identity)) continue;
+    const terminal = new Set(["ok", "partial", "failed", "cancelled", "skipped"]);
+    if (terminal.has(normalizeString(record.status)) && record.phase === "finished") continue;
+    if (record.runId) affectedRunIds.add(normalizeString(record.runId));
+    updateNativeRecordPayload(database, row, {
+      ...record,
+      status: "cancelled",
+      phase: "finished",
+      skipReason: record.skipReason || reason,
+      leaseExpiresAt: undefined,
+      finishedAt: record.finishedAt || ts,
+      updatedAt: ts
+    }, ts);
+    summary.cancelledStoreRuns += 1;
+  }
+
+  for (const row of nativeRecordRows(database, "opportunity_pipeline_submit_tasks_v2")) {
+    const record = formatNativeRecord(row);
+    if (!nativeRecordMatchesIdentity(record, identity)) continue;
+    if (!new Set(["queued", "running"]).has(normalizeString(record.status))) continue;
+    if (record.runId) affectedRunIds.add(normalizeString(record.runId));
+    affectedTaskIds.add(normalizeString(record.id || row.record_id));
+    updateNativeRecordPayload(database, row, {
+      ...record,
+      status: "cancelled",
+      leaseExpiresAt: undefined,
+      lastError: record.lastError || reason,
+      finishedAt: record.finishedAt || ts,
+      updatedAt: ts
+    }, ts);
+    summary.cancelledSubmitTasks += 1;
+  }
+
+  for (const row of nativeRecordRows(database, "opportunity_pipeline_candidates_v2")) {
+    const record = formatNativeRecord(row);
+    const belongsToStore = nativeRecordMatchesIdentity(record, identity) ||
+      affectedTaskIds.has(normalizeString(record.submitTaskId)) ||
+      Array.from(affectedRunIds).some((runId) => normalizeString(record.storeRunId).startsWith(`${runId}-`) && normalizeString(record.shopId) === identity.shopId);
+    if (!belongsToStore) continue;
+    const currentStatus = normalizeString(record.submitStatus || record.status);
+    if (["submitted", "failed", "skipped", "cancelled", "quota_exhausted", "unknown"].includes(currentStatus)) continue;
+    const unknown = currentStatus === "sending" || currentStatus === "submitting";
+    updateNativeRecordPayload(database, row, {
+      ...record,
+      eligible: false,
+      estimatedCost: 0,
+      status: unknown ? "unknown" : "cancelled",
+      submitStatus: unknown ? "unknown" : "cancelled",
+      skipReason: record.skipReason || (unknown ? "store deleted while submit outcome was unresolved" : reason),
+      updatedAt: ts
+    }, ts);
+    if (unknown) summary.unknownCandidates += 1;
+    else summary.cancelledCandidates += 1;
+  }
+
+  for (const storeName of ["opportunity_store_category_snapshots_v2", "opportunity_store_category_ledger_v2"]) {
+    for (const row of nativeRecordRows(database, storeName)) {
+      const record = formatNativeRecord(row);
+      if (!nativeRecordMatchesIdentity(record, identity)) continue;
+      summary.deletedCategoryRecords += deleteNativeRecordRow(database, row);
+    }
+  }
+
+  for (const row of nativeRecordRows(database, "opportunity_clue_cache_v2")) {
+    const record = formatNativeRecord(row);
+    if (!nativeRecordMatchesIdentity(record, identity) || record.cacheScope === "global") continue;
+    deletedClueCacheIds.add(normalizeString(record.id || row.record_id));
+    summary.deletedCacheRecords += deleteNativeRecordRow(database, row);
+  }
+  for (const row of nativeRecordRows(database, "opportunity_clue_cache_shards_v2")) {
+    const record = formatNativeRecord(row);
+    if (!deletedClueCacheIds.has(normalizeString(record.clueCacheKey))) continue;
+    summary.deletedCacheRecords += deleteNativeRecordRow(database, row);
+  }
+  for (const row of nativeRecordRows(database, "opportunity_clue_word_cache_v2")) {
+    const record = formatNativeRecord(row);
+    if (!deletedClueCacheIds.has(normalizeString(record.clueCacheKey))) continue;
+    deletedWordCacheIds.add(normalizeString(record.id || row.record_id));
+    summary.deletedCacheRecords += deleteNativeRecordRow(database, row);
+  }
+  for (const row of nativeRecordRows(database, "opportunity_clue_word_cache_shards_v2")) {
+    const record = formatNativeRecord(row);
+    if (!deletedWordCacheIds.has(normalizeString(record.wordCacheKey))) continue;
+    summary.deletedCacheRecords += deleteNativeRecordRow(database, row);
+  }
+
+  for (const runId of affectedRunIds) {
+    if (!runId) continue;
+    const runRow = database.prepare("SELECT * FROM native_records WHERE store_name = 'opportunity_pipeline_runs_v2' AND record_id = ?").get(runId);
+    if (!runRow) continue;
+    const run = formatNativeRecord(runRow);
+    const storeRuns = nativeRecordRows(database, "opportunity_pipeline_store_runs_v2")
+      .map(formatNativeRecord)
+      .filter((record) => normalizeString(record.runId) === runId);
+    const active = storeRuns.filter((record) => ["queued", "running", "submitting"].includes(normalizeString(record.status)) && record.phase !== "finished");
+    if (active.length) continue;
+    const submittedCount = storeRuns.reduce((total, record) => total + Math.max(0, Number(record.submittedCount || 0)), 0);
+    const failedCount = storeRuns.reduce((total, record) => total + Math.max(0, Number(record.failedCount || 0)), 0);
+    const cancelledCount = storeRuns.filter((record) => record.status === "cancelled").length;
+    const status = submittedCount || storeRuns.some((record) => record.status === "ok" || record.status === "partial") ? "partial" : "cancelled";
+    const nextRun = {
+      ...run,
+      status,
+      processedStoreCount: storeRuns.length,
+      submittedCount,
+      failedCount,
+      summary: {
+        ...(run.summary || {}),
+        processedStoreCount: storeRuns.length,
+        totalStoreCount: Number(run.totalStoreCount || storeRuns.length),
+        submittedCount,
+        failedCount,
+        cancelledStoreCount: cancelledCount
+      },
+      updatedAt: ts
+    };
+    updateNativeRecordPayload(database, runRow, nextRun, ts);
+    summary.finalizedPipelineRuns += 1;
+
+    const operationId = normalizeString(run.operationId || run.runId);
+    const operationRow = operationId
+      ? database.prepare("SELECT * FROM native_records WHERE store_name = 'operations' AND record_id = ?").get(operationId)
+      : null;
+    if (!operationRow) continue;
+    const operation = formatNativeRecord(operationRow);
+    if (!["created", "running"].includes(normalizeString(operation.status))) continue;
+    updateNativeRecordPayload(database, operationRow, {
+      ...operation,
+      status,
+      progress: 100,
+      resultSummary: status === "cancelled" ? "store-deleted" : "partial-store-deleted",
+      updatedAt: ts
+    }, ts);
+    summary.finalizedOperations += 1;
+  }
+
+  return summary;
+}
+
 function deleteNativeRecord(args = {}) {
   const database = ensureDb();
   const storeName = normalizeRecordStoreName(args.storeName || args.store);
   const recordId = recordIdFor(storeName, args.id || args.recordId);
   if (!recordId) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Native record requires id", { storeName });
   const ts = nowIso();
+  let opportunityCleanup = null;
   database.exec("BEGIN IMMEDIATE");
   try {
     const existing = database.prepare("SELECT * FROM native_records WHERE store_name = ? AND record_id = ?").get(storeName, recordId);
@@ -1286,6 +1493,7 @@ function deleteNativeRecord(args = {}) {
       const shopId = normalizeString(record.shopId || record.id || recordId);
       const generation = normalizeInteger(record.storeGeneration || record.generation) || activeStoreGeneration(database, tenantId, shopId) || maxStoreGeneration(database, tenantId, shopId);
       if (shopId && generation) {
+        const identity = { platform: "doudian", tenantId, shopId, storeGeneration: generation };
         database.prepare(`
           UPDATE doudian_store_identities
           SET lifecycle = 'tombstoned', tombstoned_at = COALESCE(tombstoned_at, ?), updated_at = ?
@@ -1309,6 +1517,7 @@ function deleteNativeRecord(args = {}) {
             WHERE tenant_id = ? AND shop_id = ? AND store_generation = ?
           )
         `).run(ts, String(args.reason || "store-ledger-delete"), ts, tenantId, shopId, generation);
+        opportunityCleanup = cancelStoreOpportunityState(database, identity, ts, String(args.reason || "store-ledger-delete"));
       }
     }
     if (storeName === "groups" && existing) {
@@ -1319,7 +1528,7 @@ function deleteNativeRecord(args = {}) {
     }
     const result = database.prepare("DELETE FROM native_records WHERE store_name = ? AND record_id = ?").run(storeName, recordId);
     database.exec("COMMIT");
-    return { ok: true, storeName, recordId, deleted: result.changes, deletedAt: ts };
+    return { ok: true, storeName, recordId, deleted: result.changes, deletedAt: ts, opportunityCleanup };
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
@@ -2668,6 +2877,11 @@ function handle(method, args = {}) {
     case "maintenance.recoverOpenJobs": return abandonOpenJobs(ensureDb(), args.reason || "manual-recovery");
     case "maintenance.close": return closeDatabase();
     case "stores.upsertIdentity": return upsertStoreIdentity(args);
+    case "stores.assertActiveIdentity": {
+      const identity = normalizeIdentity(args);
+      const row = assertActiveStoreIdentity(identity);
+      return { ok: true, ...identity, updatedAt: row.updated_at };
+    }
     case "stores.tombstoneIdentity": return tombstoneStoreIdentity(args);
     case "records.put": return putNativeRecord(args);
     case "records.putMany": return putManyNativeRecords(args);

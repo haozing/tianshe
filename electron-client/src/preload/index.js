@@ -169,6 +169,7 @@ const nativeData = {
   },
   stores: {
     upsertIdentity: invoke("native:data:stores:upsertIdentity"),
+    assertActiveIdentity: invoke("native:data:stores:assertActiveIdentity"),
     tombstoneIdentity: invoke("native:data:stores:tombstoneIdentity")
   },
   records: {

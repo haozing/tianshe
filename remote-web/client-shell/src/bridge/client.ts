@@ -18,6 +18,7 @@ import type {
   DoudianOpportunityTitleUpdatePosition,
   DoudianStaleGoodsCleanupResult,
   DoudianStaleGoodsRules,
+  DoudianStoreIdentityRef,
   DoudianStoreResult,
   DoudianViolationsDataResult
 } from "../types";
@@ -639,8 +640,8 @@ export async function listDoudianOpportunityCandidatesPage(args: {
   });
 }
 
-export async function listDoudianOpportunityStoreCategories(args: { shopIds?: string[] } = {}): Promise<DoudianOpportunityStoreCategoryLedger[]> {
-  return listOpportunityStoreCategoryLedger({ shopIds: args.shopIds || [] });
+export async function listDoudianOpportunityStoreCategories(args: { shopIds?: string[]; storeRefs?: DoudianStoreIdentityRef[] } = {}): Promise<DoudianOpportunityStoreCategoryLedger[]> {
+  return listOpportunityStoreCategoryLedger({ shopIds: args.shopIds || [], storeRefs: args.storeRefs || [] });
 }
 
 export async function selectAndParseCompassFile(): Promise<{

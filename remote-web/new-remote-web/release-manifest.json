@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026.07.17.bulk-delete-safety-v1",
-  "buildTime": "2026-07-17T08:51:29.886Z",
+  "releaseId": "2026.07.17.store-lifecycle-sync-v1",
+  "buildTime": "2026-07-17T10:25:59.903Z",
   "entry": {
     "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
   },
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "19070110681de10f8c6b8a717ac2c5dadb44b1723d7f5e787d7caf6a14cd37de"
+      "sha256": "8a122e9e4bdc7c1409b6cc47b24001f5a102b132a280acc32c0ce832916e7a5d"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,7 +36,7 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "8a5e81090730b6fbbbf92e43b7987fc4807d756652b0928a5b34b7f277d0c81b"
+      "sha256": "fbc193b2e98f058d538950be78a3e98bbc13576ddf0b848a588c732842a7e378"
     },
     {
       "path": "new-remote-web/styles.css",
@@ -71,7 +71,7 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "b4dbfcca5cc02957c414bc3eb402a9e4f0ff0ec48d19c671cdb5140a55fca340"
+      "sha256": "2e25b6d6b2f8c501cc8b79b3b7e597943de190bcfe33a45649d7bded032d9f87"
     },
     {
       "path": "new-remote-web/config/doudian-adapter.json",
@@ -85,7 +85,7 @@
       "type": "update-notes",
       "cache": "no-cache",
       "required": true,
-      "sha256": "2308e9a98b512740695ae7b9b932c1abb9158371bcb89aa7acfb948343ff10ee"
+      "sha256": "460924ce3ac82daa7303031832cd33ede8bb58df7aec1d3cf37b39d511038eaa"
     },
     {
       "path": "new-remote-web/config/invalid-config.json",
@@ -120,7 +120,7 @@
     "schemaVersion": 1,
     "algorithm": "ed25519",
     "keyId": "chihu-remote-web-ed25519-2026-07",
-    "payloadSha256": "d438cafa95626327c9797b757d9c072818ac3a9c97803fe9984f3e002c3a4983",
-    "value": "wzeEhnTmMxsX6zFxi16MpK/Dt1vYlaBZ5GzysWqXj5TAaRx8QJbAuMvZnGGJjUIDmjUveVfNEG5vojbuAZHBCw=="
+    "payloadSha256": "8bdc15a75989a13e924fb469c777cdcf60a8ab8f314e3d62a7dbda79708b90f5",
+    "value": "1F7XJYH9R+sLkb3F7yY6fG9CAdkNNSemQdMflFs4760HXtf631hrwESUZ++jU8KURYimQZ5gP6HwxKrOQLVdCw=="
   }
 }

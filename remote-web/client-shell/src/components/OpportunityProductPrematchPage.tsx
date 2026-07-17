@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { cancelDoudianStoreOperation, fetchDoudianOpportunityPipelineRun, fetchDoudianOpportunityPipelineSummary, fetchDoudianOpportunityReportLatest, listDoudianOpportunityCandidatesPage, listDoudianOpportunityStoreCategories, listDoudianStores, restoreDoudianOpportunityPipelineTask, runDoudianOpportunityPipelineTask } from "../bridge/client";
 import { addDoudianProgressListener } from "../domain/doudian/progress";
+import { activeStoreRefs, activeStoreSelection, reconcileSelectedShopIds, restoredActiveShopIds, storeIdentityKey } from "../domain/doudian/opportunityStoreState";
 import { cn } from "../lib/utils";
 import type {
   DoudianOpportunityClueRow,
@@ -379,18 +380,18 @@ export function OpportunityProductPrematchPage() {
   }, [candidates]);
 
   const storeRunRows = useMemo(() => {
-    const detailsByShop = new Map(runDetails.map((detail) => [String(detail.shopId || ""), detail]));
-    const detailShopIds = new Set(runDetails.map((detail) => String(detail.shopId || "")).filter(Boolean));
-    const sourceStores = stores.length
-      ? stores
-      : runDetails.map((detail) => ({
-        shopId: String(detail.shopId || ""),
-        shopName: String(detail.shopName || "")
-      } as DoudianStoreSummary)).filter((store) => store.shopId);
-    return sourceStores
-      .filter((store) => !detailShopIds.size || detailShopIds.has(store.shopId) || selectedShopIds.has(store.shopId))
+    const detailsByIdentity = new Map(
+      runDetails
+        .filter((detail) => detail.shopId && detail.storeGeneration)
+        .map((detail) => [storeIdentityKey({
+          tenantId: detail.tenantId || "local-user",
+          shopId: detail.shopId || "",
+          storeGeneration: Number(detail.storeGeneration)
+        }), detail])
+    );
+    return stores
       .map((store, index) => {
-        const detail = detailsByShop.get(store.shopId);
+        const detail = detailsByIdentity.get(storeIdentityKey(store));
         const productCount = detailDiagnosticNumber(detail, "productCount") || productCountByShop.get(store.shopId) || 0;
         const clueCount = detailDiagnosticNumber(detail, "clueCount");
         const candidateCount = detailDiagnosticNumber(detail, "candidateCount") || candidateCountByShop.get(store.shopId) || 0;
@@ -427,7 +428,7 @@ export function OpportunityProductPrematchPage() {
           estimatedSubmitDurationMs: estimatedStoreSubmitDurationMs
         };
       });
-  }, [candidateCountByShop, productCountByShop, runDetails, selectedShopIds, stores]);
+  }, [candidateCountByShop, productCountByShop, runDetails, stores]);
 
   const categoryOptions = useMemo(() => {
     const byKey = new Map<string, { key: string; label: string; productCount: number; shopCount: number; lastSeenAt: string }>();
@@ -510,8 +511,9 @@ export function OpportunityProductPrematchPage() {
   }, [autoSubmitPageCount]);
 
   async function initializePage() {
-    await refreshStores();
-    await restoreLatest();
+    const activeStores = await refreshStores({ selectAllWhenEmpty: true });
+    await restoreLatest(activeStores);
+    if (!activeStores.length) return;
     const operation = await restoreDoudianOpportunityPipelineTask().catch(() => null);
     if (!operation) return;
     actionLockRef.current = true;
@@ -520,6 +522,7 @@ export function OpportunityProductPrematchPage() {
     setPipelineInFlight(true);
     setPipelineLog("已恢复运行中的商机提报任务");
     await restorePipelineRun(operation.operationId, {
+      activeStores,
       silent: true,
       includeCandidates: false,
       updatePipelineLog: true,
@@ -528,21 +531,28 @@ export function OpportunityProductPrematchPage() {
     });
   }
 
-  async function refreshStores() {
+  async function refreshStores(options: { selectAllWhenEmpty?: boolean } = {}) {
     setLoading((current) => current || "stores");
     try {
       const result = await listDoudianStores();
       const nextStores = result.stores || [];
       setStores(nextStores);
-      setSelectedShopIds((current) => current.size ? current : new Set(nextStores.map((store) => store.shopId)));
+      setSelectedShopIds((current) => reconcileSelectedShopIds(nextStores, current, options));
+      return nextStores;
     } finally {
       setLoading("");
     }
   }
 
-  async function refreshStoreCategories(requestedShopIds = Array.from(selectedShopIds)) {
+  async function refreshStoreCategories(requestedStores = activeStoreSelection(stores, selectedShopIds)) {
+    const storeRefs = activeStoreRefs(requestedStores);
+    if (!storeRefs.length) {
+      setStoreCategories([]);
+      setSelectedStoreCategoryKeys([]);
+      return true;
+    }
     try {
-      const rows = await listDoudianOpportunityStoreCategories({ shopIds: requestedShopIds });
+      const rows = await listDoudianOpportunityStoreCategories({ storeRefs });
       setStoreCategories(rows);
       setSelectedStoreCategoryKeys((current) => current.filter((key) => rows.some((row) => row.categoryKey === key)));
       return true;
@@ -553,7 +563,7 @@ export function OpportunityProductPrematchPage() {
     }
   }
 
-  async function loadCandidatePageForRun(runId: string, pageIndex: number, cursor: string | null, summary: Record<string, number> = {}) {
+  async function loadCandidatePageForRun(runId: string, pageIndex: number, cursor: string | null, summary: Record<string, number> = {}, activeStores = stores) {
     const id = runId.trim();
     if (!id) {
       setCandidates([]);
@@ -568,7 +578,13 @@ export function OpportunityProductPrematchPage() {
     setCandidatePageLoading(true);
     try {
       const page = await listDoudianOpportunityCandidatesPage({ runId: id, cursor, pageSize: autoSubmitPageSize });
-      setCandidates(page.items || []);
+      const activeIdentityKeys = new Set(activeStores.map((store) => storeIdentityKey(store)));
+      const items = (page.items || []).filter((item) => item.storeGeneration && activeIdentityKeys.has(storeIdentityKey({
+        tenantId: item.tenantId || "local-user",
+        shopId: item.shopId,
+        storeGeneration: item.storeGeneration
+      })));
+      setCandidates(items);
       setAutoSubmitPage(pageIndex);
       setCandidateHasMore(page.hasMore === true);
       setCandidateNextCursor(page.nextCursor || null);
@@ -582,7 +598,7 @@ export function OpportunityProductPrematchPage() {
         ...current,
         ...summary,
         candidateTotalCount: Number(page.totalCount ?? summary.candidateTotalCount ?? summary.candidateCount ?? current.candidateTotalCount ?? 0),
-        candidateLoadedCount: page.items?.length || 0,
+        candidateLoadedCount: items.length,
         candidateListTruncated: page.hasMore ? 1 : 0
       }));
     } finally {
@@ -599,18 +615,22 @@ export function OpportunityProductPrematchPage() {
 
   async function applyRestoredOpportunityResult(
     result: Awaited<ReturnType<typeof fetchDoudianOpportunityReportLatest>>,
-    options: { includeCandidates?: boolean; refreshCategories?: boolean; updatePipelineLog?: boolean; restoreConfiguration?: boolean } = {}
+    options: { activeStores?: DoudianStoreSummary[]; includeCandidates?: boolean; refreshCategories?: boolean; updatePipelineLog?: boolean; restoreConfiguration?: boolean } = {}
   ) {
+    const activeStores = options.activeStores || stores;
+    const restoredShopIds = restoredActiveShopIds(activeStores, result.storeRefs || []);
+    const hasCompatibleRun = !result.runId || Boolean(result.storeRefs?.length && restoredShopIds.size > 0);
     const details = Array.isArray(result.details)
       ? result.details
       : [...(result.details?.imported || []), ...(result.details?.failed || [])];
-    setProducts(result.products || []);
-    setClues(result.clues || []);
-    setExecutions(result.executions || []);
-    setRunDetails(details);
-    setResultSummary(result.summary || {});
-    setProductRunId(result.productRunId || "");
-    setClueRunId(result.clueRunId || "");
+    const activeShopIds = new Set(activeStores.filter((store) => restoredShopIds.has(store.shopId)).map((store) => store.shopId));
+    setProducts(hasCompatibleRun ? (result.products || []).filter((item) => activeShopIds.has(item.shopId)) : []);
+    setClues(hasCompatibleRun ? (result.clues || []) : []);
+    setExecutions(hasCompatibleRun ? (result.executions || []).filter((item) => activeShopIds.has(item.shopId)) : []);
+    setRunDetails(hasCompatibleRun ? details.filter((detail) => activeShopIds.has(String(detail.shopId || ""))) : []);
+    setResultSummary(hasCompatibleRun ? (result.summary || {}) : {});
+    setProductRunId(hasCompatibleRun ? (result.productRunId || "") : "");
+    setClueRunId(hasCompatibleRun ? (result.clueRunId || "") : "");
     if (options.restoreConfiguration) {
       const restoredFilters = result.filters || {};
       const restoredRules = result.matchRules || {};
@@ -622,10 +642,12 @@ export function OpportunityProductPrematchPage() {
       setSkipSubmittedClueCategory(result.pipelineOptions?.skipSubmittedClueCategory === true);
       setSkipSubmittedClue(result.pipelineOptions?.skipSubmittedClue === true);
       setSkipSubmittedProductInSameClue(result.pipelineOptions?.skipSubmittedProductInSameClue !== false);
-      if (result.shopIds?.length) setSelectedShopIds(new Set(result.shopIds));
+      setSelectedShopIds((current) => restoredShopIds.size
+        ? restoredShopIds
+        : reconcileSelectedShopIds(activeStores, current));
     }
     if (options.updatePipelineLog) setPipelineLog(pipelineSnapshotLog(details, result.summary || {}));
-    const runId = result.matchRunId || result.runId || "";
+    const runId = hasCompatibleRun ? (result.matchRunId || result.runId || "") : "";
     setMatchRunId(runId);
     const pipelineStatus = String(result.pipelineStatus || result.status || "");
     if (runId && activePipelineOperationIdRef.current === runId) {
@@ -638,12 +660,12 @@ export function OpportunityProductPrematchPage() {
         setPipelineInFlight(false);
       }
     }
-    if (options.includeCandidates !== false) await loadCandidatePageForRun(runId, 0, null, result.summary || {});
-    if (options.refreshCategories !== false) await refreshStoreCategories(result.shopIds?.length ? result.shopIds : Array.from(selectedShopIds));
+    if (options.includeCandidates !== false) await loadCandidatePageForRun(runId, 0, null, hasCompatibleRun ? result.summary || {} : {}, activeStores);
+    if (options.refreshCategories !== false) await refreshStoreCategories(activeStoreSelection(activeStores, restoredShopIds));
     return runId;
   }
 
-  async function restorePipelineRun(runId: string, options: { silent?: boolean; includeCandidates?: boolean; updatePipelineLog?: boolean; summaryOnly?: boolean; restoreConfiguration?: boolean } = {}) {
+  async function restorePipelineRun(runId: string, options: { activeStores?: DoudianStoreSummary[]; silent?: boolean; includeCandidates?: boolean; updatePipelineLog?: boolean; summaryOnly?: boolean; restoreConfiguration?: boolean } = {}) {
     const id = runId.trim();
     if (!id) return;
     if (options.summaryOnly && pipelineSnapshotInFlightRef.current) return;
@@ -656,6 +678,7 @@ export function OpportunityProductPrematchPage() {
         : await fetchDoudianOpportunityPipelineRun({ runId: id });
       if (requestSeq !== pipelineSnapshotRequestSeqRef.current) return;
       await applyRestoredOpportunityResult(result, {
+        activeStores: options.activeStores,
         includeCandidates: options.includeCandidates !== false,
         refreshCategories: options.includeCandidates !== false,
         updatePipelineLog: options.updatePipelineLog === true,
@@ -667,13 +690,26 @@ export function OpportunityProductPrematchPage() {
     }
   }
 
-  async function restoreLatest() {
+  async function restoreLatest(activeStores = stores) {
     const requestSeq = ++pipelineSnapshotRequestSeqRef.current;
     setLoading((current) => current || "latest");
     try {
+      if (!activeStores.length) {
+        setProducts([]);
+        setClues([]);
+        setCandidates([]);
+        setExecutions([]);
+        setRunDetails([]);
+        setResultSummary({});
+        setProductRunId("");
+        setClueRunId("");
+        setMatchRunId("");
+        await refreshStoreCategories([]);
+        return;
+      }
       const result = await fetchDoudianOpportunityReportLatest();
       if (requestSeq !== pipelineSnapshotRequestSeqRef.current) return;
-      await applyRestoredOpportunityResult(result, { restoreConfiguration: true });
+      await applyRestoredOpportunityResult(result, { activeStores, restoreConfiguration: true });
     } finally {
       setLoading("");
     }
@@ -784,7 +820,7 @@ export function OpportunityProductPrematchPage() {
                 </button>
               ))}
             </div>
-            <button className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] transition-colors hover:border-brand-fox hover:text-brand-fox disabled:opacity-50" type="button" onClick={restoreLatest} disabled={busy}>
+            <button className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] transition-colors hover:border-brand-fox hover:text-brand-fox disabled:opacity-50" type="button" onClick={() => void restoreLatest()} disabled={busy}>
               <RefreshCw className={cn("size-[14px]", loading === "latest" && "animate-spin")} strokeWidth={2} />
               恢复上次结果
             </button>
@@ -809,7 +845,7 @@ export function OpportunityProductPrematchPage() {
                 <div className="flex min-h-[44px] shrink-0 items-center justify-between border-b border-[#edf1f6] bg-[#fbfcff] px-3">
                   <strong className="text-[14px] text-brand-navy">店铺范围</strong>
                   <div className="flex items-center gap-2">
-                    <button className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#344054] transition-colors hover:border-brand-fox hover:text-brand-fox disabled:opacity-50" type="button" onClick={refreshStores} disabled={busy}>
+                    <button className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#344054] transition-colors hover:border-brand-fox hover:text-brand-fox disabled:opacity-50" type="button" onClick={() => void refreshStores()} disabled={busy}>
                       <RefreshCw className={cn("size-[13px]", loading === "stores" && "animate-spin")} strokeWidth={2} />
                       刷新
                     </button>

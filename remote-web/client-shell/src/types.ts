@@ -301,9 +301,17 @@ export interface DoudianStoreSummary {
   adapterVersion?: string;
 }
 
+export interface DoudianStoreIdentityRef {
+  tenantId: string;
+  shopId: string;
+  storeGeneration: number;
+}
+
 export interface DoudianRunDetail {
+  tenantId?: string;
   shopId?: string;
   shopName?: string;
+  storeGeneration?: number;
   status?: DoudianStoreSummary["status"] | string;
   ok?: boolean;
   message: string;
@@ -980,6 +988,8 @@ export interface DoudianOpportunityPrematchCandidate {
   clueRunId: string;
   shopId: string;
   shopName: string;
+  tenantId?: string;
+  storeGeneration?: number;
   group?: string;
   productId: string;
   title: string;
@@ -1054,6 +1064,7 @@ export interface DoudianOpportunityReportResult extends DoudianStoreResult {
   pipelineStatus?: string;
   resultSource?: "live" | "cached";
   shopIds?: string[];
+  storeRefs?: DoudianStoreIdentityRef[];
   pipelineOptions?: {
     skipSubmittedClueCategory?: boolean;
     skipSubmittedClue?: boolean;

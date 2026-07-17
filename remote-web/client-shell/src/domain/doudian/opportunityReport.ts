@@ -17,12 +17,13 @@ import type {
   DoudianOpportunityTitleMatchMode,
   DoudianOpportunityTitleUpdatePosition,
   DoudianRunDetail,
+  DoudianStoreIdentityRef,
   DoudianStoreSummary
 } from "../../types";
 import { repositoryClaimOpportunitySubmitTask, repositoryDelete, repositoryDeleteMany, repositoryGet, repositoryGetAll, repositoryGetAllByPrefix, repositoryGetMany, repositoryLatest, repositoryListByPrefix, repositoryPut, repositoryPutMany } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
-import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
+import { assertMutationStoreActive, prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
 import { getChihuNative } from "../../native/client";
 import { getNativeData } from "../../nativeData/client";
 import { dispatchDoudianProgress } from "./progress";
@@ -260,6 +261,7 @@ interface PipelineRunRecord {
     skipSubmittedProductInSameClue?: boolean;
   };
   shopIds: string[];
+  storeRefs?: PipelineStoreIdentity[];
   tenantId: string;
   clientCapability: Record<string, unknown>;
   status: "running" | "partial" | "ok" | "failed" | "cancelled";
@@ -4227,6 +4229,7 @@ async function submitProductsForClue(args: {
     await recordExecutionMutationResults({ store: args.store, executions, defaultAction: "submit" }).catch(() => undefined);
     return executions;
   }
+  if (!args.dryRun) await assertMutationStoreActive(args.store);
   const edit = await editTitles(args.payload, args.store, safeProducts, filtered.nextTitles, args.dryRun);
   if (!edit.ok) {
     executions.push(...executionForProducts({
@@ -4265,6 +4268,7 @@ async function submitProductsForClue(args: {
       }));
     } else {
       assertNotCancelled(args.shouldCancel);
+      await assertMutationStoreActive(args.store);
       await args.onRemoteSubmitStart?.(batch);
       const submitResult = await submitWithRetry(args.payload, args.store, submitBody(args.clue, batch, args.store, args.module), args.shouldCancel);
       const response = submitResult.response;
@@ -5757,6 +5761,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     matchRules,
     pipelineOptions: pipelineOptions(args),
     shopIds: targets.map((store) => store.shopId),
+    storeRefs: targets.map(normalizePipelineStoreIdentity),
     tenantId: normalizePipelineStoreIdentity(targets[0]).tenantId,
     clientCapability,
     status: "running",
@@ -5821,6 +5826,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       matchRules,
       pipelineOptions: pipelineOptions(args),
       shopIds: targets.map((item) => item.shopId),
+      storeRefs: targets.map(normalizePipelineStoreIdentity),
       tenantId: normalizePipelineStoreIdentity(targets[0]).tenantId,
       clientCapability,
       status: "cancelled",
@@ -6062,7 +6068,11 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       storeDiagnostics.eligibleCandidateCount = eligibleCount;
       storeDiagnostics.alternativeCandidateCount = alternativeCount;
       storeDiagnostics.droppedByTopKCount = Math.max(0, storeDiagnostics.passedThresholdCount - plannedStoreCandidates.length);
-      const compactedStoreCandidates = plannedStoreCandidates.map(compactPipelineCandidate);
+      const compactedStoreCandidates = plannedStoreCandidates.map((candidate) => ({
+        ...compactPipelineCandidate(candidate),
+        tenantId: identity.tenantId,
+        storeGeneration: identity.storeGeneration
+      }));
       const task = await enqueueStoreSubmit({
         runId,
         storeRunId: id,
@@ -6336,6 +6346,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     matchRules,
     pipelineOptions: pipelineOptions(args),
     shopIds: targets.map((store) => store.shopId),
+    storeRefs: targets.map(normalizePipelineStoreIdentity),
     tenantId: normalizePipelineStoreIdentity(targets[0]).tenantId,
     clientCapability,
     status,
@@ -6483,8 +6494,10 @@ async function buildPipelineRunCachedResult(
     prematches,
     executions: [],
     details: storeRuns.map((storeRun, index) => ({
+      tenantId: storeRun.tenantId,
       shopId: storeRun.shopId,
       shopName: storeRun.shopName,
+      storeGeneration: storeRun.storeGeneration,
       status: storeRun.status,
       ok: storeRun.status === "ok" || storeRun.status === "skipped",
       message: storeRun.skipReason || storeRun.phase,
@@ -6528,7 +6541,12 @@ async function buildPipelineRunCachedResult(
     filters: args.filters || pipelineRun.filters,
     matchRules: args.matchRules || pipelineRun.matchRules,
     pipelineOptions: pipelineRun.pipelineOptions,
-    requestPlanHash: pipelineRun.requestPlanHash
+    requestPlanHash: pipelineRun.requestPlanHash,
+    storeRefs: (pipelineRun.storeRefs?.length ? pipelineRun.storeRefs : storeRuns.map((storeRun) => ({
+      tenantId: storeRun.tenantId,
+      shopId: storeRun.shopId,
+      storeGeneration: storeRun.storeGeneration
+    }))) as DoudianStoreIdentityRef[]
   };
 }
 
@@ -6607,8 +6625,10 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
       prematches,
       executions: [],
       details: storeRuns.map((storeRun, index) => ({
+        tenantId: storeRun.tenantId,
         shopId: storeRun.shopId,
         shopName: storeRun.shopName,
+        storeGeneration: storeRun.storeGeneration,
         status: storeRun.status,
         ok: storeRun.status === "ok" || storeRun.status === "skipped",
         message: storeRun.skipReason || storeRun.phase,
@@ -6651,7 +6671,12 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
       sourceHealth: [],
       filters: args.filters || latestPipeline.filters,
       matchRules: args.matchRules || latestPipeline.matchRules,
-      requestPlanHash: latestPipeline.requestPlanHash
+      requestPlanHash: latestPipeline.requestPlanHash,
+      storeRefs: (latestPipeline.storeRefs?.length ? latestPipeline.storeRefs : storeRuns.map((storeRun) => ({
+        tenantId: storeRun.tenantId,
+        shopId: storeRun.shopId,
+        storeGeneration: storeRun.storeGeneration
+      }))) as DoudianStoreIdentityRef[]
     };
   }
   const [clueRuns, productRuns, prematchRuns, executeRuns] = await Promise.all([
@@ -6737,11 +6762,14 @@ export async function listOpportunityPipelineCandidatesPage(args: {
   };
 }
 
-export async function listOpportunityStoreCategoryLedger(args: { shopIds?: string[] } = {}) {
+export async function listOpportunityStoreCategoryLedger(args: { shopIds?: string[]; storeRefs?: DoudianStoreIdentityRef[] } = {}) {
   const requested = new Set((args.shopIds || []).map(text).filter(Boolean));
+  const requestedRefs = new Set((args.storeRefs || []).map((ref) => `${text(ref.tenantId) || "local-user"}::${text(ref.shopId)}::${Math.max(1, Math.trunc(Number(ref.storeGeneration || 1)))}`));
   const rows = await repositoryGetAll<DoudianOpportunityStoreCategoryLedger>(storeCategoryLedgerStore).catch(() => []);
   return rows
-    .filter((row) => !requested.size || requested.has(row.shopId))
+    .filter((row) => requestedRefs.size
+      ? requestedRefs.has(`${text(row.tenantId) || "local-user"}::${text(row.shopId)}::${Math.max(1, Math.trunc(Number(row.storeGeneration || 1)))}`)
+      : (!requested.size || requested.has(row.shopId)))
     .sort((left, right) => {
       const time = String(right.lastSeenAt || "").localeCompare(String(left.lastSeenAt || ""));
       if (time) return time;

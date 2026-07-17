@@ -135,6 +135,7 @@ export interface NativeDataRecordDeleteResult {
   recordId: string;
   deleted: number;
   deletedAt: string;
+  opportunityCleanup?: StoreOpportunityCleanupResult | null;
 }
 
 export interface NativeDataRecordDeleteManyResult {
@@ -186,6 +187,18 @@ export interface StoreTombstoneResult {
   storeGeneration: number;
   nextGeneration: number;
   tombstonedAt: string;
+  opportunityCleanup?: StoreOpportunityCleanupResult;
+}
+
+export interface StoreOpportunityCleanupResult {
+  cancelledStoreRuns: number;
+  cancelledSubmitTasks: number;
+  cancelledCandidates: number;
+  unknownCandidates: number;
+  deletedCategoryRecords: number;
+  deletedCacheRecords: number;
+  finalizedPipelineRuns: number;
+  finalizedOperations: number;
 }
 
 export interface ProductCatalogTaskArgs extends StoreIdentityArgs {
@@ -493,6 +506,7 @@ export interface NativeDataApi {
   };
   stores: {
     upsertIdentity: (args: StoreIdentityArgs) => Promise<StoreIdentityResult>;
+    assertActiveIdentity?: (args: StoreIdentityArgs) => Promise<StoreIdentityResult>;
     tombstoneIdentity: (args: StoreIdentityArgs & { reason?: string }) => Promise<StoreTombstoneResult>;
   };
   records: {
