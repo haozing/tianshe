@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026.07.16.business-funds-quality-v2",
-  "buildTime": "2026-07-17T01:56:13.671Z",
+  "releaseId": "2026.07.17.store-login-silent-v1",
+  "buildTime": "2026-07-17T02:17:51.511Z",
   "entry": {
     "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
   },
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "780979cafe37e13d64bdc3d510e80a1385e34c9f28ea821c2d01f307fb219986"
+      "sha256": "97c7b72e4b3edb8e34a906821dc01874d3a7fc34786d08b4a005b7c3ac1b66cb"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,7 +36,7 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "c6c2e5d1ca9d2f1dee0d1844abca9d459914cb53d8cf903ffe53c74fa02190bb"
+      "sha256": "318146f777c6060754039d8c46171b0bbc6ec747887bff69d52ae1f0e40117e6"
     },
     {
       "path": "new-remote-web/styles.css",
@@ -71,7 +71,7 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "f8146603f9a14d937d3c5efac704f2c0974a39b7010d5fc34985c1b4b29f8671"
+      "sha256": "dd887eeb4c7bbc41240943cb4bd999b0a801e77a39ac2e9cba090493d81889b8"
     },
     {
       "path": "new-remote-web/config/doudian-adapter.json",
@@ -120,7 +120,7 @@
     "schemaVersion": 1,
     "algorithm": "ed25519",
     "keyId": "chihu-remote-web-ed25519-2026-07",
-    "payloadSha256": "8d601c4092683637ce078864b5252a2dd6abb2eee2b5e739a4cd69716b9175db",
-    "value": "U9/nWz0tS67dEOo83YqW0irOl8MLgJgiQJQ5rRuSUvsM23E/jI5QGZrRuRTYwfWGcczQoUfjUOjlpeXPpHAfCw=="
+    "payloadSha256": "45bf299ce4a5a482e5431eb9ad1bd4ad8a44c63d039bb37f8f15bbb0a2145d03",
+    "value": "iUS9ES7TVw/xyLhgFFIHcYtswggkfeRmCa1EZzXqcfX9BkhL4x0teiY7WiaceBPyawxUkD6yxfXyqh6Kxg0OCg=="
   }
 }

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.16.business-funds-quality-v2",
+  "version": "2026.07.17.store-login-silent-v1",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -34,7 +34,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "cdd7baf",
-    "buildTime": "2026-07-17T01:56:13.671Z"
+    "gitCommit": "f500a9f",
+    "buildTime": "2026-07-17T02:17:51.511Z"
   }
 }
