@@ -916,19 +916,11 @@ export function StoreManagementPage() {
     const ids = staleRows.map((row) => row.id);
     setActiveOperationId(operationId);
     setOperationBusy(true);
-    setNotice({
-      tone: "info",
-      message: `正在自动校验 ${ids.length} 家店铺登录态，10 分钟内已校验的店铺会跳过${allStaleRows.length > ids.length ? "，其余店铺可手动刷新" : ""}。`
-    });
     try {
       const result = await refreshDoudianStoreStatus(ids, operationId);
       applyStores(result);
-      const details = summarizeDetails(result);
-      const failed = details.filter((item) => item.ok === false).length;
-      const tone: NoticeTone = result.ok && failed === 0 ? "success" : result.ok ? "warning" : "error";
-      rememberRun("自动校验登录态", tone, result.ok ? `已自动校验 ${result.refreshed || details.length} 家店铺，${failed} 家需关注。` : result.message || "自动校验失败。", details, result);
-    } catch (error) {
-      rememberRun("自动校验失败", "error", error instanceof Error ? error.message : String(error), []);
+    } catch {
+      // Automatic refresh is intentionally silent on the store management page.
     } finally {
       setOperationBusy(false);
       setActiveOperationId((current) => current === operationId ? null : current);

@@ -1,6 +1,6 @@
 {
   "name": "@chihu/client-shell",
-  "version": "2026.07.16-business-funds-quality-v2",
+  "version": "2026.07.17-store-login-silent-v1",
   "private": true,
   "type": "module",
   "scripts": {
