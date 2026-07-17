@@ -206,6 +206,7 @@ const nativeData = {
     getProductsByIds: invoke("native:data:catalog:getProductsByIds"),
     recordLiveObservations: invoke("native:data:catalog:recordLiveObservations"),
     recordMutationResults: invoke("native:data:catalog:recordMutationResults"),
+    summarizeOpportunityRunMutations: invoke("native:data:catalog:summarizeOpportunityRunMutations"),
     confirmMutations: invoke("native:data:catalog:confirmMutations"),
     invalidateCoverage: invoke("native:data:catalog:invalidateCoverage")
   },

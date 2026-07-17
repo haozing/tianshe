@@ -18,9 +18,10 @@ import type {
 } from "../../types";
 import { requireChihuNative } from "../../native/client";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
-import { repositoryDelete, repositoryGet, repositoryGetAll, repositoryGetAllByPrefix, repositoryGetMany, repositoryPut, repositoryPutMany } from "./repository";
+import { repositoryDelete, repositoryDeleteMany, repositoryGet, repositoryGetAll, repositoryGetAllByPrefix, repositoryGetMany, repositoryPut, repositoryPutMany } from "./repository";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
+import { normalizeDoudianProductStatus } from "./productStatus";
 
 interface BulkDeleteArgs {
   doudianAdapter?: DoudianAdapterPayload;
@@ -38,6 +39,7 @@ interface BulkDeleteArgs {
   maxProductListPages?: number;
   mockProducts?: Array<Record<string, unknown>>;
   dryRun?: boolean;
+  allowPartialScan?: boolean;
   onProgress?: (progress: DoudianBulkDeleteProgress) => void;
   shouldCancel?: () => boolean;
 }
@@ -104,6 +106,7 @@ const bulkDeleteScanStore = "bulk_delete_scan_runs_v1" as const;
 const bulkDeleteCandidateStore = "bulk_delete_candidates_v1" as const;
 const bulkDeleteExecuteStore = "bulk_delete_execute_runs_v1" as const;
 const bulkDeleteOperationEventStore = "bulk_delete_operation_events_v1" as const;
+const bulkDeleteContractVersion = "bulk-delete-contract.status-fields-partial-v2";
 
 function text(value: unknown) {
   return String(value || "").trim();
@@ -219,19 +222,30 @@ function readNumber(record: unknown, adapter: DoudianAdapterConfig, field: strin
   return value === undefined ? fallback : value / fieldScale(adapter, field);
 }
 
-function readAuditedNumber(record: unknown, adapter: DoudianAdapterConfig, field: string, fallback = 0) {
+function firstMappedPath(record: unknown, paths: string[]) {
+  for (const path of paths) {
+    const value = path ? getPathValue(record, path) : record;
+    if (value !== undefined && value !== null && value !== "") return { value, path };
+  }
+  return { value: undefined, path: "" };
+}
+
+function readAuditedNumber(record: unknown, adapter: DoudianAdapterConfig, field: string) {
   const paths = fieldPaths(adapter, field);
-  const rawValue = readField(record, adapter, field);
+  const mapped = firstMappedPath(record, paths);
+  const rawValue = mapped.value;
   const value = coerceNumber(rawValue);
   const scale = fieldScale(adapter, field);
   return {
-    value: value === undefined ? fallback : value / scale,
+    value: value === undefined ? undefined : value / scale,
     source: {
       field,
       paths,
+      path: mapped.path,
       scale,
       valueType: Array.isArray(rawValue) ? "array" : typeof rawValue,
-      mapped: rawValue !== undefined
+      mapped: value !== undefined,
+      validated: false
     }
   };
 }
@@ -257,13 +271,25 @@ function daysSince(value: string) {
   return Number.isFinite(ms) ? Math.max(0, Math.floor((Date.now() - ms) / 864e5)) : -1;
 }
 
-function normalizeStatus(value: unknown): DoudianBulkDeleteProductStatus {
-  const raw = text(value).toLowerCase();
-  if (!raw) return "selling";
-  if (raw.includes("回收") || raw.includes("recycle")) return "recycle";
-  if (raw.includes("下架") || raw.includes("offline") || raw.includes("off_sale") || raw.includes("offsale")) return "offline";
-  if (raw.includes("售卖") || raw.includes("在售") || raw.includes("上架") || raw.includes("selling") || raw.includes("onsale") || raw.includes("on_sale")) return "selling";
-  return "unknown";
+function readProductStatus(record: Record<string, unknown>, adapter: DoudianAdapterConfig) {
+  const paths = fieldPaths(adapter, "status");
+  const values = paths
+    .map((path) => ({ path, value: path ? getPathValue(record, path) : record }))
+    .filter(({ value }) => value !== undefined && value !== null && value !== "");
+  // Prefer a display label such as `tab: 审核驳回` over a numeric companion code.
+  const selected = values.find(({ value }) => Number.isNaN(Number(value))) || values[0];
+  const rawStatus = selected ? text(selected.value) : "";
+  return {
+    status: normalizeDoudianProductStatus(selected?.value),
+    rawStatus,
+    source: {
+      field: "status",
+      paths,
+      path: selected?.path || "",
+      valueType: Array.isArray(selected?.value) ? "array" : typeof selected?.value,
+      mapped: Boolean(selected)
+    }
+  };
 }
 
 function productListPlanKey(adapter: DoudianAdapterConfig) {
@@ -294,7 +320,8 @@ function requestPlanHash(adapter: DoudianAdapterConfig) {
     productListPlanKey(adapter),
     recyclePlanKey(adapter),
     completeDeletePlanKey(adapter),
-    policyText(adapter, "bulkDelete.ruleVersion", "bulk-delete-rule")
+    policyText(adapter, "bulkDelete.ruleVersion", "bulk-delete-rule"),
+    bulkDeleteContractVersion
   ].join(":");
 }
 
@@ -423,8 +450,9 @@ function importItemForProduct(filters: DoudianBulkDeleteFilters, store: DoudianS
 function productFromRecord(store: DoudianStoreSummary, record: Record<string, unknown>, adapter: DoudianAdapterConfig, runId: string, index: number, sourceMode: DoudianBulkDeleteSourceMode, action: DoudianBulkDeleteAction, protectMode: DoudianBulkDeleteProtectMode): DoudianBulkDeleteCandidate {
   const productId = readText(record, adapter, "productId", text(record.product_id || record.productId || record.id));
   const title = readText(record, adapter, "title", productId ? `商品 ${productId}` : "未命名商品");
-  const rawStatus = readText(record, adapter, "status", text(record.tab || record.status || record.status_name));
-  const status = normalizeStatus(rawStatus || record.tab);
+  const statusField = readProductStatus(record, adapter);
+  const rawStatus = statusField.rawStatus || text(record.tab || record.status || record.status_name);
+  const status = statusField.status;
   const createdAt = normalizeDate(readField(record, adapter, "createdAt"));
   const listedAt = normalizeDate(readField(record, adapter, "listedAt"));
   const importItem = normalizeImportItem(record.__bulkDeleteImportItem);
@@ -432,7 +460,11 @@ function productFromRecord(store: DoudianStoreSummary, record: Record<string, un
   const stock = readAuditedNumber(record, adapter, "stock");
   const sales = readAuditedNumber(record, adapter, "totalSales");
   const exposure = readAuditedNumber(record, adapter, "exposureCount");
-  const excludedReason = protectMode === "skipSelling" && status === "selling" ? "已保护售卖中商品" : "";
+  const excludedReason = status === "unknown"
+    ? "商品状态未知，已从执行清单排除"
+    : protectMode === "skipSelling" && status === "selling"
+      ? "已保护售卖中商品"
+      : "";
   const targetAction = action === "delete" ? "彻底删除" : "加入回收站";
   const warning = action === "delete" && status === "selling" && !excludedReason ? "将先加入回收站，再彻底删除" : "";
   const id = `${runId}:${store.shopId}:${productId || index}`;
@@ -457,6 +489,7 @@ function productFromRecord(store: DoudianStoreSummary, record: Record<string, un
     sales: sales.value,
     exposure: exposure.value,
     fieldSources: {
+      status: statusField.source,
       price: price.source,
       stock: stock.source,
       sales: sales.source,
@@ -470,7 +503,7 @@ function productFromRecord(store: DoudianStoreSummary, record: Record<string, un
     targetAction,
     excludedReason,
     warning,
-    ok: !excludedReason,
+    ok: !excludedReason && status !== "unknown",
     raw: record
   };
 }
@@ -480,15 +513,19 @@ function matchesFilters(row: DoudianBulkDeleteCandidate, filters: DoudianBulkDel
   if (sourceMode === "ids" && productIds.size && !productIds.has(row.productId)) return false;
   if (keyword && !`${row.title} ${row.productId}`.toLowerCase().includes(keyword)) return false;
   if (filters.status && filters.status !== "all" && row.status !== filters.status) return false;
-  if (Number(row.price || 0) < Number(filters.priceMin || 0) || Number(row.price || 0) > Number(filters.priceMax || 999999999)) return false;
-  if (Number(row.sales || 0) < Number(filters.salesMin || 0) || Number(row.sales || 0) > Number(filters.salesMax || 999999999)) return false;
+  const priceMin = Number(filters.priceMin || 0);
+  const priceMax = Number(filters.priceMax || 999999999);
+  const salesMin = Number(filters.salesMin || 0);
+  const salesMax = Number(filters.salesMax || 999999999);
+  if (row.price === undefined ? priceMin > 0 || priceMax < 999999999 : row.price < priceMin || row.price > priceMax) return false;
+  if (row.sales === undefined ? salesMin > 0 || salesMax < 999999999 : row.sales < salesMin || row.sales > salesMax) return false;
   if (Number(filters.createdDaysMin || 0) > 0 && Number(row.daysSinceCreated ?? -1) >= 0 && Number(row.daysSinceCreated) < Number(filters.createdDaysMin)) return false;
   if (Number(filters.listedDaysMin || 0) > 0 && Number(row.daysSinceListed ?? -1) >= 0 && Number(row.daysSinceListed) < Number(filters.listedDaysMin)) return false;
   return true;
 }
 
 function buildRow(store: DoudianStoreSummary, products: DoudianBulkDeleteCandidate[], matches: DoudianBulkDeleteCandidate[]): DoudianBulkDeleteRow {
-  const stockEstimateCount = matches.filter((item) => item.ok).reduce((sum, item) => sum + Number(item.stock || 0), 0);
+  const stockEstimateCount = matches.filter((item) => item.ok && item.stock !== undefined).reduce((sum, item) => sum + Number(item.stock), 0);
   return {
     shopId: store.shopId,
     shopName: store.shopName,
@@ -503,7 +540,8 @@ function buildRow(store: DoudianStoreSummary, products: DoudianBulkDeleteCandida
     sellingCount: matches.filter((item) => item.status === "selling").length,
     stockCount: 0,
     stockEstimateCount,
-    stockFieldAuditedCount: matches.filter((item) => item.fieldSources?.stock).length
+    stockFieldMappedCount: matches.filter((item) => objectRecord(item.fieldSources?.stock).mapped === true).length,
+    stockFieldAuditedCount: matches.filter((item) => objectRecord(item.fieldSources?.stock).validated === true).length
   };
 }
 
@@ -590,7 +628,15 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
     requestOk: Object.values(responses).length > 0 && Object.values(responses).every((response) => requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter))),
     pageSize,
     maxPages,
-    sourceHealth: Object.entries(responses).map(([key, response]) => ({ key, status: response.status, ok: requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter)) })),
+    sourceHealth: Object.entries(responses).map(([key, response]) => ({
+      key,
+      status: response.status,
+      ok: requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter)),
+      source: response.source,
+      attemptCount: response.attemptCount || 0,
+      durationMs: response.durationMs || 0,
+      requestDiagnostic: response.requestDiagnostic || null
+    })),
     responses
   };
 }
@@ -610,7 +656,11 @@ function summarizeResponses(responses: Record<string, RequestPlanResult>, adapte
       status: response.status || 0,
       success: requestPlanResponseOk(response, adapter, planKey, mappings(adapter)),
       code: responseCode(response) ?? null,
-      message: responseMessage(response)
+      message: responseMessage(response),
+      source: response.source,
+      attemptCount: response.attemptCount || 0,
+      durationMs: response.durationMs || 0,
+      requestDiagnostic: response.requestDiagnostic || null
     }];
   }));
 }
@@ -779,9 +829,24 @@ async function scanStoresWithConcurrency(payload: DoudianAdapterPayload, targets
   return results.filter(Boolean);
 }
 
-async function saveScanRun(record: ScanRunRecord) {
+async function pruneScanHistory(adapter: DoudianAdapterConfig) {
+  const retention = policyNumber(adapter, "bulkDelete.scanHistoryLimit", 5, 1, 50);
+  const runs = (await repositoryGetAll<ScanRunRecord>(bulkDeleteScanStore))
+    .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
+  for (const staleRun of runs.slice(retention)) {
+    const candidates = await repositoryGetAllByPrefix<DoudianBulkDeleteCandidate>(bulkDeleteCandidateStore, `${staleRun.runId}:`, { pageSize: 1000, maxItems: 100000 }).catch(() => []);
+    const eventPrefix = `${staleRun.operationId || staleRun.runId}:`;
+    const events = await repositoryGetAllByPrefix<OperationEventRecord>(bulkDeleteOperationEventStore, eventPrefix, { pageSize: 1000, maxItems: 100000 }).catch(() => []);
+    await repositoryDeleteMany(bulkDeleteCandidateStore, candidates.map((item) => item.id)).catch(() => 0);
+    await repositoryDeleteMany(bulkDeleteOperationEventStore, events.map((item) => item.id)).catch(() => 0);
+    await repositoryDelete(bulkDeleteScanStore, staleRun.id).catch(() => undefined);
+  }
+}
+
+async function saveScanRun(record: ScanRunRecord, adapter: DoudianAdapterConfig) {
   await repositoryPut(bulkDeleteScanStore, record);
   await repositoryPutMany(bulkDeleteCandidateStore, record.candidates.map((candidate) => ({ ...candidate, id: candidate.id })));
+  await pruneScanHistory(adapter).catch(() => undefined);
 }
 
 function scanSummary(rows: DoudianBulkDeleteRow[], candidates: DoudianBulkDeleteCandidate[], details: DoudianRunDetail[], sourceHealth: Array<Record<string, unknown>>) {
@@ -797,8 +862,9 @@ function scanSummary(rows: DoudianBulkDeleteRow[], candidates: DoudianBulkDelete
     deleteCount: candidates.filter((item) => item.ok && item.action === "delete").length,
     sellingCount: candidates.filter((item) => item.status === "selling").length,
     stockCount: 0,
-    stockEstimateCount: candidates.filter((item) => item.ok).reduce((sum, item) => sum + Number(item.stock || 0), 0),
-    stockFieldAuditedCount: candidates.filter((item) => item.fieldSources?.stock).length
+    stockEstimateCount: candidates.filter((item) => item.ok && item.stock !== undefined).reduce((sum, item) => sum + Number(item.stock), 0),
+    stockFieldMappedCount: candidates.filter((item) => objectRecord(item.fieldSources?.stock).mapped === true).length,
+    stockFieldAuditedCount: candidates.filter((item) => objectRecord(item.fieldSources?.stock).validated === true).length
   };
 }
 
@@ -1388,7 +1454,7 @@ async function fetchBulkDeleteScan(payload: DoudianAdapterPayload, args: BulkDel
     requestPlanHash: requestHash,
     createdAt: now,
     updatedAt: now
-  });
+  }, payload.adapter);
   return {
     ok: !cancelled && failureCount === 0,
     status,
@@ -1419,6 +1485,9 @@ async function fetchBulkDeleteScan(payload: DoudianAdapterPayload, args: BulkDel
 async function fetchBulkDeleteExecute(payload: DoudianAdapterPayload, args: BulkDeleteArgs): Promise<DoudianBulkDeleteResult> {
   if (String(args.confirmText || "") !== "确认删除") throw new Error("bulk delete confirm text mismatch");
   const { run, sourceRunId, selected, action } = await loadExecuteCandidates(args);
+  if (run.status !== "ok" && !(run.status === "partial" && args.allowPartialScan === true)) {
+    throw new Error("bulk delete source scan is incomplete; explicitly allow execution for completed stores only");
+  }
   const requestHash = requestPlanHash(payload.adapter);
   const maxPreviewAgeMs = policyNumber(payload.adapter, "bulkDelete.maxPreviewAgeMs", 15 * 60 * 1000, 60000, 24 * 60 * 60 * 1000);
   const previewAgeMs = Date.now() - new Date(run.createdAt).getTime();
@@ -1593,17 +1662,31 @@ export async function runDoudianBulkDeleteSelfCheck(options: { doudianAdapter?: 
       protectMode: "includeSelling",
       filters: { keyword: "Self Check", status: "all", productIds: [] },
       mockProducts: [{
-        product_id: `bulk-product-${suffix}`,
+       product_id: `bulk-product-${suffix}`,
         title: "Self Check Bulk Product",
         status_name: "售卖中",
         create_time: "2026-01-01",
         audit_time: "2026-01-02",
         price: 1999,
         stock: 20,
-        total_sales: 1
-      }]
-    });
-    const candidate = scan.candidates?.[0];
+         total_sales: 1
+       }, {
+         product_id: `bulk-rejected-${suffix}`,
+         title: "Self Check Rejected Product",
+         status: "1",
+         tab: "审核驳回",
+         stock: 3
+       }, {
+         product_id: `bulk-unknown-${suffix}`,
+         title: "Self Check Unknown Product",
+         status: "unmapped-status"
+       }]
+     });
+     const candidate = scan.candidates?.[0];
+     const rejectedCandidate = scan.candidates?.find((item) => item.productId === `bulk-rejected-${suffix}`);
+     const unknownCandidate = scan.candidates?.find((item) => item.productId === `bulk-unknown-${suffix}`);
+     const statusMappingOk = rejectedCandidate?.status === "rejected" && rejectedCandidate.ok === true;
+     const unknownFieldOk = unknownCandidate?.status === "unknown" && unknownCandidate.ok === false && unknownCandidate.price === undefined && unknownCandidate.sales === undefined;
     const execute = await fetchBulkDeleteProducts({
       doudianAdapter: payload,
       mode: "execute",
@@ -1619,9 +1702,11 @@ export async function runDoudianBulkDeleteSelfCheck(options: { doudianAdapter?: 
     const restoredExecute = await restoreLatestBulkDeleteExecute();
     const dryRunOk = execute.executions?.every((item) => item.status === "dry_run") === true;
     return {
-      ok: scan.ok === true && !!candidate && execute.ok === true && dryRunOk && restoredScan?.runId === scanRunId && restoredExecute?.runId === execRunId,
+       ok: scan.ok === true && !!candidate && statusMappingOk && unknownFieldOk && execute.ok === true && dryRunOk && restoredScan?.runId === scanRunId && restoredExecute?.runId === execRunId,
       scanOk: scan.ok === true,
-      candidateOk: !!candidate,
+       candidateOk: !!candidate,
+       statusMappingOk,
+       unknownFieldOk,
       executeOk: execute.ok === true,
       dryRunOk,
       restoreScanOk: restoredScan?.runId === scanRunId,

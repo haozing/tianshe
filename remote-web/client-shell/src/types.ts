@@ -626,6 +626,7 @@ export interface DoudianStaleGoodsCandidate {
   source: string;
   metricAvailability?: Record<string, boolean>;
   compassMatched?: boolean;
+  implicitZeroTraffic?: boolean;
   recommendThresholds?: number[];
   [key: string]: unknown;
 }
@@ -672,6 +673,8 @@ export interface DoudianStaleGoodsCleanupResult extends DoudianStoreResult {
   rows?: DoudianStaleGoodsRow[];
   candidates?: DoudianStaleGoodsCandidate[];
   executions?: DoudianStaleGoodsExecution[];
+  candidatesDeferred?: boolean;
+  executionsDeferred?: boolean;
   successCount?: number;
   failureCount?: number;
   partialCount?: number;
@@ -688,7 +691,7 @@ export type DoudianBulkDeleteMode = "scan" | "execute";
 export type DoudianBulkDeleteSourceMode = "range" | "ids";
 export type DoudianBulkDeleteAction = "recycle" | "delete";
 export type DoudianBulkDeleteProtectMode = "includeSelling" | "skipSelling";
-export type DoudianBulkDeleteProductStatus = "selling" | "offline" | "recycle" | "unknown";
+export type DoudianBulkDeleteProductStatus = "selling" | "offline" | "recycle" | "rejected" | "unknown";
 export type DoudianBulkDeleteProductStatusFilter = "all" | "selling" | "offline";
 
 export interface DoudianBulkDeleteImportItem {
@@ -731,9 +734,9 @@ export interface DoudianBulkDeleteCandidate {
   listedAt?: string;
   daysSinceCreated?: number;
   daysSinceListed?: number;
-  price: number;
-  stock: number;
-  sales: number;
+  price?: number;
+  stock?: number;
+  sales?: number;
   exposure?: number;
   fieldSources?: Record<string, unknown>;
   importItem?: DoudianBulkDeleteImportItem;
@@ -762,6 +765,7 @@ export interface DoudianBulkDeleteRow {
   sellingCount: number;
   stockCount: number;
   stockEstimateCount?: number;
+  stockFieldMappedCount?: number;
   stockFieldAuditedCount?: number;
   [key: string]: unknown;
 }

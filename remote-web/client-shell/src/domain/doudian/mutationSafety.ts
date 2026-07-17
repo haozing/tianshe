@@ -2,8 +2,10 @@ import type { DoudianAdapterConfig, DoudianAdapterPayload, DoudianStoreSummary }
 import { getNativeData } from "../../nativeData/client";
 import type { CatalogMutationStatus, CatalogMutationRecordInput } from "../../nativeData/types";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
+import { normalizeDoudianProductStatus } from "./productStatus";
 
 const DEFAULT_TENANT_ID = "local-user";
+const LIVE_LOOKUP_CACHE_TTL_MS = 60_000;
 
 export interface MutationCandidateInput {
   id?: string;
@@ -42,6 +44,7 @@ export interface MutationExecutionInput {
   ok?: boolean;
   message?: string;
   planKey?: string;
+  diagnostic?: Record<string, unknown>;
 }
 
 interface LiveLookupResult {
@@ -53,6 +56,8 @@ interface LiveLookupResult {
   raw?: Record<string, unknown>;
   response?: RequestPlanResult;
 }
+
+const liveLookupCache = new Map<string, { expiresAt: number; result?: LiveLookupResult; pending?: Promise<LiveLookupResult> }>();
 
 function text(value: unknown) {
   return String(value ?? "").trim();
@@ -165,18 +170,21 @@ function firstArray(root: unknown, paths: string[]) {
   return [];
 }
 
+function preferredStatusValue(record: unknown, paths: string[]) {
+  const values = paths
+    .map((path) => ({ path, value: path ? getPathValue(record, path) : record }))
+    .filter(({ value }) => value !== undefined && value !== null && value !== "");
+  return values.find(({ value }) => Number.isNaN(Number(value)))?.value ?? values[0]?.value;
+}
+
 function normalizeLifecycleStatus(value: unknown) {
-  const raw = text(value).toLowerCase();
-  if (!raw) return "unknown";
-  if (["2", "recycle", "recycled"].includes(raw) || raw.includes("recycle") || raw.includes("\u56de\u6536")) return "recycle";
-  if (["1", "offline", "off_sale", "offsale"].includes(raw) || raw.includes("offline") || raw.includes("\u4e0b\u67b6")) return "offline";
-  if (["0", "selling", "onsale", "on_sale"].includes(raw) || raw.includes("selling") || raw.includes("\u5728\u552e") || raw.includes("\u4e0a\u67b6")) return "selling";
-  return "unknown";
+  return normalizeDoudianProductStatus(value);
 }
 
 function liveLookupPlanKey(adapter: DoudianAdapterConfig, feature: string) {
   if (feature === "bulk-delete" && adapter.requestPlans?.bulkDeleteProductList) return "bulkDeleteProductList";
   if (feature === "stale-goods-cleanup" && adapter.requestPlans?.staleGoodsProductList) return "staleGoodsProductList";
+  if (feature === "opportunity-submit" && adapter.requestPlans?.opportunityProductList) return "opportunityProductList";
   if (adapter.requestPlans?.violationProductLookup) return "violationProductLookup";
   if (adapter.requestPlans?.bulkDeleteProductList) return "bulkDeleteProductList";
   return "";
@@ -202,7 +210,7 @@ function liveLookupContext(productId: string) {
   };
 }
 
-async function liveLookupProduct(payload: DoudianAdapterPayload, store: DoudianStoreSummary, productId: string, feature: string): Promise<LiveLookupResult> {
+async function fetchLiveLookupProduct(payload: DoudianAdapterPayload, store: DoudianStoreSummary, productId: string, feature: string, shouldCancel?: () => boolean): Promise<LiveLookupResult> {
   const adapter = payload.adapter;
   const planKey = liveLookupPlanKey(adapter, feature);
   if (!planKey) {
@@ -211,7 +219,8 @@ async function liveLookupProduct(payload: DoudianAdapterPayload, store: DoudianS
   const response = await runDoudianRequestPlan(payload, {
     partition: store.partition,
     planKey,
-    context: liveLookupContext(productId)
+    context: liveLookupContext(productId),
+    shouldCancel
   });
   const mapping = mappingFor(adapter);
   const wrapped = { [planKey]: response.data };
@@ -230,11 +239,30 @@ async function liveLookupProduct(payload: DoudianAdapterPayload, store: DoudianS
     ok: true,
     found: true,
     planKey,
-    lifecycleStatus: normalizeLifecycleStatus(firstPathValue(match, statusPaths)),
+    lifecycleStatus: normalizeLifecycleStatus(preferredStatusValue(match, statusPaths)),
     message: "",
     raw: match,
     response
   };
+}
+
+async function liveLookupProduct(payload: DoudianAdapterPayload, store: DoudianStoreSummary, productId: string, feature: string, shouldCancel?: () => boolean): Promise<LiveLookupResult> {
+  const planKey = liveLookupPlanKey(payload.adapter, feature);
+  const cacheKey = [store.partition, planKey, productId].map(text).join("::");
+  const cached = liveLookupCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    if (cached.result) return cached.result;
+    if (cached.pending) return cached.pending;
+  }
+  const pending = fetchLiveLookupProduct(payload, store, productId, feature, shouldCancel);
+  liveLookupCache.set(cacheKey, { expiresAt: Date.now() + LIVE_LOOKUP_CACHE_TTL_MS, pending });
+  const result = await pending;
+  if (result.ok && result.found) {
+    liveLookupCache.set(cacheKey, { expiresAt: Date.now() + LIVE_LOOKUP_CACHE_TTL_MS, result });
+  } else {
+    liveLookupCache.delete(cacheKey);
+  }
+  return result;
 }
 
 function allowedStatus(action: string, stage: string | undefined, lifecycleStatus: string) {
@@ -254,7 +282,7 @@ function allowedStatus(action: string, stage: string | undefined, lifecycleStatu
     if (lifecycleStatus === "recycle") {
       return { ok: true, allowed: false, reason: "already-recycled", message: "Product is already in recycle bin" };
     }
-    return lifecycleStatus === "selling" || lifecycleStatus === "offline"
+    return lifecycleStatus === "selling" || lifecycleStatus === "offline" || lifecycleStatus === "rejected"
       ? { ok: true, allowed: true, reason: "", message: "" }
       : { ok: true, allowed: false, reason: "not-recyclable", message: `Product is ${lifecycleStatus}, recycle skipped` };
   }
@@ -356,13 +384,13 @@ export async function prepareMutationSafety<T extends MutationCandidateInput>(ar
       const index = nextIndex;
       nextIndex += 1;
       if (index >= args.candidates.length) return;
-      if (args.shouldCancel?.()) throw new Error("bulk delete operation cancelled");
+      if (args.shouldCancel?.()) throw new Error(`${args.feature} operation cancelled`);
       const productId = text(args.candidates[index].productId);
-      let live = await liveLookupProduct(args.payload, args.store, productId, args.feature);
+      let live = await liveLookupProduct(args.payload, args.store, productId, args.feature, args.shouldCancel);
       for (let attempt = 1; attempt < confirmAttempts && live.ok && live.lifecycleStatus !== "recycle"; attempt += 1) {
-        if (args.shouldCancel?.()) throw new Error("bulk delete operation cancelled");
+        if (args.shouldCancel?.()) throw new Error(`${args.feature} operation cancelled`);
         if (confirmDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, confirmDelayMs));
-        live = await liveLookupProduct(args.payload, args.store, productId, args.feature);
+        live = await liveLookupProduct(args.payload, args.store, productId, args.feature, args.shouldCancel);
       }
       lookupResults[index] = live;
     }
@@ -439,6 +467,8 @@ function statusFromExecution(execution: MutationExecutionInput): CatalogMutation
   const message = text(execution.message).toLowerCase();
   if (status === "dry_run") return "skipped";
   if (status === "skipped") return "skipped";
+  if (status === "quota_exhausted") return "skipped";
+  if (status === "unknown") return "unknown";
   if (execution.ok === true && status === "submitted") return "acknowledged";
   if (execution.ok === true) return "acknowledged";
   if (/timeout|timed out|network|socket|aborted|unknown|\u8d85\u65f6/.test(message)) return "unknown";
@@ -452,20 +482,24 @@ export async function recordExecutionMutationResults(args: {
 }) {
   const mutations = args.executions
     .filter((item) => text(item.mutationKey) && text(item.productId))
-    .map((item) => ({
-      mutationKey: text(item.mutationKey),
-      productId: text(item.productId),
-      action: text(item.action) || args.defaultAction,
-      status: statusFromExecution(item),
-      responseSummary: {
-        executionStatus: text(item.status),
-        ok: item.ok === true,
-        message: text(item.message),
-        planKey: text(item.planKey),
-        stage: text(item.stage)
-      },
-      acknowledgedAt: item.ok === true ? new Date().toISOString() : undefined
-    }));
+    .map((item) => {
+      const status = statusFromExecution(item);
+      return {
+        mutationKey: text(item.mutationKey),
+        productId: text(item.productId),
+        action: text(item.action) || args.defaultAction,
+        status,
+        responseSummary: {
+          executionStatus: text(item.status),
+          ok: item.ok === true,
+          message: text(item.message),
+          planKey: text(item.planKey),
+          stage: text(item.stage),
+          diagnostic: item.diagnostic
+        },
+        acknowledgedAt: status === "acknowledged" ? new Date().toISOString() : undefined
+      };
+    });
   if (!mutations.length) return { ok: true, changed: 0 };
   await recordMutations(args.store, mutations);
   return { ok: true, changed: mutations.length };

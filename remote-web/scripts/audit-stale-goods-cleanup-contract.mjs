@@ -10,6 +10,7 @@ const publicConfig = JSON.parse(read("remote-web/client-shell/public/config/doud
 const deployedConfig = JSON.parse(read("remote-web/new-remote-web/config/doudian-adapter.json"));
 const staleSource = read("remote-web/client-shell/src/domain/doudian/staleGoods.ts");
 const pageSource = read("remote-web/client-shell/src/components/SlowMovingCleanupPage.tsx");
+const taskRunnerSource = read("remote-web/client-shell/src/domain/doudian/taskRunner.ts");
 const bridgeSource = read("remote-web/client-shell/src/bridge/client.ts");
 
 assert.deepEqual(deployedConfig, publicConfig, "deployed adapter must match the source adapter");
@@ -27,6 +28,11 @@ assert.match(plans.staleGoodsCompleteDelete.referer, /\/ffa\/g\/recycle$/);
 assert.equal(policy.executeBatchSize, 100);
 assert.equal(policy.executePlans.delete, "staleGoodsBatchDelete");
 assert.equal(policy.executePlans.completeDelete, "staleGoodsCompleteDelete");
+assert.equal(policy.automaticCompassMissingRowPolicy, "zero");
+assert.equal(policy.importedCompassMissingRowPolicy, "unknown");
+assert.equal(policy.pageConcurrency, 4);
+assert.equal(policy.maxScanAgeMs, 900000);
+assert.deepEqual(policy.allowedExecutionActions, ["offline", "recycle", "delete"]);
 
 assert.ok(mappings.listPaths.length >= 5, "product response mapping must support nested list shapes");
 assert.ok(mappings.recommendListPaths.length >= 4, "recommend response mapping must support known nested shapes");
@@ -41,6 +47,19 @@ assert.match(staleSource, /collected\.complete/);
 assert.match(staleSource, /findArray\(payloadForPage, listPaths/);
 assert.match(staleSource, /recommendThresholds/);
 assert.match(staleSource, /metricAvailability/);
+assert.match(staleSource, /const implicitZeroTraffic = compassZeroFillSafe && !compassMatched/);
+assert.match(staleSource, /compassValue !== undefined \|\| implicitZero/);
+assert.match(staleSource, /stale goods compass workbook columns missing/);
+assert.match(staleSource, /importedCompassMissingRowPolicy/);
+assert.match(staleSource, /stale-goods-metrics-partial/);
+assert.match(staleSource, /maxScanAgeMs/);
+assert.match(staleSource, /candidate\.action !== action/);
+assert.match(staleSource, /saveScanCheckpoint/);
+assert.match(staleSource, /partialOk/);
+assert.match(staleSource, /emptyOk/);
+assert.doesNotMatch(staleSource, /const complete = responseOk && rows\.length > 0/);
+assert.match(taskRunnerSource, /task\.taskType === "staleGoodsScan" \|\| task\.taskType === "staleGoodsExecute"/);
+assert.match(taskRunnerSource, /candidatesDeferred/);
 assert.match(staleSource, /executions\.filter\(\(execution\) => !execution\.ok\)\.length/);
 
 const bridgeStart = bridgeSource.indexOf("export async function fetchDoudianStaleGoodsCleanup");
@@ -56,5 +75,10 @@ assert.doesNotMatch(pageSource, /selectedExecutable\.length\s*\?/);
 assert.doesNotMatch(pageSource, /next\.size\s*\?\s*next/);
 assert.match(pageSource, /!planRows\.length/);
 assert.match(pageSource, /row\.infoQualityScore > 0/);
+assert.match(pageSource, /仅本地演练/);
+assert.match(pageSource, /无罗盘明细商品按零流量处理/);
+assert.match(pageSource, /不可判定/);
+assert.match(pageSource, /店铺扫描诊断/);
+assert.match(pageSource, /cancelDoudianStoreOperation/);
 
 console.log("STALE_GOODS_CLEANUP_CONTRACT_OK");

@@ -54,6 +54,7 @@ function registerBusinessDatabaseHandlers() {
   ipcMain.handle("native:data:catalog:getProductsByIds", request("catalog.getProductsByIds", "interactive"));
   ipcMain.handle("native:data:catalog:recordLiveObservations", request("catalog.recordLiveObservations", "write"));
   ipcMain.handle("native:data:catalog:recordMutationResults", request("catalog.recordMutationResults", "write"));
+  ipcMain.handle("native:data:catalog:summarizeOpportunityRunMutations", request("catalog.summarizeOpportunityRunMutations", "interactive"));
   ipcMain.handle("native:data:catalog:confirmMutations", request("catalog.confirmMutations", "write"));
   ipcMain.handle("native:data:catalog:invalidateCoverage", request("catalog.invalidateCoverage", "write"));
 

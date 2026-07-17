@@ -15,6 +15,7 @@ import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestP
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { requireChihuNative } from "../../native/client";
 import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
+import { dispatchDoudianProgress } from "./progress";
 import * as XLSX from "xlsx";
 
 interface StaleGoodsArgs {
@@ -33,6 +34,7 @@ interface StaleGoodsArgs {
   candidateIds?: string[];
   sourceRunId?: string;
   confirmText?: string;
+  isCancelled?: () => boolean;
 }
 
 interface ScanRunRecord {
@@ -84,6 +86,10 @@ function text(value: unknown) {
 
 function objectRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function throwIfCancelled(args: StaleGoodsArgs) {
+  if (args.isCancelled?.()) throw new Error("stale goods task cancelled");
 }
 
 function policy(adapter: DoudianAdapterConfig, path: string, fallback: unknown = undefined): unknown {
@@ -331,11 +337,17 @@ function compassNumber(record: Record<string, unknown>, field: string) {
   return coerceNumber(firstRecordValue(record, compassAliases[field] || [field]));
 }
 
-function joinedNumber(product: Record<string, unknown>, compass: Record<string, unknown>, adapter: DoudianAdapterConfig, field: string) {
+function joinedNumber(
+  product: Record<string, unknown>,
+  compass: Record<string, unknown>,
+  adapter: DoudianAdapterConfig,
+  field: string,
+  implicitZero = false
+) {
   const productValue = readOptionalNumber(product, adapter, field);
   if (productValue !== undefined) return { value: productValue, available: true };
   const compassValue = compassNumber(compass, field);
-  return { value: compassValue ?? 0, available: compassValue !== undefined };
+  return { value: compassValue ?? 0, available: compassValue !== undefined || implicitZero };
 }
 
 function candidateFromProduct(
@@ -344,6 +356,7 @@ function candidateFromProduct(
   adapter: DoudianAdapterConfig,
   runId: string,
   compassById: Map<string, Record<string, unknown>>,
+  compassZeroFillSafe: boolean,
   recommendById: Map<string, Set<number>>,
   productSource: DoudianStaleGoodsRules["productSource"]
 ) {
@@ -357,15 +370,16 @@ function candidateFromProduct(
   const price = joinedNumber(product, compass, adapter, "price");
   const stock = joinedNumber(product, compass, adapter, "stock");
   const totalSales = joinedNumber(product, compass, adapter, "totalSales");
-  const periodSales = joinedNumber(product, compass, adapter, "periodSales");
-  const exposureCount = joinedNumber(product, compass, adapter, "exposureCount");
-  const clickCount = joinedNumber(product, compass, adapter, "clickCount");
-  const exposureUsers = joinedNumber(product, compass, adapter, "exposureUsers");
-  const clickUsers = joinedNumber(product, compass, adapter, "clickUsers");
+  const periodSales = joinedNumber(product, compass, adapter, "periodSales", compassZeroFillSafe);
+  const exposureCount = joinedNumber(product, compass, adapter, "exposureCount", compassZeroFillSafe);
+  const clickCount = joinedNumber(product, compass, adapter, "clickCount", compassZeroFillSafe);
+  const exposureUsers = joinedNumber(product, compass, adapter, "exposureUsers", compassZeroFillSafe);
+  const clickUsers = joinedNumber(product, compass, adapter, "clickUsers", compassZeroFillSafe);
   const ratingScore = joinedNumber(product, compass, adapter, "ratingScore");
   const infoQualityScore = joinedNumber(product, compass, adapter, "infoQualityScore");
   const mainImageScore = joinedNumber(product, compass, adapter, "mainImageScore");
   const titleQualityScore = joinedNumber(product, compass, adapter, "titleQualityScore");
+  const implicitZeroTraffic = compassZeroFillSafe && !compassMatched && [periodSales, exposureCount, clickCount, exposureUsers, clickUsers].some((metric) => !metric.available);
   const recommendThresholds = [...(recommendById.get(productId) || new Set<number>())];
   const sameStyleValue = readField(product, adapter, "sameStyleRisk");
   const base: DoudianStaleGoodsCandidate = {
@@ -403,8 +417,9 @@ function candidateFromProduct(
     riskScore: 0,
     action: "optimize",
     reasons: [],
-    source: ["platform product list", compassMatched ? "compass traffic" : "", recommendThresholds.length ? "recommend_admit" : ""].filter(Boolean).join(" + "),
+    source: ["platform product list", compassMatched ? "compass traffic" : implicitZeroTraffic ? "compass zero-fill" : "", recommendThresholds.length ? "recommend_admit" : ""].filter(Boolean).join(" + "),
     compassMatched,
+    implicitZeroTraffic,
     recommendThresholds,
     metricAvailability: {
       price: price.available,
@@ -499,8 +514,38 @@ function requestPlanKeys(adapter: DoudianAdapterConfig) {
   return policyArray(adapter, "staleGoodsCleanup.requestPlans");
 }
 
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function fingerprint(value: unknown) {
+  const source = stableJson(value);
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
 function requestPlanHash(adapter: DoudianAdapterConfig, planKeys: string[]) {
-  return `${adapter.version || ""}:${policyText(adapter, "staleGoodsCleanup.fieldSchemaVersion", "")}:${planKeys.join("|")}:${JSON.stringify(policy(adapter, "staleGoodsCleanup.executePlans", {}))}`;
+  const executionPlans = executePlans(adapter);
+  const referencedPlanKeys = Array.from(new Set([...planKeys, ...Object.values(executionPlans).map((value) => text(value)).filter(Boolean)]));
+  return fingerprint({
+    adapterVersion: adapter.version || "",
+    ruleVersion: policyText(adapter, "staleGoodsCleanup.ruleVersion", ""),
+    fieldSchemaVersion: policyText(adapter, "staleGoodsCleanup.fieldSchemaVersion", ""),
+    missingRowPolicy: {
+      automatic: policyText(adapter, "staleGoodsCleanup.automaticCompassMissingRowPolicy", "unknown"),
+      imported: policyText(adapter, "staleGoodsCleanup.importedCompassMissingRowPolicy", "unknown")
+    },
+    executionPlans,
+    requestPlans: Object.fromEntries(referencedPlanKeys.map((key) => [key, adapter.requestPlans?.[key] || null]))
+  });
 }
 
 function executePlans(adapter: DoudianAdapterConfig) {
@@ -522,8 +567,10 @@ function completeDeletePlanKey(adapter: DoudianAdapterConfig) {
 
 function executePlanGuard(adapter: DoudianAdapterConfig, action: string, planKey: string) {
   const plan = objectRecord(adapter.requestPlans?.[planKey]);
+  const configuredActions = policyArray(adapter, "staleGoodsCleanup.allowedExecutionActions");
+  const allowedActions = configuredActions.length ? configuredActions : ["offline", "recycle", "delete"];
   return {
-    ok: !!planKey && !!adapter.requestPlans?.[planKey] && ["offline", "recycle", "delete"].includes(action),
+    ok: !!planKey && !!adapter.requestPlans?.[planKey] && allowedActions.includes(action),
     dryRunOnly: plan.dryRunOnly !== false,
     action,
     planKey,
@@ -532,10 +579,64 @@ function executePlanGuard(adapter: DoudianAdapterConfig, action: string, planKey
   };
 }
 
-async function loadExecuteCandidates(sourceRunId: string, candidateIds: string[], action: string) {
+function enabledMetricFieldsForRules(rules: DoudianStaleGoodsRules) {
+  return Array.from(new Set([
+    rules.totalSalesEnabled ? "totalSales" : "",
+    rules.periodSalesEnabled ? "periodSales" : "",
+    rules.exposureEnabled ? "exposureCount" : "",
+    rules.clickEnabled ? "clickCount" : "",
+    rules.exposureUsersEnabled ? "exposureUsers" : "",
+    rules.clickUsersEnabled ? "clickUsers" : "",
+    rules.noSalesType === "strict" || rules.noSalesType === "trafficWaste" ? "periodSales" : "",
+    rules.noSalesType === "trafficWaste" ? "exposureCount" : "",
+    rules.stockRangeEnabled ? "stock" : "",
+    rules.priceRangeEnabled ? "price" : ""
+  ].filter(Boolean)));
+}
+
+function selectedQualityFieldsForRules(rules: DoudianStaleGoodsRules) {
+  return [
+    rules.requireLowRating ? "ratingScore" : "",
+    rules.requireLowInfo ? "infoQualityScore" : "",
+    rules.requireLowImage ? "mainImageScore" : "",
+    rules.requireSameStyleRisk ? "sameStyleRisk" : "",
+    rules.requireBadTitle ? "titleQualityScore" : ""
+  ].filter(Boolean);
+}
+
+function candidateRuleInputsComplete(candidate: DoudianStaleGoodsCandidate, rules: DoudianStaleGoodsRules) {
+  const available = candidate.metricAvailability || {};
+  if (!enabledMetricFieldsForRules(rules).every((field) => available[field] === true)) return false;
+  if (!selectedQualityFieldsForRules(rules).every((field) => available[field] === true)) return false;
+  if (rules.skipCreatedDaysEnabled && Number(candidate.daysSinceCreated ?? -1) < 0) return false;
+  if (rules.skipListedDaysEnabled && Number(candidate.daysSinceListed ?? -1) < 0) return false;
+  return true;
+}
+
+async function loadExecuteCandidates(
+  payload: DoudianAdapterPayload,
+  sourceRunId: string,
+  candidateIds: string[],
+  action: string,
+  dryRunOnly: boolean
+) {
   if (!sourceRunId) throw new Error("stale goods execute requires sourceRunId");
   const run = await repositoryGet<ScanRunRecord>("stale_scan_runs", sourceRunId);
   if (!run) throw new Error("stale goods source scan run not found");
+  if (!["ok", "partial"].includes(run.status)) throw new Error(`stale goods source scan is not executable: ${run.status}`);
+  if (run.status === "partial" && !dryRunOnly && policy(payload.adapter, "staleGoodsCleanup.allowPartialScanExecution", false) !== true) {
+    throw new Error("stale goods partial scan cannot be used for live execution");
+  }
+  const maxScanAgeMs = policyNumber(payload.adapter, "staleGoodsCleanup.maxScanAgeMs", 900000, 60000, 86400000);
+  const scanCreatedAt = Date.parse(run.createdAt || "");
+  if (!Number.isFinite(scanCreatedAt) || Date.now() - scanCreatedAt > maxScanAgeMs) throw new Error("stale goods source scan snapshot expired");
+  const cleanupRuleVersion = policyText(payload.adapter, "staleGoodsCleanup.ruleVersion", "stale-goods-rule");
+  const fieldSchemaVersion = policyText(payload.adapter, "staleGoodsCleanup.fieldSchemaVersion", "stale-goods-fields");
+  const currentRequestPlanHash = requestPlanHash(payload.adapter, requestPlanKeys(payload.adapter));
+  if (run.adapterVersion !== (payload.adapter.version || "")) throw new Error("stale goods source scan adapter version changed");
+  if (run.scriptsVersion !== (payload.scripts?.version || "")) throw new Error("stale goods source scan scripts version changed");
+  if (run.cleanupRuleVersion !== cleanupRuleVersion || run.fieldSchemaVersion !== fieldSchemaVersion) throw new Error("stale goods source scan rule version changed");
+  if (run.requestPlanHash !== currentRequestPlanHash) throw new Error("stale goods source scan request plan changed");
   const ids = Array.from(new Set(candidateIds.map((id) => text(id)).filter(Boolean)));
   if (!ids.length) throw new Error("stale goods cleanup selected products missing");
   const candidates = await repositoryGetMany<DoudianStaleGoodsCandidate>("stale_candidates", ids);
@@ -543,9 +644,19 @@ async function loadExecuteCandidates(sourceRunId: string, candidateIds: string[]
   const missing = ids.filter((id) => !byId.has(id));
   if (missing.length) throw new Error(`stale goods candidates missing from local snapshot: ${missing.slice(0, 3).join(",")}`);
   const selected = ids.map((id) => byId.get(id) as DoudianStaleGoodsCandidate);
-  const invalid = selected.filter((candidate) => candidate.sourceRunId !== sourceRunId || !candidate.shopId || !candidate.productId);
+  const snapshotIds = new Set((run.candidates || []).map((candidate) => candidate.id));
+  const successfulShopIds = new Set((run.details || []).filter((detail) => detail.ok === true).map((detail) => detail.shopId));
+  const invalid = selected.filter((candidate) =>
+    candidate.sourceRunId !== sourceRunId ||
+    !snapshotIds.has(candidate.id) ||
+    !successfulShopIds.has(candidate.shopId) ||
+    !candidate.shopId ||
+    !candidate.productId ||
+    candidate.action !== action ||
+    !candidateRuleInputsComplete(candidate, run.rules)
+  );
   if (invalid.length) throw new Error(`stale goods candidates are not from source run: ${invalid.slice(0, 3).map((item) => item.id).join(",")}`);
-  return selected.map((candidate) => ({ ...candidate, sourceRunId, action }));
+  return selected.map((candidate) => ({ ...candidate, sourceRunId }));
 }
 
 function executeSummary(executions: DoudianStaleGoodsExecution[]) {
@@ -908,7 +1019,7 @@ async function runPlan(payload: DoudianAdapterPayload, store: DoudianStoreSummar
 }
 
 async function collectProducts(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: StaleGoodsArgs, rules: DoudianStaleGoodsRules) {
-  if (args.mockProducts?.length) {
+  if (Array.isArray(args.mockProducts)) {
     return {
       products: args.mockProducts,
       remoteTotal: args.mockProducts.length,
@@ -945,14 +1056,15 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
   const baseContext = productSourceContext(source);
 
   for (const [batchIndex, idBatch] of idBatches.entries()) {
+    throwIfCancelled(args);
     const batchSet = new Set(idBatch);
     let batchComplete = false;
     let batchFetchedItems = 0;
     let batchFetchedPages = 0;
     let batchTotal: number | undefined;
     const batchMaxPages = source === "importedIds" ? idMaxPages : maxPages;
-    for (let offset = 0; offset < batchMaxPages; offset += 1) {
-      const page = pageStart + offset;
+    const fetchPage = async (page: number) => {
+      throwIfCancelled(args);
       const response = await runPlan(payload, store, planKey, {
         page: String(page),
         pageSize: String(pageSize),
@@ -960,36 +1072,66 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
         ...baseContext
       });
       const responseKey = `${planKey}:batch:${batchIndex}:page:${page}`;
-      responses[responseKey] = response;
-      fetchedPages += 1;
-      batchFetchedPages += 1;
       const payloadForPage = { [planKey]: response.data };
       const parsed = findArray(payloadForPage, listPaths(payload.adapter));
-      const responseOk = requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter));
-      sourceHealth.push({ key: responseKey, status: response.status, ok: responseOk && parsed.found, parsed: parsed.found, itemCount: parsed.items.length });
-      if (!responseOk) {
+      return { response, responseKey, payloadForPage, parsed, responseOk: requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter)) };
+    };
+    const consumePage = (result: Awaited<ReturnType<typeof fetchPage>>) => {
+      responses[result.responseKey] = result.response;
+      fetchedPages += 1;
+      batchFetchedPages += 1;
+      sourceHealth.push({ key: result.responseKey, status: result.response.status, ok: result.responseOk && result.parsed.found, parsed: result.parsed.found, itemCount: result.parsed.items.length });
+      if (!result.responseOk) {
         requestFailed = true;
-        break;
+        return;
       }
-      if (!parsed.found) {
+      if (!result.parsed.found) {
         malformed = true;
-        break;
+        return;
       }
-      batchFetchedItems += parsed.items.length;
-      batchTotal = optionalTotal(payloadForPage, payload.adapter) ?? batchTotal;
+      batchFetchedItems += result.parsed.items.length;
+      batchTotal = optionalTotal(result.payloadForPage, payload.adapter) ?? batchTotal;
       if (source !== "importedIds") remoteTotal = batchTotal ?? remoteTotal;
-      for (const item of parsed.items) {
+      for (const item of result.parsed.items) {
         const record = objectRecord(item);
         const productId = productRecordId(record, payload.adapter);
         if (!productId || (source === "importedIds" && !batchSet.has(productId))) continue;
         if (!products.has(productId)) products.set(productId, record);
       }
+    };
+    const firstPage = await fetchPage(pageStart);
+    consumePage(firstPage);
+    if (!requestFailed && !malformed) {
       const foundBatchIds = source === "importedIds" ? idBatch.filter((id) => products.has(id)).length : 0;
       if (source === "importedIds" && foundBatchIds >= idBatch.length) batchComplete = true;
+      else if (firstPage.parsed.items.length < pageSize) batchComplete = true;
       else if (batchTotal !== undefined && batchFetchedItems >= batchTotal) batchComplete = true;
-      else if (parsed.items.length < pageSize) batchComplete = true;
       else if (source !== "importedIds" && remoteTotal !== undefined && products.size >= remoteTotal) batchComplete = true;
-      if (batchComplete) break;
+    }
+    if (!batchComplete && !requestFailed && !malformed) {
+      const plannedPageCount = batchTotal === undefined ? undefined : Math.min(batchMaxPages, Math.max(1, Math.ceil(batchTotal / pageSize)));
+      if (plannedPageCount !== undefined && source !== "importedIds") {
+        const remainingPages = Array.from({ length: Math.max(0, plannedPageCount - 1) }, (_, index) => pageStart + index + 1);
+        const pageConcurrency = policyNumber(payload.adapter, "staleGoodsCleanup.pageConcurrency", 4, 1, 8);
+        for (let offset = 0; offset < remainingPages.length; offset += pageConcurrency) {
+          throwIfCancelled(args);
+          const pageResults = await Promise.all(remainingPages.slice(offset, offset + pageConcurrency).map((page) => fetchPage(page)));
+          pageResults.forEach(consumePage);
+          if (requestFailed || malformed || (remoteTotal !== undefined && products.size >= remoteTotal)) break;
+        }
+        batchComplete = !requestFailed && !malformed && batchTotal !== undefined && batchFetchedItems >= batchTotal;
+      } else {
+        for (let offset = 1; offset < batchMaxPages && !batchComplete; offset += 1) {
+          const pageResult = await fetchPage(pageStart + offset);
+          consumePage(pageResult);
+          if (requestFailed || malformed) break;
+          const foundIds = source === "importedIds" ? idBatch.filter((id) => products.has(id)).length : 0;
+          batchComplete = source === "importedIds" && foundIds >= idBatch.length
+            || (batchTotal !== undefined && batchFetchedItems >= batchTotal)
+            || pageResult.parsed.items.length < pageSize
+            || (source !== "importedIds" && remoteTotal !== undefined && products.size >= remoteTotal);
+        }
+      }
     }
     plannedPages += batchTotal === undefined ? (batchComplete ? batchFetchedPages : batchMaxPages) : Math.max(1, Math.ceil(batchTotal / pageSize));
     if (!batchComplete) incompleteBatch = true;
@@ -1032,7 +1174,7 @@ function recommendProductId(record: Record<string, unknown>) {
   return text(firstPathValue(record, ["base_item_info.item_id", "baseItemInfo.itemId", "item_id", "itemId", "product_id", "productId"]));
 }
 
-async function collectRecommendAdmit(payload: DoudianAdapterPayload, store: DoudianStoreSummary, rules: DoudianStaleGoodsRules) {
+async function collectRecommendAdmit(payload: DoudianAdapterPayload, store: DoudianStoreSummary, rules: DoudianStaleGoodsRules, args: StaleGoodsArgs) {
   const planKey = "staleGoodsRecommendAdmit";
   const byId = new Map<string, Set<number>>();
   const sourceHealth: Array<Record<string, unknown>> = [];
@@ -1044,10 +1186,12 @@ async function collectRecommendAdmit(payload: DoudianAdapterPayload, store: Doud
   let complete = true;
   let fetchedPages = 0;
   for (const threshold of thresholds) {
+    throwIfCancelled(args);
     let thresholdComplete = false;
     let fetchedItems = 0;
     let remoteTotal: number | undefined;
     for (let page = 1; page <= maxPages; page += 1) {
+      throwIfCancelled(args);
       const response = await runPlan(payload, store, planKey, {
         recommendPage: page,
         recommendPageSize: pageSize,
@@ -1121,30 +1265,57 @@ function compassRequestContext(period: DoudianStaleGoodsRules["trafficPeriod"]) 
 function workbookRows(base64: string) {
   const workbook = XLSX.read(base64, { type: "base64" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  return sheet ? XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: null }) : [];
+  if (!sheet) throw new Error("stale goods compass workbook has no worksheet");
+  const headerRow = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null })[0] || [];
+  const headerList = headerRow.map((value) => text(value)).filter(Boolean);
+  const headers = new Set(headerList);
+  const requiredFields = ["productId", "periodSales", "exposureCount", "clickCount", "exposureUsers", "clickUsers"];
+  const missingFields = requiredFields.filter((field) => !(compassAliases[field] || [field]).some((alias) => headers.has(alias)));
+  if (missingFields.length) throw new Error(`stale goods compass workbook columns missing: ${missingFields.join(",")}`);
+  return {
+    rows: XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: null }),
+    headerFingerprint: fingerprint(headerList)
+  };
 }
 
 async function collectCompassRows(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: StaleGoodsArgs, rules: DoudianStaleGoodsRules) {
-  if (args.compassRows?.length && args.compassPeriod === rules.trafficPeriod) {
+  throwIfCancelled(args);
+  if ((args.compassFileName || args.compassRows?.length) && args.compassPeriod === rules.trafficPeriod) {
+    const rows = args.compassRows || [];
+    const zeroFillSafe = policyText(payload.adapter, "staleGoodsCleanup.importedCompassMissingRowPolicy", "unknown") === "zero";
     return {
-      rows: args.compassRows,
+      rows,
       complete: true,
-      sourceHealth: [{ key: "staleGoodsCompassImport", status: 200, ok: true, itemCount: args.compassRows.length, period: rules.trafficPeriod }],
+      zeroFillSafe,
+      headerFingerprint: fingerprint(Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).sort()),
+      sourceHealth: [{ key: "staleGoodsCompassImport", status: 200, ok: true, itemCount: rows.length, period: rules.trafficPeriod, missingRowPolicy: zeroFillSafe ? "zero" : "unknown" }],
       responses: {} as Record<string, RequestPlanResult>
     };
   }
-  if (args.mockProducts?.length) return { rows: [] as Array<Record<string, unknown>>, complete: true, sourceHealth: [] as Array<Record<string, unknown>>, responses: {} as Record<string, RequestPlanResult> };
+  if (Array.isArray(args.mockProducts)) {
+    const zeroFillSafe = policyText(payload.adapter, "staleGoodsCleanup.automaticCompassMissingRowPolicy", "unknown") === "zero";
+    return { rows: [] as Array<Record<string, unknown>>, complete: true, zeroFillSafe, headerFingerprint: "mock", sourceHealth: [] as Array<Record<string, unknown>>, responses: {} as Record<string, RequestPlanResult> };
+  }
   const planKey = "staleGoodsCompassDownload";
-  if (!payload.adapter.requestPlans?.[planKey]) return { rows: [] as Array<Record<string, unknown>>, complete: false, sourceHealth: [{ key: planKey, status: 0, ok: false, reason: "missing-plan" }], responses: {} as Record<string, RequestPlanResult> };
+  if (!payload.adapter.requestPlans?.[planKey]) return { rows: [] as Array<Record<string, unknown>>, complete: false, zeroFillSafe: false, headerFingerprint: "", sourceHealth: [{ key: planKey, status: 0, ok: false, reason: "missing-plan" }], responses: {} as Record<string, RequestPlanResult> };
   const response = await runPlan(payload, store, planKey, compassRequestContext(rules.trafficPeriod));
   const responses = { [planKey]: response };
   const responseOk = requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter));
   try {
-    const rows = responseOk && typeof response.data === "string" ? workbookRows(response.data) : [];
-    const complete = responseOk && rows.length > 0;
-    return { rows, complete, sourceHealth: [{ key: planKey, status: response.status, ok: complete, itemCount: rows.length, period: rules.trafficPeriod }], responses };
+    const workbook = responseOk && typeof response.data === "string" ? workbookRows(response.data) : null;
+    const rows = workbook?.rows || [];
+    const complete = responseOk && typeof response.data === "string";
+    const zeroFillSafe = complete && policyText(payload.adapter, "staleGoodsCleanup.automaticCompassMissingRowPolicy", "unknown") === "zero";
+    return {
+      rows,
+      complete,
+      zeroFillSafe,
+      headerFingerprint: workbook?.headerFingerprint || "",
+      sourceHealth: [{ key: planKey, status: response.status, ok: complete, itemCount: rows.length, period: rules.trafficPeriod, missingRowPolicy: zeroFillSafe ? "zero" : "unknown", headerFingerprint: workbook?.headerFingerprint || "" }],
+      responses
+    };
   } catch (error) {
-    return { rows: [] as Array<Record<string, unknown>>, complete: false, sourceHealth: [{ key: planKey, status: response.status, ok: false, reason: "workbook-parse-failed", message: error instanceof Error ? error.message : String(error) }], responses };
+    return { rows: [] as Array<Record<string, unknown>>, complete: false, zeroFillSafe: false, headerFingerprint: "", sourceHealth: [{ key: planKey, status: response.status, ok: false, reason: "workbook-parse-failed", message: error instanceof Error ? error.message : String(error) }], responses };
   }
 }
 
@@ -1208,16 +1379,17 @@ async function reportStaleGoodsRow(args: {
 }
 
 async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: StaleGoodsArgs, runId: string, rules: DoudianStaleGoodsRules) {
+  throwIfCancelled(args);
   const [collected, compassResult, recommendResult] = await Promise.all([
     collectProducts(payload, store, args, rules),
     collectCompassRows(payload, store, args, rules),
-    args.mockProducts?.length
+    Array.isArray(args.mockProducts)
       ? Promise.resolve({ byId: new Map<string, Set<number>>(), complete: true, fetchedPages: 0, sourceHealth: [] as Array<Record<string, unknown>>, responses: {} as Record<string, RequestPlanResult> })
-      : collectRecommendAdmit(payload, store, rules)
+      : collectRecommendAdmit(payload, store, rules, args)
   ]);
   const compass = compassByProductId(compassResult.rows);
   const products = collected.products
-    .map((product) => candidateFromProduct(store, product, payload.adapter, runId, compass, recommendResult.byId, rules.productSource))
+    .map((product) => candidateFromProduct(store, product, payload.adapter, runId, compass, compassResult.zeroFillSafe, recommendResult.byId, rules.productSource))
     .filter((product): product is DoudianStaleGoodsCandidate => Boolean(product));
   const evaluations = products.map((product) => ({ product, evaluation: evaluateRules(product, rules) }));
   const matched = evaluations.filter((item) => item.evaluation.match).map((item) => item.product);
@@ -1225,32 +1397,35 @@ async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSumm
   const limitedCandidates = perStoreLimit
     ? [...matched].sort((left, right) => Number(right.riskScore || 0) - Number(left.riskScore || 0)).slice(0, perStoreLimit)
     : matched;
-  const enabledMetricFields = Array.from(new Set([
-    rules.totalSalesEnabled ? "totalSales" : "",
-    rules.periodSalesEnabled ? "periodSales" : "",
-    rules.exposureEnabled ? "exposureCount" : "",
-    rules.clickEnabled ? "clickCount" : "",
-    rules.exposureUsersEnabled ? "exposureUsers" : "",
-    rules.clickUsersEnabled ? "clickUsers" : "",
-    rules.noSalesType === "strict" || rules.noSalesType === "trafficWaste" ? "periodSales" : "",
-    rules.noSalesType === "trafficWaste" ? "exposureCount" : ""
-  ].filter(Boolean)));
-  const selectedQualityFields = [
-    rules.requireLowRating ? "ratingScore" : "",
-    rules.requireLowInfo ? "infoQualityScore" : "",
-    rules.requireLowImage ? "mainImageScore" : "",
-    rules.requireSameStyleRisk ? "sameStyleRisk" : "",
-    rules.requireBadTitle ? "titleQualityScore" : ""
-  ].filter(Boolean);
+  const enabledMetricFields = enabledMetricFieldsForRules(rules)
+    .filter((field) => ["totalSales", "periodSales", "exposureCount", "clickCount", "exposureUsers", "clickUsers"].includes(field));
+  const missingMetricCounts = Object.fromEntries(enabledMetricFields.map((field) => [
+    field,
+    products.filter((product) => product.metricAvailability?.[field] !== true).length
+  ]));
+  const selectedQualityFields = selectedQualityFieldsForRules(rules);
   const missingMetricCount = products.filter((product) => enabledMetricFields.some((field) => product.metricAvailability?.[field] !== true)).length;
   const metricComplete = missingMetricCount === 0;
   const qualityComplete = recommendResult.complete || products.every((product) => selectedQualityFields.every((field) => product.metricAvailability?.[field] === true));
   const trafficFieldsEnabled = enabledMetricFields.some((field) => ["periodSales", "exposureCount", "clickCount", "exposureUsers", "clickUsers"].includes(field));
   const compassRequired = trafficFieldsEnabled && !metricComplete;
-  const ok = collected.complete && recommendResult.complete && qualityComplete && (!compassRequired || compassResult.complete) && metricComplete;
+  const qualityUnknownCount = qualityComplete ? 0 : products.filter((product) => !selectedQualityFields.every((field) => product.metricAvailability?.[field] === true)).length;
+  const analyzableProductCount = products.filter((product) => candidateRuleInputsComplete(product, rules)).length;
+  const emptyProductStore = products.length === 0 && collected.complete;
+  const sourceUsable = emptyProductStore || !compassRequired || compassResult.zeroFillSafe || analyzableProductCount > 0;
+  const qualityUsable = selectedQualityFields.length === 0 || qualityComplete || analyzableProductCount > 0;
+  const ok = collected.complete && sourceUsable && qualityUsable;
   const candidates = ok ? limitedCandidates : [];
-  const sourceHealth = [...collected.sourceHealth, ...compassResult.sourceHealth, ...recommendResult.sourceHealth];
-  const optionalSourceFailure = sourceHealth.some((item) => item.ok === false);
+  const sourceHealth: Array<Record<string, unknown>> = [...collected.sourceHealth, ...compassResult.sourceHealth, ...recommendResult.sourceHealth].map((item) => {
+    const key = String(item.key || "");
+    if (item.ok !== false) return item;
+    if (emptyProductStore && (key.includes("Compass") || key.includes("Recommend"))) return { ...item, ignored: true, reason: "empty-product-store" };
+    if (key.includes("Recommend") && selectedQualityFields.length === 0) return { ...item, ignored: true, reason: "quality-rules-disabled" };
+    if (key.includes("Compass") && !trafficFieldsEnabled) return { ...item, ignored: true, reason: "traffic-rules-disabled" };
+    return item;
+  });
+  const optionalSourceFailure = sourceHealth.some((item) => item.ok === false && item.ignored !== true);
+  const coveragePartial = missingMetricCount > 0 || qualityUnknownCount > 0;
   const row = buildRow(store, candidates, collected.remoteTotal);
   const reason = collected.malformed
     ? "stale-goods-product-response-malformed"
@@ -1258,21 +1433,23 @@ async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSumm
       ? "stale-goods-product-list-truncated"
       : !collected.complete
         ? "stale-goods-product-list-incomplete"
-        : !recommendResult.complete || !qualityComplete
+        : !qualityUsable
           ? "stale-goods-recommend-incomplete"
-          : !metricComplete || (compassRequired && !compassResult.complete)
+          : !metricComplete && ok
+            ? "stale-goods-metrics-partial"
+            : !metricComplete || (compassRequired && !compassResult.complete)
             ? "stale-goods-metrics-incomplete"
             : candidates.length ? "" : "stale-goods-no-candidate";
   const detail: DoudianRunDetail = {
     shopId: store.shopId,
     shopName: store.shopName,
-    status: ok ? (optionalSourceFailure ? "partial" : "ok") : "failed",
+    status: ok ? (optionalSourceFailure || coveragePartial ? "partial" : "ok") : "failed",
     ok,
     message: ok
       ? candidates.length ? policyMessage(payload.adapter, "staleGoodsCleanup.messages.scanned", "Stale goods scanned") : policyMessage(payload.adapter, "staleGoodsCleanup.messages.noCandidateStore", "No stale goods candidates")
       : policyMessage(payload.adapter, "staleGoodsCleanup.messages.failed", "Stale goods scan failed"),
     reason,
-    category: ok ? (optionalSourceFailure ? "source" : "") : collected.truncated ? "coverage" : "api",
+    category: ok ? (coveragePartial ? "coverage" : optionalSourceFailure ? "source" : "") : collected.truncated ? "coverage" : "api",
     diagnostic: {
       productCount: products.length,
       candidateCount: candidates.length,
@@ -1282,8 +1459,13 @@ async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSumm
       missingListedAt: products.filter((item) => !item.listedAt).length,
       missingAgeDate: products.filter((item) => !item.ageDate).length,
       missingMetricCount,
+      missingMetricCounts,
+      indeterminateProductCount: Math.max(missingMetricCount, qualityUnknownCount),
+      analyzableProductCount,
       compassSourceCount: compass.size,
       compassMatchedCount: products.filter((item) => item.compassMatched).length,
+      implicitZeroTrafficCount: products.filter((item) => item.implicitZeroTraffic === true).length,
+      compassHeaderFingerprint: compassResult.headerFingerprint || "",
       recommendMatchedCount: products.filter((item) => (item.recommendThresholds || []).length > 0).length,
       truncated: collected.truncated,
       splitRequired: collected.splitRequired,
@@ -1311,6 +1493,11 @@ async function saveScanRun(record: ScanRunRecord) {
   await repositoryPutMany("stale_candidates", record.candidates.map((candidate) => ({ ...candidate, id: candidate.id })));
 }
 
+async function saveScanCheckpoint(record: ScanRunRecord, candidates: DoudianStaleGoodsCandidate[]) {
+  await repositoryPut("stale_scan_runs", record);
+  if (candidates.length) await repositoryPutMany("stale_candidates", candidates.map((candidate) => ({ ...candidate, id: candidate.id })));
+}
+
 function scanSummary(rows: DoudianStaleGoodsRow[], candidates: DoudianStaleGoodsCandidate[], details: DoudianRunDetail[], sourceHealth: Array<Record<string, unknown>>) {
   const diagnosticNumber = (detail: DoudianRunDetail, key: string) => {
     const value = Number(objectRecord(detail.diagnostic)[key] || 0);
@@ -1327,7 +1514,16 @@ function scanSummary(rows: DoudianStaleGoodsRow[], candidates: DoudianStaleGoods
     missingListedAt: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "missingListedAt"), 0),
     missingAgeDate: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "missingAgeDate"), 0),
     missingMetricCount: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "missingMetricCount"), 0),
-    sourceFailureCount: sourceHealth.filter((item) => item.ok === false).length,
+    indeterminateProductCount: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "indeterminateProductCount"), 0),
+    missingTotalSalesCount: details.reduce((sum, detail) => sum + Number(objectRecord(objectRecord(detail.diagnostic).missingMetricCounts).totalSales || 0), 0),
+    missingPeriodSalesCount: details.reduce((sum, detail) => sum + Number(objectRecord(objectRecord(detail.diagnostic).missingMetricCounts).periodSales || 0), 0),
+    missingExposureCount: details.reduce((sum, detail) => sum + Number(objectRecord(objectRecord(detail.diagnostic).missingMetricCounts).exposureCount || 0), 0),
+    missingClickCount: details.reduce((sum, detail) => sum + Number(objectRecord(objectRecord(detail.diagnostic).missingMetricCounts).clickCount || 0), 0),
+    missingExposureUsersCount: details.reduce((sum, detail) => sum + Number(objectRecord(objectRecord(detail.diagnostic).missingMetricCounts).exposureUsers || 0), 0),
+    missingClickUsersCount: details.reduce((sum, detail) => sum + Number(objectRecord(objectRecord(detail.diagnostic).missingMetricCounts).clickUsers || 0), 0),
+    sourceFailureCount: sourceHealth.filter((item) => item.ok === false && item.ignored !== true).length,
+    failedStoreCount: details.filter((detail) => detail.ok !== true).length,
+    successfulStoreCount: details.filter((detail) => detail.ok === true).length,
     diagnosticSourceCount: sourceHealth.filter((item) => !String(item.key || "").startsWith("staleGoodsProductList")).length,
     truncatedStoreCount: details.filter((detail) => objectRecord(detail.diagnostic).truncated === true).length,
     splitRequiredStoreCount: details.filter((detail) => objectRecord(detail.diagnostic).splitRequired === true).length,
@@ -1335,16 +1531,21 @@ function scanSummary(rows: DoudianStaleGoodsRow[], candidates: DoudianStaleGoods
     plannedPages: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "plannedPages"), 0),
     compassSourceCount: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "compassSourceCount"), 0),
     compassMatchedCount,
+    implicitZeroTrafficCount: details.reduce((sum, detail) => sum + diagnosticNumber(detail, "implicitZeroTrafficCount"), 0),
     compassMatchRate: productCount ? (compassMatchedCount / productCount) * 100 : 0
   };
 }
 
 async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: StaleGoodsArgs): Promise<DoudianStaleGoodsCleanupResult> {
+  throwIfCancelled(args);
   if (String(args.confirmText || "") !== "\u786e\u8ba4\u6e05\u7406") throw new Error("stale goods cleanup confirm text mismatch");
   const action = text(args.action);
   if (!["offline", "recycle", "delete"].includes(action)) throw new Error("unsupported stale goods cleanup action");
   const sourceRunId = text(args.sourceRunId);
-  const selected = await loadExecuteCandidates(sourceRunId, args.candidateIds || [], action);
+  const planKey = actionPlanKey(payload.adapter, action);
+  const guard = executePlanGuard(payload.adapter, action, planKey);
+  if (!guard.ok) throw new Error(`stale goods execute plan is not allowed: ${action}`);
+  const selected = await loadExecuteCandidates(payload, sourceRunId, args.candidateIds || [], action, guard.dryRunOnly);
 
   const ledger = await listStoreLedger();
   const stores = ledger.stores || [];
@@ -1362,10 +1563,10 @@ async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: Stal
   if (!groups.length) throw new Error("stale goods cleanup selected stores missing");
 
   const runId = args.operationId || `stale-exec-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const planKey = actionPlanKey(payload.adapter, action);
   const executions: DoudianStaleGoodsExecution[] = [];
   const details: DoudianRunDetail[] = [];
   for (const [index, group] of groups.entries()) {
+    throwIfCancelled(args);
     try {
       const result = await executeStore(payload, group.store, group.candidates, action, planKey, index + 1, groups.length, runId);
       executions.push(...result.executions);
@@ -1398,6 +1599,13 @@ async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: Stal
         planKey
       })));
     }
+    dispatchDoudianProgress({
+      operationId: runId,
+      taskType: "staleGoodsExecute",
+      status: "running",
+      progress: Math.round(((index + 1) / groups.length) * 100),
+      message: `${index + 1}/${groups.length} stores completed`
+    });
   }
   const successCount = executions.filter((execution) => execution.ok).length;
   const failureCount = executions.filter((execution) => !execution.ok).length;
@@ -1463,6 +1671,7 @@ async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: Stal
 }
 
 export async function fetchStaleGoodsCleanup(args: StaleGoodsArgs = {}): Promise<DoudianStaleGoodsCleanupResult> {
+  throwIfCancelled(args);
   const payload = adapterPayload(args);
   if ((args.mode || "scan") === "execute") return fetchStaleGoodsExecute(payload, args);
   if ((args.mode || "scan") !== "scan") return { ok: false, status: "unsupported-mode", mode: args.mode, message: "unsupported stale goods mode", rows: [], candidates: [], executions: [] };
@@ -1473,6 +1682,10 @@ export async function fetchStaleGoodsCleanup(args: StaleGoodsArgs = {}): Promise
   const rules = normalizeRules(args, payload.adapter);
   const planKeys = requestPlanKeys(payload.adapter);
   const runId = args.operationId || `stale-scan-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const createdAt = new Date().toISOString();
+  const cleanupRuleVersion = policyText(payload.adapter, "staleGoodsCleanup.ruleVersion", "stale-goods-rule");
+  const fieldSchemaVersion = policyText(payload.adapter, "staleGoodsCleanup.fieldSchemaVersion", "stale-goods-fields");
+  const requestHash = requestPlanHash(payload.adapter, planKeys);
   const rows: DoudianStaleGoodsRow[] = [];
   const candidates: DoudianStaleGoodsCandidate[] = [];
   const details: DoudianRunDetail[] = [];
@@ -1480,14 +1693,86 @@ export async function fetchStaleGoodsCleanup(args: StaleGoodsArgs = {}): Promise
   const concurrency = Math.max(1, Math.min(targets.length || 1, policyNumber(payload.adapter, "staleGoodsCleanup.concurrency", 2, 1, 8)));
   const results = new Array<Awaited<ReturnType<typeof scanStore>>>(targets.length);
   let nextStoreIndex = 0;
-  await Promise.all(Array.from({ length: concurrency }, async () => {
-    for (;;) {
-      const index = nextStoreIndex;
-      nextStoreIndex += 1;
-      if (index >= targets.length) return;
-      results[index] = await scanStore(payload, targets[index], args, runId, rules);
-    }
-  }));
+  let completedStoreCount = 0;
+  const initialRun: ScanRunRecord = {
+    id: runId,
+    mode: "scan",
+    runId,
+    operationId: args.operationId,
+    status: "running",
+    rows: [],
+    candidates: [],
+    details: [],
+    scanSummary: scanSummary([], [], [], []),
+    sourceHealth: [],
+    rules,
+    adapterVersion: payload.adapter.version || "",
+    scriptsVersion: payload.scripts?.version || "",
+    cleanupRuleVersion,
+    fieldSchemaVersion,
+    requestPlanHash: requestHash,
+    createdAt,
+    updatedAt: createdAt
+  };
+  await repositoryPut("stale_scan_runs", initialRun);
+  let checkpoint = Promise.resolve();
+  const enqueueCheckpoint = (result: Awaited<ReturnType<typeof scanStore>>) => {
+    const snapshotResults = results.filter(Boolean) as Array<Awaited<ReturnType<typeof scanStore>>>;
+    const snapshotRows = snapshotResults.map((item) => item.row);
+    const snapshotCandidates = snapshotResults.flatMap((item) => item.candidates);
+    const snapshotDetails = snapshotResults.map((item) => item.detail);
+    const snapshotSources = snapshotResults.flatMap((item) => item.sourceHealth);
+    const checkpointRecord: ScanRunRecord = {
+      ...initialRun,
+      status: "running",
+      rows: snapshotRows,
+      candidates: snapshotCandidates,
+      details: snapshotDetails,
+      scanSummary: scanSummary(snapshotRows, snapshotCandidates, snapshotDetails, snapshotSources),
+      sourceHealth: snapshotSources,
+      updatedAt: new Date().toISOString()
+    };
+    checkpoint = checkpoint.then(() => saveScanCheckpoint(checkpointRecord, result.candidates));
+  };
+  try {
+    await Promise.all(Array.from({ length: concurrency }, async () => {
+      for (;;) {
+        throwIfCancelled(args);
+        const index = nextStoreIndex;
+        nextStoreIndex += 1;
+        if (index >= targets.length) return;
+        results[index] = await scanStore(payload, targets[index], args, runId, rules);
+        enqueueCheckpoint(results[index]);
+        completedStoreCount += 1;
+        dispatchDoudianProgress({
+          operationId: runId,
+          taskType: "staleGoodsScan",
+          status: "running",
+          progress: targets.length ? Math.round((completedStoreCount / targets.length) * 100) : 100,
+          message: `${completedStoreCount}/${targets.length} stores completed`
+        });
+      }
+    }));
+  } catch (error) {
+    await checkpoint;
+    const completed = results.filter(Boolean) as Array<Awaited<ReturnType<typeof scanStore>>>;
+    const partialRows = completed.map((item) => item.row);
+    const partialCandidates = completed.flatMap((item) => item.candidates);
+    const partialDetails = completed.map((item) => item.detail);
+    const partialSources = completed.flatMap((item) => item.sourceHealth);
+    await saveScanCheckpoint({
+      ...initialRun,
+      status: args.isCancelled?.() ? "cancelled" : "failed",
+      rows: partialRows,
+      candidates: partialCandidates,
+      details: partialDetails,
+      scanSummary: scanSummary(partialRows, partialCandidates, partialDetails, partialSources),
+      sourceHealth: partialSources,
+      updatedAt: new Date().toISOString()
+    }, partialCandidates);
+    throw error;
+  }
+  await checkpoint;
   for (const result of results) {
     rows.push(result.row);
     candidates.push(...result.candidates);
@@ -1498,9 +1783,6 @@ export async function fetchStaleGoodsCleanup(args: StaleGoodsArgs = {}): Promise
   const failureCount = details.filter((detail) => !detail.ok).length;
   const partialSourceCount = details.filter((detail) => detail.ok && detail.status === "partial").length;
   const summary = scanSummary(rows, candidates, details, sourceHealth);
-  const cleanupRuleVersion = policyText(payload.adapter, "staleGoodsCleanup.ruleVersion", "stale-goods-rule");
-  const fieldSchemaVersion = policyText(payload.adapter, "staleGoodsCleanup.fieldSchemaVersion", "stale-goods-fields");
-  const requestHash = requestPlanHash(payload.adapter, planKeys);
   const status = failureCount ? (successCount ? "partial" : "failed") : partialSourceCount ? "partial" : "ok";
   const message = failureCount
     ? policyMessage(payload.adapter, "staleGoodsCleanup.messages.partial", "Stale goods scan partially failed", { successCount, failureCount })
@@ -1554,16 +1836,27 @@ export async function fetchStaleGoodsCleanup(args: StaleGoodsArgs = {}): Promise
   };
 }
 
-export async function restoreLatestStaleGoodsScan() {
-  const runs = await repositoryGetAll<ScanRunRecord>("stale_scan_runs");
-  const latest = runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
-  if (!latest) return null;
-  if (latest.candidates?.length) return latest;
+export async function restoreStaleGoodsScan(runId: string) {
+  const run = await repositoryGet<ScanRunRecord>("stale_scan_runs", runId);
+  if (!run) return null;
+  if (run.candidates?.length) return run;
   const candidates = await repositoryGetAll<DoudianStaleGoodsCandidate>("stale_candidates").catch(() => []);
   return {
-    ...latest,
-    candidates: candidates.filter((candidate) => candidate.sourceRunId === latest.runId || candidate.sourceRunId === latest.id)
+    ...run,
+    candidates: candidates.filter((candidate) => candidate.sourceRunId === run.runId || candidate.sourceRunId === run.id)
   };
+}
+
+export async function restoreLatestStaleGoodsScan() {
+  const runs = await repositoryGetAll<ScanRunRecord>("stale_scan_runs");
+  const completed = runs.filter((run) => ["ok", "partial"].includes(run.status));
+  const latest = [...(completed.length ? completed : runs)].sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  if (!latest) return null;
+  return restoreStaleGoodsScan(latest.runId);
+}
+
+export async function restoreStaleGoodsExecute(runId: string) {
+  return repositoryGet<ExecuteRunRecord>("stale_execute_runs", runId);
 }
 
 export async function restoreLatestStaleGoodsExecute() {
@@ -1575,15 +1868,24 @@ export async function runDoudianStaleGoodsScanSelfCheck(options: { doudianAdapte
   const payload = adapterPayload({ doudianAdapter: options.doudianAdapter });
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const shopId = `stale-self-check-${suffix}`;
+  const partialShopId = `stale-self-check-partial-${suffix}`;
+  const emptyShopId = `stale-self-check-empty-${suffix}`;
   const runId = `stale-self-check-run-${suffix}`;
+  const partialRunId = `stale-self-check-partial-run-${suffix}`;
+  const emptyRunId = `stale-self-check-empty-run-${suffix}`;
+  const rules = { ...defaultRules(payload.adapter), totalSalesMax: 5, exposureMax: 800, clickMax: 30 };
   try {
-    await upsertStoreLedger({ shopId, shopName: `Stale Self Check ${suffix}`, platform: "doudian", partition: `persist:chihu-stale-self-check-${suffix}`, status: "online", groupName: "Self Check", adapterVersion: payload.adapter.version });
+    await Promise.all([
+      upsertStoreLedger({ shopId, shopName: `Stale Self Check ${suffix}`, platform: "doudian", partition: `persist:chihu-stale-self-check-${suffix}`, status: "online", groupName: "Self Check", adapterVersion: payload.adapter.version }),
+      upsertStoreLedger({ shopId: partialShopId, shopName: `Stale Partial Self Check ${suffix}`, platform: "doudian", partition: `persist:chihu-stale-self-check-partial-${suffix}`, status: "online", groupName: "Self Check", adapterVersion: payload.adapter.version }),
+      upsertStoreLedger({ shopId: emptyShopId, shopName: `Stale Empty Self Check ${suffix}`, platform: "doudian", partition: `persist:chihu-stale-check-empty-${suffix}`, status: "online", groupName: "Self Check", adapterVersion: payload.adapter.version })
+    ]);
     const result = await fetchStaleGoodsCleanup({
       doudianAdapter: payload,
       mode: "scan",
       shopIds: [shopId],
       operationId: runId,
-      rules: { ...defaultRules(payload.adapter), totalSalesMax: 5, exposureMax: 800, clickMax: 30 },
+      rules,
       mockProducts: [{
         product_id: `product-${suffix}`,
         title: "Self Check Product",
@@ -1592,28 +1894,60 @@ export async function runDoudianStaleGoodsScanSelfCheck(options: { doudianAdapte
         price: 1999,
         stock: 120,
         total_sales: 1,
-        period_sales: 0,
-        exposure_count: 500,
-        click_count: 5,
         info_quality_score: 60,
         main_image_score: 65,
         title_quality_score: 66
       }]
     });
-    const restored = await restoreLatestStaleGoodsScan();
+    const partialResult = await fetchStaleGoodsCleanup({
+      doudianAdapter: payload,
+      mode: "scan",
+      shopIds: [partialShopId],
+      operationId: partialRunId,
+      rules,
+      compassFileName: "stale-self-check.xlsx",
+      compassPeriod: "7d",
+      compassRows: [{ productId: `partial-product-0-${suffix}`, periodSales: 0, exposureCount: 0, clickCount: 0, exposureUsers: 0, clickUsers: 0 }],
+      mockProducts: [
+        { product_id: `partial-product-0-${suffix}`, title: "Partial Candidate", create_time: "2026-01-01", audit_time: "2026-01-02", price: 1999, stock: 120, total_sales: 1 },
+        { product_id: `partial-product-1-${suffix}`, title: "Unknown Metrics", create_time: "2026-01-01", audit_time: "2026-01-02", price: 1999, stock: 120, total_sales: 1 }
+      ]
+    });
+    const emptyResult = await fetchStaleGoodsCleanup({
+      doudianAdapter: payload,
+      mode: "scan",
+      shopIds: [emptyShopId],
+      operationId: emptyRunId,
+      rules,
+      mockProducts: []
+    });
+    const restored = await restoreStaleGoodsScan(runId);
     const candidate = result.candidates?.[0];
+    const implicitZeroOk = candidate?.implicitZeroTraffic === true &&
+      candidate.metricAvailability?.periodSales === true &&
+      candidate.metricAvailability?.exposureCount === true &&
+      candidate.metricAvailability?.clickCount === true &&
+      Number(candidate.periodSales || 0) === 0 &&
+      Number(candidate.exposureCount || 0) === 0 &&
+      Number(candidate.clickCount || 0) === 0;
+    const partialDiagnostic = objectRecord((Array.isArray(partialResult.details) ? partialResult.details[0] : null)?.diagnostic);
+    const partialOk = partialResult.ok === true && partialResult.status === "partial" && partialResult.candidates?.length === 1 && Number(partialDiagnostic.missingMetricCount || 0) === 1;
+    const emptyOk = emptyResult.ok === true && emptyResult.candidates?.length === 0 && Number(emptyResult.scanSummary?.sourceFailureCount || 0) === 0;
     return {
-      ok: result.ok === true && !!candidate && restored?.runId === runId,
+      ok: result.ok === true && !!candidate && implicitZeroOk && restored?.runId === runId && partialOk && emptyOk,
       scanOk: result.ok === true,
       candidateOk: !!candidate && candidate.shopId === shopId && candidate.sourceRunId === runId,
+      implicitZeroOk,
       restoreOk: restored?.runId === runId,
+      partialOk,
+      emptyOk,
       runId
     };
   } finally {
-    await deleteStoreLedger([shopId]).catch(() => undefined);
-    await repositoryDelete("stale_scan_runs", runId).catch(() => undefined);
+    await deleteStoreLedger([shopId, partialShopId, emptyShopId]).catch(() => undefined);
+    await Promise.all([runId, partialRunId, emptyRunId].map((id) => repositoryDelete("stale_scan_runs", id).catch(() => undefined)));
     const candidates = await repositoryGetAll<DoudianStaleGoodsCandidate>("stale_candidates").catch(() => []);
-    await Promise.all(candidates.filter((candidate) => candidate.sourceRunId === runId).map((candidate) => repositoryDelete("stale_candidates", candidate.id).catch(() => undefined)));
+    await Promise.all(candidates.filter((candidate) => [runId, partialRunId, emptyRunId].includes(String(candidate.sourceRunId))).map((candidate) => repositoryDelete("stale_candidates", candidate.id).catch(() => undefined)));
   }
 }
 
@@ -1638,13 +1972,13 @@ export async function runDoudianStaleGoodsExecuteSelfCheck(options: { doudianAda
         audit_time: "2026-01-02",
         price: 1999,
         stock: 120,
-        total_sales: 1,
+        total_sales: index === 0 ? 3 : 1,
         period_sales: 0,
         exposure_count: 500,
         click_count: 5,
-        info_quality_score: 60,
-        main_image_score: 65,
-        title_quality_score: 66
+        info_quality_score: index === 2 ? 60 : 75,
+        main_image_score: index === 2 ? 60 : 75,
+        title_quality_score: index === 2 ? 60 : 75
       }))
     });
     const candidates = scan.candidates || [];

@@ -27,6 +27,16 @@ import { getChihuNative } from "../../native/client";
 import { getNativeData } from "../../nativeData/client";
 import { dispatchDoudianProgress } from "./progress";
 import { businessDateDaysAgo, businessDateKey } from "./businessDate";
+import { reportDoudianDiagnostic } from "./diagnosticLog";
+import {
+  candidateExecutionState,
+  isFinalRateLimitedExecution,
+  isProductClueLimitMessage,
+  isRemoteSubmittedExecution,
+  isStoreDailyQuotaMessage,
+  preserveCancelledStatus,
+  unresolvedBatchProductStatus
+} from "./opportunityExecutionPolicy";
 import {
   AhoTokenMatcher,
   compareCandidatesByEvidence,
@@ -83,6 +93,7 @@ const productCategoryIdFallbackPaths = [
   "categoryDetail.firstCid"
 ];
 let pipelineSubmitWorkerRunning = false;
+const cancelledPipelineRunIds = new Set<string>();
 
 interface OpportunityArgs {
   doudianAdapter?: DoudianAdapterPayload;
@@ -191,6 +202,9 @@ interface SubmitAttemptRecord {
   status: string;
   ok: boolean;
   message: string;
+  stage?: string;
+  planKey?: string;
+  diagnostic?: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -298,6 +312,14 @@ interface PipelineStoreRunRecord extends PipelineStoreIdentity {
   droppedByTopKCount?: number;
   submittedCount: number;
   failedCount: number;
+  skippedCount?: number;
+  safetySkippedCount?: number;
+  quotaExhaustedCount?: number;
+  cancelledCount?: number;
+  unknownCount?: number;
+  remoteRequestCount?: number;
+  estimatedSubmitGroupCount?: number;
+  estimatedSubmitDurationMs?: number;
   skipReason?: string;
   sourceHealth?: Array<Record<string, unknown>>;
   startedAt: string;
@@ -342,6 +364,11 @@ interface PipelineSubmitTaskRecord extends PipelineStoreIdentity {
   submittedCount: number;
   skippedCount: number;
   failedCount: number;
+  safetySkippedCount?: number;
+  quotaExhaustedCount?: number;
+  cancelledCount?: number;
+  unknownCount?: number;
+  remoteRequestCount?: number;
   startedAt?: string;
   leaseExpiresAt?: string;
   finishedAt?: string;
@@ -497,6 +524,37 @@ function nowIso() {
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+interface OpportunityMutationCounts {
+  acknowledged: number;
+  failed: number;
+  skipped: number;
+  safetySkipped: number;
+  unknown: number;
+  confirmed: number;
+  total: number;
+}
+
+interface OpportunityMutationSummary extends OpportunityMutationCounts {
+  ok: boolean;
+  runId: string;
+  byShop: Record<string, OpportunityMutationCounts>;
+}
+
+function assertNotCancelled(shouldCancel?: () => boolean) {
+  if (shouldCancel?.()) throw new Error("商机提报任务已取消");
+}
+
+async function cancellableWait(ms: number, shouldCancel?: () => boolean) {
+  let remaining = Math.max(0, ms);
+  while (remaining > 0) {
+    assertNotCancelled(shouldCancel);
+    const delayMs = Math.min(remaining, 250);
+    await wait(delayMs);
+    remaining -= delayMs;
+  }
+  assertNotCancelled(shouldCancel);
 }
 
 function adapterPayload(args: OpportunityArgs): DoudianAdapterPayload {
@@ -1003,7 +1061,7 @@ function responseCode(response: RequestPlanResult | undefined) {
 function submitResponseOk(response: RequestPlanResult | undefined) {
   if (!response?.ok) return false;
   const code = responseCode(response);
-  if (code == null || code === "") return response.ok === true;
+  if (code == null || code === "") return false;
   return ["0", "200"].includes(String(code));
 }
 
@@ -1412,6 +1470,8 @@ async function updatePipelineStoreRunProgress(id: string, patch: Partial<Pipelin
   const next = {
     ...current,
     ...patch,
+    status: preserveCancelledStatus(current.status, text(patch.status || current.status)),
+    phase: current.status === "cancelled" ? "finished" : patch.phase || current.phase,
     updatedAt: nowIso()
   } as PipelineStoreRunRecord;
   await repositoryPut(pipelineStoreRunStore, next);
@@ -1532,6 +1592,44 @@ function clueCacheKey(args: {
 
 function wordCacheKey(clueCacheKeyValue: string, tokenizerVersion: string, stopwordVersion: string) {
   return `${clueCacheKeyValue}::${stableHash(["word-v2", clueCacheKeyValue, tokenizerVersion, stopwordVersion].join("|"))}`;
+}
+
+async function loadOpportunityMutationSummary(runId: string): Promise<OpportunityMutationSummary | null> {
+  const summarize = getNativeData()?.catalog.summarizeOpportunityRunMutations;
+  if (!summarize) return null;
+  return summarize({ runId }).catch(() => null);
+}
+
+async function submitTaskIsCancelled(task: PipelineSubmitTaskRecord, args: OpportunityArgs) {
+  if (cancelledPipelineRunIds.has(task.runId) || pipelineCancelled({ ...args, runId: task.runId })) return true;
+  const current = await repositoryGet<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore, task.id).catch(() => null);
+  return current?.status === "cancelled";
+}
+
+async function updateSubmitTaskFromWorker(
+  task: PipelineSubmitTaskRecord,
+  workerId: string,
+  patch: Partial<PipelineSubmitTaskRecord>
+) {
+  const current = await repositoryGet<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore, task.id).catch(() => null);
+  if (!current) return null;
+  const cancelled = cancelledPipelineRunIds.has(task.runId) || current.status === "cancelled";
+  if (!cancelled && current.ownerRunId && current.ownerRunId !== workerId) return current;
+  const nextStatus = preserveCancelledStatus(current.status, text(patch.status || current.status)) as PipelineSubmitTaskRecord["status"];
+  const next = {
+    ...current,
+    ...patch,
+    status: nextStatus,
+    leaseExpiresAt: nextStatus === "cancelled"
+      ? undefined
+      : Object.prototype.hasOwnProperty.call(patch, "leaseExpiresAt")
+        ? patch.leaseExpiresAt
+        : current.leaseExpiresAt,
+    updatedAt: text(patch.updatedAt) || nowIso()
+  } satisfies PipelineSubmitTaskRecord;
+  if (cancelledPipelineRunIds.has(task.runId) && next.status !== "cancelled") return current;
+  await repositoryPut(pipelineSubmitTaskStore, next);
+  return next;
 }
 
 const opportunityRetentionMetaId = "opportunity-retention-v1";
@@ -2263,6 +2361,8 @@ function selectStoreSubmitCandidates(args: {
   candidates: DoudianOpportunityPrematchCandidate[];
   dailyAttemptLimit: number;
   quotaUsedBefore: number;
+  maxCandidates?: number;
+  fallbackOnlyAfterPrimaryFailure?: boolean;
 }) {
   const dailyAttemptLimit = Math.max(1, Math.floor(Number(args.dailyAttemptLimit || 1000)));
   const quotaUsedBefore = Math.max(0, Math.floor(Number(args.quotaUsedBefore || 0)));
@@ -2273,11 +2373,13 @@ function selectStoreSubmitCandidates(args: {
   const fallbackCandidates = args.candidates
     .filter((candidate) => candidateRank(candidate) > 1 && isSubmitQualifiedCandidate(candidate))
     .sort(compareFallbackCandidates);
-  const selectedPrimary = primaryCandidates.slice(0, quotaRemainingBefore);
-  const fallbackCapacity = Math.max(0, quotaRemainingBefore - selectedPrimary.length);
-  const selectedFallback = fallbackCandidates.slice(0, fallbackCapacity);
+  const runCapacity = Math.min(quotaRemainingBefore, Math.max(1, Math.floor(Number(args.maxCandidates || quotaRemainingBefore || 1))));
+  const selectedPrimary = primaryCandidates.slice(0, runCapacity);
+  const fallbackCapacity = Math.max(0, runCapacity - selectedPrimary.length);
+  const selectedFallback = args.fallbackOnlyAfterPrimaryFailure === false ? fallbackCandidates.slice(0, fallbackCapacity) : [];
   const selectedPrimaryIds = new Set(selectedPrimary.map((candidate) => candidate.id));
   const selectedFallbackIds = new Set(selectedFallback.map((candidate) => candidate.id));
+  const fallbackProductCount = new Set(fallbackCandidates.map((candidate) => candidate.productId)).size;
   const selectedIds = new Set([...selectedPrimaryIds, ...selectedFallbackIds]);
   const plannedSubmitCandidateCount = selectedIds.size;
   const quotaRemainingAfterPlan = Math.max(0, quotaRemainingBefore - plannedSubmitCandidateCount);
@@ -2307,6 +2409,17 @@ function selectStoreSubmitCandidates(args: {
         skipReason: undefined
       } satisfies DoudianOpportunityPrematchCandidate;
     }
+    if (candidateRank(candidate) > 1 && isSubmitQualifiedCandidate(candidate)) {
+      return {
+        ...candidate,
+        alternative: true,
+        eligible: false,
+        estimatedCost: 0,
+        status: "alternative",
+        submitPriority: "fallback",
+        fallbackSubmit: true
+      } satisfies DoudianOpportunityPrematchCandidate;
+    }
     if (candidateRank(candidate) <= 1 && isSubmitQualifiedCandidate(candidate)) {
       return {
         ...candidate,
@@ -2329,7 +2442,7 @@ function selectStoreSubmitCandidates(args: {
     fallbackCandidateCount: fallbackCandidates.length,
     plannedSubmitCandidateCount,
     primarySubmitCandidateCount: selectedPrimary.length,
-    fallbackSubmitCandidateCount: selectedFallback.length,
+    fallbackSubmitCandidateCount: args.fallbackOnlyAfterPrimaryFailure === false ? selectedFallback.length : fallbackProductCount,
     dailyAttemptLimit,
     quotaUsedBefore,
     quotaRemainingBefore,
@@ -2346,7 +2459,18 @@ async function enqueueStoreSubmit(args: {
   const readyCandidates = args.candidates
     .filter((item) => item.eligible && item.status === "ready")
     .sort(compareSubmitQueueCandidates);
-  const candidateIds = readyCandidates.map((item) => item.id);
+  const primaryProductIds = new Set(readyCandidates.map((item) => item.productId));
+  const seenFallbackProducts = new Set<string>();
+  const fallbackCandidates = args.candidates
+    .filter((item) => item.submitPriority === "fallback" && item.status === "alternative" && primaryProductIds.has(item.productId))
+    .sort(compareSubmitQueueCandidates)
+    .filter((item) => {
+      if (seenFallbackProducts.has(item.productId)) return false;
+      seenFallbackProducts.add(item.productId);
+      return true;
+    });
+  const taskCandidates = [...readyCandidates, ...fallbackCandidates];
+  const candidateIds = taskCandidates.map((item) => item.id);
   if (!candidateIds.length) return null;
   const concurrencyKey = storeScopeId(args.identity);
   const active = (await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []))
@@ -2364,7 +2488,7 @@ async function enqueueStoreSubmit(args: {
     candidateIds,
     candidateCount: candidateIds.length,
     primaryCandidateCount: readyCandidates.filter((item) => item.submitPriority !== "fallback").length,
-    fallbackCandidateCount: readyCandidates.filter((item) => item.submitPriority === "fallback").length,
+    fallbackCandidateCount: fallbackCandidates.length + readyCandidates.filter((item) => item.submitPriority === "fallback").length,
     submittedCount: 0,
     skippedCount: 0,
     failedCount: 0,
@@ -2378,6 +2502,7 @@ async function enqueueStoreSubmit(args: {
 async function cancelPipelinePendingWorkForRun(runId: string, reason = "已取消商机提报任务") {
   const id = text(runId);
   if (!id) return;
+  cancelledPipelineRunIds.add(id);
   const now = nowIso();
   const [storeRuns, tasks] = await Promise.all([
     loadPipelineStoreRunsForRun(id),
@@ -2417,7 +2542,7 @@ async function cancelPipelinePendingWorkForRun(runId: string, reason = "已取�
   const candidates = candidatePages.flat();
   const updatedCandidates = candidates
     .filter((candidate) => candidate.submitTaskId && taskIds.has(candidate.submitTaskId))
-    .filter((candidate) => candidate.submitStatus === "queued" || candidate.status === "ready")
+    .filter((candidate) => candidate.submitStatus === "queued" || candidate.submitStatus === "fallback" || candidate.status === "ready" || candidate.status === "alternative")
     .map((candidate) => ({
       ...candidate,
       eligible: false,
@@ -2459,19 +2584,54 @@ export async function cancelOpportunityPipelineSubmitTask(args: {
 async function refreshPipelineRunSummary(runId: string) {
   const run = await repositoryGet<PipelineRunRecord>(pipelineRunStore, runId).catch(() => null);
   if (!run) return null;
-  const [storeRuns, tasks] = await Promise.all([
+  const [storeRuns, tasks, mutationSummary] = await Promise.all([
     loadPipelineStoreRunsForRun(runId),
-    loadPipelineSubmitTasksForRun(runId)
+    loadPipelineSubmitTasksForRun(runId),
+    loadOpportunityMutationSummary(runId)
   ]);
-  const scopedStoreRuns = storeRuns.filter((item) => item.runId === runId);
+  let scopedStoreRuns = storeRuns.filter((item) => item.runId === runId);
   const scopedTasks = tasks.filter((item) => item.runId === runId);
-  const submittedCount = scopedTasks.reduce((sum, item) => sum + Number(item.submittedCount || 0), 0);
-  const failedStoreCount = scopedStoreRuns.filter((item) => item.status === "failed").length;
+  const hasMutationSummary = Boolean(mutationSummary?.total);
+  if (hasMutationSummary) {
+    const reconciledStoreRuns = scopedStoreRuns.map((storeRun) => {
+      const counts = mutationSummary!.byShop[storeRun.shopId];
+      if (!counts?.total) return storeRun;
+      return {
+        ...storeRun,
+        submittedCount: Number(counts.acknowledged || 0) + Number(counts.confirmed || 0),
+        failedCount: Number(counts.failed || 0) + Number(counts.unknown || 0),
+        skippedCount: Number(counts.skipped || 0),
+        safetySkippedCount: Number(counts.safetySkipped || 0),
+        unknownCount: Number(counts.unknown || 0)
+      } satisfies PipelineStoreRunRecord;
+    });
+    const changed = reconciledStoreRuns.filter((item, index) => {
+      const previous = scopedStoreRuns[index];
+      return item.submittedCount !== previous.submittedCount ||
+        item.failedCount !== previous.failedCount ||
+        item.skippedCount !== previous.skippedCount ||
+        item.safetySkippedCount !== previous.safetySkippedCount ||
+        item.unknownCount !== previous.unknownCount;
+    });
+    if (changed.length) await repositoryPutMany(pipelineStoreRunStore, changed, { concurrency: 2 });
+    scopedStoreRuns = reconciledStoreRuns;
+  }
+  const taskStoreRunIds = new Set(scopedTasks.map((task) => task.storeRunId));
+  const failedStoreCount = scopedStoreRuns.filter((item) => item.status === "failed" && !taskStoreRunIds.has(item.id)).length;
+  const skippedStoreCount = scopedStoreRuns.filter((item) => item.status === "skipped" && !taskStoreRunIds.has(item.id)).length;
+  const taskSubmittedCount = scopedTasks.reduce((sum, item) => sum + Number(item.submittedCount || 0), 0);
   const taskFailedCount = scopedTasks.reduce((sum, item) => sum + Number(item.failedCount || 0), 0);
-  const failedCount = failedStoreCount + taskFailedCount;
-  const skippedCount =
-    scopedStoreRuns.filter((item) => item.status === "skipped").length +
-    scopedTasks.reduce((sum, item) => sum + Number(item.skippedCount || 0), 0);
+  const taskSkippedCount = scopedTasks.reduce((sum, item) => sum + Number(item.skippedCount || 0), 0);
+  const taskSafetySkippedCount = scopedTasks.reduce((sum, item) => sum + Number(item.safetySkippedCount || 0), 0);
+  const submittedCount = hasMutationSummary
+    ? Number(mutationSummary!.acknowledged || 0) + Number(mutationSummary!.confirmed || 0)
+    : taskSubmittedCount;
+  const failedCount = failedStoreCount + (hasMutationSummary
+    ? Number(mutationSummary!.failed || 0) + Number(mutationSummary!.unknown || 0)
+    : taskFailedCount);
+  const skippedCount = skippedStoreCount + (hasMutationSummary
+    ? Number(mutationSummary!.skipped || 0) + Math.max(0, taskSkippedCount - taskSafetySkippedCount)
+    : taskSkippedCount);
   const candidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.candidateCount || 0), 0);
   const qualifiedCandidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.qualifiedCandidateCount || 0), 0);
   const eligibleCandidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.eligibleCandidateCount || 0), 0);
@@ -2482,11 +2642,20 @@ async function refreshPipelineRunSummary(runId: string) {
   const runningCount =
     scopedTasks.filter((item) => item.status === "queued" || item.status === "running").length +
     scopedStoreRuns.filter((item) => item.status === "queued" || item.status === "running").length;
-  const status: PipelineRunRecord["status"] = runningCount
-    ? "running"
-    : failedCount
-      ? (submittedCount || skippedCount ? "partial" : "failed")
-      : "ok";
+  const status: PipelineRunRecord["status"] = run.status === "cancelled"
+    ? "cancelled"
+    : runningCount
+      ? "running"
+      : failedCount
+        ? (submittedCount || skippedCount ? "partial" : "failed")
+        : "ok";
+  const safetySkippedCount = hasMutationSummary ? Number(mutationSummary!.safetySkipped || 0) : taskSafetySkippedCount;
+  const quotaExhaustedCount = scopedTasks.reduce((sum, item) => sum + Number(item.quotaExhaustedCount || 0), 0);
+  const cancelledCount = scopedTasks.reduce((sum, item) => sum + Number(item.cancelledCount || 0), 0);
+  const unknownCount = hasMutationSummary ? Number(mutationSummary!.unknown || 0) : scopedTasks.reduce((sum, item) => sum + Number(item.unknownCount || 0), 0);
+  const remoteRequestCount = scopedTasks.reduce((sum, item) => sum + Number(item.remoteRequestCount || 0), 0);
+  const estimatedSubmitGroupCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.estimatedSubmitGroupCount || 0), 0);
+  const estimatedSubmitDurationMs = scopedStoreRuns.reduce((sum, item) => sum + Number(item.estimatedSubmitDurationMs || 0), 0);
   const summary = {
     ...(run.summary || {}),
     productCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.productCount || 0), 0),
@@ -2517,6 +2686,14 @@ async function refreshPipelineRunSummary(runId: string) {
     submittedCount,
     failedCount,
     skippedCount,
+    safetySkippedCount,
+    quotaExhaustedCount,
+    cancelledCount,
+    unknownCount,
+    remoteRequestCount,
+    estimatedSubmitGroupCount,
+    estimatedSubmitDurationMs,
+    mutationReconciled: hasMutationSummary ? 1 : 0,
     processedStoreCount: scopedStoreRuns.length,
     totalStoreCount: run.totalStoreCount
   };
@@ -2618,7 +2795,8 @@ function dispatchPipelineProgress(args: OpportunityArgs, progress: number, messa
 }
 
 function pipelineCancelled(args: OpportunityArgs) {
-  return args.isCancelled?.() === true;
+  const runId = text(args.runId || args.operationId || args.sourceRunId);
+  return args.isCancelled?.() === true || (runId ? cancelledPipelineRunIds.has(runId) : false);
 }
 
 function targetStores(stores: DoudianStoreSummary[], shopIds: string[] = []) {
@@ -2704,8 +2882,10 @@ interface SubmitDedupeIndex {
   clueCategoryKeys: Set<string>;
 }
 
-function submittedForDedupe(value: { ok?: boolean; status?: string }) {
-  return value.ok === true || ["submitted", "success", "ok"].includes(text(value.status).toLocaleLowerCase());
+function submittedForDedupe(value: { ok?: boolean; status?: string; stage?: string; planKey?: string; diagnostic?: Record<string, unknown> }) {
+  const status = text(value.status).toLocaleLowerCase();
+  if (status === "accepted" || status === "confirmed") return true;
+  return isRemoteSubmittedExecution(value);
 }
 
 function structuredAttemptStatus(value: { ok?: boolean; status?: string }) {
@@ -2721,7 +2901,7 @@ function structuredSubmitAttempt(record: SubmitAttemptRecord, countsAgainstDaily
     ...record,
     attemptId: record.id,
     attemptKey: record.id,
-    executeRunId: undefined,
+    executeRunId: record.runId,
     businessDate: record.date,
     tenantId: "local-user",
     clueCategoryId: record.clueLastCategoryId || "",
@@ -2990,25 +3170,7 @@ function candidateFromMatch(args: {
 function compactProductRawForSubmit(product: DoudianOpportunityProductRow) {
   const raw = objectRecord(product.raw);
   const categoryDetail = objectRecord(raw.category_detail || raw.categoryDetail);
-  const productTitle = text(
-    raw.title ||
-    raw.name ||
-    raw.product_name ||
-    raw.productName ||
-    raw.product_title ||
-    raw.productTitle ||
-    raw.goods_name ||
-    raw.goodsName ||
-    raw.goods_title ||
-    raw.goodsTitle ||
-    raw.item_name ||
-    raw.itemName ||
-    raw.item_title ||
-    raw.itemTitle ||
-    product.title
-  );
   return {
-    ...productTitleAliases(productTitle),
     pic_url: text(raw.pic_url || raw.picUrl || raw.img || raw.cover || product.img),
     category_id: text(
       raw.category_id ||
@@ -3050,7 +3212,6 @@ function compactPipelineCandidate(candidate: DoudianOpportunityPrematchCandidate
     ...candidate,
     raw: {
       product: {
-        ...productTitleAliases(candidate.title),
         categoryName: text(product.categoryName || candidate.productCategory),
         categoryPath: Array.isArray(product.categoryPath) ? product.categoryPath.map(text).filter(Boolean) : normalizeCategoryPath(candidate.productCategory),
         lastCategoryKey: text(product.lastCategoryKey),
@@ -3693,11 +3854,6 @@ function submitFrequencyLimitedMessage(message: string, response?: RequestPlanRe
     (value.includes("频繁") && (value.includes("稍后") || value.includes("访问")));
 }
 
-function submitProductClueLimitMessage(message: string) {
-  const value = text(message);
-  return value.includes("最多支持关联") || value.includes("最多可关联") || value.includes("50个线索");
-}
-
 function productIdsFromSubmitMessage(message: string) {
   const ids = new Set<string>();
   const value = String(message || "");
@@ -3733,6 +3889,23 @@ function submitWorkerBatchSize(adapter: DoudianAdapterConfig) {
   return policyNumber(adapter, "opportunityReport.submitBatchSize", submitBatchSizeFallback, 1, 100);
 }
 
+function estimateSubmitGroups(candidates: DoudianOpportunityPrematchCandidate[], adapter: DoudianAdapterConfig) {
+  const batchSize = submitWorkerBatchSize(adapter);
+  const grouped = new Map<string, number>();
+  for (const candidate of candidates) {
+    if (!candidate.eligible || candidate.status !== "ready") continue;
+    const key = [candidate.shopId, candidate.clueId, candidate.submitPriority || "primary"].map(text).join("::");
+    grouped.set(key, (grouped.get(key) || 0) + 1);
+  }
+  return Array.from(grouped.values()).reduce((sum, count) => sum + Math.ceil(count / batchSize), 0);
+}
+
+function estimateSubmitDurationMs(groupCount: number, adapter: DoudianAdapterConfig) {
+  const base = policyNumber(adapter, "opportunityReport.submitCandidateDelayMs", 10000, 0, 120000);
+  const jitter = policyNumber(adapter, "opportunityReport.submitCandidateJitterMs", 2500, 0, 60000);
+  return Math.max(0, groupCount) * (base + Math.floor(jitter / 2));
+}
+
 function sameSubmitBatchCandidate(seed: DoudianOpportunityPrematchCandidate, candidate: DoudianOpportunityPrematchCandidate) {
   return text(seed.shopId) === text(candidate.shopId) &&
     text(seed.clueId) === text(candidate.clueId) &&
@@ -3743,16 +3916,6 @@ function executionsForCandidate(executions: DoudianOpportunityExecution[], candi
   const productId = text(candidate.productId);
   const clueId = text(candidate.clueId);
   return executions.filter((item) => text(item.productId) === productId && (!text(item.clueId) || text(item.clueId) === clueId));
-}
-
-function candidateExecutionState(executions: DoudianOpportunityExecution[]) {
-  const failedExecution = executions.find((item) => item.ok === false);
-  const submitted = executions.some((item) => item.stage === "submit" && item.ok === true);
-  return {
-    failed: Boolean(failedExecution),
-    failureMessage: failedExecution?.message || "",
-    submitted
-  };
 }
 
 function normalizedSubmitMessage(message: string) {
@@ -3785,18 +3948,19 @@ function productFailureMessages(message: string) {
   return failures;
 }
 
-async function submitWithRetry(payload: DoudianAdapterPayload, store: DoudianStoreSummary, body: Record<string, unknown>) {
+async function submitWithRetry(payload: DoudianAdapterPayload, store: DoudianStoreSummary, body: Record<string, unknown>, shouldCancel?: () => boolean) {
   const planKey = "opportunitySubmitClue";
   const retryLimit = policyNumber(payload.adapter, "opportunityReport.submitRetryLimit", 1, 1, 3);
   const retryDelay = policyNumber(payload.adapter, "opportunityReport.submitRetryDelayMs", 5900, 0, 30000);
   let response: RequestPlanResult | undefined;
   let attemptCount = 0;
   for (let attempt = 0; attempt < retryLimit; attempt += 1) {
-    attemptCount = attempt + 1;
-    response = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context: bodyContext(body) });
+    assertNotCancelled(shouldCancel);
+    response = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context: bodyContext(body), shouldCancel });
+    attemptCount += Math.max(1, Math.floor(Number(response.attemptCount || 1)));
     const message = responseMessage(response);
     if (submitResponseOk(response) || !transientSubmitMessage(message, response)) break;
-    if (attempt < retryLimit - 1 && retryDelay) await wait(retryDelay);
+    if (attempt < retryLimit - 1 && retryDelay) await cancellableWait(retryDelay, shouldCancel);
   }
   return { response, attemptCount };
 }
@@ -3975,6 +4139,8 @@ async function submitProductsForClue(args: {
   dryRun?: boolean;
   validatedByPipeline?: boolean;
   pipelineWords?: string[];
+  shouldCancel?: () => boolean;
+  onRemoteSubmitStart?: (products: DoudianOpportunityProductRow[]) => Promise<void>;
 }) {
   const executions: DoudianOpportunityExecution[] = [];
   const words = args.pipelineWords || (args.validatedByPipeline ? baseClueWords(args.clue) : await queryClueWords(args.payload, args.store, args.clue, args.dryRun));
@@ -4006,7 +4172,8 @@ async function submitProductsForClue(args: {
     stage: "submit",
     planKey: "opportunitySubmitClue",
     extraKey: () => args.clue.clueId,
-    dryRun: args.dryRun
+    dryRun: args.dryRun,
+    shouldCancel: args.shouldCancel
   });
   if (safety.rejected.length) {
     executions.push(...safety.rejected.map((entry) => ({
@@ -4026,7 +4193,12 @@ async function submitProductsForClue(args: {
       status: entry.status,
       ok: entry.ok,
       message: entry.message,
-      planKey: entry.planKey || "opportunitySubmitClue"
+      planKey: entry.planKey || "opportunitySubmitClue",
+      diagnostic: {
+        safetySkipped: entry.status === "skipped",
+        safetyReason: entry.reason,
+        liveLookupPlanKey: entry.planKey || ""
+      }
     })));
   }
   const safeProducts = safety.allowed.map((entry) => ({
@@ -4092,29 +4264,35 @@ async function submitProductsForClue(args: {
         stage: "submit"
       }));
     } else {
-      const submitResult = await submitWithRetry(args.payload, args.store, submitBody(args.clue, batch, args.store, args.module));
+      assertNotCancelled(args.shouldCancel);
+      await args.onRemoteSubmitStart?.(batch);
+      const submitResult = await submitWithRetry(args.payload, args.store, submitBody(args.clue, batch, args.store, args.module), args.shouldCancel);
       const response = submitResult.response;
+      const remoteCode = responseCode(response);
+      const ok = submitResponseOk(response);
       const submitDiagnostic = {
         remoteSubmitAttempt: true,
+        remoteAccepted: ok,
+        remoteResponseCode: remoteCode == null ? "" : String(remoteCode),
+        remoteHttpStatus: Number(response?.status || 0),
         submitAttemptCount: submitResult.attemptCount
       };
-      const ok = submitResponseOk(response);
       const message = ok ? "商机提报已提交" : normalizedSubmitMessage(responseMessage(response));
       const failureMessages = ok ? new Map<string, string>() : productFailureMessages(message);
       const hasBatchFailureItems = batch.some((product) => failureMessages.has(product.productId));
       if (!ok && hasBatchFailureItems) {
         const failedProducts = batch.filter((product) => failureMessages.has(product.productId));
-        const submittedProducts = batch.filter((product) => !failureMessages.has(product.productId));
-        if (submittedProducts.length) {
+        const unresolvedProducts = batch.filter((product) => !failureMessages.has(product.productId));
+        if (unresolvedProducts.length) {
           executions.push(...executionForProducts({
             runId: args.runId,
             sourceRunId: args.sourceRunId,
             store: args.store,
             clue: args.clue,
-            products: submittedProducts,
-            status: "submitted",
-            ok: true,
-            message: "商机提报已提交",
+            products: unresolvedProducts,
+            status: unresolvedBatchProductStatus(false, false),
+            ok: false,
+            message: "批量提报响应未明确确认该商品成功，已记录为未知结果",
             planKey: "opportunitySubmitClue",
             stage: "submit",
             diagnostic: submitDiagnostic
@@ -4153,7 +4331,7 @@ async function submitProductsForClue(args: {
         }));
       }
     }
-    if (batchIndex < batches.length - 1 && delayMs && !args.dryRun) await wait(delayMs);
+    if (batchIndex < batches.length - 1 && delayMs && !args.dryRun) await cancellableWait(delayMs, args.shouldCancel);
   }
   await recordExecutionMutationResults({ store: args.store, executions, defaultAction: "submit" }).catch(() => undefined);
   return executions;
@@ -4441,6 +4619,9 @@ async function recordSubmitAttempts(args: {
         status: finalAttempt ? item.status : "failed",
         ok: finalAttempt ? item.ok : false,
         message: finalAttempt ? item.message : `${item.message || "商机提报重试"}（第 ${attemptIndex} 次请求未成功）`,
+        stage: item.stage,
+        planKey: item.planKey,
+        diagnostic: item.diagnostic,
         createdAt: now
       } satisfies SubmitAttemptRecord);
     }
@@ -4475,6 +4656,7 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
   const executions: DoudianOpportunityExecution[] = [];
   const details: DoudianRunDetail[] = [];
   const updatedCandidates: DoudianOpportunityPrematchCandidate[] = [];
+  const quotaExhaustedByShop = new Map<string, string>();
 
   if (!candidates.length) {
     return {
@@ -4498,12 +4680,34 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
   for (const candidate of candidates) {
     const used = usedByShop.get(candidate.shopId) || 0;
     const remaining = Math.max(0, limit - used);
+    const remoteQuotaReason = quotaExhaustedByShop.get(candidate.shopId);
+    if (remoteQuotaReason) {
+      updatedCandidates.push({ ...candidate, eligible: false, estimatedCost: 0, status: "quota_exhausted", submitStatus: "quota_exhausted", skipReason: remoteQuotaReason });
+      executions.push({
+        id: `${runId}-${candidate.id}-remote-quota`,
+        sourceRunId: matchRunId,
+        shopId: candidate.shopId,
+        shopName: candidate.shopName,
+        clueId: candidate.clueId,
+        clueName: candidate.clueName,
+        productId: candidate.productId,
+        title: candidate.title,
+        action: "submit",
+        stage: "quota",
+        status: "quota_exhausted",
+        ok: true,
+        message: remoteQuotaReason,
+        diagnostic: { quotaExhausted: true }
+      });
+      continue;
+    }
     if (remaining <= 0) {
       const skipped = {
         ...candidate,
         eligible: false,
         estimatedCost: 0,
-        status: "skipped",
+        status: "quota_exhausted",
+        submitStatus: "quota_exhausted",
         skipReason: "今日提报尝试额度不足"
       };
       updatedCandidates.push(skipped);
@@ -4518,10 +4722,10 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
         title: candidate.title,
         action: "submit",
         stage: "quota",
-        status: "skipped",
+        status: "quota_exhausted",
         ok: true,
         message: "今日提报尝试额度不足，已跳过",
-        diagnostic: { dailyAttemptLimit: limit, dailyAttemptUsed: used }
+        diagnostic: { dailyAttemptLimit: limit, dailyAttemptUsed: used, quotaExhausted: true }
       });
       continue;
     }
@@ -4605,12 +4809,13 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
       }
     })));
     const candidateExecutions = executions.slice(beforeCount);
-    const failed = candidateExecutions.some((item) => item.ok === false);
-    const submitted = candidateExecutions.some((item) => item.stage === "submit" && item.ok === true);
-    const skipped = !submitted && candidateExecutions.every((item) => item.status === "skipped" || item.status === "dry_run");
+    const { failed, failureMessage, submitted, skipped, unknown } = candidateExecutionState(candidateExecutions);
+    if (failureMessage && isStoreDailyQuotaMessage(failureMessage)) {
+      quotaExhaustedByShop.set(candidate.shopId, normalizedSubmitMessage(failureMessage));
+    }
     const updated = {
       ...candidate,
-      status: submitted ? "submitted" : failed ? "failed" : skipped ? "skipped" : candidate.status,
+      status: submitted ? "submitted" : unknown ? "unknown" : failed ? "failed" : skipped ? "skipped" : candidate.status,
       skipReason: failed ? candidateExecutions.find((item) => item.ok === false)?.message : candidate.skipReason
     };
     updatedCandidates.push(updated);
@@ -4776,11 +4981,18 @@ async function fetchCollect(payload: DoudianAdapterPayload, args: OpportunityArg
 }
 
 function executeSummary(executions: DoudianOpportunityExecution[]) {
+  const submittedCount = executions.filter(isRemoteSubmittedExecution).length;
+  const collectedCount = executions.filter((item) => item.ok === true && item.status === "collected").length;
   return {
     executionCount: executions.length,
-    successCount: executions.filter((item) => item.ok).length,
+    successCount: submittedCount + collectedCount,
+    submittedCount,
+    collectedCount,
     failureCount: executions.filter((item) => item.ok === false).length,
     skippedCount: executions.filter((item) => item.status === "skipped").length,
+    safetySkippedCount: executions.filter((item) => item.status === "skipped" && objectRecord(item.diagnostic).safetySkipped === true).length,
+    quotaExhaustedCount: executions.filter((item) => item.status === "quota_exhausted").length,
+    unknownCount: executions.filter((item) => item.status === "unknown").length,
     dryRunCount: executions.filter((item) => item.status === "dry_run").length,
     productCount: uniqueText(executions.map((item) => item.productId || "")).length,
     clueCount: uniqueText(executions.map((item) => item.clueId || "")).length
@@ -4803,7 +5015,7 @@ async function saveExecuteResult(
   }
 ): Promise<DoudianOpportunityReportResult> {
   const summary = executeSummary(args.executions);
-  const successCount = args.details.filter((detail) => detail.ok).length || (summary.failureCount ? 0 : 1);
+  const successCount = summary.successCount;
   const failureCount = args.details.filter((detail) => detail.ok === false).length || summary.failureCount;
   const status = failureCount ? (successCount ? "partial" : "failed") : "ok";
   const message = failureCount
@@ -4911,12 +5123,21 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
         .filter((candidate): candidate is DoudianOpportunityPrematchCandidate => Boolean(candidate));
       const updatedCandidates: DoudianOpportunityPrematchCandidate[] = [];
       const executions: DoudianOpportunityExecution[] = [];
-      let submittedCount = 0;
-      let skippedCount = 0;
-      let failedCount = 0;
+      let submittedCount = Number(task.submittedCount || 0);
+      let skippedCount = Number(task.skippedCount || 0);
+      let failedCount = Number(task.failedCount || 0);
+      let safetySkippedCount = Number(task.safetySkippedCount || 0);
+      let quotaExhaustedCount = Number(task.quotaExhaustedCount || 0);
+      let cancelledCount = Number(task.cancelledCount || 0);
+      let unknownCount = Number(task.unknownCount || 0);
+      let remoteRequestCount = Number(task.remoteRequestCount || 0);
       let submitThrottleReason = "";
+      let quotaExhaustedReason = "";
+      let cancelledDuringTask = false;
       const blockedProductIds = new Set<string>();
+      const fallbackEligibleProductIds = new Set<string>();
       const processedCandidateIds = new Set<string>();
+      const sendingCandidateIds = new Set<string>();
       try {
         if (!store) throw new Error("Selected store is missing login partition");
         if (taskCandidates.length !== task.candidateIds.length) throw new Error("Submit task candidate snapshot is incomplete");
@@ -4937,18 +5158,79 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             phase: "submitting",
             submittedCount,
             failedCount,
+            safetySkippedCount,
+            quotaExhaustedCount,
+            cancelledCount,
+            unknownCount,
+            remoteRequestCount,
             quotaAttemptCount: used,
             quotaRemainingAfterSubmit: Math.max(0, limit - used)
           }).catch(() => null);
         };
         for (const [candidateIndex, candidate] of taskCandidates.entries()) {
           if (processedCandidateIds.has(candidate.id)) continue;
-          if (!candidate.eligible || candidate.status !== "ready") {
+          if (await submitTaskIsCancelled(task, args)) {
+            cancelledDuringTask = true;
+            cancelledCount = Math.max(cancelledCount, taskCandidates.length - processedCandidateIds.size);
+            break;
+          }
+          const isFallback = candidate.submitPriority === "fallback" || candidate.submitStatus === "fallback";
+          const terminalStatus = text(candidate.submitStatus || candidate.status);
+          if (["submitted", "failed", "skipped", "cancelled", "quota_exhausted", "unknown"].includes(terminalStatus)) {
+            processedCandidateIds.add(candidate.id);
+            continue;
+          }
+          if (isFallback && !fallbackEligibleProductIds.has(candidate.productId)) {
+            processedCandidateIds.add(candidate.id);
+            skippedCount += 1;
+            updatedCandidates.push({
+              ...candidate,
+              eligible: false,
+              estimatedCost: 0,
+              status: "skipped",
+              submitStatus: "skipped",
+              skipReason: "主候选已成功或未发生明确失败，fallback 无需提报"
+            });
+            continue;
+          }
+          if (!isFallback && (!candidate.eligible || candidate.status !== "ready")) {
+            processedCandidateIds.add(candidate.id);
             skippedCount += 1;
             updatedCandidates.push(candidate);
             continue;
           }
+          if (quotaExhaustedReason) {
+            processedCandidateIds.add(candidate.id);
+            skippedCount += 1;
+            quotaExhaustedCount += 1;
+            updatedCandidates.push({
+              ...candidate,
+              eligible: false,
+              estimatedCost: 0,
+              status: "quota_exhausted",
+              submitStatus: "quota_exhausted",
+              skipReason: quotaExhaustedReason
+            });
+            executions.push({
+              id: `${task.id}-${candidate.id}-quota-exhausted`,
+              sourceRunId: task.runId,
+              shopId: candidate.shopId,
+              shopName: candidate.shopName,
+              clueId: candidate.clueId,
+              clueName: candidate.clueName,
+              productId: candidate.productId,
+              title: candidate.title,
+              action: "submit",
+              stage: "quota",
+              status: "quota_exhausted",
+              ok: true,
+              message: quotaExhaustedReason,
+              diagnostic: { quotaExhausted: true }
+            });
+            continue;
+          }
           if (submitThrottleReason) {
+            processedCandidateIds.add(candidate.id);
             skippedCount += 1;
             updatedCandidates.push({
               ...candidate,
@@ -4976,6 +5258,7 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             continue;
           }
           if (blockedProductIds.has(candidate.productId)) {
+            processedCandidateIds.add(candidate.id);
             const limitReason = "商品已达到商机关联上限，本轮后续同商品不再提报";
             skippedCount += 1;
             updatedCandidates.push({
@@ -5004,10 +5287,40 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             continue;
           }
           const remaining = Math.max(0, limit - used);
-          const submittedSkipReason = remaining <= 0
-            ? "今日提报尝试额度不足"
-            : shouldSkipSubmittedCandidate(args, dedupeIndex, candidate);
+          if (remaining <= 0) {
+            processedCandidateIds.add(candidate.id);
+            quotaExhaustedReason = "今日提报尝试额度不足，已停止本店后续提报";
+            skippedCount += 1;
+            quotaExhaustedCount += 1;
+            updatedCandidates.push({
+              ...candidate,
+              eligible: false,
+              estimatedCost: 0,
+              status: "quota_exhausted",
+              submitStatus: "quota_exhausted",
+              skipReason: quotaExhaustedReason
+            });
+            executions.push({
+              id: `${task.id}-${candidate.id}-quota-exhausted`,
+              sourceRunId: task.runId,
+              shopId: candidate.shopId,
+              shopName: candidate.shopName,
+              clueId: candidate.clueId,
+              clueName: candidate.clueName,
+              productId: candidate.productId,
+              title: candidate.title,
+              action: "submit",
+              stage: "quota",
+              status: "quota_exhausted",
+              ok: true,
+              message: quotaExhaustedReason,
+              diagnostic: { quotaExhausted: true }
+            });
+            continue;
+          }
+          const submittedSkipReason = shouldSkipSubmittedCandidate(args, dedupeIndex, candidate);
           if (submittedSkipReason) {
+            processedCandidateIds.add(candidate.id);
             skippedCount += 1;
             updatedCandidates.push({
               ...candidate,
@@ -5045,6 +5358,7 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             if (shouldSkipSubmittedCandidate(args, dedupeIndex, nextCandidate)) continue;
             batchCandidates.push(nextCandidate);
           }
+          const shouldCancelSubmit = () => cancelledPipelineRunIds.has(task.runId) || args.isCancelled?.() === true;
           const nextExecutions = await submitProductsForClue({
             payload,
             store,
@@ -5058,9 +5372,31 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             module: "search_page_query",
             dryRun: args.dryRun,
             validatedByPipeline: true,
-            pipelineWords: candidate.clueWords
+            pipelineWords: candidate.clueWords,
+            shouldCancel: shouldCancelSubmit,
+            onRemoteSubmitStart: async (remoteProducts) => {
+              assertNotCancelled(shouldCancelSubmit);
+              const remoteProductIds = new Set(remoteProducts.map((product) => product.productId));
+              const sendingCandidates = batchCandidates.filter((batchCandidate) => remoteProductIds.has(batchCandidate.productId));
+              const sendingAt = nowIso();
+              sendingCandidates.forEach((batchCandidate) => sendingCandidateIds.add(batchCandidate.id));
+              await repositoryPutMany(pipelineCandidateStore, sendingCandidates.map((batchCandidate) => ({
+                ...batchCandidate,
+                status: "submitting",
+                submitStatus: "sending",
+                submittedAt: undefined,
+                updatedAt: sendingAt
+              })), { concurrency: 2 });
+              assertNotCancelled(shouldCancelSubmit);
+            }
           });
+          const batchRemoteRequestCount = nextExecutions.reduce((maximum, item) => {
+            const itemDiagnostic = objectRecord(item.diagnostic);
+            return Math.max(maximum, Math.max(0, Math.floor(Number(itemDiagnostic.submitAttemptCount || 0))));
+          }, 0);
+          remoteRequestCount += batchRemoteRequestCount;
           let batchAttempts = 0;
+          const resolvedBatchCandidates: DoudianOpportunityPrematchCandidate[] = [];
           for (const batchCandidate of batchCandidates) {
             processedCandidateIds.add(batchCandidate.id);
             const candidateExecutions = executionsForCandidate(nextExecutions, batchCandidate);
@@ -5080,13 +5416,27 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
               }
             }));
             executions.push(...decoratedExecutions);
-            const { failed, failureMessage, submitted } = candidateExecutionState(candidateExecutions);
-            if (failureMessage && submitProductClueLimitMessage(failureMessage)) {
+            const { failed, failureMessage, submitted, safetySkipped, unknown } = candidateExecutionState(candidateExecutions);
+            const dailyQuotaExhausted = Boolean(failureMessage && isStoreDailyQuotaMessage(failureMessage));
+            if (dailyQuotaExhausted && !quotaExhaustedReason) {
+              quotaExhaustedReason = normalizedSubmitMessage(failureMessage) || "已达店铺今日商机提报上限";
+              await writePipelineEvent({
+                runId: task.runId,
+                storeRunId: task.storeRunId,
+                shopId: task.shopId,
+                level: "warn",
+                event: "pipeline-submit-quota-exhausted",
+                message: quotaExhaustedReason,
+                detail: { dailyAttemptUsed: used, dailyAttemptLimit: limit, candidateId: batchCandidate.id }
+              }).catch(() => undefined);
+            }
+            if (!dailyQuotaExhausted && failureMessage && isProductClueLimitMessage(failureMessage)) {
               blockedProductIds.add(batchCandidate.productId);
               for (const productId of productIdsFromSubmitMessage(failureMessage)) blockedProductIds.add(productId);
             }
-            if (!submitThrottleReason && failureMessage && stopStoreOnSubmitFrequency(payload.adapter) && submitFrequencyLimitedMessage(failureMessage)) {
-              submitThrottleReason = failureMessage || "商机中心提交触发频控，已停止本店后续提报";
+            const finalRateLimited = candidateExecutions.some(isFinalRateLimitedExecution);
+            if (!submitThrottleReason && stopStoreOnSubmitFrequency(payload.adapter) && ((failureMessage && submitFrequencyLimitedMessage(failureMessage)) || finalRateLimited)) {
+              submitThrottleReason = finalRateLimited ? "HTTP 429 重试后仍被限流，已停止本店后续提报" : failureMessage || "商机中心提交触发频控，已停止本店后续提报";
               await writePipelineEvent({
                 runId: task.runId,
                 storeRunId: task.storeRunId,
@@ -5106,106 +5456,192 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             }
             if (submitted) submittedCount += 1;
             if (failed) failedCount += 1;
+            if (safetySkipped) safetySkippedCount += 1;
+            if (unknown) unknownCount += 1;
             if (!submitted && !failed) skippedCount += 1;
-            updatedCandidates.push({
+            if (isFallback && submitted) fallbackEligibleProductIds.delete(batchCandidate.productId);
+            if (!isFallback && failed && !unknown && !dailyQuotaExhausted && !submitThrottleReason) fallbackEligibleProductIds.add(batchCandidate.productId);
+            resolvedBatchCandidates.push({
               ...batchCandidate,
-              status: submitted ? "submitted" : failed ? "failed" : "skipped",
-              submitStatus: submitted ? "submitted" : failed ? "failed" : "skipped",
+              eligible: false,
+              estimatedCost: 0,
+              status: submitted ? "submitted" : unknown ? "unknown" : failed ? "failed" : "skipped",
+              submitStatus: submitted ? "submitted" : unknown ? "unknown" : failed ? "failed" : "skipped",
               skipReason: failed ? failureMessage : batchCandidate.skipReason,
               submittedAt: submitted ? nowIso() : undefined
             });
           }
+          if (resolvedBatchCandidates.length) {
+            await repositoryPutMany(pipelineCandidateStore, resolvedBatchCandidates, { concurrency: 2 });
+            resolvedBatchCandidates.forEach((batchCandidate) => sendingCandidateIds.delete(batchCandidate.id));
+          }
           if (batchAttempts > 0 || batchCandidates.length > 1) await updateStoreSubmitProgress();
           if (!args.dryRun && batchAttempts > 0 && !submitThrottleReason) {
             const delayMs = submitCandidateDelayMs(payload.adapter);
-            if (delayMs) await wait(delayMs);
+            if (delayMs) await cancellableWait(delayMs, shouldCancelSubmit);
           }
           if (Date.now() - lastLeaseRenewalMs >= leaseRenewalIntervalMs) {
             lastLeaseRenewalMs = Date.now();
             const renewedAt = nowIso();
-            await repositoryPut(pipelineSubmitTaskStore, {
-              ...task,
+            await updateSubmitTaskFromWorker(task, workerId, {
               status: "running",
               submittedCount,
               skippedCount,
               failedCount,
+              safetySkippedCount,
+              quotaExhaustedCount,
+              cancelledCount,
+              unknownCount,
+              remoteRequestCount,
               leaseExpiresAt: submitLeaseExpiresAt(payload.adapter),
               updatedAt: renewedAt
-            } satisfies PipelineSubmitTaskRecord);
+            });
           }
         }
         if (updatedCandidates.length) await repositoryPutMany(pipelineCandidateStore, updatedCandidates, { concurrency: 2 });
-        const finalStatus = failedCount ? (submittedCount || skippedCount ? "partial" : "failed") : "ok";
+        cancelledDuringTask = cancelledDuringTask || await submitTaskIsCancelled(task, args);
+        const finalStatus: PipelineSubmitTaskRecord["status"] = cancelledDuringTask
+          ? "cancelled"
+          : failedCount
+            ? (submittedCount || skippedCount ? "partial" : "failed")
+            : "ok";
         const finishedAt = nowIso();
-        await repositoryPut(pipelineSubmitTaskStore, {
-          ...task,
+        await updateSubmitTaskFromWorker(task, workerId, {
           status: finalStatus,
           submittedCount,
           skippedCount,
           failedCount,
+          safetySkippedCount,
+          quotaExhaustedCount,
+          cancelledCount,
+          unknownCount,
+          remoteRequestCount,
           leaseExpiresAt: undefined,
-          lastError: submitThrottleReason || task.lastError,
+          lastError: quotaExhaustedReason || submitThrottleReason || task.lastError,
           finishedAt,
           updatedAt: finishedAt
-        } satisfies PipelineSubmitTaskRecord);
+        });
         const finalQuotaAttemptCount = await submitAttemptCountForShop(store.shopId);
-        const storeRun = await repositoryGet<PipelineStoreRunRecord>(pipelineStoreRunStore, task.storeRunId).catch(() => null);
-        if (storeRun) {
-          await repositoryPut(pipelineStoreRunStore, {
-            ...storeRun,
-            status: finalStatus,
-            phase: "finished",
-            submittedCount,
-            failedCount,
-            skipReason: submitThrottleReason || storeRun.skipReason,
-            quotaAttemptCount: finalQuotaAttemptCount,
-            quotaRemainingAfterSubmit: Math.max(0, limit - finalQuotaAttemptCount),
-            updatedAt: finishedAt,
-            finishedAt
-          } satisfies PipelineStoreRunRecord);
-        }
+        await updatePipelineStoreRunProgress(task.storeRunId, {
+          status: finalStatus,
+          phase: "finished",
+          submittedCount,
+          failedCount,
+          safetySkippedCount,
+          quotaExhaustedCount,
+          cancelledCount,
+          unknownCount,
+          remoteRequestCount,
+          skipReason: quotaExhaustedReason || submitThrottleReason || undefined,
+          quotaAttemptCount: finalQuotaAttemptCount,
+          quotaRemainingAfterSubmit: Math.max(0, limit - finalQuotaAttemptCount),
+          finishedAt
+        }).catch(() => null);
         await writePipelineEvent({
           runId: task.runId,
           storeRunId: task.storeRunId,
           shopId: task.shopId,
-          level: failedCount ? "warn" : "info",
-          event: "pipeline-submit-task-finished",
-          message: failedCount ? "商机提报部分失败" : "商机提报任务完成",
+          level: failedCount || cancelledDuringTask ? "warn" : "info",
+          event: cancelledDuringTask ? "pipeline-submit-task-cancelled" : "pipeline-submit-task-finished",
+          message: cancelledDuringTask ? "商机提报任务已取消" : failedCount ? "商机提报部分失败" : "商机提报任务完成",
           detail: {
+            accepted: submittedCount,
             submittedCount,
             skippedCount,
             failedCount,
+            safetySkipped: safetySkippedCount,
+            safetySkippedCount,
+            quotaExhausted: quotaExhaustedCount,
+            quotaExhaustedCount,
+            cancelled: cancelledCount,
+            cancelledCount,
+            unknownCount,
+            remoteRequestCount,
             executionCount: executions.length,
             quotaAttemptCount: finalQuotaAttemptCount,
             dailyAttemptLimit: limit,
             submitThrottleReason,
+            quotaExhaustedReason,
             blockedProductCount: blockedProductIds.size
           }
         }).catch(() => undefined);
+        await reportDoudianDiagnostic({
+          category: "opportunity-pipeline",
+          event: "store-submit-summary",
+          runId: task.runId,
+          storeRunId: task.storeRunId,
+          shopId: task.shopId,
+          status: finalStatus,
+          accepted: submittedCount,
+          failed: failedCount,
+          safetySkipped: safetySkippedCount,
+          quotaExhausted: quotaExhaustedCount,
+          cancelled: cancelledCount,
+          unknown: unknownCount,
+          remoteRequestCount,
+          quotaAttemptCount: finalQuotaAttemptCount,
+          dailyAttemptLimit: limit
+        }, true);
         await refreshPipelineRunSummary(task.runId).catch(() => null);
       } catch (error) {
-        failedCount = Math.max(1, failedCount);
+        const cancelled = await submitTaskIsCancelled(task, args);
+        if (cancelled && sendingCandidateIds.size) {
+          const unresolvedSending = await repositoryGetMany<DoudianOpportunityPrematchCandidate>(pipelineCandidateStore, Array.from(sendingCandidateIds)).catch(() => []);
+          const cancelledAt = nowIso();
+          await repositoryPutMany(pipelineCandidateStore, unresolvedSending
+            .filter((candidate) => candidate.submitStatus === "sending" || candidate.status === "submitting")
+            .map((candidate) => ({
+              ...candidate,
+              eligible: false,
+              estimatedCost: 0,
+              status: "skipped",
+              submitStatus: "cancelled",
+              skipReason: "商机提报任务在平台写请求发出前取消",
+              updatedAt: cancelledAt
+            })), { concurrency: 2 }).catch(() => []);
+        }
+        if (!cancelled) failedCount = Math.max(1, failedCount);
         const failedAt = nowIso();
-        await repositoryPut(pipelineSubmitTaskStore, {
-          ...task,
-          status: "failed",
+        await updateSubmitTaskFromWorker(task, workerId, {
+          status: cancelled ? "cancelled" : "failed",
           submittedCount,
           skippedCount,
           failedCount,
+          safetySkippedCount,
+          quotaExhaustedCount,
+          cancelledCount,
+          unknownCount,
+          remoteRequestCount,
           leaseExpiresAt: undefined,
           lastError: error instanceof Error ? error.message : String(error),
           finishedAt: failedAt,
           updatedAt: failedAt
-        } satisfies PipelineSubmitTaskRecord);
+        });
         await writePipelineEvent({
           runId: task.runId,
           storeRunId: task.storeRunId,
           shopId: task.shopId,
-          level: "error",
-          event: "pipeline-submit-task-failed",
+          level: cancelled ? "warn" : "error",
+          event: cancelled ? "pipeline-submit-task-cancelled" : "pipeline-submit-task-failed",
           message: error instanceof Error ? error.message : String(error),
-          detail: { submittedCount, skippedCount, failedCount }
+          detail: { accepted: submittedCount, submittedCount, skippedCount, failedCount, safetySkipped: safetySkippedCount, quotaExhausted: quotaExhaustedCount, cancelled: cancelledCount, unknownCount, remoteRequestCount }
         }).catch(() => undefined);
+        await reportDoudianDiagnostic({
+          category: "opportunity-pipeline",
+          event: "store-submit-summary",
+          runId: task.runId,
+          storeRunId: task.storeRunId,
+          shopId: task.shopId,
+          status: cancelled ? "cancelled" : "failed",
+          accepted: submittedCount,
+          failed: failedCount,
+          safetySkipped: safetySkippedCount,
+          quotaExhausted: quotaExhaustedCount,
+          cancelled: cancelledCount,
+          unknown: unknownCount,
+          remoteRequestCount,
+          error: error instanceof Error ? error.message : String(error)
+        }, true);
         await refreshPipelineRunSummary(task.runId).catch(() => null);
       }
       processed += 1;
@@ -5224,6 +5660,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   const stores = ledger.stores || [];
   const targets = targetStores(stores, args.shopIds);
   const runId = args.operationId || `opportunity-pipeline-submit-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  cancelledPipelineRunIds.delete(runId);
   const matchRules = normalizeOpportunityMatchRules(args.matchRules);
   const filters = args.filters || {};
   try {
@@ -5307,6 +5744,8 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   let plannedSubmitCandidateCount = 0;
   let primarySubmitCandidateCount = 0;
   let fallbackSubmitCandidateCount = 0;
+  let estimatedSubmitGroupCount = 0;
+  let estimatedSubmitDurationMs = 0;
   const pipelineClues: DoudianOpportunityClueRow[] = [];
   const matchRulesHash = stableMatchRulesHash(args);
   await repositoryPut(pipelineRunStore, {
@@ -5364,6 +5803,8 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       plannedSubmitCandidateCount,
       primarySubmitCandidateCount,
       fallbackSubmitCandidateCount,
+      estimatedSubmitGroupCount,
+      estimatedSubmitDurationMs,
       submitTaskCount,
       submittedCount: 0,
       failedCount,
@@ -5608,9 +6049,13 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       const plannedSelection = selectStoreSubmitCandidates({
         candidates: rankedStoreCandidates,
         dailyAttemptLimit: storeDailyAttemptLimit,
-        quotaUsedBefore
+        quotaUsedBefore,
+        maxCandidates: policyNumber(payload.adapter, "opportunityReport.maxSubmitCandidatesPerStore", 1000, 1, 10000),
+        fallbackOnlyAfterPrimaryFailure: policyBoolean(payload.adapter, "opportunityReport.fallbackOnlyAfterPrimaryFailure", true)
       });
       const plannedStoreCandidates = plannedSelection.candidates;
+      const storeEstimatedSubmitGroupCount = estimateSubmitGroups(plannedStoreCandidates, payload.adapter);
+      const storeEstimatedSubmitDurationMs = estimateSubmitDurationMs(storeEstimatedSubmitGroupCount, payload.adapter);
       const eligibleCount = plannedSelection.plannedSubmitCandidateCount;
       const alternativeCount = plannedStoreCandidates.filter((candidate) => candidateRank(candidate) > 1 || candidate.alternative === true).length;
       storeDiagnostics.persistedCandidateCount = plannedStoreCandidates.length;
@@ -5624,9 +6069,14 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         identity,
         candidates: compactedStoreCandidates
       });
+      const taskCandidateIds = new Set(task?.candidateIds || []);
       const persistedCandidates = task
-        ? compactedStoreCandidates.map((candidate) => candidate.eligible && candidate.status === "ready"
-          ? { ...candidate, submitTaskId: task.id, submitStatus: "queued" }
+        ? compactedStoreCandidates.map((candidate) => taskCandidateIds.has(candidate.id)
+          ? {
+              ...candidate,
+              submitTaskId: task.id,
+              submitStatus: candidate.eligible && candidate.status === "ready" ? "queued" : "fallback"
+            }
           : candidate)
         : compactedStoreCandidates;
       if (persistedCandidates.length) {
@@ -5665,6 +6115,8 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       plannedSubmitCandidateCount += plannedSelection.plannedSubmitCandidateCount;
       primarySubmitCandidateCount += plannedSelection.primarySubmitCandidateCount;
       fallbackSubmitCandidateCount += plannedSelection.fallbackSubmitCandidateCount;
+      estimatedSubmitGroupCount += storeEstimatedSubmitGroupCount;
+      estimatedSubmitDurationMs += storeEstimatedSubmitDurationMs;
       processedStoreCount += 1;
       const finishedAt = nowIso();
       await repositoryPut(pipelineStoreRunStore, {
@@ -5689,6 +6141,8 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         plannedSubmitCandidateCount: plannedSelection.plannedSubmitCandidateCount,
         primarySubmitCandidateCount: plannedSelection.primarySubmitCandidateCount,
         fallbackSubmitCandidateCount: plannedSelection.fallbackSubmitCandidateCount,
+        estimatedSubmitGroupCount: storeEstimatedSubmitGroupCount,
+        estimatedSubmitDurationMs: storeEstimatedSubmitDurationMs,
         dailyAttemptLimit: plannedSelection.dailyAttemptLimit,
         quotaUsedBefore: plannedSelection.quotaUsedBefore,
         quotaRemainingBefore: plannedSelection.quotaRemainingBefore,
@@ -5723,6 +6177,9 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           plannedSubmitCandidateCount: plannedSelection.plannedSubmitCandidateCount,
           primarySubmitCandidateCount: plannedSelection.primarySubmitCandidateCount,
           fallbackSubmitCandidateCount: plannedSelection.fallbackSubmitCandidateCount,
+          maxSubmitCandidatesPerStore: policyNumber(payload.adapter, "opportunityReport.maxSubmitCandidatesPerStore", 1000, 1, 10000),
+          estimatedSubmitGroupCount: storeEstimatedSubmitGroupCount,
+          estimatedSubmitDurationMs: storeEstimatedSubmitDurationMs,
           alternativeCount,
           dailyAttemptLimit: plannedSelection.dailyAttemptLimit,
           quotaUsedBefore: plannedSelection.quotaUsedBefore,
@@ -5732,6 +6189,26 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           submitTaskId: task?.id
         }
       }).catch(() => undefined);
+      if (!task) {
+        await reportDoudianDiagnostic({
+          category: "opportunity-pipeline",
+          event: "store-submit-summary",
+          runId,
+          storeRunId: id,
+          shopId: identity.shopId,
+          status: skipReason ? "skipped" : "ok",
+          accepted: 0,
+          failed: 0,
+          safetySkipped: 0,
+          quotaExhausted: 0,
+          cancelled: 0,
+          unknown: 0,
+          remoteRequestCount: 0,
+          productCount: scan.products.length,
+          candidateCount: plannedStoreCandidates.length,
+          reason: skipReason
+        }, true);
+      }
       dispatchPipelineProgress(args, 8 + ((index + 1) / targets.length) * 70, `店铺候选已落库：${identity.shopName || identity.shopId}`);
       details.push({
         shopId: store.shopId,
@@ -5840,6 +6317,8 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     plannedSubmitCandidateCount,
     primarySubmitCandidateCount,
     fallbackSubmitCandidateCount,
+    estimatedSubmitGroupCount,
+    estimatedSubmitDurationMs,
     submitTaskCount,
     submittedCount: 0,
     failedCount,
@@ -6031,7 +6510,14 @@ async function buildPipelineRunCachedResult(
         quotaAttemptCount: storeRun.quotaAttemptCount,
         quotaRemainingAfterSubmit: storeRun.quotaRemainingAfterSubmit,
         submittedCount: storeRun.submittedCount,
-        failedCount: storeRun.failedCount
+        failedCount: storeRun.failedCount,
+        safetySkippedCount: storeRun.safetySkippedCount,
+        quotaExhaustedCount: storeRun.quotaExhaustedCount,
+        cancelledCount: storeRun.cancelledCount,
+        unknownCount: storeRun.unknownCount,
+        remoteRequestCount: storeRun.remoteRequestCount,
+        estimatedSubmitGroupCount: storeRun.estimatedSubmitGroupCount,
+        estimatedSubmitDurationMs: storeRun.estimatedSubmitDurationMs
       },
       index: index + 1,
       total: storeRuns.length
@@ -6051,7 +6537,10 @@ export async function fetchOpportunityPipelineRun(args: OpportunityArgs = {}): P
   const pipelineRun = runId
     ? await repositoryGet<PipelineRunRecord>(pipelineRunStore, runId).catch(() => null)
     : null;
-  if (pipelineRun) return buildPipelineRunCachedResult(args, pipelineRun, "已恢复本次商机提报数据");
+  if (pipelineRun) {
+    const refreshed = await refreshPipelineRunSummary(pipelineRun.runId).catch(() => null);
+    return buildPipelineRunCachedResult(args, refreshed || pipelineRun, "已恢复本次商机提报数据");
+  }
   const ledger = await listStoreLedger();
   return {
     ...ledger,
@@ -6085,6 +6574,8 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
   const payload = adapterPayload(args);
   const latestPipeline = await repositoryLatest<PipelineRunRecord>(pipelineRunStore).catch(() => null);
   if (latestPipeline) {
+    const refreshed = await refreshPipelineRunSummary(latestPipeline.runId).catch(() => null);
+    if (refreshed) Object.assign(latestPipeline, refreshed);
     const [pipelineStoreRuns, pipelineCandidates] = await Promise.all([
       loadPipelineStoreRunsForRun(latestPipeline.runId),
       loadPipelineCandidatesForRun(latestPipeline.runId, latestPipelineCandidatePreviewLimit)
@@ -6143,7 +6634,14 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
           quotaAttemptCount: storeRun.quotaAttemptCount,
           quotaRemainingAfterSubmit: storeRun.quotaRemainingAfterSubmit,
           submittedCount: storeRun.submittedCount,
-          failedCount: storeRun.failedCount
+          failedCount: storeRun.failedCount,
+          safetySkippedCount: storeRun.safetySkippedCount,
+          quotaExhaustedCount: storeRun.quotaExhaustedCount,
+          cancelledCount: storeRun.cancelledCount,
+          unknownCount: storeRun.unknownCount,
+          remoteRequestCount: storeRun.remoteRequestCount,
+          estimatedSubmitGroupCount: storeRun.estimatedSubmitGroupCount,
+          estimatedSubmitDurationMs: storeRun.estimatedSubmitDurationMs
         },
         index: index + 1,
         total: storeRuns.length

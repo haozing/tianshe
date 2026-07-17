@@ -2,10 +2,13 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 const { DatabaseSync } = require("node:sqlite");
 const { Worker } = require("node:worker_threads");
 
 async function main() {
+  const executionPolicy = await import(pathToFileURL(path.join(__dirname, "../../remote-web/client-shell/src/domain/doudian/opportunityExecutionPolicy.ts")).href);
+  const retryPolicy = await import(pathToFileURL(path.join(__dirname, "../../remote-web/client-shell/src/domain/doudian/requestRetryPolicy.ts")).href);
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "chihu-opportunity-check-"));
   const databasePath = path.join(tempDir, "opportunity.sqlite3");
   const legacyDatabase = new DatabaseSync(databasePath);
@@ -158,11 +161,86 @@ async function main() {
     assert.equal(count.count, 2);
     assert.deepEqual(dedupe.relationKeys, ["shop-1::clue-1::product-1"]);
     assert.deepEqual(matchedDedupe.relationKeys, ["shop-1::clue-1::product-1"]);
+    await request("stores.upsertIdentity", { platform: "doudian", tenantId: "local-user", shopId: "shop-1", storeGeneration: 1, identityContractVersion: "opportunity-check" });
+    await request("catalog.recordMutationResults", {
+      platform: "doudian",
+      tenantId: "local-user",
+      shopId: "shop-1",
+      storeGeneration: 1,
+      mutations: [
+        { mutationKey: "catalog-mutation:opportunity-submit:summary-run:accepted", productId: "product-1", action: "submit", status: "acknowledged", responseSummary: { executionStatus: "submitted", ok: true } },
+        { mutationKey: "catalog-mutation:opportunity-submit:summary-run:skipped", productId: "product-2", action: "submit", status: "skipped", responseSummary: { executionStatus: "skipped", ok: true, message: "live lookup did not find product" } },
+        { mutationKey: "catalog-mutation:opportunity-submit:summary-run:failed", productId: "product-3", action: "submit", status: "failed", responseSummary: { executionStatus: "failed", ok: false } }
+      ]
+    });
+    const mutationSummary = await request("catalog.summarizeOpportunityRunMutations", { runId: "summary-run" });
+    assert.deepEqual({
+      acknowledged: mutationSummary.acknowledged,
+      failed: mutationSummary.failed,
+      skipped: mutationSummary.skipped,
+      safetySkipped: mutationSummary.safetySkipped,
+      total: mutationSummary.total
+    }, { acknowledged: 1, failed: 1, skipped: 1, safetySkipped: 1, total: 3 });
     const cleanup = await request("opportunityAttempts.cleanup", { failedRetentionDays: 90 });
     assert.equal(cleanup.deleted, 1);
 
+    const safetySkipped = {
+      stage: "submit",
+      planKey: "opportunityProductList",
+      status: "skipped",
+      ok: true,
+      message: "live lookup did not find product",
+      diagnostic: { safetySkipped: true, safetyReason: "live-not-found" }
+    };
+    assert.equal(executionPolicy.isRemoteSubmittedExecution(safetySkipped), false);
+    assert.deepEqual(executionPolicy.candidateExecutionState([safetySkipped]), {
+      failed: false,
+      unknown: false,
+      skipped: true,
+      safetySkipped: true,
+      quotaExhausted: false,
+      failureMessage: "",
+      submitted: false
+    });
+    assert.equal(executionPolicy.isRemoteSubmittedExecution({
+      stage: "submit",
+      planKey: "opportunitySubmitClue",
+      status: "submitted",
+      ok: true,
+      diagnostic: { remoteSubmitAttempt: true }
+    }), false);
+    assert.equal(executionPolicy.isRemoteSubmittedExecution({
+      stage: "submit",
+      planKey: "opportunitySubmitClue",
+      status: "submitted",
+      ok: true,
+      diagnostic: { remoteSubmitAttempt: true, remoteAccepted: true, remoteResponseCode: "0" }
+    }), true);
+    assert.equal(executionPolicy.isFinalRateLimitedExecution({
+      status: "unknown",
+      ok: false,
+      diagnostic: { remoteSubmitAttempt: true, remoteAccepted: false, remoteHttpStatus: 429, submitAttemptCount: 3 }
+    }), true);
+    assert.equal(executionPolicy.unresolvedBatchProductStatus(false, false), "unknown");
+    assert.equal(executionPolicy.isStoreDailyQuotaMessage("单天最多可关联1000个线索，已达今日上限！"), true);
+    assert.equal(executionPolicy.isProductClueLimitMessage("单天最多可关联1000个线索，已达今日上限！"), false);
+    assert.equal(executionPolicy.isProductClueLimitMessage("单个商品最多可关联50个线索"), true);
+    assert.equal(executionPolicy.preserveCancelledStatus("cancelled", "partial"), "cancelled");
+    assert.deepEqual(executionPolicy.reconcileOpportunityRecordCounts({
+      attemptStatuses: ["accepted", "failed"],
+      candidateStatuses: ["submitted", "failed"],
+      mutationStatuses: ["acknowledged", "failed"]
+    }), { ok: true, accepted: 1, submitted: 1, acknowledged: 1 });
+    assert.equal(executionPolicy.reconcileOpportunityRecordCounts({
+      attemptStatuses: ["accepted"],
+      candidateStatuses: ["submitted", "submitted"],
+      mutationStatuses: ["acknowledged"]
+    }).ok, false);
+    assert.equal(retryPolicy.requestRetryDelayMs({ retryDelayMs: 1200, retryBackoff: "exponential" }, 3, "retryDelayMs", "retryBackoff", 1000, undefined, () => 0), 4800);
+    assert.equal(retryPolicy.requestRetryDelayMs({ retryDelayMs: 1200, retryBackoff: "exponential", retryJitterMs: 1000 }, 1, "retryDelayMs", "retryBackoff", 1000, { headers: { "retry-after": "5" } }, () => 0), 5000);
+
     await request("maintenance.close");
-    console.log("OPPORTUNITY_DATA_OK atomic dedupe, task claim, batch writes, attempts and cleanup");
+    console.log("OPPORTUNITY_DATA_OK atomic dedupe, task claim, business status classification, quota fuse, cancellation fence, retry policy, reconciliation, batch writes, attempts and cleanup");
   } finally {
     await worker.terminate().catch(() => undefined);
     fs.rmSync(tempDir, { recursive: true, force: true });

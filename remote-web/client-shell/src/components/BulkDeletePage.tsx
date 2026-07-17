@@ -73,12 +73,12 @@ interface ProductRow {
   shopName: string;
   group: string;
   status: ProductStatus;
-  price: number;
-  sales: number;
-  stock: number;
+  price?: number;
+  sales?: number;
+  stock?: number;
   createdDays: number;
   listedDays: number;
-  exposure: number;
+  exposure?: number;
   lastUpdated: string;
   source: string;
 }
@@ -101,9 +101,9 @@ interface MetricItem {
 const defaultFilters: FilterSettings = {
   status: "all",
   priceMin: 0,
-  priceMax: 9999,
+  priceMax: 999999999,
   salesMin: 0,
-  salesMax: 999999,
+  salesMax: 999999999,
   createdDaysMin: 0,
   listedDaysMin: 0,
   perStoreLimit: 0
@@ -120,6 +120,7 @@ const productStatusCopy: Record<ProductStatus, { label: string; className: strin
   selling: { label: "售卖中", className: "border-[#bff0cf] bg-[#eafaf0] text-[#087443]" },
   offline: { label: "已下架", className: "border-[#dbe5f2] bg-white text-[#667085]" },
   recycle: { label: "回收站", className: "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" },
+  rejected: { label: "审核驳回", className: "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" },
   unknown: { label: "未知", className: "border-[#dbe5f2] bg-white text-[#667085]" }
 };
 
@@ -174,12 +175,12 @@ function mapStoreToOption(store: DoudianStoreSummary): StoreOption {
   };
 }
 
-function formatNumber(value: number) {
-  return value.toLocaleString("zh-CN");
+function formatNumber(value: number | undefined) {
+  return Number.isFinite(value) ? value!.toLocaleString("zh-CN") : "未知";
 }
 
-function formatMoney(value: number) {
-  return `¥${value.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+function formatMoney(value: number | undefined) {
+  return Number.isFinite(value) ? `¥${value!.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "未知";
 }
 
 function clampNumber(value: number, min = 0) {
@@ -297,23 +298,29 @@ function toRemoteAction(deleteMode: DeleteMode): DoudianBulkDeleteAction {
   return deleteMode === "final" ? "delete" : "recycle";
 }
 
-function toPreviewNumber(value: unknown, fallback = 0) {
+function toPreviewNumber(value: unknown, fallback?: number) {
   const next = Number(value);
   return Number.isFinite(next) ? next : fallback;
 }
 
 function sortPreviewRows(rows: PreviewRow[], sortKey: SortKey) {
+  const compareNumbers = (left: number | undefined, right: number | undefined) => {
+    if (left === undefined && right === undefined) return 0;
+    if (left === undefined) return 1;
+    if (right === undefined) return -1;
+    return right - left;
+  };
   return [...rows].sort((left, right) => {
-    if (sortKey === "销量") return right.sales - left.sales;
-    if (sortKey === "价格") return right.price - left.price;
+    if (sortKey === "销量") return compareNumbers(left.sales, right.sales);
+    if (sortKey === "价格") return compareNumbers(left.price, right.price);
     if (sortKey === "创建时间") return right.createdDays - left.createdDays;
     return left.id.localeCompare(right.id);
   });
 }
 
 function candidateToPreviewRow(candidate: DoudianBulkDeleteCandidate): PreviewRow {
-  const createdDays = toPreviewNumber(candidate.daysSinceCreated, -1);
-  const listedDays = toPreviewNumber(candidate.daysSinceListed, -1);
+  const createdDays = toPreviewNumber(candidate.daysSinceCreated, -1) ?? -1;
+  const listedDays = toPreviewNumber(candidate.daysSinceListed, -1) ?? -1;
   return {
     id: candidate.id || `${candidate.shopId}-${candidate.productId}`,
     productId: candidate.productId,
@@ -348,9 +355,9 @@ function exportRows(rows: PreviewRow[]) {
       row.productId,
       row.title,
       productStatusCopy[row.status].label,
-      String(row.price),
-      String(row.sales),
-      String(row.stock),
+      row.price === undefined ? "" : String(row.price),
+      row.sales === undefined ? "" : String(row.sales),
+      row.stock === undefined ? "" : String(row.stock),
       String(row.createdDays),
       String(row.listedDays),
       row.targetAction,
@@ -575,6 +582,9 @@ export function BulkDeletePage() {
   const [previewBusy, setPreviewBusy] = useState(false);
   const [remoteCandidates, setRemoteCandidates] = useState<DoudianBulkDeleteCandidate[]>([]);
   const [sourceRunId, setSourceRunId] = useState("");
+  const [previewStatus, setPreviewStatus] = useState("");
+  const [partialScan, setPartialScan] = useState(false);
+  const [allowPartialScan, setAllowPartialScan] = useState(false);
   const [previewMessage, setPreviewMessage] = useState("");
   const [executionMessage, setExecutionMessage] = useState("");
   const [executionRows, setExecutionRows] = useState<DoudianBulkDeleteExecution[]>([]);
@@ -619,8 +629,8 @@ export function BulkDeletePage() {
       if (sourceMode === "ids" && usableProductImportItems.length && !usableProductImportItems.some((item) => item.productId === row.productId && importItemMatchesPreviewRow(item, row))) return false;
       if (sourceMode === "range" && keyword && !normalizeText(row.title + row.productId).includes(keyword)) return false;
       if (filters.status !== "all" && row.status !== filters.status) return false;
-      if (row.price < filters.priceMin || row.price > filters.priceMax) return false;
-      if (row.sales < filters.salesMin || row.sales > filters.salesMax) return false;
+      if (row.price === undefined ? filters.priceMin > 0 || filters.priceMax < 999999999 : row.price < filters.priceMin || row.price > filters.priceMax) return false;
+      if (row.sales === undefined ? filters.salesMin > 0 || filters.salesMax < 999999999 : row.sales < filters.salesMin || row.sales > filters.salesMax) return false;
       if (row.createdDays < filters.createdDaysMin) return false;
       if (row.listedDays < filters.listedDaysMin) return false;
       return true;
@@ -637,7 +647,7 @@ export function BulkDeletePage() {
   const remotePreviewRows = useMemo(() => sortPreviewRows(remoteCandidates.map(candidateToPreviewRow), sortKey), [remoteCandidates, sortKey]);
   const previewRows = previewMode ? samplePreviewRows : analyzed ? remotePreviewRows : [];
 
-  const executableRows = useMemo(() => previewRows.filter((row) => row.ok !== false && !row.excludedReason), [previewRows]);
+  const executableRows = useMemo(() => previewRows.filter((row) => row.ok === true && row.status !== "unknown" && !row.excludedReason), [previewRows]);
   const excludedRows = useMemo(() => previewRows.filter((row) => row.excludedReason), [previewRows]);
   const finalRows = useMemo(() => previewRows.filter((row) => row.targetAction === "彻底删除" && !row.excludedReason), [previewRows]);
   const selectedExecutableRows = useMemo(() => executableRows.filter((row) => selectedProductIds.has(row.id)), [executableRows, selectedProductIds]);
@@ -649,7 +659,7 @@ export function BulkDeletePage() {
   const previewPageEndIndex = Math.min(previewRows.length, previewPageStartIndex + previewPageSizeNumber);
   const previewRangeText = previewRows.length ? `${formatNumber(previewPageStartIndex + 1)}-${formatNumber(previewPageEndIndex)}` : "0";
   const visiblePreviewRows = useMemo(() => previewRows.slice(previewPageStartIndex, previewPageEndIndex), [previewRows, previewPageEndIndex, previewPageStartIndex]);
-  const visibleExecutableRows = useMemo(() => visiblePreviewRows.filter((row) => row.ok !== false && !row.excludedReason), [visiblePreviewRows]);
+  const visibleExecutableRows = useMemo(() => visiblePreviewRows.filter((row) => row.ok === true && row.status !== "unknown" && !row.excludedReason), [visiblePreviewRows]);
   const visibleProductIds = useMemo(() => visibleExecutableRows.map((row) => row.id), [visibleExecutableRows]);
   const allVisibleProductsSelected = visibleProductIds.length > 0 && visibleProductIds.every((id) => selectedProductIds.has(id));
   const selectedVisibleProductsCount = visibleProductIds.filter((id) => selectedProductIds.has(id)).length;
@@ -808,6 +818,9 @@ export function BulkDeletePage() {
     setAnalyzed(false);
     setRemoteCandidates([]);
     setSourceRunId("");
+    setPreviewStatus("");
+    setPartialScan(false);
+    setAllowPartialScan(false);
     setSelectedProductIds(new Set());
     setPreviewMessage("正在扫描商品");
     try {
@@ -824,16 +837,24 @@ export function BulkDeletePage() {
       const nextSourceRunId = result.sourceRunId || result.runId || "";
       setRemoteCandidates(nextCandidates);
       setSourceRunId(nextSourceRunId);
+      const nextStatus = result.status || (result.ok ? "ok" : "failed");
+      const nextPartialScan = nextStatus === "partial";
+      setPreviewStatus(nextStatus);
+      setPartialScan(nextPartialScan);
+      setAllowPartialScan(false);
       setAnalyzed(true);
       setLastPreviewAt(new Date());
       setPreviewMessage(result.message || (result.ok ? `命中 ${nextCandidates.length} 个商品` : "扫描完成但存在异常"));
-      setSelectedProductIds(new Set(nextCandidates.filter((item) => item.ok !== false && !item.excludedReason).map((item) => item.id)));
+      setSelectedProductIds(new Set(nextCandidates.filter((item) => item.ok === true && item.status !== "unknown" && !item.excludedReason).map((item) => item.id)));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setPreviewMessage(message || "生成预览失败");
       setAnalyzed(false);
       setRemoteCandidates([]);
       setSourceRunId("");
+      setPreviewStatus("");
+      setPartialScan(false);
+      setAllowPartialScan(false);
     } finally {
       setPreviewBusy(false);
     }
@@ -854,6 +875,9 @@ export function BulkDeletePage() {
     setExecutionRows([]);
     setRemoteCandidates([]);
     setSourceRunId("");
+    setPreviewStatus("");
+    setPartialScan(false);
+    setAllowPartialScan(false);
     setSelectedProductIds(new Set());
     setPreviewPage(0);
     setPreviewPageSize("100");
@@ -893,6 +917,7 @@ export function BulkDeletePage() {
         action: toRemoteAction(deleteMode),
         candidateIds,
         sourceRunId,
+        allowPartialScan,
         confirmText: "确认删除",
         onProgress: (event) => setProgress(event.percent),
         shouldCancel: () => cancelExecutionRef.current,
@@ -904,7 +929,7 @@ export function BulkDeletePage() {
       setExecutionRows(nextExecutions);
       if (result.status !== "cancelled") setProgress(100);
       setRunState(result.ok ? "done" : "error");
-      setExecutionMessage(result.message || (result.ok ? `批量删除已提交，成功 ${submittedCount} 个` : `批量删除执行失败，失败 ${failedCount} 个`));
+      setExecutionMessage(result.message || (result.ok ? `批量删除请求已提交 ${submittedCount} 个` : `批量删除执行失败，失败 ${failedCount} 个`));
     } catch (error) {
       setProgress(100);
       setRunState("error");
@@ -919,7 +944,9 @@ export function BulkDeletePage() {
   }
 
   const tableMinWidth = 1160;
-  const canExecute = previewMode ? analyzed : analyzed && Boolean(sourceRunId);
+  const canExecute = previewMode
+    ? analyzed
+    : analyzed && Boolean(sourceRunId) && (previewStatus === "ok" || (partialScan && allowPartialScan));
   const failedExecutionRows = executionRows.filter((item) => item.ok === false);
   const submittedExecutionCount = executionRows.filter((item) => item.ok && item.status === "submitted").length;
 
@@ -1284,6 +1311,17 @@ export function BulkDeletePage() {
                 已选 {selectedExecutableRows.length} 个商品，动作：{deleteMode === "final" ? "彻底删除" : "加入回收站"}。
                 {!previewMode && sourceRunId ? <span className="ml-1">来源：{sourceRunId}</span> : null}
               </p>
+              {!previewMode && partialScan ? (
+                <label className="mt-2 flex items-start gap-2 text-[12px] leading-5 text-[#b54708]">
+                  <input
+                    className="mt-1 size-3.5 accent-[#b54708]"
+                    type="checkbox"
+                    checked={allowPartialScan}
+                    onChange={(event) => setAllowPartialScan(event.target.checked)}
+                  />
+                  <span>本次扫描不完整，仅执行已完成店铺的候选商品</span>
+                </label>
+              ) : null}
             </div>
             <button className="grid size-7 shrink-0 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054]" type="button" aria-label="关闭执行确认" onClick={() => setAnalyzed(false)}>
               <XCircle className="size-[14px]" strokeWidth={2} />
@@ -1299,7 +1337,7 @@ export function BulkDeletePage() {
               </span>
               {executionRows.length ? (
                 <span className="text-[12px] text-[#667085]">
-                  已返回 {executionRows.length} 条执行记录，成功 {submittedExecutionCount} 条，失败 {failedExecutionRows.length} 条。
+                  已返回 {executionRows.length} 条执行记录，已提交 {submittedExecutionCount} 条，失败 {failedExecutionRows.length} 条。
                 </span>
               ) : null}
             </div>

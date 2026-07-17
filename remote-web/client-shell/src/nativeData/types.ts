@@ -530,6 +530,18 @@ export interface NativeDataApi {
     getProductsByIds: (args: CatalogProductsByIdsArgs) => Promise<ProductCatalogLatestV2[]>;
     recordLiveObservations: (args: CatalogRecordLiveObservationsArgs) => Promise<CatalogRecordLiveObservationsResult>;
     recordMutationResults: (args: CatalogRecordMutationResultsArgs) => Promise<CatalogRecordMutationResultsResult>;
+    summarizeOpportunityRunMutations?: (args: { runId: string }) => Promise<{
+      ok: boolean;
+      runId: string;
+      acknowledged: number;
+      failed: number;
+      skipped: number;
+      safetySkipped: number;
+      unknown: number;
+      confirmed: number;
+      total: number;
+      byShop: Record<string, { acknowledged: number; failed: number; skipped: number; safetySkipped: number; unknown: number; confirmed: number; total: number }>;
+    }>;
     confirmMutations: (args: CatalogConfirmMutationsArgs) => Promise<CatalogConfirmMutationsResult>;
     invalidateCoverage: (args: { coverageKey: string; reason?: string }) => Promise<{ ok: boolean; changed: number; invalidatedAt: string }>;
   };

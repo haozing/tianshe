@@ -4,6 +4,7 @@ import { requireChihuNative } from "../../native/client";
 import { signDoudianRequest } from "./signer";
 import { XZB_SIGN_USER_AGENT } from "./xzbSigner";
 import { detailedDoudianLoggingEnabled, reportDoudianDiagnostic } from "./diagnosticLog";
+import { requestRetryDelayMs } from "./requestRetryPolicy";
 
 const losslessJson = JSONbigFactory({ storeAsString: true });
 
@@ -11,6 +12,7 @@ export interface RequestPlanResult {
   ok: boolean;
   status: number;
   data: unknown;
+  headers?: Record<string, unknown>;
   error?: string;
   source: string;
   url?: string;
@@ -87,6 +89,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   headers?: Record<string, string>;
   context?: Record<string, unknown>;
   trackWindow?: (winId: number) => void;
+  shouldCancel?: () => boolean;
 }): Promise<RequestPlanResult> {
   const startedAt = Date.now();
   let attemptCount = 0;
@@ -160,9 +163,11 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   const prepareMessages = arrayText(plan.prepareOnMessages);
   const prepareAttempts = Math.max(0, Math.min(3, Math.floor(Number(plan.prepareRetryAttempts || (prepareMessages.length ? 1 : 0)))));
   for (let attempt = 0; attempt < prepareAttempts && responseMatches(response, prepareMessages); attempt += 1) {
+    if (args.shouldCancel?.()) break;
     await reportPlanRetry(args.planKey, args.partition, "prepare", attempt + 1, response);
-    const delayMs = retryDelayMs(plan, attempt + 1, "prepareRetryDelayMs", "prepareRetryBackoff", 0);
+    const delayMs = requestRetryDelayMs(plan, attempt + 1, "prepareRetryDelayMs", "prepareRetryBackoff", 0, response);
     if (delayMs) await delay(delayMs);
+    if (args.shouldCancel?.()) break;
     await prepareRequestPlanContext(args.partition, args.planKey, plan, adapter, context, url, args.trackWindow);
     response = await runRequest(`prepare-${attempt + 1}`);
     if (response.nonRetryable) return finalize(response);
@@ -171,9 +176,11 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   const maxAttempts = Math.max(1, Math.min(8, Math.floor(Number(plan.maxAttempts || 1))));
   if (plan.retryOnHttpError === true) {
     for (let attempt = 1; attempt < maxAttempts && responseHasHttpError(response); attempt += 1) {
+      if (args.shouldCancel?.()) break;
       await reportPlanRetry(args.planKey, args.partition, "http", attempt, response);
-      const delayMs = retryDelayMs(plan, attempt, "retryDelayMs", "retryBackoff", 1000);
+      const delayMs = requestRetryDelayMs(plan, attempt, "retryDelayMs", "retryBackoff", 1000, response);
       if (delayMs) await delay(delayMs);
+      if (args.shouldCancel?.()) break;
       response = await runRequest(attempt);
       if (response.nonRetryable) return finalize(response);
     }
@@ -181,9 +188,11 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
 
   if (plan.retryOnBusinessFailure === true) {
     for (let attempt = 1; attempt < maxAttempts && !requestPlanResponseOk(response, adapter, args.planKey); attempt += 1) {
+      if (args.shouldCancel?.()) break;
       await reportPlanRetry(args.planKey, args.partition, "business", attempt, response);
-      const delayMs = retryDelayMs(plan, attempt, "retryDelayMs", "retryBackoff", 1000);
+      const delayMs = requestRetryDelayMs(plan, attempt, "retryDelayMs", "retryBackoff", 1000, response);
       if (delayMs) await delay(delayMs);
+      if (args.shouldCancel?.()) break;
       response = await runRequest(`business-${attempt}`);
       if (response.nonRetryable) return finalize(response);
     }
@@ -278,11 +287,6 @@ function responseMessage(response: RequestPlanResult | undefined) {
 
 function responseHasHttpError(response: RequestPlanResult | undefined) {
   return Number(response?.status || 0) >= 400 || (Number(response?.status || 0) === 0 && !!response?.error);
-}
-
-function retryDelayMs(plan: Record<string, unknown>, attempt: number, delayKey: string, backoffKey: string, fallback: number) {
-  const base = Math.max(0, Number(plan[delayKey] ?? fallback));
-  return base * (plan[backoffKey] === "linear" ? Math.max(1, attempt) : 1);
 }
 
 function delay(ms: number) {
@@ -708,10 +712,11 @@ async function requestJson(partition: string, url: string, headers: Record<strin
     responseType,
     timeoutMs: 15000
   });
-  const result = response as { ok?: boolean; status?: number; data?: unknown; error?: { message?: string } | string };
+  const result = response as { ok?: boolean; status?: number; headers?: Record<string, unknown>; data?: unknown; error?: { message?: string } | string };
   return {
     ok: result.ok === true,
     status: Number(result.status || 0),
+    headers: result.headers || {},
     data: result.data ?? null,
     error: typeof result.error === "string" ? result.error : result.error?.message || "",
     source,

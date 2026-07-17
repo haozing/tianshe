@@ -3329,9 +3329,10 @@
       },
       "body": "{bodyJson}",
       "retryOnHttpError": true,
-      "maxAttempts": 2,
+      "maxAttempts": 3,
       "retryDelayMs": 1200,
-      "retryBackoff": "linear",
+      "retryBackoff": "exponential",
+      "retryJitterMs": 1000,
       "allowMissingCode": true,
       "successCodes": [
         0,
@@ -4985,6 +4986,7 @@
     },
     "staleGoodsCleanup": {
       "concurrency": 2,
+      "pageConcurrency": 4,
       "pageSize": 100,
       "productStatus": "",
       "requestPlans": [
@@ -5005,6 +5007,15 @@
         "completeDelete": "staleGoodsCompleteDelete"
       },
       "confirmText": "确认清理",
+      "allowedExecutionActions": [
+        "offline",
+        "recycle",
+        "delete"
+      ],
+      "maxScanAgeMs": 900000,
+      "allowPartialScanExecution": false,
+      "automaticCompassMissingRowPolicy": "zero",
+      "importedCompassMissingRowPolicy": "unknown",
       "ruleVersion": "stale-goods-rule.xzb-v2-trusted-scan",
       "fieldSchemaVersion": "stale-goods-fields.xzb-v2-source-aware",
       "defaultRules": {
@@ -5119,6 +5130,10 @@
       "submitRetryLimit": 1,
       "submitRetryDelayMs": 5900,
       "stopStoreOnSubmitFrequency": true,
+      "maxSubmitCandidatesPerStore": 1000,
+      "fallbackOnlyAfterPrimaryFailure": true,
+      "historyRetentionDays": 14,
+      "maxHistoryRuns": 50,
       "submitTaskLeaseMs": 1800000,
       "submitLeaseRenewalMs": 120000,
       "maxTitleLength": 60,

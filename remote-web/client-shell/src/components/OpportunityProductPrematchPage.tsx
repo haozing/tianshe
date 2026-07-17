@@ -83,6 +83,15 @@ function formatNumber(value: number | undefined) {
   return Number(value || 0).toLocaleString("zh-CN");
 }
 
+function formatDuration(value: number | undefined) {
+  const minutes = Math.max(0, Math.ceil(Number(value || 0) / 60000));
+  if (!minutes) return "--";
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours} 小时 ${rest} 分` : `${hours} 小时`;
+}
+
 function CompactMetric({ label, value, detail, tone = "default" }: { label: string; value: string; detail: string; tone?: "default" | "blue" | "green" | "warn" }) {
   const toneClass = {
     default: "text-[#111827]",
@@ -192,6 +201,9 @@ function submitStatusInfo(item: DoudianOpportunityPrematchCandidate) {
   const status = String(item.submitStatus || item.status || "");
   if (item.submittedAt || status === "submitted") return { label: "已提报", className: "bg-[#eafaf0] text-[#087443]" };
   if (status === "failed") return { label: "失败", className: "bg-[#fff1ef] text-[#b42318]" };
+  if (status === "unknown") return { label: "结果待确认", className: "bg-[#fff7e8] text-[#b54708]" };
+  if (status === "quota_exhausted") return { label: "今日额度已满", className: "bg-[#fff7e8] text-[#b54708]" };
+  if (status === "sending" || status === "submitting") return { label: "提交中", className: "bg-[#eef4ff] text-[#175cd3]" };
   if (status === "skipped") return { label: "跳过", className: "bg-[#fff7e8] text-[#b54708]" };
   if (status === "queued") return { label: "待提报", className: "bg-brand-foxSoft text-brand-fox" };
   if (status === "cancelled") return { label: "已取消", className: "bg-[#f2f4f7] text-[#667085]" };
@@ -249,9 +261,10 @@ function pipelineSnapshotLog(details: DoudianRunDetail[], summary: Record<string
   }
   const submittedCount = Number(summary.submittedCount || 0);
   const failedCount = Number(summary.failedCount || 0);
+  const safetySkippedCount = Number(summary.safetySkippedCount || 0);
   const productCount = Number(summary.productCount || 0);
   const clueCount = Number(summary.clueCount || 0);
-  if (submittedCount || failedCount) return `提报完成：成功 ${formatNumber(submittedCount)} · 失败 ${formatNumber(failedCount)}`;
+  if (submittedCount || failedCount || safetySkippedCount) return `提报完成：平台成功 ${formatNumber(submittedCount)} · 失败 ${formatNumber(failedCount)} · 安全跳过 ${formatNumber(safetySkippedCount)}`;
   if (productCount || clueCount) return `已同步：商品 ${formatNumber(productCount)} · 商机 ${formatNumber(clueCount)}`;
   return "等待一键提报";
 }
@@ -337,6 +350,9 @@ export function OpportunityProductPrematchPage() {
   const processedStoreCount = Number(resultSummary.processedStoreCount || 0);
   const totalStoreCount = Number(resultSummary.totalStoreCount || selectedShopIds.size);
   const failedSubmitCount = Number(resultSummary.failedCount || 0);
+  const safetySkippedCount = Number(resultSummary.safetySkippedCount || 0);
+  const quotaExhaustedCount = Number(resultSummary.quotaExhaustedCount || 0);
+  const estimatedSubmitDurationMs = Number(resultSummary.estimatedSubmitDurationMs || 0);
   const totalDailySubmitTarget = defaultDailySubmitTarget * Math.max(1, totalStoreCount || selectedShopIds.size || 1);
   const summaryQuotaGap = Number(resultSummary.quotaRemainingAfterPlan);
   const submitTargetGap = Number.isFinite(summaryQuotaGap)
@@ -387,6 +403,7 @@ export function OpportunityProductPrematchPage() {
         const quotaAttemptCount = detailDiagnosticOptionalNumber(detail, "quotaAttemptCount") ?? quotaUsedBefore + submittedCount + failedCount;
         const quotaRemainingAfterSubmit = detailDiagnosticOptionalNumber(detail, "quotaRemainingAfterSubmit");
         const quotaGap = quotaRemainingAfterSubmit ?? Math.max(0, dailyAttemptLimit - quotaAttemptCount);
+        const estimatedStoreSubmitDurationMs = detailDiagnosticNumber(detail, "estimatedSubmitDurationMs");
         const status = String(detail?.status || "");
         const diagnosticPhase = detailDiagnosticText(detail, "phase");
         const messagePhase = ["product-scan", "category-ledger", "clue-load", "tokenize", "match", "submit-queued", "submitting", "finished"].includes(String(detail?.message || ""))
@@ -406,7 +423,8 @@ export function OpportunityProductPrematchPage() {
           quotaAttemptCount,
           submittedCount,
           failedCount,
-          quotaGap
+          quotaGap,
+          estimatedSubmitDurationMs: estimatedStoreSubmitDurationMs
         };
       });
   }, [candidateCountByShop, productCountByShop, runDetails, selectedShopIds, stores]);
@@ -777,10 +795,10 @@ export function OpportunityProductPrematchPage() {
             <CompactMetric
               label="可提报商品"
               value={formatNumber(candidateSummary.eligibleCount)}
-              detail={submitTargetGap ? `距店铺目标差 ${formatNumber(submitTargetGap)}` : "已满足店铺目标"}
+              detail={estimatedSubmitDurationMs ? `节流预计 ${formatDuration(estimatedSubmitDurationMs)}` : submitTargetGap ? `距店铺目标差 ${formatNumber(submitTargetGap)}` : "已满足店铺目标"}
               tone="green"
             />
-            <CompactMetric label="已提报商品" value={formatNumber(candidateSummary.submittedCount)} detail={`失败 ${formatNumber(failedSubmitCount)}`} />
+            <CompactMetric label="平台成功" value={formatNumber(candidateSummary.submittedCount)} detail={`失败 ${formatNumber(failedSubmitCount)} · 安全跳过 ${formatNumber(safetySkippedCount)} · 额度跳过 ${formatNumber(quotaExhaustedCount)}`} />
           </div>
         </div>
 
@@ -821,7 +839,7 @@ export function OpportunityProductPrematchPage() {
                         </span>
                         <span className="min-w-0 truncate px-3 font-semibold text-[13px]" title={row.shopName}>{row.shopName}</span>
                         <span className="px-2 text-center">
-                          <span className={cn("inline-flex rounded-md px-2 py-0.5 text-[12px] font-semibold", statusInfo.className)}>{statusInfo.label}</span>
+                          <span className={cn("inline-flex rounded-md px-2 py-0.5 text-[12px] font-semibold", statusInfo.className)} title={row.estimatedSubmitDurationMs ? `节流预计 ${formatDuration(row.estimatedSubmitDurationMs)}` : undefined}>{statusInfo.label}</span>
                         </span>
                         <span className="px-2 text-right font-semibold text-[#475467]">{formatNumber(row.productCount)}</span>
                         <span className="px-2 text-right font-semibold text-[#475467]">{formatNumber(row.clueCount)}</span>

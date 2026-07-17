@@ -12,6 +12,7 @@ import { cancelOpportunityPipelineSubmitTask, runOpportunityPipelineSubmitTask }
 import { fetchBusinessData } from "./businessData";
 import { fetchFundsData } from "./fundsData";
 import { fetchViolationsData } from "./violationsData";
+import { fetchStaleGoodsCleanup } from "./staleGoods";
 
 interface RunningTask {
   cancelled: boolean;
@@ -28,8 +29,20 @@ function post(channel: BroadcastChannel, message: DoudianTaskMessage) {
 }
 
 function channelResult(task: DoudianTaskRequest, result: unknown) {
-  if (task.taskType !== "violationsData" || !result || typeof result !== "object") return result;
+  if (!result || typeof result !== "object") return result;
   const record = result as Record<string, unknown>;
+  if (task.taskType === "staleGoodsScan") {
+    const candidates = Array.isArray(record.candidates) ? record.candidates : [];
+    return candidates.length ? { ...record, candidates: [], candidateCount: candidates.length, candidatesDeferred: true } : result;
+  }
+  if (task.taskType === "staleGoodsExecute") {
+    const candidates = Array.isArray(record.candidates) ? record.candidates : [];
+    const executions = Array.isArray(record.executions) ? record.executions : [];
+    return candidates.length || executions.length
+      ? { ...record, candidates: [], executions: [], candidateCount: candidates.length, executionCount: executions.length, candidatesDeferred: candidates.length > 0, executionsDeferred: executions.length > 0 }
+      : result;
+  }
+  if (task.taskType !== "violationsData") return result;
   const records = Array.isArray(record.records) ? record.records : [];
   return records.length ? { ...record, records: [], recordCount: records.length, recordsDeferred: true } : result;
 }
@@ -159,6 +172,11 @@ async function runDomainTask(channel: BroadcastChannel, operationId: string, tas
         operationId,
         ...payload
       } as unknown as Parameters<typeof fetchViolationsData>[0]);
+    } else if (task.taskType === "staleGoodsScan" || task.taskType === "staleGoodsExecute") {
+      result = await fetchStaleGoodsCleanup({
+        operationId,
+        ...payload
+      } as unknown as Parameters<typeof fetchStaleGoodsCleanup>[0]);
     } else if (task.taskType === "opportunityPipelineSubmit") {
       state.cancelCleanup = async () => {
         await cancelOpportunityPipelineSubmitTask({

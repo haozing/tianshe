@@ -36,7 +36,9 @@ import {
   fetchOpportunityReportLatest,
   listOpportunityPipelineCandidatesPage,
   listOpportunityStoreCategoryLedger,
-  fetchStaleGoodsCleanup,
+  restoreLatestStaleGoodsScan,
+  restoreStaleGoodsExecute,
+  restoreStaleGoodsScan,
   fetchViolationsDataLatest,
   listStoreLedger,
   openStoreWindow,
@@ -422,7 +424,36 @@ export async function fetchDoudianStaleGoodsCleanup(args: {
     ...(args.compassPeriod ? { compassPeriod: args.compassPeriod } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
-  return fetchStaleGoodsCleanup(nextArgs);
+  const mode = args.mode || "scan";
+  const operationId = args.operationId;
+  const dedupeKey = mode === "scan"
+    ? JSON.stringify({ mode, shopIds: [...(args.shopIds || [])].sort(), rules: args.rules || null, compassFileName: args.compassFileName || "", compassPeriod: args.compassPeriod || "", adapterVersion: nextArgs.doudianAdapter.adapter.version || "" })
+    : JSON.stringify({ mode, sourceRunId: args.sourceRunId || "", action: args.action || "", candidateIds: [...(args.candidateIds || [])].sort(), adapterVersion: nextArgs.doudianAdapter.adapter.version || "" });
+  const result = await runDoudianStoreTask({
+    taskType: mode === "scan" ? "staleGoodsScan" : "staleGoodsExecute",
+    operationId,
+    adapterVersion: nextArgs.doudianAdapter.adapter.version,
+    ruleVersion: nextArgs.doudianAdapter.scripts?.version || "",
+    metadata: { dedupeKey, replaceActive: true },
+    payload: nextArgs
+  }, 900000) as DoudianStaleGoodsCleanupResult;
+  if (mode === "scan" && result.candidatesDeferred) {
+    const restored = await restoreStaleGoodsScan(result.runId || operationId || "");
+    if (restored) return { ...result, ...restored, ok: result.ok, status: result.status, message: result.message, operationId: result.operationId || operationId } as DoudianStaleGoodsCleanupResult;
+  }
+  if (mode === "execute" && result.executionsDeferred) {
+    const restored = await restoreStaleGoodsExecute(result.runId || operationId || "");
+    if (restored) return { ...result, ...restored, ok: result.ok, status: result.status, message: result.message, operationId: result.operationId || operationId } as DoudianStaleGoodsCleanupResult;
+  }
+  return result;
+}
+
+export async function restoreDoudianStaleGoodsScan(runId?: string) {
+  return runId ? restoreStaleGoodsScan(runId) : restoreLatestStaleGoodsScan();
+}
+
+export async function restoreDoudianStaleGoodsOperations() {
+  return (await restoreDoudianTasks()).filter((record) => record.taskType === "staleGoodsScan" || record.taskType === "staleGoodsExecute");
 }
 
 export async function fetchDoudianBulkDeleteProducts(args: {
@@ -434,6 +465,7 @@ export async function fetchDoudianBulkDeleteProducts(args: {
   protectMode?: "includeSelling" | "skipSelling";
   candidateIds?: string[];
   sourceRunId?: string;
+  allowPartialScan?: boolean;
   confirmText?: string;
   operationId?: string;
   onProgress?: (progress: DoudianBulkDeleteProgress) => void;
@@ -449,6 +481,7 @@ export async function fetchDoudianBulkDeleteProducts(args: {
     ...(args.protectMode ? { protectMode: args.protectMode } : {}),
     ...(args.candidateIds?.length ? { candidateIds: args.candidateIds } : {}),
     ...(args.sourceRunId ? { sourceRunId: args.sourceRunId } : {}),
+    ...(args.allowPartialScan ? { allowPartialScan: true } : {}),
     ...(args.confirmText ? { confirmText: args.confirmText } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });

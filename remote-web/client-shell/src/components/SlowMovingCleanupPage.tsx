@@ -19,11 +19,12 @@ import {
   Workflow,
   XCircle
 } from "lucide-react";
-import { fetchDoudianStaleGoodsCleanup, listDoudianStores, selectAndParseCompassFile } from "../bridge/client";
+import { cancelDoudianStoreOperation, fetchDoudianStaleGoodsCleanup, listDoudianStores, restoreDoudianStaleGoodsOperations, restoreDoudianStaleGoodsScan, selectAndParseCompassFile } from "../bridge/client";
 import { loadDoudianAdapterPayload } from "../bridge/doudianAdapter";
+import { addDoudianProgressListener } from "../domain/doudian";
 import { STORAGE_KEY_STALE_GOODS_COLUMNS, storageGet, storageSet } from "../bridge/storage";
 import { cn } from "../lib/utils";
-import type { DoudianStaleGoodsCandidate, DoudianStaleGoodsRules, DoudianStoreStatus, DoudianStoreSummary } from "../types";
+import type { DoudianAdapterConfig, DoudianStaleGoodsCandidate, DoudianStaleGoodsRules, DoudianStoreStatus, DoudianStoreSummary } from "../types";
 
 type LoadState = "loading" | "ready" | "error";
 type CleanupState = "idle" | "loading" | "ready" | "error";
@@ -47,6 +48,9 @@ interface ScanDiagnostics {
   missingListedAt: number;
   missingAgeDate: number;
   missingMetricCount: number;
+  indeterminateProductCount: number;
+  failedStoreCount: number;
+  successfulStoreCount: number;
   sourceFailureCount: number;
   diagnosticSourceCount: number;
   truncatedStoreCount: number;
@@ -55,8 +59,24 @@ interface ScanDiagnostics {
   plannedPages: number;
   compassSourceCount: number;
   compassMatchedCount: number;
+  implicitZeroTrafficCount: number;
   compassMatchRate: number;
   sourceHealth: Array<Record<string, unknown>>;
+  stores: StoreScanDiagnostic[];
+}
+
+interface StoreScanDiagnostic {
+  shopId: string;
+  shopName: string;
+  status: string;
+  ok: boolean;
+  reason: string;
+  productCount: number;
+  compassMatchedCount: number;
+  missingMetricCount: number;
+  indeterminateProductCount: number;
+  analyzableProductCount: number;
+  candidateCount: number;
 }
 
 interface StoreOption {
@@ -700,17 +720,61 @@ function numberFromRecord(record: Record<string, unknown> | undefined, key: stri
   return Number.isFinite(value) ? value : 0;
 }
 
+function objectFromUnknown(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+const defaultDryRunActions: Record<CandidateAction, boolean> = {
+  offline: true,
+  recycle: true,
+  delete: true,
+  optimize: true
+};
+
+function staleGoodsExecutionDryRunActions(adapter: DoudianAdapterConfig): Record<CandidateAction, boolean> {
+  const stalePolicy = objectFromUnknown(objectFromUnknown(adapter.policies).staleGoodsCleanup);
+  const executePlans = objectFromUnknown(stalePolicy.executePlans);
+  const isDryRunPlan = (action: string) => {
+    const planKey = String(executePlans[action] || "").trim();
+    return !planKey || objectFromUnknown(adapter.requestPlans?.[planKey]).dryRunOnly !== false;
+  };
+  return {
+    offline: isDryRunPlan("offline"),
+    recycle: isDryRunPlan("recycle"),
+    delete: isDryRunPlan("delete") || isDryRunPlan("completeDelete"),
+    optimize: true
+  };
+}
+
 function normalizeScanDiagnostics(result?: {
   scanSummary?: Record<string, number>;
   sourceHealth?: Array<Record<string, unknown>>;
   rows?: Array<{ totalProducts?: number; candidateCount?: number }>;
   candidates?: unknown[];
+  details?: unknown;
 }): ScanDiagnostics | null {
   if (!result) return null;
   const scanSummary = result.scanSummary || {};
   const productCount = numberFromRecord(scanSummary, "productCount") ||
     (result.rows || []).reduce((sum, row) => sum + Number(row.totalProducts || 0), 0);
   const candidateCount = numberFromRecord(scanSummary, "candidateCount") || (result.candidates || []).length;
+  const stores = (Array.isArray(result.details) ? result.details : []).map((rawDetail) => {
+    const detail = objectFromUnknown(rawDetail);
+    const diagnostic = objectFromUnknown(detail.diagnostic);
+    return {
+      shopId: String(detail.shopId || ""),
+      shopName: String(detail.shopName || detail.shopId || ""),
+      status: String(detail.status || ""),
+      ok: detail.ok === true,
+      reason: String(detail.reason || ""),
+      productCount: Number(diagnostic.productCount || 0),
+      compassMatchedCount: Number(diagnostic.compassMatchedCount || 0),
+      missingMetricCount: Number(diagnostic.missingMetricCount || 0),
+      indeterminateProductCount: Number(diagnostic.indeterminateProductCount || 0),
+      analyzableProductCount: Number(diagnostic.analyzableProductCount || 0),
+      candidateCount: Number(diagnostic.candidateCount || 0)
+    };
+  });
   return {
     productCount,
     remoteTotal: numberFromRecord(scanSummary, "remoteTotal") || productCount,
@@ -720,6 +784,9 @@ function normalizeScanDiagnostics(result?: {
     missingListedAt: numberFromRecord(scanSummary, "missingListedAt"),
     missingAgeDate: numberFromRecord(scanSummary, "missingAgeDate"),
     missingMetricCount: numberFromRecord(scanSummary, "missingMetricCount"),
+    indeterminateProductCount: numberFromRecord(scanSummary, "indeterminateProductCount"),
+    failedStoreCount: numberFromRecord(scanSummary, "failedStoreCount"),
+    successfulStoreCount: numberFromRecord(scanSummary, "successfulStoreCount"),
     sourceFailureCount: numberFromRecord(scanSummary, "sourceFailureCount"),
     diagnosticSourceCount: numberFromRecord(scanSummary, "diagnosticSourceCount"),
     truncatedStoreCount: numberFromRecord(scanSummary, "truncatedStoreCount"),
@@ -728,8 +795,10 @@ function normalizeScanDiagnostics(result?: {
     plannedPages: numberFromRecord(scanSummary, "plannedPages"),
     compassSourceCount: numberFromRecord(scanSummary, "compassSourceCount"),
     compassMatchedCount: numberFromRecord(scanSummary, "compassMatchedCount"),
+    implicitZeroTrafficCount: numberFromRecord(scanSummary, "implicitZeroTrafficCount"),
     compassMatchRate: numberFromRecord(scanSummary, "compassMatchRate"),
-    sourceHealth: Array.isArray(result.sourceHealth) ? result.sourceHealth : []
+    sourceHealth: Array.isArray(result.sourceHealth) ? result.sourceHealth : [],
+    stores
   };
 }
 
@@ -738,11 +807,19 @@ function scanDiagnosticMessage(diagnostics: ScanDiagnostics | null) {
   if (diagnostics.truncatedStoreCount > 0 || diagnostics.splitRequiredStoreCount > 0) {
     return `扫描不完整：${formatNumber(Math.max(diagnostics.truncatedStoreCount, diagnostics.splitRequiredStoreCount))} 家店铺超过当前分页覆盖，请勿执行清理`;
   }
+  if (diagnostics.candidateCount > 0) {
+    const zeroFill = diagnostics.implicitZeroTrafficCount > 0 ? `，${formatNumber(diagnostics.implicitZeroTrafficCount)} 个无罗盘明细商品按零流量处理` : "";
+    const indeterminate = diagnostics.indeterminateProductCount > 0 ? `，${formatNumber(diagnostics.indeterminateProductCount)} 个商品不可判定` : "";
+    return `命中 ${formatNumber(diagnostics.candidateCount)} 个候选，已读取 ${formatNumber(diagnostics.productCount)} 个商品${zeroFill}${indeterminate}`;
+  }
+  if (diagnostics.indeterminateProductCount > 0) {
+    return `扫描部分可判定：${formatNumber(diagnostics.indeterminateProductCount)} 个商品缺少规则指标，其余商品未命中候选`;
+  }
+  if (diagnostics.failedStoreCount > 0 && diagnostics.missingMetricCount > 0) {
+    return `扫描不完整：${formatNumber(diagnostics.failedStoreCount)} 家店铺共 ${formatNumber(diagnostics.missingMetricCount)} 个商品缺少规则指标`;
+  }
   if (diagnostics.sourceFailureCount > 0) {
     return "扫描不完整：商品、罗盘或无动销来源异常，请稍后重试";
-  }
-  if (diagnostics.candidateCount > 0) {
-    return `命中 ${formatNumber(diagnostics.candidateCount)} 个候选，已读取 ${formatNumber(diagnostics.productCount)} 个商品`;
   }
   if (diagnostics.missingAgeDate > 0 && diagnostics.missingAgeDate >= diagnostics.productCount) {
     return `未命中候选：${formatNumber(diagnostics.missingAgeDate)} 个商品缺少可判断的创建/上架时间`;
@@ -759,6 +836,7 @@ function sourceHealthLabel(item: Record<string, unknown>) {
   const key = String(item.key || "");
   const status = String(item.status || "");
   const httpStatus = Number(item.httpStatus || 0);
+  if (item.ignored === true) return `${key || "来源"} 已忽略（${String(item.reason || "不适用")}）`;
   if (item.ok === true) return `${key || "来源"} 正常${status ? ` HTTP ${status}` : ""}`;
   if (item.ok === false) return `${key || "来源"} 失败${status ? ` HTTP ${status}` : ""}`;
   if (status === "ready") return `${key} 正常`;
@@ -766,6 +844,20 @@ function sourceHealthLabel(item: Record<string, unknown>) {
   if (status === "optional_failed") return `${key} 可选失败${httpStatus ? ` HTTP ${httpStatus}` : ""}`;
   if (status === "required_failed") return `${key} 必需失败${httpStatus ? ` HTTP ${httpStatus}` : ""}`;
   return `${key || "来源"} ${status || "未知"}`;
+}
+
+function storeDiagnosticReason(reason: string, status: string, ok: boolean) {
+  if (!reason) return ok ? (status === "partial" ? "部分可判定" : "已完成") : "失败";
+  const labels: Record<string, string> = {
+    "stale-goods-metrics-partial": "部分指标缺失，其余可判定",
+    "stale-goods-metrics-incomplete": "指标来源不可用",
+    "stale-goods-no-candidate": "确实无候选",
+    "stale-goods-product-list-truncated": "商品分页被截断",
+    "stale-goods-product-list-incomplete": "商品列表未完整读取",
+    "stale-goods-product-response-malformed": "商品列表格式异常",
+    "stale-goods-recommend-incomplete": "规则来源未完整读取"
+  };
+  return labels[reason] || reason;
 }
 
 function toneClass(tone?: MetricTone) {
@@ -1014,7 +1106,7 @@ function ActionTag({ action }: { action: CandidateAction }) {
   );
 }
 
-function exportCandidates(rows: CandidateRow[], selectedIds: Set<string>, adapterVersion: string, previewMode: boolean, diagnostics: ScanDiagnostics | null = null) {
+function exportCandidates(rows: CandidateRow[], selectedIds: Set<string>, adapterVersion: string, simulationMode: boolean, diagnostics: ScanDiagnostics | null = null) {
   const exportRows = rows.filter((row) => selectedIds.size ? selectedIds.has(row.id) : true);
   const header = [
     "候选快照ID",
@@ -1048,9 +1140,11 @@ function exportCandidates(rows: CandidateRow[], selectedIds: Set<string>, adapte
     "缺创建时间",
     "缺上架时间",
     "缺年龄判断时间",
+    "隐式零流量商品",
+    "失败店铺",
     "来源失败",
     "适配器版本",
-    "预览模式"
+    "演练/预览模式"
   ];
   const body = exportRows.map((row) => [
     row.candidateId || "",
@@ -1084,9 +1178,11 @@ function exportCandidates(rows: CandidateRow[], selectedIds: Set<string>, adapte
     diagnostics?.missingCreatedAt || "",
     diagnostics?.missingListedAt || "",
     diagnostics?.missingAgeDate || "",
+    diagnostics?.implicitZeroTrafficCount || "",
+    diagnostics?.failedStoreCount || "",
     diagnostics?.sourceFailureCount || "",
     adapterVersion,
-    previewMode ? "是" : "否"
+    simulationMode ? "是" : "否"
   ]);
   const diagnosticsRows = diagnostics ? [
     [],
@@ -1099,6 +1195,10 @@ function exportCandidates(rows: CandidateRow[], selectedIds: Set<string>, adapte
     ["缺上架时间", diagnostics.missingListedAt],
     ["缺年龄判断时间", diagnostics.missingAgeDate],
     ["缺规则所需指标", diagnostics.missingMetricCount],
+    ["不可判定商品", diagnostics.indeterminateProductCount],
+    ["罗盘缺行按零流量", diagnostics.implicitZeroTrafficCount],
+    ["成功店铺", diagnostics.successfulStoreCount],
+    ["失败店铺", diagnostics.failedStoreCount],
     ["来源失败", diagnostics.sourceFailureCount],
     ["诊断源", diagnostics.diagnosticSourceCount],
     ["分页截断店铺", diagnostics.truncatedStoreCount],
@@ -1174,6 +1274,7 @@ export function SlowMovingCleanupPage() {
   const [cleanupMessage, setCleanupMessage] = useState("");
   const [lastScanAt, setLastScanAt] = useState<Date>(new Date());
   const [adapterVersion, setAdapterVersion] = useState("fallback");
+  const [executionDryRunActions, setExecutionDryRunActions] = useState<Record<CandidateAction, boolean>>(defaultDryRunActions);
   const [compassFileName, setCompassFileName] = useState("");
   const [compassRows, setCompassRows] = useState<Array<Record<string, unknown>>>([]);
   const [compassPeriod, setCompassPeriod] = useState<TrafficPeriod | undefined>();
@@ -1191,13 +1292,82 @@ export function SlowMovingCleanupPage() {
   const [executingPlan, setExecutingPlan] = useState(false);
   const [scanDiagnostics, setScanDiagnostics] = useState<ScanDiagnostics | null>(null);
   const [analysisStarted, setAnalysisStarted] = useState(false);
+  const [activeOperationId, setActiveOperationId] = useState("");
+  const restoredScanRef = useRef(false);
+
+  function applyRestoredScan(restored: Awaited<ReturnType<typeof restoreDoudianStaleGoodsScan>>) {
+    const restoredDetails = Array.isArray(restored?.details) ? restored.details : [];
+    if (!restored || !["ok", "partial"].includes(String(restored.status || "")) || (!restored.candidates?.length && !restoredDetails.length)) return false;
+    const byStore = new Map(stores.map((store) => [store.id, store]));
+    const nextCandidates = restored.candidates.map((row) => normalizeRemoteCandidate(row, byStore.get(String(row.shopId))));
+    const restoredShopIds = new Set(restoredDetails.map((detail) => String(detail.shopId || "")).filter(Boolean));
+    if (restoredShopIds.size) setSelectedIds(restoredShopIds);
+    setRemoteCandidates(nextCandidates);
+    const diagnostics = normalizeScanDiagnostics(restored);
+    setScanDiagnostics(diagnostics);
+    setAnalysisStarted(true);
+    setCleanupState("ready");
+    setCleanupMessage(scanDiagnosticMessage(diagnostics) || "已恢复上次滞销扫描结果");
+    setLastScanAt(new Date(restored.updatedAt || restored.createdAt || Date.now()));
+    setSelectedCandidateIds(new Set(nextCandidates.filter((row) => row.action !== "optimize").map((row) => row.id)));
+    return true;
+  }
 
   useEffect(() => {
     void refreshStores();
     void loadDoudianAdapterPayload().then((payload) => {
       setAdapterVersion(payload.adapter.version || "fallback");
-    }).catch(() => setAdapterVersion("fallback"));
+      setExecutionDryRunActions(staleGoodsExecutionDryRunActions(payload.adapter));
+    }).catch(() => {
+      setAdapterVersion("fallback");
+      setExecutionDryRunActions(defaultDryRunActions);
+    });
   }, []);
+
+  useEffect(() => addDoudianProgressListener((event) => {
+    if (!activeOperationId || event.detail.operationId !== activeOperationId) return;
+    if (event.detail.status === "running") {
+      setCleanupMessage(event.detail.message ? `扫描进度 ${event.detail.progress}%：${event.detail.message}` : `扫描进度 ${event.detail.progress}%`);
+      return;
+    }
+    if (["succeeded", "partial"].includes(event.detail.status) && event.detail.taskType === "staleGoodsScan") {
+      void restoreDoudianStaleGoodsScan(activeOperationId).then((restored) => {
+        setActiveOperationId("");
+        applyRestoredScan(restored);
+      }).catch(() => setActiveOperationId(""));
+    } else if (["succeeded", "partial", "failed", "cancelled"].includes(event.detail.status)) {
+      setActiveOperationId("");
+      if (event.detail.status === "cancelled") {
+        setCleanupState("error");
+        setCleanupMessage("滞销任务已取消");
+      }
+    }
+  }), [activeOperationId, stores]);
+
+  useEffect(() => {
+    if (previewMode || loadState !== "ready" || restoredScanRef.current || analysisStarted) return;
+    restoredScanRef.current = true;
+    void restoreDoudianStaleGoodsOperations().then(async (operations) => {
+      const active = operations.filter((operation) => operation.status === "running" || operation.status === "created").sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0];
+      if (active) {
+        setActiveOperationId(active.operationId);
+        setAnalysisStarted(true);
+        setCleanupState("loading");
+        setCleanupMessage(`正在恢复滞销任务，当前进度 ${active.progress || 0}%`);
+        if (active.taskType === "staleGoodsScan") {
+          const partial = await restoreDoudianStaleGoodsScan(active.operationId);
+          if (partial) {
+            applyRestoredScan({ ...partial, status: "partial" });
+            setCleanupState("loading");
+            setCleanupMessage(`正在恢复滞销任务，当前进度 ${active.progress || 0}%`);
+          }
+        }
+        return;
+      }
+      const restored = await restoreDoudianStaleGoodsScan();
+      applyRestoredScan(restored);
+    }).catch(() => undefined);
+  }, [analysisStarted, loadState, previewMode, stores]);
 
   const filteredStores = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -1246,6 +1416,9 @@ export function SlowMovingCleanupPage() {
   const summary = aggregateCandidates(matchedCandidates);
   const defaultPlanAction: CandidateAction = summary.offline ? "offline" : matchedCandidates.some((row) => row.action === "recycle") ? "recycle" : "delete";
   const planRows = planOpen ? selectedCandidates : [];
+  const planDryRun = executionDryRunActions[planAction] !== false;
+  const allExecutionDryRun = (["offline", "recycle", "delete"] as CandidateAction[]).every((action) => executionDryRunActions[action] !== false);
+  const hasCompassCoverage = Boolean(scanDiagnostics && (scanDiagnostics.compassSourceCount > 0 || scanDiagnostics.implicitZeroTrafficCount > 0 || scanDiagnostics.sourceHealth.some((item) => String(item.key || "").toLowerCase().includes("compass"))));
 
   const metrics: MetricItem[] = [
     { label: "滞销候选", value: formatNumber(matchedCandidates.length), detail: `${selectedStores.length} 家店铺命中`, tone: "blue" },
@@ -1257,8 +1430,10 @@ export function SlowMovingCleanupPage() {
     { label: "库存占用", value: formatNumber(summary.stock), detail: "候选商品库存", tone: "blue" },
     {
       label: "罗盘匹配率",
-      value: scanDiagnostics?.compassSourceCount ? formatPercent(scanDiagnostics.compassMatchRate) : "-",
-      detail: scanDiagnostics?.compassSourceCount ? `${formatNumber(scanDiagnostics.compassMatchedCount)} / ${formatNumber(scanDiagnostics.productCount)} 个商品` : "本次未使用罗盘明细",
+      value: hasCompassCoverage ? formatPercent(scanDiagnostics?.compassMatchRate || 0) : "-",
+      detail: hasCompassCoverage && scanDiagnostics
+        ? `${formatNumber(scanDiagnostics.compassMatchedCount)} 个直接匹配，${formatNumber(scanDiagnostics.implicitZeroTrafficCount)} 个按零流量，${formatNumber(scanDiagnostics.indeterminateProductCount)} 个不可判定`
+        : "本次未使用罗盘明细",
       tone: "green"
     }
   ];
@@ -1321,15 +1496,17 @@ export function SlowMovingCleanupPage() {
     setCleanupMessage(`正在完整读取商品并合并${trafficPeriodOptions.find((item) => item.key === rules.trafficPeriod)?.label || "所选周期"}罗盘指标`);
     setLastScanAt(new Date());
     if (!previewMode) {
+      const operationId = `stale-scan-${Date.now()}`;
+      setActiveOperationId(operationId);
       try {
         const result = await fetchDoudianStaleGoodsCleanup({
           mode: "scan",
-        shopIds: [...selectedIds],
-        rules: toRemoteRules(rules, productSource, importedProductIds),
-        compassFileName,
-        compassRows,
-        compassPeriod,
-        operationId: `stale-scan-${Date.now()}`,
+          shopIds: [...selectedIds],
+          rules: toRemoteRules(rules, productSource, importedProductIds),
+          compassFileName,
+          compassRows,
+          compassPeriod,
+          operationId,
           forceAdapter: true
         });
         if (!result.ok && result.status !== "partial") throw new Error(result.message || "滞销商品扫描失败");
@@ -1350,6 +1527,8 @@ export function SlowMovingCleanupPage() {
         setSelectedCandidateIds(new Set());
         setCleanupState("error");
         setCleanupMessage(message);
+      } finally {
+        setActiveOperationId("");
       }
       return;
     }
@@ -1359,6 +1538,16 @@ export function SlowMovingCleanupPage() {
       setScanDiagnostics(null);
       setSelectedCandidateIds(new Set(matchedCandidates.filter((row) => row.action !== "optimize").map((row) => row.id)));
     }, 260);
+  }
+
+  async function cancelActiveOperation() {
+    if (!activeOperationId) return;
+    const operationId = activeOperationId;
+    setCleanupMessage("正在取消滞销扫描任务");
+    await cancelDoudianStoreOperation(operationId).catch(() => undefined);
+    setActiveOperationId("");
+    setCleanupState("error");
+    setCleanupMessage("滞销扫描任务已取消，已完成的店铺进度已保存");
   }
 
   function resetRules() {
@@ -1474,7 +1663,9 @@ export function SlowMovingCleanupPage() {
     setPlanOpen(true);
     setConfirmInput("");
     setCleanupState("ready");
-    setCleanupMessage(`${actionCopy[action].label}计划已生成，需二次确认后才能执行`);
+    setCleanupMessage(executionDryRunActions[action] !== false
+      ? `${actionCopy[action].label}演练计划已生成，本次不会向平台提交`
+      : `${actionCopy[action].label}计划已生成，需二次确认后才能执行`);
     const next = new Set(matchedCandidates.filter((row) => row.action === action).map((row) => row.id));
     setSelectedCandidateIds(next);
   }
@@ -1490,6 +1681,8 @@ export function SlowMovingCleanupPage() {
       setExecutingPlan(true);
       setCleanupState("loading");
       setCleanupMessage("正在提交清理计划");
+      const operationId = `stale-exec-${Date.now()}`;
+      setActiveOperationId(operationId);
       try {
         const result = await fetchDoudianStaleGoodsCleanup({
           mode: "execute",
@@ -1497,7 +1690,7 @@ export function SlowMovingCleanupPage() {
           candidateIds: executable.map((row) => row.id),
           confirmText: confirmInput,
           sourceRunId: executable.find((row) => row.sourceRunId)?.sourceRunId,
-          operationId: `stale-exec-${Date.now()}`,
+          operationId,
           forceAdapter: true
         });
         if (!result.ok && result.status !== "partial") throw new Error(result.message || "滞销商品清理执行失败");
@@ -1511,6 +1704,7 @@ export function SlowMovingCleanupPage() {
         setCleanupMessage(message);
       } finally {
         setExecutingPlan(false);
+        setActiveOperationId("");
       }
       return;
     }
@@ -1706,6 +1900,7 @@ export function SlowMovingCleanupPage() {
             <span className="rounded-md border border-[#dbe5f2] bg-white px-2 py-1 text-[12px] font-medium text-[#667085]">{trafficPeriodLabel}</span>
             <span className="rounded-md border border-[#dbe5f2] bg-white px-2 py-1 text-[12px] font-medium text-[#667085]">{perStoreLimitLabel}</span>
             {previewMode ? <span className="rounded-md border border-[#ffdca8] bg-[#fff7e8] px-2 py-1 text-[12px] font-semibold text-[#b54708]">设计预览</span> : null}
+            {!previewMode && allExecutionDryRun ? <span className="rounded-md border border-[#ffdca8] bg-[#fff7e8] px-2 py-1 text-[12px] font-semibold text-[#b54708]">演练模式</span> : null}
             {cleanupState === "loading" ? (
               <span className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#667085]">
                 <Loader2 className="size-[13px] animate-spin" strokeWidth={2} />
@@ -1716,6 +1911,12 @@ export function SlowMovingCleanupPage() {
                 <AlertTriangle className="size-[13px] shrink-0" strokeWidth={2} />
                 <span className="truncate">{cleanupMessage}</span>
               </span>
+            ) : null}
+            {activeOperationId ? (
+              <button className="inline-flex h-7 items-center gap-1 rounded-md border border-[#ffd1d1] bg-[#fff1f0] px-2 text-[12px] font-semibold text-[#b42318]" type="button" onClick={() => void cancelActiveOperation()}>
+                <XCircle className="size-[13px]" strokeWidth={2} />
+                取消任务
+              </button>
             ) : null}
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -1732,13 +1933,13 @@ export function SlowMovingCleanupPage() {
                   <SlidersHorizontal className="size-[14px]" strokeWidth={2} />
                   修改规则
                 </button>
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" disabled={!matchedCandidates.length && !scanDiagnostics} onClick={() => exportCandidates(matchedCandidates, selectedCandidateIds, adapterVersion, previewMode, scanDiagnostics)}>
+                <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" disabled={!matchedCandidates.length && !scanDiagnostics} onClick={() => exportCandidates(matchedCandidates, selectedCandidateIds, adapterVersion, previewMode || allExecutionDryRun, scanDiagnostics)}>
                   <Download className="size-[14px]" strokeWidth={2} />
                   导出清单
                 </button>
                 <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!matchedCandidates.some((row) => row.action !== "optimize")} onClick={() => buildPlan(defaultPlanAction)}>
                   <Workflow className="size-[14px]" strokeWidth={2} />
-                  生成计划
+                  {executionDryRunActions[defaultPlanAction] !== false ? "生成演练" : "生成计划"}
                 </button>
               </>
             ) : (
@@ -1860,6 +2061,46 @@ export function SlowMovingCleanupPage() {
           </div>
         </section>
 
+        {scanDiagnostics?.stores.length ? (
+          <section className="overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+            <div className="flex items-center justify-between border-b border-[#edf1f6] px-3.5 py-3">
+              <div className="flex items-center gap-2">
+                <Store className="size-[15px] text-brand-navy" strokeWidth={2.2} />
+                <strong className="text-[14px] font-semibold text-[#101828]">店铺扫描诊断</strong>
+              </div>
+              <span className="text-[12px] text-[#667085]">可信候选与不可判定商品分开处理</span>
+            </div>
+            <div className="max-h-[220px] overflow-auto">
+              <table className="w-full min-w-[900px] border-separate border-spacing-0 text-left text-[12px]">
+                <thead className="sticky top-0 z-10 bg-[#fbfcff] text-[#344054] shadow-[inset_0_-1px_0_#edf1f6]">
+                  <tr className="h-9">
+                    <th className="px-3 font-semibold">店铺</th>
+                    <th className="px-3 font-semibold">商品数</th>
+                    <th className="px-3 font-semibold">罗盘匹配</th>
+                    <th className="px-3 font-semibold">缺指标</th>
+                    <th className="px-3 font-semibold">可判定</th>
+                    <th className="px-3 font-semibold">候选</th>
+                    <th className="px-3 font-semibold">结果</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#edf1f6]">
+                  {scanDiagnostics.stores.map((store) => (
+                    <tr className="h-10" key={store.shopId}>
+                      <td className="max-w-[280px] truncate px-3 font-medium text-[#344054]" title={store.shopName}>{store.shopName || store.shopId}</td>
+                      <td className="px-3 text-[#667085]">{formatNumber(store.productCount)}</td>
+                      <td className="px-3 text-[#667085]">{formatNumber(store.compassMatchedCount)}</td>
+                      <td className={cn("px-3", store.indeterminateProductCount ? "font-semibold text-[#b54708]" : "text-[#667085]")}>{formatNumber(store.indeterminateProductCount || store.missingMetricCount)}</td>
+                      <td className="px-3 text-[#667085]">{formatNumber(store.analyzableProductCount)}</td>
+                      <td className="px-3 font-semibold text-[#344054]">{formatNumber(store.candidateCount)}</td>
+                      <td className={cn("px-3", store.ok ? store.status === "partial" ? "text-[#b54708]" : "text-[#067647]" : "text-[#b42318]")}>{storeDiagnosticReason(store.reason, store.status, store.ok)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
+
         <section className="grid min-h-0 grid-rows-[44px_minmax(0,1fr)_46px] overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
           <div className="flex items-center justify-between gap-3 border-b border-[#edf1f6] px-3.5">
             <div className="flex min-w-0 items-center gap-2">
@@ -1945,8 +2186,8 @@ export function SlowMovingCleanupPage() {
                         <span className="grid size-14 place-items-center rounded-full bg-brand-foxSoft text-brand-fox">
                           {cleanupState === "loading" ? <Loader2 className="size-7 animate-spin" strokeWidth={2.2} /> : <PackageSearch className="size-7" strokeWidth={2.2} />}
                         </span>
-                        <strong className="text-[14px] text-[#344054]">{cleanupState === "loading" ? "正在计算候选" : "暂无滞销候选"}</strong>
-                        <span className="text-[13px] leading-6">可返回修改店铺、清理设置、动作或风险筛选后重新分析。</span>
+                         <strong className="text-[14px] text-[#344054]">{cleanupState === "loading" ? "正在计算候选" : scanDiagnostics?.indeterminateProductCount ? "部分商品不可判定" : "暂无滞销候选"}</strong>
+                         <span className="text-[13px] leading-6">{scanDiagnostics?.indeterminateProductCount ? `有 ${formatNumber(scanDiagnostics.indeterminateProductCount)} 个商品缺少规则指标，未参与候选判断。` : "可返回修改店铺、清理设置、动作或风险筛选后重新分析。"}</span>
                       </div>
                     </td>
                   </tr>
@@ -1980,10 +2221,12 @@ export function SlowMovingCleanupPage() {
               <div className="flex items-center gap-2">
                 <ShieldAlert className="size-[17px] text-[#b54708]" strokeWidth={2.2} />
                 <strong className="text-[14px] text-[#101828]">执行计划确认</strong>
-                {previewMode ? <CompactTag label="真实执行待接入" className="border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" /> : null}
+                {previewMode ? <CompactTag label="真实执行待接入" className="border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" /> : planDryRun ? <CompactTag label="仅本地演练" className="border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" /> : null}
               </div>
               <p className="m-0 mt-1 text-[12px] leading-5 text-[#667085]">
-                当前计划包含 {planRows.length} 个商品。彻底删除不可恢复，执行前请先导出清单并复核店铺登录状态。
+                {planDryRun
+                  ? `当前演练包含 ${planRows.length} 个商品，不会向平台提交下架或删除请求。`
+                  : `当前计划包含 ${planRows.length} 个商品。彻底删除不可恢复，执行前请先导出清单并复核店铺登录状态。`}
               </p>
             </div>
             <button className="grid size-7 shrink-0 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054]" type="button" aria-label="关闭执行计划" onClick={() => setPlanOpen(false)}>
@@ -2013,7 +2256,7 @@ export function SlowMovingCleanupPage() {
             />
             <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white disabled:opacity-50" type="button" disabled={executingPlan || !planRows.length || confirmInput !== "确认清理"} onClick={() => void confirmExecution()}>
               <Check className="size-[14px]" strokeWidth={2.2} />
-              确认执行
+              {planDryRun ? "确认演练" : "确认执行"}
             </button>
           </div>
         </div>

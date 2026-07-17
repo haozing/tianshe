@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.17.store-login-silent-v1",
+  "version": "2026.07.17.bulk-delete-safety-v1",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -34,7 +34,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "f500a9f",
-    "buildTime": "2026-07-17T02:17:51.511Z"
+    "gitCommit": "ab96b03-dirty",
+    "buildTime": "2026-07-17T08:47:54.614Z"
   }
 }

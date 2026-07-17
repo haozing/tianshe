@@ -2405,6 +2405,39 @@ function recordMutationResults(args = {}) {
   }
 }
 
+function summarizeOpportunityRunMutations(args = {}) {
+  const database = ensureDb();
+  const runId = normalizeString(args.runId || args.operationId);
+  if (!runId) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Opportunity mutation summary requires runId");
+  const prefix = `catalog-mutation:opportunity-submit:${runId}:`;
+  const rows = database.prepare(`
+    SELECT shop_id, status, result_json
+    FROM catalog_mutations
+    WHERE substr(mutation_key, 1, length(?)) = ?
+  `).all(prefix, prefix);
+  const empty = () => ({ acknowledged: 0, failed: 0, skipped: 0, safetySkipped: 0, unknown: 0, confirmed: 0, total: 0 });
+  const totals = empty();
+  const byShop = {};
+  for (const row of rows) {
+    const shopId = normalizeString(row.shop_id);
+    const summary = byShop[shopId] || (byShop[shopId] = empty());
+    const status = normalizeMutationStatus(row.status, "unknown");
+    const result = decodeJson(row.result_json, {});
+    const diagnostic = result && typeof result.diagnostic === "object" ? result.diagnostic : {};
+    const safetySkipped = status === "skipped" && (
+      diagnostic.safetySkipped === true ||
+      normalizeString(result.message).toLowerCase().includes("live lookup did not find product")
+    );
+    for (const target of [totals, summary]) {
+      target.total += 1;
+      if (Object.prototype.hasOwnProperty.call(target, status)) target[status] += 1;
+      else target.unknown += 1;
+      if (safetySkipped) target.safetySkipped += 1;
+    }
+  }
+  return { ok: true, runId, ...totals, byShop };
+}
+
 function invalidateCoverageKeys(database, coverageKeys, reason, ts = nowIso()) {
   const keys = Array.isArray(coverageKeys) ? [...new Set(coverageKeys.map((key) => normalizeString(key)).filter(Boolean))] : [];
   let changed = 0;
@@ -2668,6 +2701,7 @@ function handle(method, args = {}) {
     case "catalog.getProductsByIds": return getProductsByIds(args);
     case "catalog.recordLiveObservations": return recordLiveObservations(args);
     case "catalog.recordMutationResults": return recordMutationResults(args);
+    case "catalog.summarizeOpportunityRunMutations": return summarizeOpportunityRunMutations(args);
     case "catalog.confirmMutations": return confirmMutations(args);
     case "catalog.invalidateCoverage": return invalidateCoverage(args);
     case "features.saveStaleRun": return saveFeatureRun(args, args.mode === "execute" ? "stale_execute_runs" : "stale_scan_runs");
