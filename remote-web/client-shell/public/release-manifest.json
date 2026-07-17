@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "releaseId": "2026.07.16.business-funds-quality-v2",
-  "buildTime": "2026-07-16T11:40:30.702Z",
+  "buildTime": "2026-07-17T01:56:13.671Z",
   "entry": {
     "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
   },
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "63679be4ebf4cbf3e233baffe3aca8108d275de44693ba14b811f13d84cbbd60"
+      "sha256": "780979cafe37e13d64bdc3d510e80a1385e34c9f28ea821c2d01f307fb219986"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,7 +36,7 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "579e6ac5bb463e3097d6de234377d6710d72ae8f29be5561cf92f71504db3b5c"
+      "sha256": "c6c2e5d1ca9d2f1dee0d1844abca9d459914cb53d8cf903ffe53c74fa02190bb"
     },
     {
       "path": "new-remote-web/styles.css",
@@ -71,7 +71,7 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "d1ce37e7655113cddac5f34103d272c57000175fe9be40d7846465a8528f5879"
+      "sha256": "f8146603f9a14d937d3c5efac704f2c0974a39b7010d5fc34985c1b4b29f8671"
     },
     {
       "path": "new-remote-web/config/doudian-adapter.json",
@@ -85,7 +85,7 @@
       "type": "update-notes",
       "cache": "no-cache",
       "required": true,
-      "sha256": "4f9e9254e8986943a35bad80c5ab486ebc0578a746b6bd73bfde4346c8e1a5d6"
+      "sha256": "4cb08caa54fb97742077d5f0b69c674543396a3dc7b14f673066af83cdf7d1dc"
     },
     {
       "path": "new-remote-web/config/invalid-config.json",
@@ -120,7 +120,7 @@
     "schemaVersion": 1,
     "algorithm": "ed25519",
     "keyId": "chihu-remote-web-ed25519-2026-07",
-    "payloadSha256": "96516678ddaf68cc4d7439a874bf4a0ad11a5cd67072dd9bb4ea4bc736cae929",
-    "value": "u2nfJ5+RjgA3T+NGsuwlUXeHlWUu+lwWsTlv5qoMPj4vhJJXKPK5sVYuP34G1DOLoXu98vPkYdP6kCA2S1sACw=="
+    "payloadSha256": "8d601c4092683637ce078864b5252a2dd6abb2eee2b5e739a4cd69716b9175db",
+    "value": "U9/nWz0tS67dEOo83YqW0irOl8MLgJgiQJQ5rRuSUvsM23E/jI5QGZrRuRTYwfWGcczQoUfjUOjlpeXPpHAfCw=="
   }
 }
