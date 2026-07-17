@@ -65,7 +65,8 @@ interface ViolationRecord {
   shopId: string;
   shopName: string;
   group: string;
-  objectType: "商品" | "店铺" | "订单" | "内容";
+  objectType: string;
+  objectId: string;
   objectName: string;
   productId: string;
   reason: string;
@@ -94,6 +95,8 @@ type ViolationRow = {
   truncated?: boolean;
   fetchedAt?: string;
   remoteTotal?: number;
+  sourceTotal?: number;
+  filteredTotal?: number;
 } & Record<ViolationMetricKey, number>;
 
 interface ViolationsCapabilities {
@@ -122,6 +125,7 @@ interface DataColumn {
 
 interface RemoteViolationsFieldSchema {
   version?: string;
+  unavailableMetrics?: string[];
   columns?: Array<{
     key?: string;
     label?: string;
@@ -251,6 +255,7 @@ const sampleRecords: ViolationRecord[] = [
     shopName: "赤狐样例店 A",
     group: "华南组",
     objectType: "商品",
+    objectId: "371900024815",
     objectName: "夏季速干防晒衣",
     productId: "371900024815",
     reason: "商品信息不一致",
@@ -269,6 +274,7 @@ const sampleRecords: ViolationRecord[] = [
     shopName: "赤狐样例店 A",
     group: "华南组",
     objectType: "商品",
+    objectId: "371900024822",
     objectName: "儿童运动鞋",
     productId: "371900024822",
     reason: "夸大宣传",
@@ -287,6 +293,7 @@ const sampleRecords: ViolationRecord[] = [
     shopName: "赤狐样例店 B",
     group: "华东组",
     objectType: "店铺",
+    objectId: "preview-1002",
     objectName: "售后服务体验",
     productId: "",
     reason: "发货履约异常",
@@ -305,6 +312,7 @@ const sampleRecords: ViolationRecord[] = [
     shopName: "赤狐样例店 B",
     group: "华东组",
     objectType: "商品",
+    objectId: "371900024866",
     objectName: "厨房收纳架",
     productId: "371900024866",
     reason: "类目错放",
@@ -323,6 +331,7 @@ const sampleRecords: ViolationRecord[] = [
     shopName: "赤狐样例店 C",
     group: "待复核",
     objectType: "商品",
+    objectId: "371900024899",
     objectName: "美妆套装",
     productId: "371900024899",
     reason: "资质材料缺失",
@@ -552,7 +561,8 @@ function normalizeProcessStatus(value: unknown): ViolationRecord["processStatus"
 }
 
 function normalizeObjectType(value: unknown): ViolationRecord["objectType"] {
-  return value === "商品" || value === "店铺" || value === "订单" || value === "内容" ? value : "店铺";
+  const next = String(value || "").trim();
+  return next || "未知";
 }
 
 function normalizeProductStatus(value: unknown): ViolationRecord["productStatus"] {
@@ -577,6 +587,8 @@ function rowFromRemote(row: DoudianViolationsDataRow, store?: StoreOption, detai
     truncated: row.truncated === true,
     fetchedAt: String(row.fetchedAt || ""),
     remoteTotal: row.remoteTotal === undefined ? undefined : numberValue(row.remoteTotal),
+    sourceTotal: row.sourceTotal === undefined ? undefined : numberValue(row.sourceTotal),
+    filteredTotal: row.filteredTotal === undefined ? undefined : numberValue(row.filteredTotal),
     ...emptyMetrics()
   };
   for (const key of violationMetricKeys) next[key] = numberValue(row[key]);
@@ -586,7 +598,7 @@ function rowFromRemote(row: DoudianViolationsDataRow, store?: StoreOption, detai
 function recordFromRemote(record: DoudianViolationRecord): ViolationRecord {
   const fallbackId = [
     record.shopId || "shop",
-    record.productId || "no-product",
+    record.objectId || record.productId || "no-object",
     record.reason || record.objectName || "violation",
     record.dueAt || "no-due"
   ].map((item) => String(item).replace(/\s+/g, "_").slice(0, 48)).join("-");
@@ -596,6 +608,7 @@ function recordFromRemote(record: DoudianViolationRecord): ViolationRecord {
     shopName: String(record.shopName || ""),
     group: String(record.group || "未分组"),
     objectType: normalizeObjectType(record.objectType),
+    objectId: String(record.objectId || record.productId || ""),
     objectName: String(record.objectName || "-"),
     productId: String(record.productId || ""),
     reason: String(record.reason || "违规原因待确认"),
@@ -712,11 +725,11 @@ function exportRows(
   records: ViolationRecord[],
   columns: DataColumn[],
   details: DoudianRunDetail[],
-  meta: { adapterVersion: string; fieldSchemaVersion: string; requestPlanHash: string; productLinkageVersion: string; preview: boolean; productAssociation: boolean }
+  meta: { adapterVersion: string; fieldSchemaVersion: string; requestPlanHash: string; productLinkageVersion: string; preview: boolean; productAssociation: boolean; unavailableMetrics: ReadonlySet<ViolationMetricKey> }
 ) {
   const exportColumns = columns.filter((column) => column.export !== false);
   const detailById = new Map(details.map((detail) => [String(detail.shopId || ""), detail]));
-  const header = ["店铺名称", "店铺ID", "分组", "状态", "同步状态", "覆盖状态", "完整", "已截断", "远端总数", "抓取时间", "同步消息", "adapterVersion", "fieldSchemaVersion", "requestPlanHash", "productLinkageVersion", ...exportColumns.map((column) => column.label)];
+  const header = ["店铺名称", "店铺ID", "分组", "状态", "同步状态", "覆盖状态", "完整", "已截断", "源记录总数", "筛选后记录数", "抓取时间", "同步消息", "adapterVersion", "fieldSchemaVersion", "requestPlanHash", "productLinkageVersion", ...exportColumns.map((column) => column.label)];
   const rowBody = rows.map((row) => [
     row.shopName,
     row.shopId,
@@ -726,20 +739,22 @@ function exportRows(
     row.coverageStatus || "not_queried",
     row.complete === true ? "是" : "否",
     row.truncated === true ? "是" : "否",
-    row.remoteTotal ?? "",
+    row.sourceTotal ?? row.remoteTotal ?? "",
+    row.filteredTotal ?? row.totalRecords,
     row.fetchedAt || "",
     detailById.get(row.shopId)?.message || row.lastMessage || "",
     meta.adapterVersion,
     meta.fieldSchemaVersion,
     meta.requestPlanHash,
     meta.productLinkageVersion,
-    ...exportColumns.map((column) => formatColumnValue(row[column.key], column.format))
+    ...exportColumns.map((column) => meta.unavailableMetrics.has(column.key) ? "暂不可用" : formatColumnValue(row[column.key], column.format))
   ]);
-  const detailHeader = ["违规ID", "店铺名称", "处罚对象", "商品ID", "违规原因", "违规时间", "创建时间", "风险等级", "处理状态", ...(meta.productAssociation ? ["商品状态", "关联状态"] : []), "建议动作", "处理时限", "处罚金额", "失败原因", "adapterVersion", "fieldSchemaVersion", "requestPlanHash", "productLinkageVersion"];
+  const detailHeader = ["违规ID", "店铺名称", "处罚对象", "处罚对象ID", "商品ID", "违规原因", "违规时间", "创建时间", "风险等级", "处理状态", ...(meta.productAssociation ? ["商品状态", "关联状态"] : []), "建议动作", "处理时限", "处罚金额", "失败原因", "adapterVersion", "fieldSchemaVersion", "requestPlanHash", "productLinkageVersion"];
   const detailBody = records.map((record) => [
     record.id,
     record.shopName,
     `${record.objectType} / ${record.objectName}`,
+    record.objectId || "-",
     record.productId || "-",
     record.reason,
     record.violationAt || "",
@@ -748,8 +763,8 @@ function exportRows(
     processCopy[record.processStatus].label,
     ...(meta.productAssociation ? [record.productStatus, record.associationStatus || ""] : []),
     record.action,
-    record.dueAt,
-    formatMoney(record.penaltyAmount),
+    meta.unavailableMetrics.has("dueSoonCount") ? "暂不可用" : record.dueAt,
+    meta.unavailableMetrics.has("penaltyAmount") ? "暂不可用" : formatMoney(record.penaltyAmount),
     record.failureReason,
     meta.adapterVersion,
     meta.fieldSchemaVersion,
@@ -1045,13 +1060,17 @@ export function ViolationsPage() {
     });
   }, [processFilter, records, selectedIds, severityFilter]);
 
+  const unavailableMetrics = useMemo(() => new Set(
+    (Array.isArray(fieldSchema.unavailableMetrics) ? fieldSchema.unavailableMetrics : [])
+      .filter((key): key is ViolationMetricKey => violationMetricKeySet.has(key))
+  ), [fieldSchema]);
   const schemaColumns = useMemo(() => normalizeRemoteColumns(fieldSchema).filter((column) => capabilities.productAssociation || !productMetricKeys.has(column.key)), [capabilities.productAssociation, fieldSchema]);
   const columnStorageKey = violationsColumnStorageKey(fieldSchema.version || fieldSchemaVersion);
   const visibleColumns = useMemo(() => {
     const next = schemaColumns.filter((column) => visibleColumnKeys.has(column.key));
     return next.length ? next : schemaColumns;
   }, [schemaColumns, visibleColumnKeys]);
-  const sortOptions = useMemo(() => normalizeRemoteSortOptions(fieldSchema), [fieldSchema]);
+  const sortOptions = useMemo(() => normalizeRemoteSortOptions(fieldSchema).filter((option) => !unavailableMetrics.has(option.key)), [fieldSchema, unavailableMetrics]);
   const selectedSort = sortOptions.find((option) => option.label === sortKey) || sortOptions[0];
 
   const sortedRecords = useMemo(() => {
@@ -1079,13 +1098,17 @@ export function ViolationsPage() {
         complete: remote.complete,
         truncated: remote.truncated,
         fetchedAt: remote.fetchedAt,
-        remoteTotal: remote.remoteTotal
+        remoteTotal: remote.remoteTotal,
+        sourceTotal: remote.sourceTotal,
+        filteredTotal: remote.filteredTotal
       } : row;
     });
     const direction = selectedSort?.direction === "asc" ? 1 : -1;
     return calculated.sort((left, right) => ((left[selectedSort?.key || "pendingCount"] || 0) - (right[selectedSort?.key || "pendingCount"] || 0)) * direction || left.shopName.localeCompare(right.shopName, "zh-CN"));
   }, [filteredRecords, selectedSort?.direction, selectedSort?.key, selectedStores, storeRows]);
   const totals = aggregateRows(rows);
+  const sourceRecordTotal = rows.reduce((sum, row) => sum + Number(row.sourceTotal ?? row.remoteTotal ?? row.totalRecords), 0);
+  const dateFilteredRecordTotal = rows.reduce((sum, row) => sum + Number(row.filteredTotal ?? row.totalRecords), 0);
   const failedStoreCount = rows.filter((row) => row.ok === false).length;
   const truncatedStoreCount = rows.filter((row) => row.truncated === true).length;
   const detailPageCount = Math.max(1, Math.ceil(sortedRecords.length / DETAIL_PAGE_SIZE));
@@ -1099,7 +1122,7 @@ export function ViolationsPage() {
   const tableMinWidth = Math.max(980, 260 + visibleColumns.length * 112);
   const shopColumnWidth = 260;
   const riskStoreCount = rows.filter((row) => row.pendingCount || row.highRiskCount || row.overdueCount || row.failedCount).length;
-  const selectedRowsAllEmpty = rows.length > 0 && rows.every((row) => row.totalRecords === 0);
+  const selectedDateRangeEmpty = rows.length > 0 && dateFilteredRecordTotal === 0;
   const showOperationColumn = capabilities.platformNavigation;
   const detailColSpan = 8 + Number(capabilities.productAssociation) + Number(showOperationColumn);
   const summarySchema = useMemo(() => normalizeRemoteSummary(fieldSchema).filter((item) => capabilities.productAssociation || !productMetricKeys.has(item.key as ViolationMetricKey)), [capabilities.productAssociation, fieldSchema]);
@@ -1109,10 +1132,12 @@ export function ViolationsPage() {
     let detail = item.detail || "";
     if (key === "totalRecords") detail = `${rows.length} 家店铺`;
     if (key === "dueSoonCount") detail = "24 小时内到期";
-    const alertingTone = totals[key] > 0 ? item.tone : item.tone === "danger" || item.tone === "warning" ? undefined : item.tone;
+    const unavailable = unavailableMetrics.has(key);
+    if (unavailable) detail = "当前数据源未覆盖";
+    const alertingTone = unavailable ? undefined : totals[key] > 0 ? item.tone : item.tone === "danger" || item.tone === "warning" ? undefined : item.tone;
     return {
       label: item.label || key,
-      value: formatColumnValue(totals[key], format),
+      value: unavailable ? "暂不可用" : formatColumnValue(totals[key], format),
       detail,
       tone: alertingTone
     };
@@ -1133,8 +1158,8 @@ export function ViolationsPage() {
         ? `${formatNumber(totals.failedCount)} 条失败日志`
         : totals.pendingCount
           ? `${formatNumber(totals.pendingCount)} 条待处理`
-          : selectedRowsAllEmpty && violationState === "ready" && !previewMode
-            ? "暂无违规记录"
+          : selectedDateRangeEmpty && violationState === "ready" && !previewMode
+            ? datePreset === "全部" ? "暂无违规记录" : "所选时间范围内暂无违规记录"
             : "";
   const warningDetail = failedStoreCount || truncatedStoreCount
     ? violationMessage || "部分店铺未完成全量抓取，请重试后再据此执行治理动作。"
@@ -1144,7 +1169,9 @@ export function ViolationsPage() {
       ? "违规列表失败、商品查询异常、商品处理失败会进入失败日志。"
       : totals.pendingCount
         ? "按小尊宝旧逻辑，待处理项需要结合商品状态判断治理动作。"
-        : violationMessage;
+        : selectedDateRangeEmpty && datePreset !== "全部"
+          ? `已获取 ${formatNumber(sourceRecordTotal)} 条源记录，所选时间范围内 ${formatNumber(dateFilteredRecordTotal)} 条。`
+          : violationMessage;
 
   function toggleColumn(key: ViolationMetricKey) {
     setVisibleColumnKeys((current) => {
@@ -1301,7 +1328,7 @@ export function ViolationsPage() {
                 <CircleStop className="size-[15px]" strokeWidth={2} />
               </button>
             ) : null}
-            <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!rows.length} onClick={() => exportRows(rows, sortedRecords, visibleColumns, violationDetails, { adapterVersion, fieldSchemaVersion, requestPlanHash, productLinkageVersion, preview: previewMode, productAssociation: capabilities.productAssociation })}>
+            <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!rows.length} onClick={() => exportRows(rows, sortedRecords, visibleColumns, violationDetails, { adapterVersion, fieldSchemaVersion, requestPlanHash, productLinkageVersion, preview: previewMode, productAssociation: capabilities.productAssociation, unavailableMetrics })}>
               <Download className="size-[14px]" strokeWidth={2} />
               导出日志
             </button>
@@ -1387,10 +1414,11 @@ export function ViolationsPage() {
                         </div>
                       </td>
                       {visibleColumns.map((column) => {
-                        const resolvedTone = typeof column.tone === "function" ? column.tone(row) : column.tone;
+                        const unavailable = unavailableMetrics.has(column.key);
+                        const resolvedTone = unavailable ? undefined : typeof column.tone === "function" ? column.tone(row) : column.tone;
                         return (
                           <td className={cn("whitespace-nowrap px-3", toneClass(resolvedTone), resolvedTone ? "font-semibold" : "")} key={column.key}>
-                            {formatColumnValue(row[column.key], column.format)}
+                            {unavailable ? "暂不可用" : formatColumnValue(row[column.key], column.format)}
                           </td>
                         );
                       })}
@@ -1444,7 +1472,7 @@ export function ViolationsPage() {
                       </td>
                       <td className="px-3">
                         <div className="max-w-[180px] truncate font-semibold text-[#1d2939]" title={record.objectName}>{record.objectType}：{record.objectName}</div>
-                        <div className="font-mono text-[11px] text-[#667085]">{record.productId || "-"}</div>
+                        <div className="font-mono text-[11px] text-[#667085]">{record.objectId || record.productId || "-"}</div>
                       </td>
                       <td className="max-w-[180px] truncate px-3 font-medium text-[#344054]" title={record.reason}>{record.reason}</td>
                       <td className="px-3"><CompactTag label={severityCopy[record.severity].label} className={severityCopy[record.severity].className} /></td>
@@ -1472,7 +1500,7 @@ export function ViolationsPage() {
                           <span className="grid size-12 place-items-center rounded-full bg-brand-foxSoft text-brand-fox">
                             <Filter className="size-6" strokeWidth={2.2} />
                           </span>
-                          <strong className="text-[14px] text-[#344054]">暂无违规记录</strong>
+                          <strong className="text-[14px] text-[#344054]">{selectedDateRangeEmpty && datePreset !== "全部" ? "所选时间范围内暂无违规记录" : "暂无符合条件的违规记录"}</strong>
                           <span className="text-[13px] leading-6">可调整店铺、风险等级、处理状态或时间范围后重新查询。</span>
                         </div>
                       </td>
@@ -1501,7 +1529,7 @@ export function ViolationsPage() {
             </span>
             <span className="inline-flex items-center gap-2">
               <Clock3 className="size-[14px]" strokeWidth={2} />
-              即将超时 {formatNumber(totals.dueSoonCount)}
+              即将超时 {unavailableMetrics.has("dueSoonCount") ? "暂不可用" : formatNumber(totals.dueSoonCount)}
               <AlertTriangle className="ml-2 size-[14px]" strokeWidth={2} />
               高危 {formatNumber(totals.highRiskCount)}
               <FileWarning className="ml-2 size-[14px]" strokeWidth={2} />

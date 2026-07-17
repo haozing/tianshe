@@ -2,6 +2,7 @@ const { ipcMain, session } = require("electron");
 const axios = require("axios");
 const http = require("node:http");
 const https = require("node:https");
+const { parseLosslessJson } = require("../utils/lossless-json");
 
 const defaultHttpAgent = new http.Agent({
   keepAlive: true,
@@ -147,9 +148,10 @@ async function nativeHttpRequest(args = {}) {
   const url = String(args.url || "").trim();
   if (!url) return { ok: false, status: 0, headers: {}, data: null, error: { message: "missing url" } };
 
+  const losslessJson = args.responseType === "losslessJson";
   const responseType = args.responseType === "arrayBuffer" || args.responseType === "base64"
     ? "arraybuffer"
-    : args.responseType === "text"
+    : args.responseType === "text" || losslessJson
       ? "text"
       : "json";
   const requestBody = normalizeNativeBody(args.body);
@@ -174,6 +176,19 @@ async function nativeHttpRequest(args = {}) {
       data = Buffer.from(data).toString("base64");
     } else if (args.responseType === "arrayBuffer" && Buffer.isBuffer(data)) {
       data = Array.from(data.values());
+    } else if (losslessJson) {
+      try {
+        data = parseLosslessJson(data);
+      } catch (error) {
+        return {
+          ok: false,
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+          data: null,
+          error: { message: `invalid lossless JSON response: ${error.message || String(error)}` }
+        };
+      }
     }
 
     return {

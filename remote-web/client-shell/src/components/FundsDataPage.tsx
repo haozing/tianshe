@@ -138,13 +138,13 @@ const tableColumns: DataColumn[] = [
   { key: "frozenBalance", label: "应冻结金额", format: "money", group: "账户", tone: (row) => row.frozenBalance > 0 ? "danger" : undefined },
   { key: "pendingSettleAmount", label: "待结算金额", format: "money", group: "账户", tone: "warning" },
   { key: "pendingSettleOrders", label: "结算订单数", format: "number", group: "待结算订单信息", tone: (row) => row.pendingSettleOrders > 0 ? "warning" : undefined },
-  { key: "marginBalance", label: "体验保证金余额", format: "money", group: "保证金" },
+  { key: "marginBalance", label: "体验保证金余额", format: "money", group: "保证金", tone: (row) => row.marginBalance < 0 ? "danger" : undefined },
   { key: "depositPayable", label: "应缴体验保证金", format: "money", group: "保证金", tone: (row) => row.depositPayable > 0 ? "danger" : undefined },
   { key: "refundableMargin", label: "可退体验保证金", format: "money", group: "保证金", tone: "green" },
   { key: "baseMarginBalance", label: "基础保证金", format: "money", group: "保证金", defaultVisible: false },
   { key: "baseDepositPayable", label: "基础待缴", format: "money", group: "保证金", defaultVisible: false, tone: (row) => row.baseDepositPayable > 0 ? "danger" : undefined },
   { key: "baseRefundableMargin", label: "基础可退", format: "money", group: "保证金", defaultVisible: false, tone: "green" },
-  { key: "experienceMarginBalance", label: "体验保证金", format: "money", group: "保证金", defaultVisible: false },
+  { key: "experienceMarginBalance", label: "体验保证金", format: "money", group: "保证金", defaultVisible: false, tone: (row) => row.experienceMarginBalance < 0 ? "danger" : undefined },
   { key: "experienceDepositPayable", label: "体验待缴", format: "money", group: "保证金", defaultVisible: false, tone: (row) => row.experienceDepositPayable > 0 ? "danger" : undefined },
   { key: "experienceRefundableMargin", label: "体验可退", format: "money", group: "保证金", defaultVisible: false, tone: "green" },
   { key: "subsidyTotal", label: "累计补贴", format: "money", group: "补贴赔付" },
@@ -152,8 +152,8 @@ const tableColumns: DataColumn[] = [
   { key: "qianchuanSubsidy", label: "千川补贴", format: "money", group: "补贴赔付", defaultVisible: false },
   { key: "compensationOrderCountToday", label: "今日赔付单量", format: "number", group: "补贴赔付", tone: (row) => row.compensationOrderCountToday > 0 ? "danger" : undefined },
   { key: "compensationOrderCount7d", label: "近7日赔付单量", format: "number", group: "补贴赔付", defaultVisible: false, tone: (row) => row.compensationOrderCount7d > 0 ? "warning" : undefined },
-  { key: "compensationAmountToday", label: "今日赔付动账", format: "money", group: "补贴赔付", tone: (row) => row.compensationAmountToday > 0 ? "danger" : undefined },
-  { key: "compensationAmount7d", label: "近七日赔付", format: "money", group: "补贴赔付", defaultVisible: false, tone: (row) => row.compensationAmount7d > 0 ? "warning" : undefined },
+  { key: "compensationAmountToday", label: "今日赔付动账", format: "money", group: "补贴赔付", tone: (row) => row.compensationAmountToday !== 0 ? "danger" : undefined },
+  { key: "compensationAmount7d", label: "近七日赔付", format: "money", group: "补贴赔付", defaultVisible: false, tone: (row) => row.compensationAmount7d !== 0 ? "warning" : undefined },
   { key: "pendingSettleOrderAmount", label: "预结算金额", format: "money", group: "待结算订单信息", tone: "warning" },
   { key: "riskCount", label: "资金风险", format: "number", group: "账单", tone: (row) => row.riskCount > 0 ? "danger" : undefined }
 ];
@@ -231,7 +231,8 @@ function fundRiskCount(row: Record<FundsMetricKey, number>) {
   return [
     row.frozenBalance > 0,
     row.depositPayable > 0,
-    row.compensationAmountToday > 0
+    row.marginBalance < 0 || row.experienceMarginBalance < 0,
+    row.compensationAmountToday !== 0 || row.compensationAmount7d !== 0
   ].filter(Boolean).length;
 }
 
@@ -765,24 +766,32 @@ export function FundsDataPage() {
       const storeById = new Map(stores.map((store) => [store.id, store]));
       const rowById = new Map((result.rows || []).map((row) => [String(row.shopId), row]));
       const previousById = new Map(fundsRowsRef.current.map((row) => [row.shopId, row]));
+      const requestedIds = new Set(shopIds);
       const nextRows = stores.map((store) => {
         const row = rowById.get(store.id);
         const detail = detailById.get(store.id);
+        const previous = previousById.get(store.id);
         return row
-          ? fundsRowFromRemote(row, store, detail, previousById.get(store.id))
-          : staleFundsRow(previousById.get(store.id), store, detail?.message || "本次未返回资金数据");
+          ? fundsRowFromRemote(row, store, detail, previous)
+          : requestedIds.has(store.id)
+            ? staleFundsRow(previous, store, detail?.message || "本次未返回资金数据")
+            : previous || zeroFundsRow(store);
       });
       for (const row of result.rows || []) {
         const id = String(row.shopId || "");
         if (id && !storeById.has(id)) nextRows.push(fundsRowFromRemote(row, undefined, detailById.get(id), previousById.get(id)));
       }
       commitFundsRows(nextRows);
-      setFundsDetails(detailList.map((detail) => ({
+      const refreshedDetails = detailList.map((detail) => ({
         ...detail,
         usingStaleCache: nextRows.find((row) => row.shopId === String(detail.shopId || ""))
           ? fundsMetricKeys.some((key) => nextRows.find((row) => row.shopId === String(detail.shopId || ""))?.metricStates[key] === "stale")
           : false
-      })));
+      }));
+      setFundsDetails((current) => [
+        ...current.filter((detail) => !requestedIds.has(String(detail.shopId || ""))),
+        ...refreshedDetails
+      ]);
       setFundsMessage(result.message || "");
       setAdapterVersion(result.adapterVersion || adapterVersion);
       setFieldSchemaVersion(result.fieldSchemaVersion || fieldSchemaVersion);
@@ -807,22 +816,29 @@ export function FundsDataPage() {
   }
 
   async function hydrateLatestFundsData(ids = selectedIds, generation = requestGeneration.current) {
-    if (previewMode || !stores.length || !ids.size) return false;
+    if (previewMode || !stores.length || !ids.size) return new Set<string>();
     try {
       const result = await fetchDoudianFundsDataLatest({
         shopIds: [...ids]
       });
-      if (generation !== requestGeneration.current) return false;
-      if (!result.rows?.length) return false;
+      if (generation !== requestGeneration.current) return new Set<string>();
+      if (!result.rows?.length) return new Set(ids);
       const detailList = Array.isArray(result.details) ? result.details : [];
       const detailById = new Map(detailList.map((detail) => [String(detail.shopId || ""), detail]));
       const rowById = new Map(result.rows.map((row) => [String(row.shopId), row]));
       const now = Date.now();
-      const cacheFresh = result.rows.length >= ids.size && [...ids].every((id) => {
+      const refreshIds = new Set([...ids].filter((id) => {
         const detail = detailById.get(id);
+        if (!rowById.has(id) || !detail) return true;
         const updatedAt = Date.parse(detail?.dataUpdatedAt || detail?.attemptedAt || "");
-        return Number.isFinite(updatedAt) && now - updatedAt <= autoRefreshTtlMs;
-      });
+        const diagnostic = detailDiagnostic(detail);
+        const summary = diagnostic.rowSummary && typeof diagnostic.rowSummary === "object" ? diagnostic.rowSummary as Record<string, unknown> : {};
+        return !Number.isFinite(updatedAt) ||
+          now - updatedAt > autoRefreshTtlMs ||
+          detail.status === "partial" ||
+          Number(diagnostic.dataSourceFailureCount || 0) > 0 ||
+          Number(summary.unavailableFieldCount || 0) > 0;
+      }));
       commitFundsRows(stores.map((store) => {
         const row = rowById.get(store.id);
         const detail = detailById.get(store.id);
@@ -840,10 +856,10 @@ export function FundsDataPage() {
         .filter(Number.isFinite)
         .sort((left, right) => right - left)[0];
       if (latestTimestamp) setLastSyncAt(new Date(latestTimestamp));
-      return cacheFresh;
+      return refreshIds;
     } catch {
       // Latest cached data is optional; an explicit sync is authoritative.
-      return false;
+      return new Set(ids);
     }
   }
 
@@ -889,8 +905,8 @@ export function FundsDataPage() {
     if (loadState !== "ready" || !stores.length) return;
     const generation = ++requestGeneration.current;
     void (async () => {
-      const cacheFresh = await hydrateLatestFundsData(selectedIds, generation);
-      if (!cacheFresh && generation === requestGeneration.current) await refreshFundsData(selectedIds, generation);
+      const refreshIds = await hydrateLatestFundsData(selectedIds, generation);
+      if (refreshIds.size && generation === requestGeneration.current) await refreshFundsData(refreshIds, generation);
     })();
     return () => {
       if (requestGeneration.current === generation) requestGeneration.current += 1;
@@ -995,7 +1011,7 @@ export function FundsDataPage() {
     : selectedRowsAllUnavailable && !previewMode
       ? "资金桥接或字段映射尚未返回可展示的金额。"
       : riskStoreCount
-        ? "存在冻结、待缴保证金或赔付动账。"
+        ? "存在冻结、待缴保证金、负保证金余额或非零赔付动账，请复核平台账单。"
         : "";
 
   const metrics: MetricItem[] = summarySchema.map((item) => {
@@ -1013,13 +1029,21 @@ export function FundsDataPage() {
     if (key === "pendingSettleOrders") detail = "待结算订单信息";
     if (staleCounts[key] > 0) detail = `${staleCounts[key]} 家为历史有效值`;
     else if (freshCounts[key] === 0) detail = "当前不可用";
-    const alertingTone = (
+    const conditionalAlert = (
       key === "frozenBalance" ||
       key === "depositPayable" ||
+      key === "marginBalance" ||
+      key === "experienceMarginBalance" ||
       key === "riskCount" ||
       key === "compensationAmountToday" ||
       key === "compensationAmount7d"
-    ) && totals[key] > 0 ? item.tone || "danger" : item.tone;
+    );
+    const hasAlertingValue = selectedRows.some((row) => {
+      if (key === "marginBalance" || key === "experienceMarginBalance") return row[key] < 0;
+      if (key === "compensationAmountToday" || key === "compensationAmount7d") return row[key] !== 0;
+      return row[key] > 0;
+    });
+    const alertingTone = conditionalAlert ? (hasAlertingValue ? item.tone || "danger" : undefined) : item.tone;
     return {
       label: item.label || key,
       value: freshCounts[key] + staleCounts[key] > 0 ? formatColumnValue(totals[key], format) : "--",

@@ -80,6 +80,7 @@ interface FundsLatestRecord {
   shopId: string;
   shopName: string;
   ok: boolean;
+  status?: "ok" | "partial";
   message: string;
   row: DoudianFundsDataRow;
   diagnostic?: unknown;
@@ -115,6 +116,14 @@ interface MetricSource {
   alias?: string;
   formula?: string;
   sources?: string[];
+}
+
+interface FundsInterfaceStat {
+  requestCount: number;
+  successCount: number;
+  failureCount: number;
+  retryCount: number;
+  p95Ms: number;
 }
 
 const FUNDS_CURRENT_ID_PREFIX = "funds-current::";
@@ -472,8 +481,10 @@ function applyDerivedFields(row: DoudianFundsDataRow, metricSources: Record<stri
   for (const config of derivedFieldConfigs(adapter)) {
     if (!config.sources.length) continue;
     if (config.onlyWhenZero && rowNumber(row, config.key) !== 0) continue;
-    const value = config.formula === "countPositive"
-      ? config.sources.filter((source) => rowNumber(row, source) > 0).length
+    const value = config.formula === "countPositive" && config.key === "riskCount"
+      ? fundsRiskCount(row)
+      : config.formula === "countPositive"
+        ? config.sources.filter((source) => rowNumber(row, source) > 0).length
       : config.formula === "subtract"
         ? config.sources.reduce((nextValue, source, index) => index === 0 ? rowNumber(row, source) : nextValue - rowNumber(row, source), 0)
         : config.sources.reduce((sum, source) => sum + rowNumber(row, source), 0);
@@ -486,6 +497,29 @@ function applyDerivedFields(row: DoudianFundsDataRow, metricSources: Record<stri
       available: config.sources.every((source) => metricSources[source]?.available === true)
     };
   }
+}
+
+function fundsRiskCount(row: DoudianFundsDataRow) {
+  return [
+    rowNumber(row, "frozenBalance") > 0,
+    rowNumber(row, "depositPayable") > 0,
+    rowNumber(row, "marginBalance") < 0 || rowNumber(row, "experienceMarginBalance") < 0,
+    rowNumber(row, "compensationAmountToday") !== 0 || rowNumber(row, "compensationAmount7d") !== 0
+  ].filter(Boolean).length;
+}
+
+function applyZeroCountInferences(row: DoudianFundsDataRow, metricSources: Record<string, MetricSource>) {
+  const orderCount = metricSources.pendingSettleOrders;
+  const orderAmount = metricSources.pendingSettleOrderAmount;
+  if (orderCount?.available !== true || row.pendingSettleOrders !== 0 || orderAmount?.available === true) return;
+  row.pendingSettleOrderAmount = 0;
+  metricSources.pendingSettleOrderAmount = {
+    value: 0,
+    source: "derived",
+    formula: "zeroWhenCountZero",
+    sources: ["pendingSettleOrders"],
+    available: true
+  };
 }
 
 function responsePayload(responses: Record<string, RequestPlanResult>) {
@@ -503,6 +537,7 @@ function buildFundsDataResult(store: DoudianStoreSummary, responses: Record<stri
     row[field] = metric.value;
     metricSources[field] = metric.source;
   }
+  applyZeroCountInferences(row, metricSources);
   applyDerivedFields(row, metricSources, adapter);
   return { row, metricSources };
 }
@@ -531,9 +566,48 @@ function summarizeResponses(responses: Record<string, RequestPlanResult>, adapte
     success: requestPlanResponseOk(response, adapter, key, fundsDataMappings(adapter)),
     countsAsSuccess: planCountsAsSuccess(adapter, key),
     diagnosticOnly: planDiagnosticOnly(adapter, key),
+    attemptCount: Math.max(1, Number(response.attemptCount || 1)),
+    durationMs: Math.max(0, Number(response.durationMs || 0)),
     code: responseCode(response) ?? null,
     message: responseMessage(response).slice(0, 160)
   }]));
+}
+
+function percentile95(values: number[]) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] || 0;
+}
+
+function summarizeInterfaceStats(details: DoudianRunDetail[]) {
+  const samples = new Map<string, Array<{ success: boolean; attemptCount: number; durationMs: number }>>();
+  for (const detail of details) {
+    const responses = objectRecord(objectRecord(detail.diagnostic).responses);
+    for (const [planKey, value] of Object.entries(responses)) {
+      const response = objectRecord(value);
+      const list = samples.get(planKey) || [];
+      list.push({
+        success: response.success === true,
+        attemptCount: Math.max(1, Number(response.attemptCount || 1)),
+        durationMs: Math.max(0, Number(response.durationMs || 0))
+      });
+      samples.set(planKey, list);
+    }
+  }
+  return Object.fromEntries([...samples.entries()].map(([planKey, list]) => [planKey, {
+    requestCount: list.length,
+    successCount: list.filter((item) => item.success).length,
+    failureCount: list.filter((item) => !item.success).length,
+    retryCount: list.reduce((sum, item) => sum + Math.max(0, item.attemptCount - 1), 0),
+    p95Ms: percentile95(list.map((item) => item.durationMs))
+  } satisfies FundsInterfaceStat]));
+}
+
+function fundsRunStatus(counts: { successCount: number; partialCount: number; failureCount: number; targetCount: number }) {
+  const usableCount = counts.successCount + counts.partialCount;
+  if (counts.targetCount > 0 && usableCount === 0) return "failed" as const;
+  if (counts.partialCount > 0 || counts.failureCount > 0) return "partial" as const;
+  return "ok" as const;
 }
 
 function summarizeFailures(summary: Record<string, { status: number; success: boolean; countsAsSuccess: boolean; diagnosticOnly: boolean; code: unknown; message: string }>, adapter: DoudianAdapterConfig): SourceFailure[] {
@@ -856,6 +930,7 @@ async function saveFundsLatestRows(args: {
       shopId: row.shopId,
       shopName: row.shopName,
       ok: detail?.ok !== false,
+      status: detail?.status === "partial" ? "partial" : "ok",
       message: detail?.message || "",
       row,
       diagnostic: { ...diagnostic, metricUpdatedAt },
@@ -876,6 +951,7 @@ async function saveFundsLatestRows(args: {
 }
 
 export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianFundsDataResult> {
+  const startedAt = Date.now();
   const payload = adapterPayload(args);
   await migrateLegacyFundsCache();
   const ledger = await listStoreLedger();
@@ -925,9 +1001,14 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
       rows,
       details,
       successCount: rows.length,
+      partialCount: 0,
       failureCount: 0,
       partialSourceCount: 0,
       noMetricMatchCount: 0,
+      incompleteMetricCount: 0,
+      cacheWriteCount: rows.length,
+      cacheSkippedCount: 0,
+      durationMs: Date.now() - startedAt,
       dateRange: publicDateRange(dateContext),
       adapterVersion,
       scriptsVersion,
@@ -945,6 +1026,12 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
       message: "remote fetchFundsData operation missing request plans",
       rows: targets.map(emptyFundsDataRow),
       details: [],
+      successCount: 0,
+      partialCount: 0,
+      failureCount: targets.length,
+      cacheWriteCount: 0,
+      cacheSkippedCount: targets.length,
+      durationMs: Date.now() - startedAt,
       dateRange: publicDateRange(dateContext),
       adapterVersion,
       scriptsVersion,
@@ -1000,47 +1087,51 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
     });
   });
 
-  const successCount = details.filter((detail) => detail.ok).length;
-  const failureCount = details.filter((detail) => !detail.ok).length;
+  const successCount = details.filter((detail) => detail.ok === true && detail.status === "ok").length;
+  const partialCount = details.filter((detail) => detail.ok === true && detail.status === "partial").length;
+  const failureCount = details.filter((detail) => detail.ok !== true || detail.status === "failed").length;
   const partialSourceCount = details.filter((detail) => {
     const diagnostic = objectRecord(detail.diagnostic);
     return Number(diagnostic.dataSourceFailureCount ?? diagnostic.blockingSourceFailureCount ?? 0) > 0;
   }).length;
   const noMetricMatchCount = details.filter((detail) => objectRecord(objectRecord(detail.diagnostic).rowSummary).allUnavailable === true).length;
   const incompleteMetricCount = details.filter((detail) => Number(objectRecord(objectRecord(detail.diagnostic).rowSummary).unavailableFieldCount || 0) > 0).length;
-  const partialIssueCount = partialSourceCount + incompleteMetricCount;
-  const message = failureCount
-    ? policyMessage(payload.adapter, "fundsData.messages.partial", "Funds data synced with {failureCount} failures", { successCount, failureCount })
-    : partialIssueCount
-      ? policyMessage(payload.adapter, "fundsData.messages.partialSources", "Funds data synced; {partialSourceCount} stores have source issues, {noMetricMatchCount} stores have no metric match", {
-        successCount,
-        partialSourceCount,
-        noMetricMatchCount
-      })
-      : policyMessage(payload.adapter, "fundsData.messages.done", "Funds data synced for {successCount} stores", { successCount });
+  const status = fundsRunStatus({ successCount, partialCount, failureCount, targetCount: targets.length });
+  const messageValues = { successCount, partialCount, failureCount, partialSourceCount, noMetricMatchCount, incompleteMetricCount };
+  const message = status === "failed"
+    ? policyMessage(payload.adapter, "fundsData.messages.failed", "Funds data sync failed for all {failureCount} stores", messageValues)
+    : failureCount
+      ? policyMessage(payload.adapter, "fundsData.messages.partial", "{successCount} complete, {partialCount} partial, {failureCount} failed", messageValues)
+      : partialCount
+        ? policyMessage(payload.adapter, "fundsData.messages.partialSources", "{successCount} complete, {partialCount} partial; {incompleteMetricCount} have incomplete metrics", messageValues)
+        : policyMessage(payload.adapter, "fundsData.messages.done", "Funds data synced for {successCount} stores", messageValues);
 
   const detailByShopId = new Map(details.map((detail) => [text(detail.shopId), detail]));
   const rowsToSave = rows.filter((row) => {
     const detail = detailByShopId.get(row.shopId);
-    const diagnostic = objectRecord(detail?.diagnostic);
-    const summary = objectRecord(diagnostic.rowSummary);
-    return detail?.ok === true && Number(diagnostic.dataSourceFailureCount || 0) === 0 && Number(summary.unavailableFieldCount || 0) === 0;
+    return detail?.ok === true;
   });
   await saveFundsLatestRows({ rows: rowsToSave, details, dateContext, adapterVersion, ruleVersion: scriptsVersion, fieldSchemaVersion: schemaVersion, requestPlanHash: hash });
+  const interfaceStats = summarizeInterfaceStats(details);
 
   return {
-    ok: failureCount === 0,
-    status: failureCount || partialIssueCount ? "partial" : "ok",
+    ok: status === "ok",
+    status,
     message,
     runId,
     operationId: args.operationId,
     rows,
     details,
     successCount,
+    partialCount,
     failureCount,
     partialSourceCount,
     noMetricMatchCount,
     incompleteMetricCount,
+    cacheWriteCount: rowsToSave.length,
+    cacheSkippedCount: rows.length - rowsToSave.length,
+    durationMs: Date.now() - startedAt,
+    interfaceStats,
     dateRange: publicDateRange(dateContext),
     adapterVersion,
     scriptsVersion,
@@ -1073,7 +1164,7 @@ export async function fetchFundsDataLatest(args: FundsDataArgs = {}): Promise<Do
   const details: DoudianRunDetail[] = rows.map((record, index) => ({
     shopId: record.shopId,
     shopName: record.shopName,
-    status: record.ok ? "ok" : "failed",
+    status: record.ok ? (record.status === "partial" ? "partial" : "ok") : "failed",
     ok: record.ok,
     message: record.message || (record.ok ? "Cached funds data ready" : "Cached funds data failed"),
     reason: record.ok ? "" : "funds-data-cached-failure",
@@ -1183,14 +1274,60 @@ export async function runDoudianFundsDataSelfCheck(options: { doudianAdapter?: D
     const partial = buildFundsDataResult(store, partialResponses, payload.adapter);
     const partialSourceOk = ["subsidyTotal", "commissionSubsidy", "qianchuanSubsidy"]
       .every((field) => partial.metricSources[field]?.available === false);
+    const zeroOrderResponses = {
+      ...fixtureResponses,
+      fundBillQuery: {
+        ...fixtureResponses.fundBillQuery,
+        data: { code: 0, total: 0 }
+      }
+    };
+    const zeroOrder = buildFundsDataResult(store, zeroOrderResponses, payload.adapter);
+    const zeroOrderInferenceOk = zeroOrder.row.pendingSettleOrderAmount === 0 &&
+      zeroOrder.metricSources.pendingSettleOrderAmount?.available === true &&
+      zeroOrder.metricSources.pendingSettleOrderAmount?.formula === "zeroWhenCountZero";
+    const negativeRiskRow = emptyFundsDataRow(store);
+    negativeRiskRow.marginBalance = -30.04;
+    negativeRiskRow.experienceMarginBalance = -30.04;
+    negativeRiskRow.compensationAmount7d = -2;
+    const negativeRiskOk = fundsRiskCount(negativeRiskRow) === 2;
+    const allFailedStatusOk = fundsRunStatus({ successCount: 0, partialCount: 0, failureCount: 19, targetCount: 19 }) === "failed";
+    const mixedStatusOk = fundsRunStatus({ successCount: 14, partialCount: 5, failureCount: 0, targetCount: 19 }) === "partial";
+    await saveFundsLatestRows({
+      rows: [partial.row],
+      details: [{
+        ...detail,
+        status: "partial",
+        diagnostic: {
+          rowSummary: rowSummary(partial.row, partial.metricSources, displayMetricFields(payload.adapter)),
+          metricSources: partial.metricSources
+        }
+      }],
+      dateContext,
+      adapterVersion: payload.adapter.version || "",
+      ruleVersion: payload.scripts?.version || "",
+      fieldSchemaVersion: schemaVersion,
+      requestPlanHash: hash
+    });
+    const partialLatest = await fetchFundsDataLatest({ doudianAdapter: payload, shopIds: [shopId] });
+    const partialLatestDetails = Array.isArray(partialLatest.details) ? partialLatest.details : [];
+    const partialCacheOk = partialLatest.rows?.[0]?.withdrawBalance === expected.withdrawBalance && partialLatestDetails[0]?.status === "partial";
     const fixtureOk = cases.every((item) => item.actual === item.expected);
 
     return {
-      ok: fixtureOk && partialSourceOk && latest.rows?.[0]?.withdrawBalance === expected.withdrawBalance && moneyCases.every((item) => item.actual === item.expected),
+      ok: fixtureOk && partialSourceOk && zeroOrderInferenceOk && negativeRiskOk && allFailedStatusOk && mixedStatusOk && partialCacheOk && latest.rows?.[0]?.withdrawBalance === expected.withdrawBalance && moneyCases.every((item) => item.actual === item.expected),
       latestOk: latest.ok === true && latest.rows?.[0]?.shopId === shopId,
       datePresetOk: latest.dateRange?.datePreset === "snapshot" && dateContext.beginDate === dateContext.endDate,
       metadataOk: latest.adapterVersion === payload.adapter.version && latest.scriptsVersion === (payload.scripts?.version || "") && latest.fieldSchemaVersion === schemaVersion,
-      cases: [...cases, ...moneyCases.map((item, index) => ({ field: `moneyText-${index + 1}`, expected: item.expected, actual: item.actual })), { field: "partial-source-availability", expected: true, actual: partialSourceOk }]
+      cases: [
+        ...cases,
+        ...moneyCases.map((item, index) => ({ field: `moneyText-${index + 1}`, expected: item.expected, actual: item.actual })),
+        { field: "partial-source-availability", expected: true, actual: partialSourceOk },
+        { field: "zero-order-amount-inference", expected: true, actual: zeroOrderInferenceOk },
+        { field: "negative-risk-review", expected: true, actual: negativeRiskOk },
+        { field: "all-failed-status", expected: "failed", actual: allFailedStatusOk ? "failed" : "unexpected" },
+        { field: "mixed-partial-status", expected: "partial", actual: mixedStatusOk ? "partial" : "unexpected" },
+        { field: "partial-cache-reload", expected: true, actual: partialCacheOk }
+      ]
     };
   } finally {
     await deleteStoreLedger([shopId]).catch(() => undefined);

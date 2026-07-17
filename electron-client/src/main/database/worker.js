@@ -1199,7 +1199,7 @@ function listNativeRecords(args = {}) {
 }
 
 function queryNativeOperations(args = {}) {
-  const allowedStatuses = new Set(["created", "running", "succeeded", "failed", "cancelled"]);
+  const allowedStatuses = new Set(["created", "running", "succeeded", "partial", "failed", "cancelled"]);
   const statuses = Array.from(new Set((Array.isArray(args.statuses) ? args.statuses : [])
     .map(normalizeString)
     .filter((status) => allowedStatuses.has(status))));
@@ -1231,7 +1231,7 @@ function queryNativeOperations(args = {}) {
 
 function cleanupNativeOperations(args = {}) {
   const database = ensureDb();
-  const terminalStatuses = ["succeeded", "failed", "cancelled"];
+  const terminalStatuses = ["succeeded", "partial", "failed", "cancelled"];
   const retentionDays = Math.max(1, Math.min(365, normalizeInteger(args.retentionDays) || 14));
   const maxTerminalRecords = Math.max(10, Math.min(10000, normalizeInteger(args.maxTerminalRecords) || 200));
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();

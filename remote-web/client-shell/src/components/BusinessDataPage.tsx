@@ -85,6 +85,7 @@ type BusinessRow = {
   status: DoudianStoreStatus;
   lastMessage?: string;
   ok?: boolean;
+  metricAvailability: Partial<Record<BusinessMetricKey, boolean>>;
 } & Record<BusinessMetricKey, number>;
 
 interface BusinessDetailDiagnostic {
@@ -95,9 +96,16 @@ interface BusinessDetailDiagnostic {
   missingCoreMetricPlans?: string[];
   rowSummary?: {
     allZero?: boolean;
+    allUnavailable?: boolean;
     nonZeroFieldCount?: number;
     nonZeroFields?: string[];
+    availableFieldCount?: number;
+    availableFields?: string[];
+    unavailableFieldCount?: number;
+    unavailableFields?: string[];
   };
+  metricSources?: Partial<Record<BusinessMetricKey, { available?: boolean; source?: string; reason?: string }>>;
+  unavailableCriticalFields?: string[];
 }
 
 interface MetricItem {
@@ -240,6 +248,7 @@ function zeroBusinessRow(store: StoreOption): BusinessRow {
     shopName: store.name,
     group: store.group,
     status: store.status,
+    metricAvailability: Object.fromEntries(businessMetricKeys.map((key) => [key, false])),
     ...emptyMetrics()
   };
 }
@@ -259,8 +268,12 @@ function blockingSourceCount(detail?: DoudianRunDetail) {
   return Number(diagnostic.blockingSourceFailureCount ?? diagnostic.sourceFailureCount ?? 0);
 }
 
-function businessRowHasMetric(row: BusinessRow) {
-  return businessMetricKeys.some((key) => Number(row[key] || 0) !== 0);
+function metricAvailable(row: BusinessRow, key: BusinessMetricKey) {
+  return row.metricAvailability[key] === true;
+}
+
+function businessRowHasAvailableMetric(row: BusinessRow) {
+  return businessMetricKeys.some((key) => metricAvailable(row, key));
 }
 
 function businessRowFromRemote(row: DoudianBusinessDataRow, store?: StoreOption, detail?: DoudianRunDetail): BusinessRow {
@@ -273,6 +286,8 @@ function businessRowFromRemote(row: DoudianBusinessDataRow, store?: StoreOption,
   for (const key of businessMetricKeys) {
     base[key] = numberValue(row[key]);
   }
+  const metricSources = businessDetailDiagnostic(detail).metricSources || {};
+  base.metricAvailability = Object.fromEntries(businessMetricKeys.map((key) => [key, metricSources[key]?.available === true]));
   base.lastMessage = detail?.message;
   base.ok = detail?.ok;
   return base;
@@ -335,7 +350,8 @@ function scoreText(value: number) {
   return value > 0 ? value.toFixed(2) : "-";
 }
 
-function formatColumnValue(value: number, format: ColumnFormat) {
+function formatColumnValue(value: number, format: ColumnFormat, available = true) {
+  if (!available) return "--";
   if (format === "money") return formatMoney(value);
   if (format === "percent") return formatPercent(value);
   if (format === "score") return scoreText(value);
@@ -376,15 +392,20 @@ function dateRangeForPreset(preset: DatePreset) {
 }
 
 function weightedAverage(rows: BusinessRow[], field: ScoreMetricKey) {
-  const scored = rows.filter((row) => row[field] > 0);
+  const scored = rows.filter((row) => metricAvailable(row, field) && row[field] > 0);
   if (!scored.length) return 0;
   return scored.reduce((sum, row) => sum + row[field], 0) / scored.length;
 }
 
 function aggregateRows(rows: BusinessRow[]) {
   const totals = emptyMetrics();
+  const availableCounts = Object.fromEntries(businessMetricKeys.map((key) => [key, 0])) as Record<BusinessMetricKey, number>;
   for (const row of rows) {
-    for (const key of businessMetricKeys) totals[key] += Number(row[key] || 0);
+    for (const key of businessMetricKeys) {
+      if (!metricAvailable(row, key)) continue;
+      totals[key] += Number(row[key] || 0);
+      availableCounts[key] += 1;
+    }
   }
   totals.customerPrice = totals.orderCount ? totals.dealAmount / totals.orderCount : 0;
   totals.refundRate = totals.orderCount ? (totals.refundOrderCount / totals.orderCount) * 100 : totals.refundRate;
@@ -393,7 +414,7 @@ function aggregateRows(rows: BusinessRow[]) {
   totals.logisticsScore = weightedAverage(rows, "logisticsScore");
   totals.productScore = weightedAverage(rows, "productScore");
   totals.serviceScore = weightedAverage(rows, "serviceScore");
-  return totals;
+  return { values: totals, availableCounts };
 }
 
 function sourceFailureText(detail?: DoudianRunDetail) {
@@ -418,7 +439,7 @@ function exportRows(rows: BusinessRow[], range: string, columns: DataColumn[], d
     detailById.get(row.shopId)?.message || row.lastMessage || "",
     sourceFailureText(detailById.get(row.shopId)),
     adapterVersion,
-    ...exportColumns.map((column) => formatColumnValue(row[column.key], column.format))
+    ...exportColumns.map((column) => formatColumnValue(row[column.key], column.format, metricAvailable(row, column.key)))
   ]);
   const csv = [header, ...body].map((line) => line.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
   const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
@@ -766,7 +787,9 @@ export function BusinessDataPage() {
   const shopColumnWidth = 174;
   const tableMinWidth = Math.max(1040, shopColumnWidth + visibleColumns.length * 92);
   const summarySchema = useMemo(() => normalizeRemoteSummary(fieldSchema), [fieldSchema]);
-  const totals = useMemo(() => aggregateRows(selectedRows), [selectedRows]);
+  const aggregated = useMemo(() => aggregateRows(selectedRows), [selectedRows]);
+  const totals = aggregated.values;
+  const totalAvailableCounts = aggregated.availableCounts;
   const range = requestedRange;
   const actualRangeLabel = actualDateRange ? `${actualDateRange.beginDate} - ${actualDateRange.endDate}` : "";
   const rangeTitle = actualRangeLabel && actualRangeLabel !== range.label
@@ -780,12 +803,14 @@ export function BusinessDataPage() {
   const partialSourceCount = businessDetails.filter((detail) => blockingSourceCount(detail) > 0).length;
   const coreIncompleteCount = businessDetails.filter((detail) => businessDetailDiagnostic(detail).coreMetricsComplete === false).length;
   const missingSelectedCount = Math.max(0, selectedIds.size - selectedRows.length);
-  const noMetricMatchCount = businessDetails.filter((detail) => businessDetailDiagnostic(detail).rowSummary?.allZero === true).length;
-  const selectedRowsAllZero = businessState === "ready" && selectedRows.length > 0 && selectedRows.every((row) => !businessRowHasMetric(row));
-  const metricMissCount = noMetricMatchCount || (selectedRowsAllZero ? selectedRows.length : 0);
+  const noMetricMatchCount = businessDetails.filter((detail) => businessDetailDiagnostic(detail).rowSummary?.allUnavailable === true).length;
+  const incompleteMetricCount = businessDetails.filter((detail) => (businessDetailDiagnostic(detail).unavailableCriticalFields || []).length > 0).length;
+  const selectedRowsAllUnavailable = businessState === "ready" && selectedRows.length > 0 && selectedRows.every((row) => !businessRowHasAvailableMetric(row));
+  const metricMissCount = noMetricMatchCount || (selectedRowsAllUnavailable ? selectedRows.length : 0);
   const businessWarningParts = [
     missingSelectedCount ? `${missingSelectedCount} 家正在加载` : "",
     coreIncompleteCount ? `${coreIncompleteCount} 家核心交易指标不完整` : "",
+    incompleteMetricCount ? `${incompleteMetricCount} 家核心字段不可用` : "",
     partialSourceCount ? `${partialSourceCount} 家关键来源异常` : "",
     metricMissCount ? `${metricMissCount} 家未命中经营指标` : ""
   ].filter(Boolean);
@@ -796,6 +821,7 @@ export function BusinessDataPage() {
       ? [
         missingSelectedCount ? "新增选择的店铺尚未返回数据，不会用全零值代替。" : "",
         coreIncompleteCount ? "核心交易接口未完整返回，当前仍保留评分、营销和商品等可用数据。" : "",
+        incompleteMetricCount ? "核心接口成功但部分关键字段不可读，未知值以 -- 展示且不计入汇总。" : "",
         partialSourceCount ? "关键来源未返回有效数据，辅助营销和商品来源不会再污染总状态。" : "",
         metricMissCount ? "远程接口有返回，但当前映射没有读到可展示的经营指标。" : ""
       ].filter(Boolean).join(" ")
@@ -806,21 +832,23 @@ export function BusinessDataPage() {
     const format = (item.format || "number") as ColumnFormat;
     let detail = item.detail || "";
     if (key === "dealAmount") detail = `${onlineSelectedCount} 家在线`;
-    if (key === "refundAmount") detail = `${formatNumber(totals.refundOrderCount)} 笔退款`;
-    if (key === "pendingShipment") detail = `${formatNumber(totals.ship24h)} 单 24h 内`;
-    if (key === "exposureUsers") detail = `${formatNumber(totals.productExposureCount)} 次曝光`;
-    if (key === "clickUsers") detail = totals.exposureUsers ? `点击率 ${formatPercent((totals.clickUsers / totals.exposureUsers) * 100)}` : "点击率 -";
-    if (key === "onSaleProductCount") detail = `${formatNumber(totals.offlineProductCount)} 个已下架`;
+    if (key === "refundAmount") detail = totalAvailableCounts.refundOrderCount > 0 ? `${formatNumber(totals.refundOrderCount)} 笔退款` : "退款笔数 --";
+    if (key === "pendingShipment") detail = totalAvailableCounts.ship24h > 0 ? `${formatNumber(totals.ship24h)} 单 24h 内` : "24h 内 --";
+    if (key === "exposureUsers") detail = totalAvailableCounts.productExposureCount > 0 ? `${formatNumber(totals.productExposureCount)} 次曝光` : "曝光次数 --";
+    if (key === "clickUsers") detail = totalAvailableCounts.exposureUsers > 0 && totalAvailableCounts.clickUsers > 0 && totals.exposureUsers ? `点击率 ${formatPercent((totals.clickUsers / totals.exposureUsers) * 100)}` : "点击率 --";
+    if (key === "onSaleProductCount") detail = totalAvailableCounts.offlineProductCount > 0 ? `${formatNumber(totals.offlineProductCount)} 个已下架` : "已下架 --";
     if (key === "couponActive") return {
       label: item.label || "营销活动",
-      value: formatNumber(totals.couponActive + totals.directDiscountActive + totals.newUserBonusActive),
+      value: ["couponActive", "directDiscountActive", "newUserBonusActive"].some((field) => totalAvailableCounts[field as BusinessMetricKey] > 0)
+        ? formatNumber(totals.couponActive + totals.directDiscountActive + totals.newUserBonusActive)
+        : "--",
       detail: item.detail || "券 / 直降 / 礼金",
       tone: item.tone
     };
     if (key === "experienceScore") detail = `口碑分 ${scoreText(totals.reputationScore)}`;
     return {
       label: item.label || key,
-      value: formatColumnValue(totals[key], format),
+      value: formatColumnValue(totals[key], format, totalAvailableCounts[key] > 0),
       detail,
       tone: item.tone
     };
@@ -1086,7 +1114,7 @@ export function BusinessDataPage() {
                       const resolvedTone = typeof column.tone === "function" ? column.tone(row) : column.tone;
                       return (
                         <td className={cn("whitespace-nowrap px-3", toneClass(resolvedTone), resolvedTone ? "font-semibold" : "")} key={column.key}>
-                          {formatColumnValue(row[column.key], column.format)}
+                          {formatColumnValue(row[column.key], column.format, metricAvailable(row, column.key))}
                         </td>
                       );
                     })}
@@ -1116,11 +1144,11 @@ export function BusinessDataPage() {
             </span>
             <span className="inline-flex items-center gap-2">
               <Truck className="size-[14px]" strokeWidth={2} />
-              待发货 {formatNumber(totals.pendingShipment)}
+              待发货 {totalAvailableCounts.pendingShipment > 0 ? formatNumber(totals.pendingShipment) : "--"}
               <Users className="ml-2 size-[14px]" strokeWidth={2} />
-              成交人数 {formatNumber(totals.buyers)}
+              成交人数 {totalAvailableCounts.buyers > 0 ? formatNumber(totals.buyers) : "--"}
               <Gauge className="ml-2 size-[14px]" strokeWidth={2} />
-              平均体验 {scoreText(totals.experienceScore)}
+              平均体验 {totalAvailableCounts.experienceScore > 0 ? scoreText(totals.experienceScore) : "--"}
             </span>
           </div>
         </section>

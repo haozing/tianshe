@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026.07.16.opportunity-pipeline-v1",
-  "buildTime": "2026-07-16T01:33:20.719Z",
+  "releaseId": "2026.07.16.business-funds-quality-v2",
+  "buildTime": "2026-07-16T11:40:30.702Z",
   "entry": {
     "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
   },
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "bcfa1deb4ef04fe7b91b8b3f050150f491ad65529c75f8c989959132ba9c558c"
+      "sha256": "63679be4ebf4cbf3e233baffe3aca8108d275de44693ba14b811f13d84cbbd60"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,7 +36,7 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "17c8195de11691c89146f4fc0fc43587491b7e6863b103ce26ff10de3c51d936"
+      "sha256": "579e6ac5bb463e3097d6de234377d6710d72ae8f29be5561cf92f71504db3b5c"
     },
     {
       "path": "new-remote-web/styles.css",
@@ -71,14 +71,14 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "a7b3e22ffe1e2cea4232f7c88921ddc9a47189e1a30dda44751e6c7f2b23db48"
+      "sha256": "d1ce37e7655113cddac5f34103d272c57000175fe9be40d7846465a8528f5879"
     },
     {
       "path": "new-remote-web/config/doudian-adapter.json",
       "type": "doudian-adapter",
       "cache": "no-cache",
       "required": true,
-      "sha256": "9b58061cd9e33865c7290009ebfc76a2ea3b3db9a0360e008483f8149058f5ac"
+      "sha256": "d3f0675cea01f829ab82453e3f7bf2d726c0be52f0c0337d011bcfcaef444e4a"
     },
     {
       "path": "new-remote-web/config/update-notes.json",
@@ -120,7 +120,7 @@
     "schemaVersion": 1,
     "algorithm": "ed25519",
     "keyId": "chihu-remote-web-ed25519-2026-07",
-    "payloadSha256": "6130e154e8531bb279e34a0cdcd163e877ecc527ce30c5c543b10b7893d78556",
-    "value": "N+JPOyYRwVPo2gVMLtWqG0fVNmfqsPXqSzQhVdbGxWgfLoK9JCeBaca4zgYJSnhjJkI+n9lIxWlx3U8wkyUzAw=="
+    "payloadSha256": "96516678ddaf68cc4d7439a874bf4a0ad11a5cd67072dd9bb4ea4bc736cae929",
+    "value": "u2nfJ5+RjgA3T+NGsuwlUXeHlWUu+lwWsTlv5qoMPj4vhJJXKPK5sVYuP34G1DOLoXu98vPkYdP6kCA2S1sACw=="
   }
 }

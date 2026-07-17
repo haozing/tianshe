@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.16.opportunity-pipeline-v1",
+  "version": "2026.07.16.business-funds-quality-v2",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -34,7 +34,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "4b14ce8",
-    "buildTime": "2026-07-16T01:33:20.719Z"
+    "gitCommit": "1c85426-dirty",
+    "buildTime": "2026-07-16T11:40:30.702Z"
   }
 }

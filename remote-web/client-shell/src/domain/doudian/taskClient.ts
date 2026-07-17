@@ -27,7 +27,7 @@ const runnerWindows = new Map<string, number>();
 let channel: BroadcastChannel | null = null;
 const DEFAULT_RUNNER_PARTITION = "persist:chihu-default";
 const MAX_OPERATION_RESULT_RECORD_BYTES = 4 * 1024 * 1024;
-type OperationLogPhase = "started" | "succeeded" | "failed" | "cancelled";
+type OperationLogPhase = "started" | "succeeded" | "partial" | "failed" | "cancelled";
 
 type TaskWaiter = {
   resolve: (record: DoudianOperationRecord | null) => void;
@@ -53,6 +53,8 @@ function shouldPersistOperationResult(value: unknown) {
 
 function operationLogPayload(record: DoudianOperationRecord | null | undefined) {
   if (!record) return {};
+  const createdAt = Date.parse(record.createdAt || "");
+  const updatedAt = Date.parse(record.updatedAt || "");
   return {
     operationId: record.operationId,
     taskType: record.taskType,
@@ -61,12 +63,15 @@ function operationLogPayload(record: DoudianOperationRecord | null | undefined) 
     adapterVersion: record.adapterVersion || "",
     ruleVersion: record.ruleVersion || "",
     hasResult: record.result !== undefined,
-    resultSummary: record.resultSummary || ""
+    resultSummary: record.resultSummary || "",
+    durationMs: Number.isFinite(createdAt) && Number.isFinite(updatedAt) ? Math.max(0, updatedAt - createdAt) : 0
   };
 }
 
 async function reportOperationLog(phase: OperationLogPhase, record: DoudianOperationRecord | null | undefined, detail: Record<string, unknown> = {}) {
-  if (!getPreferences().autoOperationLog) return;
+  const requiredFundsSummary = record?.taskType === "fundsData" && phase !== "started";
+  const requiredViolationsLog = record?.taskType === "violationsData";
+  if (!requiredFundsSummary && !requiredViolationsLog && !getPreferences().autoOperationLog) return;
   const native = getChihuNative();
   if (!native?.logs?.report) return;
   await native.logs.report({
@@ -78,8 +83,81 @@ async function reportOperationLog(phase: OperationLogPhase, record: DoudianOpera
   }).catch(() => undefined);
 }
 
+function fundsResultLogSummary(result: unknown) {
+  if (!result || typeof result !== "object") return {};
+  const record = result as Record<string, unknown>;
+  const rawStats = record.interfaceStats && typeof record.interfaceStats === "object"
+    ? record.interfaceStats as Record<string, unknown>
+    : {};
+  const interfaceStats = Object.fromEntries(Object.entries(rawStats).map(([planKey, value]) => {
+    const stat = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    return [planKey, {
+      requestCount: Number(stat.requestCount || 0),
+      successCount: Number(stat.successCount || 0),
+      failureCount: Number(stat.failureCount || 0),
+      retryCount: Number(stat.retryCount || 0),
+      p95Ms: Number(stat.p95Ms || 0)
+    }];
+  }));
+  return {
+    status: String(record.status || ""),
+    recordCount: Number(record.recordCount ?? (Array.isArray(record.records) ? record.records.length : 0)),
+    successCount: Number(record.successCount || 0),
+    partialCount: Number(record.partialCount || 0),
+    failureCount: Number(record.failureCount || 0),
+    incompleteMetricCount: Number(record.incompleteMetricCount || 0),
+    cacheWriteCount: Number(record.cacheWriteCount || 0),
+    cacheSkippedCount: Number(record.cacheSkippedCount || 0),
+    durationMs: Number(record.durationMs || 0),
+    interfaceStats
+  };
+}
+
+function violationsResultLogSummary(result: unknown) {
+  if (!result || typeof result !== "object") return {};
+  const record = result as Record<string, unknown>;
+  const rows = Array.isArray(record.rows) ? record.rows : [];
+  const rowRecords = rows.map((row) => row && typeof row === "object" ? row as Record<string, unknown> : {});
+  const dateRange = record.dateRange && typeof record.dateRange === "object"
+    ? record.dateRange as Record<string, unknown>
+    : {};
+  return {
+    runId: String(record.runId || ""),
+    status: String(record.status || ""),
+    dateRange: {
+      datePreset: String(dateRange.datePreset || ""),
+      beginDate: String(dateRange.beginDate || ""),
+      endDate: String(dateRange.endDate || "")
+    },
+    sourceTotal: Number(record.remoteTotal ?? rowRecords.reduce((sum, row) => sum + Number(row.sourceTotal ?? row.remoteTotal ?? row.fetchedRecords ?? 0), 0)),
+    filteredTotal: Number(record.recordCount ?? rowRecords.reduce((sum, row) => sum + Number(row.filteredTotal ?? row.totalRecords ?? 0), 0)),
+    successCount: Number(record.successCount || 0),
+    failureCount: Number(record.failureCount || 0),
+    partialSourceCount: Number(record.partialSourceCount || 0),
+    truncatedCount: rowRecords.filter((row) => row.truncated === true).length,
+    cached: record.cached === true,
+    cacheDerived: record.cacheDerived === true,
+    sourceDatePreset: String(record.sourceDatePreset || "")
+  };
+}
+
+function taskResultLogSummary(taskType: string | undefined, result: unknown) {
+  if (taskType === "fundsData") return fundsResultLogSummary(result);
+  if (taskType === "violationsData") return violationsResultLogSummary(result);
+  return {};
+}
+
 function isTerminal(record?: DoudianOperationRecord | null) {
-  return !!record && ["succeeded", "failed", "cancelled"].includes(record.status);
+  return !!record && ["succeeded", "partial", "failed", "cancelled"].includes(record.status);
+}
+
+function resultOperationStatus(result: unknown): "succeeded" | "partial" | "failed" {
+  if (!result || typeof result !== "object") return "succeeded";
+  const record = result as { ok?: unknown; status?: unknown };
+  const status = String(record.status || "").toLowerCase();
+  if (status === "partial") return "partial";
+  if (record.ok === false || ["failed", "error", "missing", "missing-request-plans"].includes(status)) return "failed";
+  return "succeeded";
 }
 
 async function destroyRunnerWindow(operationId: string) {
@@ -131,6 +209,7 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
     const resultStatus = message.result && typeof message.result === "object"
       ? String((message.result as { status?: unknown }).status || "")
       : "";
+    const operationStatus = resultOperationStatus(message.result);
     const persistResult = message.result === undefined || shouldPersistOperationResult(message.result);
     const record = existing?.status === "cancelled"
       ? existing
@@ -138,22 +217,23 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
         ? await markOperationCancelled(message.operationId)
       : message.result !== undefined
         ? persistResult
-          ? await markOperationFullResult(message.operationId, message.resultSummary || "completed", message.result)
-          : await markOperationResult(message.operationId, message.resultSummary || "completed")
-        : await markOperationResult(message.operationId, message.resultSummary || "completed");
+          ? await markOperationFullResult(message.operationId, message.resultSummary || "completed", message.result, operationStatus)
+          : await markOperationResult(message.operationId, message.resultSummary || "completed", operationStatus)
+        : await markOperationResult(message.operationId, message.resultSummary || "completed", operationStatus);
     const waiterRecord = record && message.result !== undefined && !persistResult
       ? { ...record, result: message.result }
       : record;
     dispatchDoudianProgress({
       operationId: message.operationId,
       taskType: record?.taskType,
-      status: record?.status === "cancelled" ? "cancelled" : "succeeded",
+      status: record?.status === "cancelled" ? "cancelled" : record?.status === "partial" ? "partial" : record?.status === "failed" ? "failed" : "succeeded",
       progress: record?.progress ?? 100,
       resultSummary: message.resultSummary
     });
-    void reportOperationLog(record?.status === "cancelled" ? "cancelled" : "succeeded", record || null, {
+    void reportOperationLog(record?.status === "cancelled" ? "cancelled" : record?.status === "partial" ? "partial" : record?.status === "failed" ? "failed" : "succeeded", record || null, {
       resultSummary: message.resultSummary || "",
-      resultPersisted: persistResult
+      resultPersisted: persistResult,
+      ...taskResultLogSummary(record?.taskType, message.result)
     });
     await destroyRunnerWindow(message.operationId);
     resolveWaiters(message.operationId, waiterRecord || null);
@@ -267,7 +347,15 @@ async function startDoudianTaskInternal(task: DoudianTaskRequest): Promise<Doudi
     message: "task started"
   });
   void reportOperationLog("started", runningOperation, {
-    metadata: task.metadata || null
+    metadata: task.metadata || null,
+    ...(task.taskType === "violationsData" ? {
+      dateRange: {
+        datePreset: String(task.payload?.datePreset || "all"),
+        beginDate: String(task.payload?.beginDate || ""),
+        endDate: String(task.payload?.endDate || "")
+      },
+      shopCount: Array.isArray(task.payload?.shopIds) ? task.payload.shopIds.length : 0
+    } : {})
   });
   const startMessage: DoudianTaskMessage = {
     type: "task:start",
@@ -355,7 +443,7 @@ export async function restoreDoudianTasks() {
 
 export async function waitForDoudianTaskResult(operationId: string, timeoutMs = 120000): Promise<DoudianOperationRecord | null> {
   const current = await getOperation(operationId);
-  if (current && ["succeeded", "failed", "cancelled"].includes(current.status)) return current;
+  if (current && ["succeeded", "partial", "failed", "cancelled"].includes(current.status)) return current;
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
       const list = waiters.get(operationId) || [];
@@ -389,7 +477,11 @@ export async function runDoudianStoreTask(task: DoudianTaskRequest, timeoutMs = 
     return failed || getOperation(operation.operationId);
   });
   if (!result) return { ok: false, status: "missing", operationId: operation.operationId, message: "task result missing", stores: [] };
-  if (result.status === "failed") return { ok: false, status: "failed", operationId: operation.operationId, message: result.error || "task failed", stores: [] };
+  if (result.status === "failed") {
+    return (result.result && typeof result.result === "object")
+      ? result.result as DoudianStoreResult
+      : { ok: false, status: "failed", operationId: operation.operationId, message: result.error || "task failed", stores: [] };
+  }
   if (result.status === "cancelled") return { ok: false, status: "cancelled", operationId: operation.operationId, message: "已取消任务", stores: [] };
   return (result.result && typeof result.result === "object")
     ? result.result as DoudianStoreResult

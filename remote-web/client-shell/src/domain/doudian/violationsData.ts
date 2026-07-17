@@ -414,12 +414,27 @@ function associationStatus(productStatus: string, productId = "") {
   return "unknown";
 }
 
+const OBJECT_TYPE_LABELS: Record<string, string> = {
+  "1": "订单",
+  "2": "商品",
+  "3": "店铺",
+  "25": "渠道商品",
+  "32": "售后单",
+  "61": "电商门店"
+};
+
 function normalizeObjectType(value: unknown, productId = "") {
   const next = text(value).toLowerCase();
-  if (productId || /(商品|goods|product|item|sku)/i.test(next)) return "商品";
+  if (OBJECT_TYPE_LABELS[next]) return OBJECT_TYPE_LABELS[next];
+  if (/(渠道商品|channel.{0,4}(goods|product|item))/i.test(next)) return "渠道商品";
+  if (/(售后单|after.?sale)/i.test(next)) return "售后单";
+  if (/(电商门店|e.?commerce.{0,4}store)/i.test(next)) return "电商门店";
+  if (/(商品|goods|product|item|sku)/i.test(next)) return "商品";
   if (/(订单|order)/i.test(next)) return "订单";
   if (/(内容|素材|content|material)/i.test(next)) return "内容";
-  return "店铺";
+  if (/(店铺|shop|store)/i.test(next)) return "店铺";
+  if (!next && productId) return "商品";
+  return next ? "未知" : "店铺";
 }
 
 function amount(value: unknown, scale = 1) {
@@ -495,7 +510,11 @@ function extractRecords(store: DoudianStoreSummary, responses: Record<string, Re
   const payload = payloadFromResponses(responses);
   const items = firstArray(payload, listPaths(adapter));
   return items.map((item, index) => {
-    const productId = text(readViolationField(item, adapter, "productId"));
+    const candidateProductId = text(readViolationField(item, adapter, "productId"));
+    const objectId = text(readViolationField(item, adapter, "objectId")) || candidateProductId;
+    const rawObjectType = readViolationField(item, adapter, "objectType");
+    const objectType = normalizeObjectType(rawObjectType, candidateProductId);
+    const productId = objectType === "商品" ? (candidateProductId || objectId) : "";
     const reason = text(readViolationField(item, adapter, "reason"));
     const dueAt = normalizeDateTime(readViolationField(item, adapter, "dueAt"));
     const violationAt = normalizeDateTime(readViolationField(item, adapter, "violationAt"));
@@ -507,7 +526,9 @@ function extractRecords(store: DoudianStoreSummary, responses: Record<string, Re
       shopId: store.shopId,
       shopName: store.shopName,
       group: store.groupName || "",
-      objectType: normalizeObjectType(readViolationField(item, adapter, "objectType"), productId),
+      objectType,
+      objectId,
+      objectTypeCode: text(rawObjectType),
       objectName: text(readViolationField(item, adapter, "objectName")) || reason || id,
       productId,
       reason: reason || "违规原因待确认",
@@ -581,6 +602,8 @@ function buildRow(store: DoudianStoreSummary, records: DoudianViolationRecord[],
   row.fetchedAt = coverage.fetchedAt;
   if (coverage.remoteTotal !== undefined) row.remoteTotal = coverage.remoteTotal;
   row.fetchedRecords = coverage.fetchedRecords;
+  row.sourceTotal = coverage.remoteTotal ?? coverage.fetchedRecords;
+  row.filteredTotal = records.length;
   return row;
 }
 
@@ -592,7 +615,9 @@ function rowSummary(row: DoudianViolationsDataRow, records: DoudianViolationReco
     nonZeroFieldCount: nonZeroFields.length,
     nonZeroFields,
     noRecord: Number(row.totalRecords || 0) === 0 && records.length === 0,
-    remoteTotalWithoutRecords: Number(row.remoteTotal || 0) > 0 && records.length === 0
+    selectedRangeNoRecord: row.datePreset !== "all" && records.length === 0,
+    sourceRecordsFilteredOut: Math.max(0, Number(row.fetchedRecords || 0) - records.length),
+    remoteTotalWithoutRecords: row.datePreset === "all" && Number(row.remoteTotal || 0) > 0 && records.length === 0
   };
 }
 
@@ -633,11 +658,13 @@ async function reportViolationsDataRow(args: {
   summary: ReturnType<typeof rowSummary>;
   responseSummary: Record<string, { status: number; success: boolean; code: unknown; message: string }>;
   pageSummary: Record<string, unknown>;
+  operationId?: string;
 }) {
   try {
     await requireChihuNative().logs.report({
       category: "doudian-violations-data",
       event: "row",
+      operationId: args.operationId || "",
       shopId: args.store.shopId,
       shopName: args.store.shopName,
       partition: args.store.partition,
@@ -645,8 +672,15 @@ async function reportViolationsDataRow(args: {
       reason: args.detail.reason || "",
       message: args.detail.message || "",
       rowSummary: args.summary,
+      dateRange: {
+        datePreset: args.row.datePreset || "all",
+        beginDate: args.row.beginDate || "",
+        endDate: args.row.endDate || ""
+      },
       metrics: {
         totalRecords: args.row.totalRecords,
+        sourceTotal: args.row.sourceTotal ?? args.row.remoteTotal ?? args.row.fetchedRecords ?? 0,
+        filteredTotal: args.row.filteredTotal ?? args.row.totalRecords,
         pendingCount: args.row.pendingCount,
         appealCount: args.row.appealCount,
         rectificationCount: args.row.rectificationCount,
@@ -1047,6 +1081,7 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
   const sourceFailures = [...summarizeFailures(responseSummary, payload.adapter), ...associationResult.failures];
   const blockingSourceFailures = sourceFailures.filter((failure) => !failure.optional);
   const summary = rowSummary(row, records);
+  const filteredNoRecord = summary.noRecord && dateContext.datePreset !== "all" && Number(row.fetchedRecords || 0) > 0;
   const requiredPlans = policyArray(payload.adapter, "violationsData.requiredPlans");
   const successPlanKeys = Object.entries(normalizedResponses)
     .filter(([key, response]) => requestPlanResponseOk(response, payload.adapter, key, violationsDataMappings(payload.adapter)))
@@ -1059,7 +1094,9 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
     : blockingSourceFailures.length || coverage.coverageStatus !== "complete"
       ? policyMessage(payload.adapter, "violationsData.messages.partialSourceStore", "Violations data synced with partial source errors")
       : summary.noRecord
-        ? policyMessage(payload.adapter, "violationsData.messages.noRecordStore", "Violations data synced with no records")
+        ? filteredNoRecord
+          ? policyMessage(payload.adapter, "violationsData.messages.noRecordStoreFiltered", "Violations data synced with no records in the selected date range")
+          : policyMessage(payload.adapter, "violationsData.messages.noRecordStore", "Violations data synced with no records")
         : policyMessage(payload.adapter, "violationsData.messages.synced", "Violations data synced");
   const detail: DoudianRunDetail = {
     shopId: store.shopId,
@@ -1067,7 +1104,7 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
     status: ok ? (partial ? "partial" : "ok") : "failed",
     ok,
     message,
-    reason: ok ? (partial ? "violations-data-partial-source-failure" : summary.noRecord ? "violations-data-no-record" : "") : "violations-data-request-failed",
+    reason: ok ? (partial ? "violations-data-partial-source-failure" : filteredNoRecord ? "violations-data-no-record-in-range" : summary.noRecord ? "violations-data-no-record" : "") : "violations-data-request-failed",
     category: ok ? (partial ? "api-partial" : "") : "api",
     diagnostic: {
       responses: responseSummary,
@@ -1092,7 +1129,7 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
     index,
     total
   };
-  await reportViolationsDataRow({ store, row, detail, summary, responseSummary, pageSummary });
+  await reportViolationsDataRow({ store, row, detail, summary, responseSummary, pageSummary, operationId: args.operationId });
   dispatchDoudianProgress({
     operationId: args.operationId || "",
     taskType: "violationsData",
@@ -1155,6 +1192,152 @@ async function saveLatest(args: {
   void cleanupViolationsLatestCache(args.adapterVersion, args.fieldSchemaVersion, args.requestPlanHash, args.productLinkageVersion, args.cacheRetentionDays).catch(() => undefined);
 }
 
+async function deriveFilteredResultFromAllCache(input: {
+  payload: DoudianAdapterPayload;
+  args: ViolationsDataArgs;
+  ledger: Awaited<ReturnType<typeof listStoreLedger>>;
+  targets: DoudianStoreSummary[];
+  dateContext: DateContext;
+  adapterVersion: string;
+  scriptsVersion: string;
+  schemaVersion: string;
+  linkageVersion: string;
+  requestPlanHash: string;
+  runId: string;
+}): Promise<DoudianViolationsDataResult | null> {
+  if (input.dateContext.datePreset === "all" || !input.targets.length) return null;
+  const reuseMinutes = policyNumber(input.payload.adapter, "violationsData.allCacheReuseMinutes", 0);
+  if (reuseMinutes <= 0) return null;
+
+  const allDateContext = violationsDateContext({ datePreset: "all" }, input.payload.adapter);
+  const ids = input.targets.map((store) => latestId(
+    store.shopId,
+    allDateContext,
+    input.adapterVersion,
+    input.schemaVersion,
+    input.requestPlanHash,
+    input.linkageVersion
+  ));
+  const snapshots = await repositoryGetMany<ViolationsLatestRecord>("violations_latest", ids);
+  const snapshotByShop = new Map(snapshots.map((record) => [record.shopId, record]));
+  const cutoff = Date.now() - reuseMinutes * 60 * 1000;
+  const usable = input.targets.every((store) => {
+    const record = snapshotByShop.get(store.shopId);
+    const updatedAt = Date.parse(record?.updatedAt || "");
+    return !!record &&
+      record.ok === true &&
+      record.row.complete === true &&
+      record.row.truncated !== true &&
+      record.ruleVersion === input.scriptsVersion &&
+      Number.isFinite(updatedAt) &&
+      updatedAt >= cutoff;
+  });
+  if (!usable) return null;
+
+  const rows: DoudianViolationsDataRow[] = [];
+  const records: DoudianViolationRecord[] = [];
+  const details: DoudianRunDetail[] = [];
+  for (const [index, store] of input.targets.entries()) {
+    const snapshot = snapshotByShop.get(store.shopId)!;
+    const sourceRecords = snapshot.records || [];
+    const filteredRecords = sourceRecords.filter((record) => recordInDateRange(record, input.dateContext));
+    const dateUnknownCount = sourceRecords.filter((record) => !record.violationAt && !record.createdAt).length;
+    const coverage: StoreCoverage = {
+      coverageStatus: dateUnknownCount ? "partial" : "complete",
+      complete: dateUnknownCount === 0,
+      truncated: false,
+      fetchedAt: String(snapshot.row.fetchedAt || snapshot.updatedAt || nowIso()),
+      remoteTotal: coerceNumber(snapshot.row.remoteTotal) ?? sourceRecords.length,
+      fetchedRecords: sourceRecords.length
+    };
+    const row = buildRow(store, filteredRecords, input.dateContext, coverage);
+    const summary = rowSummary(row, filteredRecords);
+    const filteredNoRecord = summary.noRecord && sourceRecords.length > 0;
+    const partial = coverage.complete !== true;
+    const message = partial
+      ? policyMessage(input.payload.adapter, "violationsData.messages.partialSourceStore", "Violations data synced with partial source errors")
+      : filteredNoRecord
+        ? policyMessage(input.payload.adapter, "violationsData.messages.noRecordStoreFiltered", "Violations data synced with no records in the selected date range")
+        : summary.noRecord
+          ? policyMessage(input.payload.adapter, "violationsData.messages.noRecordStore", "Violations data synced with no records")
+          : policyMessage(input.payload.adapter, "violationsData.messages.synced", "Violations data synced");
+    rows.push(row);
+    records.push(...filteredRecords);
+    details.push({
+      shopId: store.shopId,
+      shopName: store.shopName,
+      status: partial ? "partial" : "ok",
+      ok: true,
+      message,
+      reason: partial ? "violations-data-partial-source-failure" : filteredNoRecord ? "violations-data-no-record-in-range" : summary.noRecord ? "violations-data-no-record" : "",
+      category: partial ? "cache-partial" : "",
+      diagnostic: {
+        cacheDerived: true,
+        sourceDatePreset: "all",
+        sourceUpdatedAt: snapshot.updatedAt,
+        dateUnknownCount,
+        dateMatchedCount: filteredRecords.length,
+        rowSummary: summary,
+        datePreset: input.dateContext.datePreset,
+        beginDate: input.dateContext.beginDate,
+        endDate: input.dateContext.endDate
+      },
+      index: index + 1,
+      total: input.targets.length
+    });
+  }
+
+  const partialSourceCount = details.filter((detail) => detail.status === "partial").length;
+  const noRecordCount = rows.filter((row) => Number(row.totalRecords || 0) === 0).length;
+  const successCount = details.length;
+  const message = partialSourceCount
+    ? policyMessage(input.payload.adapter, "violationsData.messages.partialSources", "Violations data synced; {partialSourceCount} stores have source issues", { successCount, partialSourceCount })
+    : policyMessage(input.payload.adapter, "violationsData.messages.done", "Violations data synced for {successCount} stores", { successCount });
+  await saveLatest({
+    rows,
+    records,
+    details,
+    dateContext: input.dateContext,
+    adapterVersion: input.adapterVersion,
+    ruleVersion: input.scriptsVersion,
+    fieldSchemaVersion: input.schemaVersion,
+    requestPlanHash: input.requestPlanHash,
+    productLinkageVersion: input.linkageVersion,
+    cacheRetentionDays: policyNumber(input.payload.adapter, "violationsData.cacheRetentionDays", 35)
+  });
+
+  return {
+    ok: partialSourceCount === 0,
+    status: partialSourceCount ? "partial" : "ok",
+    message,
+    runId: input.runId,
+    operationId: input.args.operationId,
+    rows,
+    records,
+    details,
+    successCount,
+    failureCount: 0,
+    partialSourceCount,
+    noRecordCount,
+    coverageStatus: partialSourceCount ? "partial" : "complete",
+    complete: partialSourceCount === 0,
+    truncated: false,
+    fetchedAt: rows.map((row) => String(row.fetchedAt || "")).filter(Boolean).sort().at(-1) || nowIso(),
+    remoteTotal: rows.reduce((sum, row) => sum + Number(row.sourceTotal || 0), 0),
+    dateRange: publicDateRange(input.dateContext),
+    adapterVersion: input.adapterVersion,
+    scriptsVersion: input.scriptsVersion,
+    fieldSchemaVersion: input.schemaVersion,
+    requestPlanHash: input.requestPlanHash,
+    productLinkageVersion: input.linkageVersion,
+    stores: input.ledger.stores || [],
+    groups: input.ledger.groups || [],
+    cached: true,
+    cacheDerived: true,
+    sourceDatePreset: "all"
+  };
+}
+
 export async function fetchViolationsData(args: ViolationsDataArgs = {}): Promise<DoudianViolationsDataResult> {
   const payload = adapterPayload(args);
   const ledger = await listStoreLedger();
@@ -1211,6 +1394,21 @@ export async function fetchViolationsData(args: ViolationsDataArgs = {}): Promis
       groups: ledger.groups || []
     };
   }
+
+  const derivedFromAllCache = await deriveFilteredResultFromAllCache({
+    payload,
+    args,
+    ledger,
+    targets,
+    dateContext,
+    adapterVersion,
+    scriptsVersion,
+    schemaVersion,
+    linkageVersion,
+    requestPlanHash: hash,
+    runId
+  });
+  if (derivedFromAllCache) return derivedFromAllCache;
 
   if (!planKeys.length) {
     return {
@@ -1381,6 +1579,7 @@ export async function runDoudianViolationsDataSelfCheck(options: { doudianAdapte
         shopName,
         group: "Self Check",
         objectType: "商品",
+        objectId: `product-${suffix}`,
         objectName: `Self Check Product ${item.datePreset}`,
         productId: `product-${suffix}`,
         reason: "self check",
@@ -1409,12 +1608,27 @@ export async function runDoudianViolationsDataSelfCheck(options: { doudianAdapte
     const fixtureStatuses = violationsResponseFixture.tickets.map((ticket) => resolveProcessStatus(ticket, payload.adapter));
     const expectedStatuses = violationsResponseFixture.expectedStatuses;
     const statusNormalizationOk = fixtureStatuses.every((status, index) => status === expectedStatuses[index]);
+    const fixtureRecords = extractRecords({ shopId, shopName, platform: "doudian", partition: "", status: "online" }, {
+      violationPenaltyList: {
+        ok: true,
+        status: 200,
+        data: { code: 0, data: { tickets: violationsResponseFixture.tickets, total: violationsResponseFixture.tickets.length } },
+        source: "violationPenaltyList"
+      }
+    }, { sourcePlan: "violationPenaltyList" }, payload.adapter);
+    const expectedObjectTypes = ["商品", "商品", "店铺", "商品", "商品"];
+    const objectTypeNormalizationOk = fixtureRecords.every((record, index) => record.objectType === expectedObjectTypes[index]) &&
+      fixtureRecords[2]?.objectId === "fixture-shop-id" &&
+      fixtureRecords[2]?.productId === "";
+    const cacheDerived = await fetchViolationsData({ doudianAdapter: payload, shopIds: [shopId], datePreset: "7d" });
+    const cacheDerivationOk = cacheDerived.cacheDerived === true && cacheDerived.sourceDatePreset === "all" && cacheDerived.records?.length === 1;
     const completedDueAt = formatDateTime(addDateDays(new Date(), -1));
     const completedRiskRow = buildRow({ shopId, shopName, platform: "doudian", partition: "", status: "online" }, [{
       id: "completed-risk-check",
       shopId,
       shopName,
       objectType: "店铺",
+      objectId: shopId,
       objectName: "completed",
       productId: "",
       reason: "completed",
@@ -1432,15 +1646,18 @@ export async function runDoudianViolationsDataSelfCheck(options: { doudianAdapte
     const noTotalCompletes = paginationCoverage({ mergedRecordCount: 75, stoppedOnShortPage: true, requestFailed: false, fetchedPages: 2, maxPages: 50 });
     const maxPageTruncates = paginationCoverage({ mergedRecordCount: 2500, stoppedOnShortPage: false, requestFailed: false, fetchedPages: 50, maxPages: 50 });
     return {
-      ok: results.every((item) => item.fetchOk && item.latestOk && item.metadataOk && item.dateRangeOk) && statusNormalizationOk && completedRiskRow.overdueCount === 0 && !noTotalContinues.complete && noTotalCompletes.complete && maxPageTruncates.truncated,
+      ok: results.every((item) => item.fetchOk && item.latestOk && item.metadataOk && item.dateRangeOk) && statusNormalizationOk && objectTypeNormalizationOk && cacheDerivationOk && completedRiskRow.overdueCount === 0 && !noTotalContinues.complete && noTotalCompletes.complete && maxPageTruncates.truncated,
       latestOk: results.every((item) => item.latestOk),
       datePresetOk: results.every((item) => item.dateRangeOk),
       metadataOk: results.every((item) => item.metadataOk),
       statusNormalizationOk,
+      objectTypeNormalizationOk,
+      cacheDerivationOk,
       completedRiskOk: completedRiskRow.overdueCount === 0,
       noTotalPaginationOk: !noTotalContinues.complete && !noTotalContinues.truncated && noTotalCompletes.complete,
       maxPageTruncationOk: maxPageTruncates.truncated,
       fixtureStatuses,
+      fixtureObjectTypes: fixtureRecords.map((record) => record.objectType),
       cases: results
     };
   } finally {

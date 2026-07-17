@@ -25,7 +25,7 @@ export interface DoudianTaskRequest {
 export interface DoudianProgressDetail {
   operationId: string;
   taskType?: string;
-  status: "running" | "succeeded" | "failed" | "cancelled";
+  status: "running" | "succeeded" | "partial" | "failed" | "cancelled";
   progress: number;
   message?: string;
   resultSummary?: string;

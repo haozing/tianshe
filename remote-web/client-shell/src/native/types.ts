@@ -24,7 +24,7 @@ export interface NativeHttpRequest {
   method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   headers?: Record<string, string>;
   body?: unknown;
-  responseType?: "json" | "text" | "arrayBuffer" | "base64";
+  responseType?: "json" | "losslessJson" | "text" | "arrayBuffer" | "base64";
   timeoutMs?: number;
   persistSetCookie?: boolean;
 }

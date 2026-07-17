@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "contractVersion": "doudian-adapter.v1",
   "platform": "doudian",
-  "version": "2026.07.15.remote-adapter-violations-v2",
+  "version": "2026.07.16.remote-adapter-business-funds-quality-v2",
   "source": "remote-web",
   "capabilities": {
     "actions": [
@@ -1695,6 +1695,14 @@
             "name"
           ]
         },
+        "objectId": {
+          "paths": [
+            "object_id",
+            "objectId",
+            "target_id",
+            "targetId"
+          ]
+        },
         "productId": {
           "paths": [
             "product_info.product_id",
@@ -1706,11 +1714,7 @@
             "goods_id",
             "goodsId",
             "item_id",
-            "itemId",
-            "target_id",
-            "targetId",
-            "object_id",
-            "objectId"
+            "itemId"
           ]
         },
         "reason": {
@@ -2895,6 +2899,7 @@
       "signatureParam": false,
       "includeEmptySignature": false,
       "requestMode": "platform",
+      "responseType": "losslessJson",
       "origin": "https://fxg.jinritemai.com",
       "referer": "https://fxg.jinritemai.com/ffa/mshop/violation",
       "signerUrl": "https://fxg.jinritemai.com/ffa/mshop/violation",
@@ -3730,18 +3735,30 @@
         "syncing": "正在同步经营数据",
         "synced": "经营数据已同步",
         "failed": "经营数据接口返回异常",
-        "partial": "已同步 {successCount} 家，{failureCount} 家失败",
+        "partial": "{successCount} 家完整，{partialCount} 家部分可用，{failureCount} 家失败",
         "done": "已同步 {successCount} 家店铺经营数据",
         "cancelled": "已取消经营数据同步",
         "partialSourceStore": "经营数据已同步，部分来源异常",
         "noMetricMatchStore": "经营数据已同步，但未命中指标字段",
-        "partialSources": "已同步 {successCount} 家，{partialSourceCount} 家关键来源异常，{noMetricMatchCount} 家未命中指标"
+        "partialSources": "已同步 {successCount} 家，{partialSourceCount} 家关键来源异常，{noMetricMatchCount} 家未命中指标",
+        "partialMetrics": "{successCount} 家完整，{partialCount} 家部分可用，其中 {incompleteMetricCount} 家核心指标不完整"
       },
       "requiredPlans": [
         "businessHomepage"
       ],
+      "criticalPlans": [
+        "businessHomepage",
+        "businessCoreIndex"
+      ],
+      "criticalFields": [
+        "dealAmount",
+        "orderCount",
+        "buyers",
+        "exposureUsers",
+        "clickUsers",
+        "onSaleProductCount"
+      ],
       "optionalPlans": [
-        "businessCoreIndex",
         "businessSmartActivityCoupon",
         "businessSmartActivityDirectDiscount",
         "businessSmartActivityNewUserBonus",
@@ -3749,7 +3766,7 @@
         "businessOfflineProducts"
       ],
       "fieldSchema": {
-        "version": "2026.07.06.business-data-fields-v1",
+        "version": "2026.07.16.business-data-fields-v2-quality",
         "columns": [
           {
             "key": "dealAmount",
@@ -4226,13 +4243,13 @@
       "messages": {
         "syncing": "正在同步资金",
         "synced": "资金数据已同步",
-        "failed": "资金数据请求失败",
-        "partial": "已同步 {successCount} 家，{failureCount} 家失败",
+        "failed": "{failureCount} 家资金数据同步失败，未取得可用结果",
+        "partial": "{successCount} 家完整，{partialCount} 家部分可用，{failureCount} 家失败",
         "done": "已同步 {successCount} 家资金数据",
         "cancelled": "资金数据同步已取消",
         "partialSourceStore": "资金数据已同步，部分来源异常",
         "noMetricMatchStore": "资金数据已同步，但未命中指标字段",
-        "partialSources": "已同步 {successCount} 家，{partialSourceCount} 家关键来源异常，{noMetricMatchCount} 家未命中指标"
+        "partialSources": "{successCount} 家完整，{partialCount} 家部分可用，其中 {partialSourceCount} 家来源异常，{incompleteMetricCount} 家指标不完整"
       },
       "datePresets": {
         "snapshot": {
@@ -4632,7 +4649,9 @@
           "sources": [
             "frozenBalance",
             "depositPayable",
-            "compensationAmountToday"
+            "marginBalance",
+            "compensationAmountToday",
+            "compensationAmount7d"
           ],
           "onlyWhenZero": true
         }
@@ -4694,6 +4713,7 @@
       "pageConcurrency": 4,
       "maxPages": 50,
       "cacheRetentionDays": 35,
+      "allCacheReuseMinutes": 10,
       "filterMode": "local-after-complete-fetch",
       "dateField": "violationAt",
       "requestPlans": [
@@ -4767,6 +4787,7 @@
         "cancelled": "违规管理同步已取消",
         "partialSourceStore": "违规列表已同步，部分来源异常",
         "noRecordStore": "违规列表已同步，暂无违规记录",
+        "noRecordStoreFiltered": "违规列表已同步，当前时间范围内暂无违规记录",
         "partialSources": "已同步 {successCount} 家，{partialSourceCount} 家来源异常"
       },
       "datePresets": {
@@ -4792,7 +4813,12 @@
         }
       },
       "fieldSchema": {
-        "version": "2026.07.15.violations-data-fields-v2-coverage",
+        "version": "2026.07.16.violations-data-fields-v4-coverage",
+        "unavailableMetrics": [
+          "dueSoonCount",
+          "overdueCount",
+          "penaltyAmount"
+        ],
         "columns": [
           {
             "key": "totalRecords",

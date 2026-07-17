@@ -231,7 +231,7 @@ async function deleteStoreLatestCaches(shopIds: string[]) {
       repositoryGetAllByPrefix<{ id: string }>("violations_latest", `${shopId}::`, { pageSize: 500, maxItems: 10000 })
     ]);
     await Promise.all([
-      repositoryDelete("funds_latest", shopId).catch(() => undefined),
+      repositoryDeleteMany("funds_latest", [`funds-current::${shopId}`, shopId]).catch(() => undefined),
       repositoryDeleteMany("business_latest", businessRows.map((record) => record.id)),
       repositoryDeleteMany("violations_latest", violationRows.map((record) => record.id))
     ]);
@@ -443,6 +443,7 @@ export async function runDoudianStoreGroupsSelfCheck(options: { openUrl?: string
   const shopId = `store-self-check-${suffix}`;
   const originalGroupName = `自检分组-${suffix}`;
   const renamedGroupName = `自检改名-${suffix}`;
+  const fundsCacheIds = [`funds-current::${shopId}`, shopId];
   let openedWinId: number | null = null;
 
   try {
@@ -466,6 +467,7 @@ export async function runDoudianStoreGroupsSelfCheck(options: { openUrl?: string
     const created = await createStoreGroup(originalGroupName);
     const moved = await updateStoreGroup([shopId], originalGroupName);
     const renamed = await renameStoreGroup(originalGroupName, renamedGroupName);
+    await repositoryPutMany("funds_latest", fundsCacheIds.map((id) => ({ id, shopId, selfCheck: true })));
     const opened = await openStoreWindow(shopId, {
       url: options.openUrl || location.href,
       title: "CHIHU Store Self Check",
@@ -476,16 +478,18 @@ export async function runDoudianStoreGroupsSelfCheck(options: { openUrl?: string
       ? (diagnostic as { winId: number }).winId
       : null;
     const deletedStore = await deleteStoreLedger([shopId]);
+    const fundsCacheDeleteOk = (await Promise.all(fundsCacheIds.map((id) => repositoryGet("funds_latest", id)))).every((record) => record == null);
     const deletedGroup = await deleteEmptyStoreGroup(renamedGroupName);
 
     return {
-      ok: listOk && created.ok && moved.ok && renamed.ok && opened.ok && deletedStore.ok && deletedGroup.ok,
+      ok: listOk && created.ok && moved.ok && renamed.ok && opened.ok && deletedStore.ok && fundsCacheDeleteOk && deletedGroup.ok,
       listOk,
       createOk: created.ok,
       updateOk: moved.ok,
       renameOk: renamed.ok,
       openOk: opened.ok,
       deleteStoreOk: deletedStore.ok,
+      fundsCacheDeleteOk,
       deleteGroupOk: deletedGroup.ok,
       openedWinId
     };
@@ -494,6 +498,7 @@ export async function runDoudianStoreGroupsSelfCheck(options: { openUrl?: string
       await getChihuNative()?.windows.destroy({ winId: openedWinId }).catch(() => null);
     }
     await repositoryDelete("stores", shopId).catch(() => undefined);
+    await repositoryDeleteMany("funds_latest", fundsCacheIds).catch(() => undefined);
     const groups = await repositoryGetAll<GroupRecord>("groups").catch(() => []);
     await Promise.all(groups
       .filter((group) => group.groupName === originalGroupName || group.groupName === renamedGroupName)

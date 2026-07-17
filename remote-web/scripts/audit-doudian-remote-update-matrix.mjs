@@ -220,6 +220,9 @@ const businessRequiredPlans = Array.isArray(adapter.policies?.businessData?.requ
 const businessOptionalPlans = Array.isArray(adapter.policies?.businessData?.optionalPlans)
   ? adapter.policies.businessData.optionalPlans.map((item) => String(item)).filter(Boolean)
   : [];
+const businessCriticalPlans = Array.isArray(adapter.policies?.businessData?.criticalPlans)
+  ? adapter.policies.businessData.criticalPlans.map((item) => String(item)).filter(Boolean)
+  : [];
 const businessCoreIndexPlan = adapter.requestPlans?.businessCoreIndex || {};
 const businessCoreIndexModulePath = "data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0";
 const businessCoreIndexMetricPrefix = "businessCoreIndex.data.module_data.homepage_core_index.compass_general_multi_index_card_value.data.0.";
@@ -373,10 +376,11 @@ const checks = [
     source: rel(adapterPath)
   },
   {
-    key: "businessCoreIndexOptionalRemote",
+    key: "businessCoreIndexCriticalRemote",
     ok: businessRequiredPlans.includes("businessHomepage") &&
       !businessRequiredPlans.includes("businessCoreIndex") &&
-      businessOptionalPlans.includes("businessCoreIndex"),
+      !businessOptionalPlans.includes("businessCoreIndex") &&
+      businessCriticalPlans.includes("businessCoreIndex"),
     source: rel(adapterPath)
   },
   {
@@ -513,6 +517,23 @@ const checks = [
       requestPlanClient.includes("signDoudianRequest") &&
       (businessCoreIndexPlan.requestMode === "page-fetch" || businessCoreIndexPlan.pageFetchOnSignFailure === true),
     source: rel(requestPlanClientPath)
+  },
+  {
+    key: "remotePlatformJsonIsLossless",
+    ok: requestPlanClient.includes('import JSONbigFactory from "json-bigint"') &&
+      requestPlanClient.includes(': "losslessJson"') &&
+      requestPlanClient.includes("data = losslessJson.parse(result.text)") &&
+      !requestPlanClient.includes("data = JSON.parse(text)") &&
+      adapter.requestPlans?.violationPenaltyList?.responseType === "losslessJson",
+    source: rel(requestPlanClientPath)
+  },
+  {
+    key: "violationsObjectTypeControlsProductId",
+    ok: adapter.responseMappings?.violationsData?.fields?.objectId?.paths?.includes("object_id") &&
+      !adapter.responseMappings?.violationsData?.fields?.productId?.paths?.includes("object_id") &&
+      violationsDataClient.includes('const productId = objectType === "商品"') &&
+      violationsDataClient.includes("OBJECT_TYPE_LABELS"),
+    source: rel(violationsDataClientPath)
   },
   {
     key: "remoteRuntimeSelfChecksExposed",

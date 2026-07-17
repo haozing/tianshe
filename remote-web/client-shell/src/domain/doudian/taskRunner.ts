@@ -31,7 +31,7 @@ function channelResult(task: DoudianTaskRequest, result: unknown) {
   if (task.taskType !== "violationsData" || !result || typeof result !== "object") return result;
   const record = result as Record<string, unknown>;
   const records = Array.isArray(record.records) ? record.records : [];
-  return records.length ? { ...record, records: [], recordsDeferred: true } : result;
+  return records.length ? { ...record, records: [], recordCount: records.length, recordsDeferred: true } : result;
 }
 
 function installProgressForwarder(channel: BroadcastChannel) {

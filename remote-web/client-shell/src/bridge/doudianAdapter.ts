@@ -183,6 +183,54 @@ const VIOLATIONS_CONTRACT_FIELDS = new Set([
   "productMissingCount", "offlineProductCount", "failedCount", "penaltyAmount"
 ]);
 
+const BUSINESS_CONTRACT_FIELDS = new Set([
+  "dealAmount", "orderCount", "refundAmount", "refundOrderCount", "platformSubsidyAmount",
+  "violationPending", "rectificationRisk", "pendingShipment", "ship24h", "overdueShipment",
+  "unpaidOrders", "afterSalePending", "abnormalPackage", "serviceOrder", "buyers", "customerPrice",
+  "exposureUsers", "clickUsers", "productExposureCount", "productClickCount", "onSaleProductCount",
+  "offlineProductCount", "experienceScore", "refundRate", "latest7dUnreadWarning", "couponActive",
+  "directDiscountActive", "newUserBonusActive", "reputationScore", "logisticsScore", "disputeDeduction",
+  "productScore", "serviceScore"
+]);
+
+function isValidBusinessContract(config: DoudianAdapterConfig) {
+  const responseMappings = config.responseMappings as unknown as Record<string, unknown>;
+  const mappings = isPlainObject(responseMappings.businessData) ? responseMappings.businessData : null;
+  const policies = config.policies as unknown as Record<string, unknown>;
+  const businessPolicy = isPlainObject(policies?.businessData) ? policies.businessData : null;
+  if (!mappings || !businessPolicy) return false;
+
+  const requestPlans = businessPolicy.requestPlans;
+  const requiredPlans = businessPolicy.requiredPlans;
+  const optionalPlans = businessPolicy.optionalPlans;
+  const criticalPlans = businessPolicy.criticalPlans;
+  const coreMetricPlans = businessPolicy.coreMetricPlans;
+  const criticalFields = businessPolicy.criticalFields;
+  if (![requestPlans, requiredPlans, optionalPlans, criticalPlans, coreMetricPlans, criticalFields].every(isOptionalStringList)) return false;
+  if (!(requestPlans as string[]).length || !(criticalPlans as string[]).length || !(criticalFields as string[]).length) return false;
+  const requestPlanSet = new Set(requestPlans as string[]);
+  if ([...(requiredPlans as string[]), ...(optionalPlans as string[]), ...(criticalPlans as string[]), ...(coreMetricPlans as string[])].some((key) => !requestPlanSet.has(key))) return false;
+  if ((criticalPlans as string[]).some((key) => (optionalPlans as string[]).includes(key))) return false;
+  if ([...requestPlanSet].some((key) => !isPlainObject(config.requestPlans?.[key]))) return false;
+
+  const groups = businessPolicy.requestPlanGroups;
+  if (!Array.isArray(groups) || !groups.every((group) => isOptionalStringList(group) && group.every((key) => requestPlanSet.has(key)))) return false;
+  const groupedPlans = groups.flatMap((group) => group as string[]);
+  if (new Set(groupedPlans).size !== groupedPlans.length || groupedPlans.some((key) => !requestPlanSet.has(key))) return false;
+  if (groupedPlans.length !== requestPlanSet.size || [...requestPlanSet].some((key) => !groupedPlans.includes(key))) return false;
+
+  const fields = isPlainObject(mappings.fields) ? mappings.fields : null;
+  const schema = isPlainObject(businessPolicy.fieldSchema) ? businessPolicy.fieldSchema : null;
+  const columns = schema && Array.isArray(schema.columns) ? schema.columns : [];
+  if (!fields || !schema || !isString(schema.version) || !columns.length) return false;
+  const columnKeys = columns.map((column) => isPlainObject(column) ? String(column.key || "") : "");
+  if (columnKeys.some((key) => !BUSINESS_CONTRACT_FIELDS.has(key) || !isPlainObject(fields[key]))) return false;
+  if ((criticalFields as string[]).some((key) => !BUSINESS_CONTRACT_FIELDS.has(key) || !columnKeys.includes(key))) return false;
+  return new Set(columnKeys).size === columnKeys.length &&
+    columnKeys.length === BUSINESS_CONTRACT_FIELDS.size &&
+    [...BUSINESS_CONTRACT_FIELDS].every((key) => columnKeys.includes(key));
+}
+
 function isValidFundsContract(config: DoudianAdapterConfig) {
   const responseMappings = config.responseMappings as unknown as Record<string, unknown>;
   const mappings = isPlainObject(responseMappings.fundsData) ? responseMappings.fundsData : null;
@@ -253,7 +301,7 @@ function isValidViolationsContract(config: DoudianAdapterConfig) {
   if (!isStringArray(mappings.listPaths) || !isOptionalStringList(mappings.totalPaths)) return false;
   const fields = isPlainObject(mappings.fields) ? mappings.fields : null;
   if (!fields) return false;
-  const requiredFields = ["id", "violationAt", "processStatus", "penaltyStatus", "appealStatus", "rectificationStatus", "dueAt"];
+  const requiredFields = ["id", "objectType", "objectId", "productId", "violationAt", "processStatus", "penaltyStatus", "appealStatus", "rectificationStatus", "dueAt"];
   if (requiredFields.some((key) => !isPlainObject(fields[key]) || !isStringArray(fields[key].paths))) return false;
   if (Object.values(fields).some((value) => !isPlainObject(value) || !isStringArray(value.paths))) return false;
 
@@ -326,6 +374,7 @@ export function isDoudianAdapterConfig(value: unknown): value is DoudianAdapterC
     isValidSignConfig(config.sign) &&
     isValidStrategies(config.strategies) &&
     isValidPolicies(config.policies) &&
+    isValidBusinessContract(config) &&
     isValidFundsContract(config) &&
     isValidViolationsContract(config)
   );

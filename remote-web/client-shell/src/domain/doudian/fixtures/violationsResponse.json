@@ -37,6 +37,7 @@
     {
       "ticket_id": "fixture-unknown-status",
       "object_id_type": 3,
+      "object_id": "fixture-shop-id",
       "show_violation_reason": "店铺信息待核实",
       "circumstances_level": 1,
       "all_exec_task_status": 999,

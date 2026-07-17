@@ -1,8 +1,11 @@
 import type { DoudianAdapterConfig, DoudianAdapterPayload } from "../../types";
+import JSONbigFactory from "json-bigint";
 import { requireChihuNative } from "../../native/client";
 import { signDoudianRequest } from "./signer";
 import { XZB_SIGN_USER_AGENT } from "./xzbSigner";
 import { detailedDoudianLoggingEnabled, reportDoudianDiagnostic } from "./diagnosticLog";
+
+const losslessJson = JSONbigFactory({ storeAsString: true });
 
 export interface RequestPlanResult {
   ok: boolean;
@@ -18,6 +21,8 @@ export interface RequestPlanResult {
   signFailureReason?: string;
   requestCookieState?: Record<string, unknown>;
   requestDiagnostic?: Record<string, unknown>;
+  attemptCount?: number;
+  durationMs?: number;
 }
 
 function endpointUrl(adapter: DoudianAdapterConfig, endpoint: string) {
@@ -83,11 +88,18 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   context?: Record<string, unknown>;
   trackWindow?: (winId: number) => void;
 }): Promise<RequestPlanResult> {
+  const startedAt = Date.now();
+  let attemptCount = 0;
+  const finalize = (result: RequestPlanResult): RequestPlanResult => ({
+    ...result,
+    attemptCount,
+    durationMs: Date.now() - startedAt
+  });
   const adapter = payload.adapter;
   const plan = (adapter.requestPlans?.[args.planKey] || {}) as Record<string, unknown>;
   const endpointKey = typeof plan.endpointKey === "string" ? plan.endpointKey : args.planKey;
   const endpoint = adapter.endpoints[endpointKey];
-  if (!endpoint) return { ok: false, status: 0, data: null, error: `missing endpoint: ${endpointKey}`, source: args.planKey };
+  if (!endpoint) return finalize({ ok: false, status: 0, data: null, error: `missing endpoint: ${endpointKey}`, source: args.planKey });
 
   const context = args.context || {};
   const url = buildPlanUrl(adapter, endpoint, plan, context);
@@ -95,6 +107,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
     await prepareRequestPlanContext(args.partition, args.planKey, plan, adapter, context, url, args.trackWindow);
   }
   const runRequest = async (attempt: number | string = 0) => {
+    attemptCount += 1;
     let result: RequestPlanResult;
     if (plan.requestMode === "page-fetch") {
       result = await pageFetchJson(args.partition, url, args.planKey, plan, context, args.trackWindow);
@@ -143,7 +156,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   };
 
   let response = await runRequest();
-  if (response.nonRetryable) return response;
+  if (response.nonRetryable) return finalize(response);
   const prepareMessages = arrayText(plan.prepareOnMessages);
   const prepareAttempts = Math.max(0, Math.min(3, Math.floor(Number(plan.prepareRetryAttempts || (prepareMessages.length ? 1 : 0)))));
   for (let attempt = 0; attempt < prepareAttempts && responseMatches(response, prepareMessages); attempt += 1) {
@@ -152,7 +165,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
     if (delayMs) await delay(delayMs);
     await prepareRequestPlanContext(args.partition, args.planKey, plan, adapter, context, url, args.trackWindow);
     response = await runRequest(`prepare-${attempt + 1}`);
-    if (response.nonRetryable) return response;
+    if (response.nonRetryable) return finalize(response);
   }
 
   const maxAttempts = Math.max(1, Math.min(8, Math.floor(Number(plan.maxAttempts || 1))));
@@ -162,7 +175,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
       const delayMs = retryDelayMs(plan, attempt, "retryDelayMs", "retryBackoff", 1000);
       if (delayMs) await delay(delayMs);
       response = await runRequest(attempt);
-      if (response.nonRetryable) return response;
+      if (response.nonRetryable) return finalize(response);
     }
   }
 
@@ -172,11 +185,11 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
       const delayMs = retryDelayMs(plan, attempt, "retryDelayMs", "retryBackoff", 1000);
       if (delayMs) await delay(delayMs);
       response = await runRequest(`business-${attempt}`);
-      if (response.nonRetryable) return response;
+      if (response.nonRetryable) return finalize(response);
     }
   }
 
-  return response;
+  return finalize(response);
 }
 
 function stringRecord(value: unknown): Record<string, string> {
@@ -683,7 +696,9 @@ function buildPlanUrl(adapter: DoudianAdapterConfig, endpoint: string, plan: Rec
 async function requestJson(partition: string, url: string, headers: Record<string, string>, source: string, plan: Record<string, unknown> = {}, context: Record<string, unknown> = {}): Promise<RequestPlanResult> {
   const method = String(plan.method || "GET").toUpperCase() as "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   const body = method === "GET" ? undefined : interpolateDeep(plan.body, context);
-  const responseType = plan.responseType === "base64" || plan.responseType === "arrayBuffer" || plan.responseType === "text" ? plan.responseType : "json";
+  const responseType = plan.responseType === "base64" || plan.responseType === "arrayBuffer" || plan.responseType === "text" || plan.responseType === "losslessJson"
+    ? plan.responseType
+    : "losslessJson";
   const response = await requireChihuNative().http.request({
     partition,
     url,
@@ -748,15 +763,13 @@ async function pageFetchJson(partition: string, url: string, source: string, pla
           }
           const response = await fetch(${JSON.stringify(url)}, init);
           const text = await response.text();
-          let data = text;
-          try { data = JSON.parse(text); } catch {}
           return {
             ok: response.ok,
             status: response.status,
             url: response.url || ${JSON.stringify(url)},
             pageHref: location.href,
             pageTitle: document.title,
-            data,
+            text,
             error: response.ok ? "" : text.slice(0, 240)
           };
         } catch (error) {
@@ -774,7 +787,7 @@ async function pageFetchJson(partition: string, url: string, source: string, pla
         }
       })();
     `;
-    const result = await native.windows.eval({ winId, code, timeoutMs: timeoutMs + 2000 }) as { ok?: boolean; status?: number; url?: string; pageHref?: string; pageTitle?: string; data?: unknown; error?: string } | null;
+    const result = await native.windows.eval({ winId, code, timeoutMs: timeoutMs + 2000 }) as { ok?: boolean; status?: number; url?: string; pageHref?: string; pageTitle?: string; text?: string; data?: unknown; error?: string } | null;
     if (!result) {
       return {
         ok: false,
@@ -787,10 +800,29 @@ async function pageFetchJson(partition: string, url: string, source: string, pla
         requestDiagnostic: requestDiagnostic(method, url, body)
       };
     }
+    let data = result.text ?? result.data ?? null;
+    if (typeof result.text === "string" && plan.responseType !== "text") {
+      try {
+        data = losslessJson.parse(result.text);
+      } catch (error) {
+        return {
+          ok: false,
+          status: Number(result.status || 0),
+          data: null,
+          error: `invalid lossless JSON response: ${error instanceof Error ? error.message : String(error)}`,
+          source,
+          url: String(result.url || url),
+          openUrl,
+          pageHref: String(result.pageHref || ""),
+          pageTitle: String(result.pageTitle || ""),
+          requestDiagnostic: requestDiagnostic(method, url, body)
+        };
+      }
+    }
     return {
       ok: result?.ok === true,
       status: Number(result?.status || 0),
-      data: result?.data ?? null,
+      data,
       error: String(result?.error || ""),
       source,
       url: String(result?.url || url),

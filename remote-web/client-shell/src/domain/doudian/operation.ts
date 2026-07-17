@@ -1,6 +1,6 @@
 import { repositoryAcquireOperation, repositoryCleanupOperations, repositoryGet, repositoryPut, repositoryQueryOperations } from "./repository";
 
-export type DoudianOperationStatus = "created" | "running" | "succeeded" | "failed" | "cancelled";
+export type DoudianOperationStatus = "created" | "running" | "succeeded" | "partial" | "failed" | "cancelled";
 
 export interface DoudianOperationRecord {
   id: string;
@@ -115,14 +115,14 @@ export async function markOperationProgress(operationId: string, progress: numbe
   return updateOperation(operationId, { status: "running", progress });
 }
 
-export async function markOperationResult(operationId: string, resultSummary = "completed") {
-  const record = await updateOperation(operationId, { status: "succeeded", progress: 100, resultSummary });
+export async function markOperationResult(operationId: string, resultSummary = "completed", status: "succeeded" | "partial" | "failed" = "succeeded") {
+  const record = await updateOperation(operationId, { status, progress: 100, resultSummary });
   void cleanupOperationHistory();
   return record;
 }
 
-export async function markOperationFullResult(operationId: string, resultSummary = "completed", result?: unknown) {
-  const record = await updateOperation(operationId, { status: "succeeded", progress: 100, resultSummary, result });
+export async function markOperationFullResult(operationId: string, resultSummary = "completed", result?: unknown, status: "succeeded" | "partial" | "failed" = "succeeded") {
+  const record = await updateOperation(operationId, { status, progress: 100, resultSummary, result });
   void cleanupOperationHistory();
   return record;
 }

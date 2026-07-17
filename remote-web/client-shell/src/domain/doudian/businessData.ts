@@ -12,6 +12,7 @@ import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestP
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { dispatchDoudianProgress } from "./progress";
 import { reportDoudianDiagnostic } from "./diagnosticLog";
+import businessDataResponseFixture from "./fixtures/businessDataResponse.json";
 
 const BUSINESS_DATA_FIELDS = [
   "dealAmount",
@@ -69,6 +70,7 @@ interface BusinessLatestRecord {
   shopId: string;
   shopName: string;
   ok: boolean;
+  quality?: "ok" | "partial" | "failed" | "empty";
   message: string;
   row: DoudianBusinessDataRow;
   diagnostic?: unknown;
@@ -102,6 +104,8 @@ interface DateContext {
 interface MetricSource {
   value: number;
   source: "path" | "alias" | "derived" | "none";
+  available: boolean;
+  reason?: "missing-path" | "empty-value" | "blocked";
   path?: string;
   alias?: string;
   formula?: string;
@@ -116,12 +120,24 @@ interface BusinessMetric {
   source: MetricSource;
 }
 
+interface BusinessRowSummary {
+  nonZeroFieldCount: number;
+  nonZeroFields: string[];
+  allZero: boolean;
+  availableFieldCount: number;
+  availableFields: string[];
+  unavailableFieldCount: number;
+  unavailableFields: string[];
+  allUnavailable: boolean;
+}
+
 interface SourceFailure {
   key?: string;
   status?: number;
   code?: unknown;
   message?: string;
   optional?: boolean;
+  critical?: boolean;
 }
 
 interface StoreActivationResult {
@@ -563,7 +579,7 @@ function readBusinessMetric(payload: Record<string, unknown>, adapter: DoudianAd
       }
       pathCandidates.get(planKey)?.push({
         value: metricValue,
-        source: { value: metricValue, source: "path", path }
+        source: { value: metricValue, source: "path", path, available: true }
       });
     }
   }
@@ -572,7 +588,7 @@ function readBusinessMetric(payload: Record<string, unknown>, adapter: DoudianAd
     const selectedGroup = preferNonZero
       ? groups.find((group) => group.some((candidate) => Number(candidate.value || 0) !== 0)) || groups[0] || []
       : groups[0] || [];
-    return preferredBusinessMetric(selectedGroup, preferNonZero) || { value: 0, source: { value: 0, source: "none" } };
+    return preferredBusinessMetric(selectedGroup, preferNonZero) || { value: 0, source: { value: 0, source: "none", available: false, reason: "missing-path" } };
   }
 
   const aliases = businessFieldAliases(adapter, field);
@@ -591,13 +607,13 @@ function readBusinessMetric(payload: Record<string, unknown>, adapter: DoudianAd
         const metricValue = normalizeBusinessMetricValue(field, number / scale);
         candidates.push({
           value: metricValue,
-          source: { value: metricValue, source: "alias", alias: match?.alias, path: root.path }
+          source: { value: metricValue, source: "alias", alias: match?.alias, path: root.path, available: true }
         });
       }
     }
   }
 
-  return preferredBusinessMetric(candidates, preferNonZero) || { value: 0, source: { value: 0, source: "none" } };
+  return preferredBusinessMetric(candidates, preferNonZero) || { value: 0, source: { value: 0, source: "none", available: false, reason: "missing-path" } };
 }
 
 function emptyBusinessDataRow(store: DoudianStoreSummary): DoudianBusinessDataRow {
@@ -643,12 +659,20 @@ function emptyBusinessDataRow(store: DoudianStoreSummary): DoudianBusinessDataRo
   return row;
 }
 
-function rowSummary(row: DoudianBusinessDataRow) {
+function rowSummary(row: DoudianBusinessDataRow, metricSources?: Record<string, MetricSource>, expectedFields: BusinessField[] = [...BUSINESS_DATA_FIELDS]): BusinessRowSummary {
   const nonZeroFields = BUSINESS_DATA_FIELDS.filter((field) => Number(row[field] || 0) !== 0);
+  const availableFields = expectedFields.filter((field) => metricSources?.[field]?.available === true);
+  const availableFieldSet = new Set(availableFields);
+  const unavailableFields = expectedFields.filter((field) => !availableFieldSet.has(field));
   return {
     nonZeroFieldCount: nonZeroFields.length,
     nonZeroFields,
-    allZero: nonZeroFields.length === 0
+    allZero: nonZeroFields.length === 0,
+    availableFieldCount: availableFields.length,
+    availableFields,
+    unavailableFieldCount: unavailableFields.length,
+    unavailableFields,
+    allUnavailable: availableFields.length === 0
   };
 }
 
@@ -675,7 +699,7 @@ function businessRowMetricSnapshot(row: DoudianBusinessDataRow) {
 }
 
 function businessMetricSourceSnapshot(metricSources: Record<string, MetricSource>) {
-  return Object.fromEntries(BUSINESS_ROW_DIAGNOSTIC_FIELDS.map((field) => [field, metricSources[field] || { value: 0, source: "none" }]));
+  return Object.fromEntries(BUSINESS_ROW_DIAGNOSTIC_FIELDS.map((field) => [field, metricSources[field] || { value: 0, source: "none", available: false, reason: "missing-path" }]));
 }
 
 function businessCoreShape(responses: Record<string, RequestPlanResult>, adapter: DoudianAdapterConfig) {
@@ -777,15 +801,29 @@ function summarizeResponses(responses: Record<string, RequestPlanResult>, adapte
 
 function summarizeFailures(summary: Record<string, { status: number; success: boolean; code: unknown; message: string }>, adapter: DoudianAdapterConfig): SourceFailure[] {
   const optionalPlans = new Set(policyArray(adapter, "businessData.optionalPlans"));
+  const criticalPlans = new Set(policyArray(adapter, "businessData.criticalPlans"));
   return Object.entries(summary)
     .filter(([, response]) => response.success !== true)
     .map(([key, response]) => ({
       key,
-      optional: optionalPlans.has(key),
+      optional: optionalPlans.has(key) && !criticalPlans.has(key),
+      critical: criticalPlans.has(key),
       status: response.status || 0,
       code: response.code,
       message: response.message || ""
     }));
+}
+
+function criticalBusinessPlans(adapter: DoudianAdapterConfig, planKeys: string[]) {
+  const configured = policyArray(adapter, "businessData.criticalPlans");
+  const defaults = configured.length ? configured : ["businessHomepage", "businessCoreIndex"];
+  return defaults.filter((key) => planKeys.includes(key));
+}
+
+function criticalBusinessFields(adapter: DoudianAdapterConfig): BusinessField[] {
+  const configured = policyArray(adapter, "businessData.criticalFields") as BusinessField[];
+  if (configured.length) return configured.filter((field) => BUSINESS_DATA_FIELDS.includes(field));
+  return ["dealAmount", "orderCount", "buyers", "exposureUsers", "clickUsers", "onSaleProductCount"];
 }
 
 function activationSourceFailure(activation: StoreActivationResult, store: DoudianStoreSummary): SourceFailure | null {
@@ -963,11 +1001,11 @@ function buildBusinessDataResult(store: DoudianStoreSummary, responses: Record<s
   }
   if (!row.customerPrice && row.orderCount > 0) {
     row.customerPrice = row.dealAmount / row.orderCount;
-    metricSources.customerPrice = { value: row.customerPrice, source: "derived", formula: "dealAmount/orderCount" };
+    metricSources.customerPrice = { value: row.customerPrice, source: "derived", available: metricSources.dealAmount?.available === true && metricSources.orderCount?.available === true, formula: "dealAmount/orderCount" };
   }
   if (!row.refundRate && row.orderCount > 0 && row.refundOrderCount > 0) {
     row.refundRate = (row.refundOrderCount / row.orderCount) * 100;
-    metricSources.refundRate = { value: row.refundRate, source: "derived", formula: "refundOrderCount/orderCount*100" };
+    metricSources.refundRate = { value: row.refundRate, source: "derived", available: metricSources.refundOrderCount?.available === true && metricSources.orderCount?.available === true, formula: "refundOrderCount/orderCount*100" };
   }
   row.datePreset = dateContext.datePreset;
   row.beginDate = dateContext.beginDate;
@@ -980,6 +1018,8 @@ function blockedBusinessDataResult(store: DoudianStoreSummary, dateContext: Date
   const metricSources = Object.fromEntries(BUSINESS_DATA_FIELDS.map((field) => [field, {
     value: 0,
     source: "none",
+    available: false,
+    reason: "blocked",
     blockedBy
   }])) as Record<string, MetricSource>;
   row.datePreset = dateContext.datePreset;
@@ -1136,31 +1176,37 @@ async function collectStoreBusinessData(payload: DoudianAdapterPayload, store: D
     ? blockedBusinessDataResult(store, dateContext, "activateStore")
     : buildBusinessDataResult(store, responses, dateContext, payload.adapter);
   const blockingSourceFailures = sourceFailures.filter((failure) => !failure.optional);
-  const summary = rowSummary(row);
+  const summary = rowSummary(row, metricSources);
   const requiredPlans = policyArray(payload.adapter, "businessData.requiredPlans");
+  const criticalPlans = criticalBusinessPlans(payload.adapter, planKeys);
+  const criticalFields = criticalBusinessFields(payload.adapter);
   const coreMetricPlans = policyArray(payload.adapter, "businessData.coreMetricPlans").length
     ? policyArray(payload.adapter, "businessData.coreMetricPlans")
     : ["businessCoreIndex"];
   const missingCoreMetricPlans = coreMetricPlans.filter((planKey) => !requestPlanResponseOk(responses[planKey], payload.adapter, planKey, businessDataMappings(payload.adapter)));
   const coreMetricsComplete = missingCoreMetricPlans.length === 0;
+  const missingCriticalPlans = criticalPlans.filter((planKey) => !requestPlanResponseOk(responses[planKey], payload.adapter, planKey, businessDataMappings(payload.adapter)));
+  const unavailableCriticalFields = criticalFields.filter((field) => metricSources[field]?.available !== true);
   const missingRequiredPlans = requiredPlans.filter((planKey) => requestPlanResponseOk(responses[planKey], payload.adapter, planKey, businessDataMappings(payload.adapter)) !== true);
   const okCount = Object.entries(responses).filter(([key, response]) => requestPlanResponseOk(response, payload.adapter, key, businessDataMappings(payload.adapter))).length;
-  const ok = requiredPlans.length ? missingRequiredPlans.length === 0 : okCount > 0;
-  const partial = ok && (blockingSourceFailures.length > 0 || summary.allZero);
+  const ok = (requiredPlans.length ? missingRequiredPlans.length === 0 : okCount > 0) && missingCriticalPlans.length === 0;
+  const partial = ok && (blockingSourceFailures.length > 0 || unavailableCriticalFields.length > 0 || summary.allUnavailable);
   const message = !ok
     ? sourceFailures.find((failure) => !failure.optional)?.message || policyMessage(payload.adapter, "businessData.messages.failed", "Business data request failed")
     : blockingSourceFailures.length
       ? policyMessage(payload.adapter, "businessData.messages.partialSourceStore", "Business data synced with partial source errors")
-      : summary.allZero
-        ? policyMessage(payload.adapter, "businessData.messages.noMetricMatchStore", "Business data synced but no metric fields matched")
-        : policyMessage(payload.adapter, "businessData.messages.synced", "Business data synced");
+      : summary.allUnavailable
+        ? policyMessage(payload.adapter, "businessData.messages.noMetricMatchStore", "Business data returned no readable metric fields")
+        : unavailableCriticalFields.length
+          ? policyMessage(payload.adapter, "businessData.messages.noMetricMatchStore", "Business data synced but critical metric fields are unavailable")
+          : policyMessage(payload.adapter, "businessData.messages.synced", "Business data synced");
   const detail: DoudianRunDetail = {
     shopId: store.shopId,
     shopName: store.shopName,
     status: ok ? (partial ? "partial" : "ok") : "failed",
     ok,
     message,
-    reason: ok ? (blockingSourceFailures.length ? "business-data-partial-source-failure" : summary.allZero ? "business-data-no-metric-match" : "") : "business-data-request-failed",
+    reason: ok ? (blockingSourceFailures.length ? "business-data-partial-source-failure" : summary.allUnavailable ? "business-data-no-readable-metrics" : unavailableCriticalFields.length ? "business-data-critical-fields-unavailable" : "") : "business-data-request-failed",
     category: ok ? (partial ? "api-partial" : "") : "api",
     diagnostic: {
       responses: responseSummary,
@@ -1170,6 +1216,10 @@ async function collectStoreBusinessData(payload: DoudianAdapterPayload, store: D
       coreMetricPlans,
       missingCoreMetricPlans,
       coreMetricsComplete,
+      criticalPlans,
+      missingCriticalPlans,
+      criticalFields,
+      unavailableCriticalFields,
       sourceFailureCount: sourceFailures.length,
       blockingSourceFailureCount: blockingSourceFailures.length,
       sourceFailures,
@@ -1211,13 +1261,16 @@ async function saveBusinessLatestRows(args: {
 }) {
   const detailById = new Map(args.details.map((detail) => [text(detail.shopId), detail]));
   const updatedAt = nowIso();
-  const records = args.rows.map((row) => {
+  const records = args.rows.flatMap((row) => {
     const detail = detailById.get(row.shopId);
-    return {
+    const quality = detail?.status === "ok" ? "ok" : detail?.status === "failed" || detail?.ok === false ? "failed" : "partial";
+    if (quality !== "ok") return [];
+    return [{
       id: latestId(row.shopId, args.dateContext, args.adapterVersion, args.fieldSchemaVersion, args.requestPlanHash),
       shopId: row.shopId,
       shopName: row.shopName,
-      ok: detail?.ok !== false,
+      ok: true,
+      quality,
       message: detail?.message || "",
       row,
       diagnostic: detail?.diagnostic,
@@ -1230,9 +1283,10 @@ async function saveBusinessLatestRows(args: {
       scriptsVersion: args.ruleVersion,
       requestPlanHash: args.requestPlanHash,
       updatedAt
-    } satisfies BusinessLatestRecord;
+    } satisfies BusinessLatestRecord];
   });
   await repositoryPutMany<BusinessLatestRecord>("business_latest", records);
+  return records.length;
 }
 
 function adapterPayload(args: BusinessDataArgs): DoudianAdapterPayload {
@@ -1241,6 +1295,7 @@ function adapterPayload(args: BusinessDataArgs): DoudianAdapterPayload {
 }
 
 export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<DoudianBusinessDataResult> {
+  const startedAtMs = Date.now();
   const payload = adapterPayload(args);
   const ledger = await listStoreLedger();
   const stores = ledger.stores || [];
@@ -1255,16 +1310,24 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
 
   if (args.mockRows?.length) {
     const rows = args.mockRows;
-    const details = rows.map((row, index) => ({
-      shopId: row.shopId,
-      shopName: row.shopName,
-      status: "ok",
-      ok: true,
-      message: "Mock business data synced",
-      diagnostic: { rowSummary: rowSummary(row) },
-      index: index + 1,
-      total: rows.length
-    }));
+    const details = rows.map((row, index) => {
+      const metricSources = Object.fromEntries(BUSINESS_DATA_FIELDS.map((field) => [field, {
+        value: Number(row[field] || 0),
+        source: "path",
+        available: true,
+        path: "mockRows"
+      }])) as Record<string, MetricSource>;
+      return {
+        shopId: row.shopId,
+        shopName: row.shopName,
+        status: "ok",
+        ok: true,
+        message: "Mock business data synced",
+        diagnostic: { rowSummary: rowSummary(row, metricSources), metricSources },
+        index: index + 1,
+        total: rows.length
+      };
+    });
     await saveBusinessLatestRows({ rows, details, dateContext, adapterVersion, ruleVersion: scriptsVersion, fieldSchemaVersion: schemaVersion, requestPlanHash: planHash });
     return {
       ok: true,
@@ -1337,26 +1400,37 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
     });
   });
 
-  const successCount = details.filter((detail) => detail.ok).length;
+  const successCount = details.filter((detail) => detail.status === "ok").length;
   const failureCount = details.filter((detail) => !detail.ok).length;
+  const partialCount = details.filter((detail) => detail.status === "partial").length;
   const partialSourceCount = details.filter((detail) => {
     const diagnostic = objectRecord(detail.diagnostic);
     return Number(diagnostic.blockingSourceFailureCount ?? diagnostic.sourceFailureCount ?? 0) > 0;
   }).length;
-  const noMetricMatchCount = details.filter((detail) => objectRecord(objectRecord(detail.diagnostic).rowSummary).allZero === true).length;
+  const noMetricMatchCount = details.filter((detail) => objectRecord(objectRecord(detail.diagnostic).rowSummary).allUnavailable === true).length;
+  const incompleteMetricCount = details.filter((detail) => {
+    const diagnostic = objectRecord(detail.diagnostic);
+    return Array.isArray(diagnostic.unavailableCriticalFields) && diagnostic.unavailableCriticalFields.length > 0;
+  }).length;
   const coreIncompleteCount = details.filter((detail) => objectRecord(detail.diagnostic).coreMetricsComplete === false).length;
-  const partialIssueCount = partialSourceCount + noMetricMatchCount;
-  const message = failureCount
-    ? policyMessage(payload.adapter, "businessData.messages.partial", "Business data synced with {failureCount} failures", { successCount, failureCount })
+  const partialIssueCount = partialCount;
+  const allFailed = targets.length > 0 && failureCount === targets.length;
+  const resultStatus = allFailed ? "failed" : failureCount || partialIssueCount ? "partial" : "ok";
+  const message = allFailed
+    ? policyMessage(payload.adapter, "businessData.messages.failed", "Business data request failed")
+    : failureCount
+      ? policyMessage(payload.adapter, "businessData.messages.partial", "Business data synced with {failureCount} failures", { successCount, partialCount, failureCount })
     : partialIssueCount
-      ? policyMessage(payload.adapter, "businessData.messages.partialSources", "Business data synced; {partialSourceCount} stores have source issues, {noMetricMatchCount} stores have no metric match", {
+      ? policyMessage(payload.adapter, "businessData.messages.partialMetrics", "Business data synced; {successCount} stores complete and {partialCount} stores partial", {
         successCount,
+        partialCount,
         partialSourceCount,
-        noMetricMatchCount
+        noMetricMatchCount,
+        incompleteMetricCount
       })
       : policyMessage(payload.adapter, "businessData.messages.done", "Business data synced for {successCount} stores", { successCount });
 
-  await saveBusinessLatestRows({
+  const cacheWriteCount = await saveBusinessLatestRows({
     rows,
     details,
     dateContext,
@@ -1365,11 +1439,34 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
     fieldSchemaVersion: schemaVersion,
     requestPlanHash: planHash
   });
+  const cacheSkippedCount = rows.length - cacheWriteCount;
   await cleanupBusinessLatestCache(adapterVersion, schemaVersion, planHash);
 
+  const durationMs = Date.now() - startedAtMs;
+  await reportDoudianDiagnostic({
+    category: "doudian-business-data",
+    event: "run-summary",
+    runId,
+    operationId: args.operationId || "",
+    storeCount: targets.length,
+    successCount,
+    partialCount,
+    failureCount,
+    partialSourceCount,
+    noMetricMatchCount,
+    incompleteMetricCount,
+    coreIncompleteCount,
+    cacheWriteCount,
+    cacheSkippedCount,
+    dateRange: publicDateRange(dateContext),
+    adapterVersion,
+    fieldSchemaVersion: schemaVersion,
+    durationMs
+  }, true);
+
   return {
-    ok: failureCount === 0,
-    status: failureCount || partialIssueCount ? "partial" : "ok",
+    ok: resultStatus === "ok",
+    status: resultStatus,
     message,
     runId,
     operationId: args.operationId,
@@ -1377,9 +1474,14 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
     details,
     successCount,
     failureCount,
+    partialCount,
     partialSourceCount,
     noMetricMatchCount,
+    incompleteMetricCount,
     coreIncompleteCount,
+    cacheWriteCount,
+    cacheSkippedCount,
+    durationMs,
     dateRange: publicDateRange(dateContext),
     adapterVersion,
     scriptsVersion,
@@ -1406,11 +1508,11 @@ export async function fetchBusinessDataLatest(args: BusinessDataArgs = {}): Prom
   const details: DoudianRunDetail[] = rows.map((record, index) => ({
     shopId: record.shopId,
     shopName: record.shopName,
-    status: record.ok ? "ok" : "failed",
+    status: record.quality || (record.ok ? "ok" : "failed"),
     ok: record.ok,
     message: record.message || (record.ok ? "Cached business data ready" : "Cached business data failed"),
-    reason: record.ok ? "" : "business-data-cached-failure",
-    category: record.ok ? "" : "api",
+    reason: record.quality === "partial" ? "business-data-cached-partial" : record.ok ? "" : "business-data-cached-failure",
+    category: record.quality === "partial" ? "api-partial" : record.ok ? "" : "api",
     diagnostic: record.diagnostic,
     index: index + 1,
     total: rows.length
@@ -1432,6 +1534,52 @@ export async function fetchBusinessDataLatest(args: BusinessDataArgs = {}): Prom
   };
 }
 
+export function runDoudianBusinessDataFixtureSelfCheck(adapter: DoudianAdapterConfig) {
+  const fixtureStore: DoudianStoreSummary = {
+    shopId: "business-fixture-self-check",
+    shopName: "Business Fixture Self Check",
+    platform: "doudian",
+    partition: "persist:chihu-business-fixture-self-check",
+    status: "online",
+    groupName: "Self Check"
+  };
+  const fixtureRequestResults = (responses: Record<string, unknown>) => Object.fromEntries(Object.entries(responses).map(([key, data]) => [key, {
+    ok: true,
+    status: 200,
+    source: key,
+    data
+  } satisfies RequestPlanResult]));
+  const dateContext = dataDateContext({ datePreset: "today" }, adapter);
+  const fixtureParsed = buildBusinessDataResult(
+    fixtureStore,
+    fixtureRequestResults(businessDataResponseFixture.responses),
+    dateContext,
+    adapter
+  );
+  const fixtureCases = Object.entries(businessDataResponseFixture.expected).map(([field, expected]) => ({
+    field,
+    expected,
+    actual: fixtureParsed.row[field],
+    available: fixtureParsed.metricSources[field]?.available === true
+  }));
+  const explicitZeroParsed = buildBusinessDataResult(
+    fixtureStore,
+    fixtureRequestResults(businessDataResponseFixture.explicitZeroResponses),
+    dateContext,
+    adapter
+  );
+  const explicitZeroSummary = rowSummary(explicitZeroParsed.row, explicitZeroParsed.metricSources);
+  const explicitZeroOk = explicitZeroSummary.allZero === true && explicitZeroSummary.allUnavailable === false &&
+    criticalBusinessFields(adapter).every((field) => explicitZeroParsed.metricSources[field]?.available === true);
+  const fixtureOk = fixtureCases.every((item) => item.actual === item.expected && item.available);
+  return {
+    ok: fixtureOk && explicitZeroOk,
+    fixtureOk,
+    explicitZeroOk,
+    cases: [...fixtureCases, { field: "explicit-zero-availability", expected: true, actual: explicitZeroOk }]
+  };
+}
+
 export async function runDoudianBusinessDataSelfCheck(options: { doudianAdapter?: DoudianAdapterPayload } = {}) {
   const payload = adapterPayload({ doudianAdapter: options.doudianAdapter });
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1449,6 +1597,8 @@ export async function runDoudianBusinessDataSelfCheck(options: { doudianAdapter?
       groupName: "Self Check",
       adapterVersion: payload.adapter.version
     });
+
+    const fixtureCheck = runDoudianBusinessDataFixtureSelfCheck(payload.adapter);
 
     const cases = [
       { datePreset: "today", dealAmount: 12345 },
@@ -1502,11 +1652,13 @@ export async function runDoudianBusinessDataSelfCheck(options: { doudianAdapter?
     }
 
     return {
-      ok: results.every((item) => item.fetchOk && item.latestOk && item.metadataOk && item.dateRangeOk),
+      ok: fixtureCheck.ok && results.every((item) => item.fetchOk && item.latestOk && item.metadataOk && item.dateRangeOk),
+      fixtureOk: fixtureCheck.fixtureOk,
+      explicitZeroOk: fixtureCheck.explicitZeroOk,
       latestOk: results.every((item) => item.latestOk),
       datePresetOk: results.every((item) => item.dateRangeOk),
       metadataOk: results.every((item) => item.metadataOk),
-      cases: results
+      cases: [...fixtureCheck.cases, ...results]
     };
   } finally {
     await deleteStoreLedger([shopId]).catch(() => undefined);

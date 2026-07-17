@@ -1,0 +1,91 @@
+{
+  "source": "redacted-contract-sample-derived-from-runtime-shape",
+  "responses": {
+    "businessCoreIndex": {
+      "code": 0,
+      "data": {
+        "module_data": {
+          "homepage_core_index": {
+            "compass_general_multi_index_card_value": {
+              "data": [
+                {
+                  "income_amt": { "index_value": { "value": { "value": 15344 } } },
+                  "pay_amt": { "index_value": { "value": { "value": 15344 } } },
+                  "pay_cnt": { "index_value": { "value": { "value": 2 } } },
+                  "pay_ucnt": { "index_value": { "value": { "value": 2 } } },
+                  "per_usr_pay_amt": { "index_value": { "value": { "value": 7672 } } },
+                  "product_show_ucnt": { "index_value": { "value": { "value": 370 } } },
+                  "product_click_ucnt": { "index_value": { "value": { "value": 19 } } },
+                  "product_show_cnt": { "index_value": { "value": { "value": 612 } } },
+                  "product_click_cnt": { "index_value": { "value": { "value": 31 } } },
+                  "refund_amt_rate": { "index_value": { "value": { "value": 0 } } },
+                  "refund_order_cnt": { "index_value": { "value": { "value": 0 } } },
+                  "rfndsuc_amt": { "index_value": { "value": { "value": 0 } } }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "businessHomepage": {
+      "code": 0,
+      "data": {
+        "pay_amt": 153.44,
+        "pay_cnt": 2,
+        "pay_ucnt": 2,
+        "per_usr_pay_amt": 76.72,
+        "unsend": 3,
+        "unprocess": 1,
+        "abnormal_package": 0,
+        "service_order": 0
+      }
+    },
+    "businessWarnTicket": { "code": 0, "data": { "total": 0 } },
+    "businessCreditScoreBase": { "code": 0, "data": { "score": 53 } },
+    "businessCreditScoreLevel": { "code": 0, "data": { "level": 3 } },
+    "businessOnSaleProducts": { "code": 0, "data": { "total_product_num": 1285 } },
+    "businessOfflineProducts": { "code": 0, "data": { "total": 4 } },
+    "businessSmartActivityCoupon": { "code": 0, "data": { "total": 2 } },
+    "businessSmartActivityDirectDiscount": { "code": 0, "data": { "total": 1 } },
+    "businessSmartActivityNewUserBonus": { "code": 0, "data": { "total": 1 } }
+  },
+  "expected": {
+    "dealAmount": 153.44,
+    "orderCount": 2,
+    "buyers": 2,
+    "customerPrice": 76.72,
+    "exposureUsers": 370,
+    "clickUsers": 19,
+    "productExposureCount": 612,
+    "productClickCount": 31,
+    "onSaleProductCount": 1285,
+    "offlineProductCount": 4,
+    "experienceScore": 53,
+    "couponActive": 2
+  },
+  "explicitZeroResponses": {
+    "businessCoreIndex": {
+      "code": 0,
+      "data": {
+        "module_data": {
+          "homepage_core_index": {
+            "compass_general_multi_index_card_value": {
+              "data": [
+                {
+                  "pay_amt": { "index_value": { "value": { "value": 0 } } },
+                  "pay_cnt": { "index_value": { "value": { "value": 0 } } },
+                  "pay_ucnt": { "index_value": { "value": { "value": 0 } } },
+                  "product_show_ucnt": { "index_value": { "value": { "value": 0 } } },
+                  "product_click_ucnt": { "index_value": { "value": { "value": 0 } } }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "businessHomepage": { "code": 0, "data": { "pay_amt": 0, "pay_cnt": 0, "pay_ucnt": 0 } },
+    "businessOnSaleProducts": { "code": 0, "data": { "total_product_num": 0 } }
+  }
+}

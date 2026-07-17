@@ -10,12 +10,12 @@ const {
 } = require("./protocol");
 
 class NativeDataService {
-  constructor({ app }) {
+  constructor({ app, workerPath }) {
     this.app = app;
     this.worker = null;
     this.workerGeneration = 0;
     this.databasePath = path.join(app.getPath("userData"), "data", "chihu-business.sqlite3");
-    this.workerPath = path.join(__dirname, "worker.js");
+    this.workerPath = workerPath || path.join(__dirname, "worker.js");
     this.nextRequestId = 1;
     this.pending = new Map();
     this.queue = [];
@@ -79,15 +79,18 @@ class NativeDataService {
 
       worker.once("online", onOnline);
       worker.once("error", onInitialError);
-      worker.on("message", (message) => this.handleWorkerMessage(message));
-      worker.on("error", (error) => this.handleWorkerFailure(error));
+      worker.on("message", (message) => {
+        if (this.worker === worker) this.handleWorkerMessage(message);
+      });
+      worker.on("error", (error) => this.handleWorkerFailure(error, worker));
       worker.on("exit", (code) => {
-        if (this.worker === worker) {
+        const currentWorker = this.worker === worker;
+        if (currentWorker) {
           this.worker = null;
           this.startPromise = null;
           this.inFlight = false;
         }
-        if (!this.stopping && code !== 0) {
+        if (currentWorker && !this.stopping && code !== 0) {
           this.rejectAll(createError("NATIVE_DATA_WORKER_EXITED", `Native data worker exited with code ${code}`));
         }
       });
@@ -145,9 +148,13 @@ class NativeDataService {
     };
     request.timer = setTimeout(() => {
       this.removeQueued(id);
-      this.pending.delete(id);
+      const wasPending = this.pending.delete(id);
       request.reject(createError("NATIVE_DATA_TIMEOUT", `Native data request timed out: ${method}`, { timeoutMs }));
-      this.drain();
+      if (request.dispatched && wasPending) {
+        this.recoverWorkerAfterTimeout(request);
+      } else {
+        this.drain();
+      }
     }, timeoutMs);
     return request;
   }
@@ -163,6 +170,16 @@ class NativeDataService {
   removeQueued(id) {
     const index = this.queue.findIndex((item) => item.id === id);
     if (index >= 0) this.queue.splice(index, 1);
+  }
+
+  recoverWorkerAfterTimeout(request) {
+    this.inFlight = false;
+    this.destroyWorker();
+    this.startPromise = null;
+    if (this.stopping || request.method === "initialize") return;
+    void this.start()
+      .then(() => this.drain())
+      .catch((error) => this.rejectAll(error));
   }
 
   dispatch(request) {
@@ -205,7 +222,8 @@ class NativeDataService {
     this.drain();
   }
 
-  handleWorkerFailure(error) {
+  handleWorkerFailure(error, worker = this.worker) {
+    if (worker !== this.worker) return;
     const nativeError = error && error.code
       ? error
       : createError("NATIVE_DATA_WORKER_ERROR", error && error.message ? error.message : "Native data worker failed");

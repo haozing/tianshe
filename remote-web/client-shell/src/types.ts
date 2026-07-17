@@ -390,9 +390,14 @@ export interface DoudianBusinessDataResult extends DoudianStoreResult {
   rows?: DoudianBusinessDataRow[];
   successCount?: number;
   failureCount?: number;
+  partialCount?: number;
   partialSourceCount?: number;
   noMetricMatchCount?: number;
+  incompleteMetricCount?: number;
   coreIncompleteCount?: number;
+  cacheWriteCount?: number;
+  cacheSkippedCount?: number;
+  durationMs?: number;
   cached?: boolean;
   cachedRows?: unknown[];
   dateRange?: {
@@ -437,10 +442,21 @@ export interface DoudianFundsDataRow {
 export interface DoudianFundsDataResult extends DoudianStoreResult {
   rows?: DoudianFundsDataRow[];
   successCount?: number;
+  partialCount?: number;
   failureCount?: number;
   partialSourceCount?: number;
   noMetricMatchCount?: number;
   incompleteMetricCount?: number;
+  cacheWriteCount?: number;
+  cacheSkippedCount?: number;
+  durationMs?: number;
+  interfaceStats?: Record<string, {
+    requestCount: number;
+    successCount: number;
+    failureCount: number;
+    retryCount: number;
+    p95Ms: number;
+  }>;
   fieldSchemaVersion?: string;
   requestPlanHash?: string;
   cached?: boolean;
@@ -458,7 +474,8 @@ export interface DoudianViolationRecord {
   shopId: string;
   shopName: string;
   group?: string;
-  objectType: "商品" | "店铺" | "订单" | "内容" | string;
+  objectType: "商品" | "店铺" | "订单" | "内容" | "渠道商品" | "售后单" | "电商门店" | "未知" | string;
+  objectId: string;
   objectName: string;
   productId: string;
   reason: string;
@@ -499,6 +516,8 @@ export interface DoudianViolationsDataRow {
   fetchedAt?: string;
   remoteTotal?: number;
   fetchedRecords?: number;
+  sourceTotal?: number;
+  filteredTotal?: number;
   [key: string]: unknown;
 }
 
@@ -517,8 +536,11 @@ export interface DoudianViolationsDataResult extends DoudianStoreResult {
   truncated?: boolean;
   fetchedAt?: string;
   remoteTotal?: number;
+  recordCount?: number;
   recordsDeferred?: boolean;
   cached?: boolean;
+  cacheDerived?: boolean;
+  sourceDatePreset?: string;
   cachedRows?: unknown[];
   dateRange?: {
     datePreset?: string;
@@ -1112,6 +1134,7 @@ declare global {
         renameOk: boolean;
         openOk: boolean;
         deleteStoreOk: boolean;
+        fundsCacheDeleteOk: boolean;
         deleteGroupOk: boolean;
         openedWinId: number | null;
       }>;
