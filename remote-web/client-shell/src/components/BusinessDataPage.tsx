@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
   BarChart3,
   CalendarDays,
   Check,
   ChevronDown,
   Download,
   Gauge,
+  GripVertical,
   Loader2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -20,8 +23,10 @@ import {
 } from "lucide-react";
 import { cancelDoudianStoreOperation, fetchDoudianBusinessData, fetchDoudianBusinessDataLatest, listDoudianStores } from "../bridge/client";
 import { loadDoudianAdapterPayload } from "../bridge/doudianAdapter";
-import { STORAGE_KEY_BUSINESS_DATA_COLUMNS, storageGet, storageSet } from "../bridge/storage";
+import { STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER, STORAGE_KEY_BUSINESS_DATA_COLUMN_WIDTHS, STORAGE_KEY_BUSINESS_DATA_COLUMNS, storageGet, storageSet } from "../bridge/storage";
 import { addDoudianProgressListener } from "../domain/doudian";
+import { toggleStoreIds } from "../domain/doudian/storeSelection";
+import { GroupedStoreSelectionList } from "./GroupedStoreSelectionList";
 import { cn } from "../lib/utils";
 import type { DoudianBusinessDataRow, DoudianRunDetail, DoudianStoreStatus, DoudianStoreSummary } from "../types";
 
@@ -70,6 +75,7 @@ const businessMetricKeys = [
 
 type BusinessMetricKey = typeof businessMetricKeys[number];
 type ScoreMetricKey = "experienceScore" | "reputationScore" | "logisticsScore" | "productScore" | "serviceScore";
+type BusinessColumnWidths = Partial<Record<BusinessMetricKey, number>>;
 
 interface StoreOption {
   id: string;
@@ -192,7 +198,7 @@ const tableColumns: DataColumn[] = [
   { key: "newUserBonusActive", label: "新人礼金", format: "number" },
   { key: "reputationScore", label: "口碑分", format: "score", tone: "green" },
   { key: "logisticsScore", label: "物流体验得分", format: "score" },
-  { key: "disputeDeduction", label: "差评扣分", format: "number", tone: (row) => row.disputeDeduction > 0 ? "danger" : undefined },
+  { key: "disputeDeduction", label: "差行为扣分", format: "number", tone: (row) => row.disputeDeduction > 0 ? "danger" : undefined },
   { key: "productScore", label: "商品体验得分", format: "score" },
   { key: "serviceScore", label: "服务体验得分", format: "score" }
 ];
@@ -220,6 +226,9 @@ const defaultSummaryMetrics: NonNullable<RemoteBusinessFieldSchema["summaryMetri
 const businessMetricKeySet = new Set<string>(businessMetricKeys);
 const columnFormatSet = new Set<string>(["money", "number", "percent", "score"]);
 const toneSet = new Set<string>(["default", "blue", "green", "warning", "danger"]);
+const defaultMetricColumnWidth = 108;
+const minMetricColumnWidth = 72;
+const maxMetricColumnWidth = 360;
 
 function hasNativeStoreBridge() {
   return Boolean(window.chihuNative && (window.nativeData || window.chihuNative.nativeData));
@@ -279,7 +288,7 @@ function businessRowHasAvailableMetric(row: BusinessRow) {
 function businessRowFromRemote(row: DoudianBusinessDataRow, store?: StoreOption, detail?: DoudianRunDetail): BusinessRow {
   const base = zeroBusinessRow({
     id: String(row.shopId || store?.id || ""),
-    name: String(row.shopName || store?.name || ""),
+    name: String(store?.name || row.shopName || ""),
     group: String(row.group || store?.group || "未分组"),
     status: normalizeStoreStatus(row.status || store?.status)
   });
@@ -332,6 +341,40 @@ function visibleColumnKeySet(schemaColumns: DataColumn[]) {
   const valid = saved.filter((key) => businessMetricKeySet.has(key));
   const initial = valid.length ? valid : schemaColumns.filter((column) => column.defaultVisible !== false).map((column) => column.key);
   return new Set(initial.length ? initial : defaultColumnKeys);
+}
+
+function normalizeColumnOrder(schemaColumns: DataColumn[], preferredOrder: readonly string[]) {
+  const schemaKeys = schemaColumns.map((column) => column.key);
+  const schemaKeySet = new Set<BusinessMetricKey>(schemaKeys);
+  const seen = new Set<BusinessMetricKey>();
+  const orderedKeys = preferredOrder.filter((key): key is BusinessMetricKey => {
+    if (!businessMetricKeySet.has(key) || !schemaKeySet.has(key as BusinessMetricKey) || seen.has(key as BusinessMetricKey)) return false;
+    seen.add(key as BusinessMetricKey);
+    return true;
+  });
+  return [...orderedKeys, ...schemaKeys.filter((key) => !seen.has(key))];
+}
+
+function savedColumnOrder(schemaColumns: DataColumn[]) {
+  const saved = storageGet<string[]>(STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER, []);
+  return normalizeColumnOrder(schemaColumns, Array.isArray(saved) ? saved : []);
+}
+
+function clampColumnWidth(width: number) {
+  return Math.min(maxMetricColumnWidth, Math.max(minMetricColumnWidth, Math.round(width)));
+}
+
+function normalizeColumnWidths(schemaColumns: DataColumn[], widths: unknown): BusinessColumnWidths {
+  if (!widths || typeof widths !== "object" || Array.isArray(widths)) return {};
+  const source = widths as Record<string, unknown>;
+  return Object.fromEntries(schemaColumns.flatMap((column) => {
+    const width = source[column.key];
+    return typeof width === "number" && Number.isFinite(width) ? [[column.key, clampColumnWidth(width)]] : [];
+  })) as BusinessColumnWidths;
+}
+
+function savedColumnWidths(schemaColumns: DataColumn[]) {
+  return normalizeColumnWidths(schemaColumns, storageGet<unknown>(STORAGE_KEY_BUSINESS_DATA_COLUMN_WIDTHS, {}));
 }
 
 function formatMoney(value: number) {
@@ -528,10 +571,16 @@ export function BusinessDataPage() {
   const [activeOperationId, setActiveOperationId] = useState("");
   const [fieldSchema, setFieldSchema] = useState<RemoteBusinessFieldSchema>({});
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<Set<string>>(() => visibleColumnKeySet(tableColumns));
+  const [columnOrder, setColumnOrder] = useState<BusinessMetricKey[]>(() => savedColumnOrder(tableColumns));
+  const [columnWidths, setColumnWidths] = useState<BusinessColumnWidths>(() => savedColumnWidths(tableColumns));
   const [columnPanelOpen, setColumnPanelOpen] = useState(false);
+  const [draggedColumnKey, setDraggedColumnKey] = useState<BusinessMetricKey | null>(null);
+  const [dragOverColumnKey, setDragOverColumnKey] = useState<BusinessMetricKey | null>(null);
+  const [resizingColumnKey, setResizingColumnKey] = useState<BusinessMetricKey | null>(null);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [adapterVersion, setAdapterVersion] = useState("");
   const businessRequestSeq = useRef(0);
+  const columnResizeState = useRef<{ key: BusinessMetricKey; pointerId: number; startX: number; startWidth: number } | null>(null);
 
   const requestedRange = datePreset === "custom"
     ? { beginDate: customBeginDate, endDate: customEndDate, label: `${customBeginDate} - ${customEndDate}` }
@@ -685,6 +734,12 @@ export function BusinessDataPage() {
         const columns = normalizeRemoteColumns(schema);
         setFieldSchema(schema);
         setAdapterVersion(payload.adapter.version || "");
+        const nextOrder = savedColumnOrder(columns);
+        const nextWidths = savedColumnWidths(columns);
+        storageSet(STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER, nextOrder);
+        storageSet(STORAGE_KEY_BUSINESS_DATA_COLUMN_WIDTHS, nextWidths);
+        setColumnOrder(nextOrder);
+        setColumnWidths(nextWidths);
         setVisibleColumnKeys((current) => {
           const currentValid = [...current].filter((key) => columns.some((column) => column.key === key));
           const next = currentValid.length ? new Set(currentValid) : visibleColumnKeySet(columns);
@@ -780,12 +835,16 @@ export function BusinessDataPage() {
   }, [businessRows, selectedIds, sortKey]);
 
   const schemaColumns = useMemo(() => normalizeRemoteColumns(fieldSchema), [fieldSchema]);
+  const orderedSchemaColumns = useMemo(() => {
+    const columnByKey = new Map(schemaColumns.map((column) => [column.key, column]));
+    return normalizeColumnOrder(schemaColumns, columnOrder).map((key) => columnByKey.get(key) as DataColumn);
+  }, [columnOrder, schemaColumns]);
   const visibleColumns = useMemo(() => {
-    const next = schemaColumns.filter((column) => visibleColumnKeys.has(column.key));
-    return next.length ? next : schemaColumns;
-  }, [schemaColumns, visibleColumnKeys]);
+    const next = orderedSchemaColumns.filter((column) => visibleColumnKeys.has(column.key));
+    return next.length ? next : orderedSchemaColumns;
+  }, [orderedSchemaColumns, visibleColumnKeys]);
   const shopColumnWidth = 174;
-  const tableMinWidth = Math.max(1040, shopColumnWidth + visibleColumns.length * 92);
+  const tableMinWidth = Math.max(1040, shopColumnWidth + visibleColumns.reduce((total, column) => total + (columnWidths[column.key] || defaultMetricColumnWidth), 0));
   const summarySchema = useMemo(() => normalizeRemoteSummary(fieldSchema), [fieldSchema]);
   const aggregated = useMemo(() => aggregateRows(selectedRows), [selectedRows]);
   const totals = aggregated.values;
@@ -861,35 +920,112 @@ export function BusinessDataPage() {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
       else next.add(key);
-      if (!next.size) schemaColumns.slice(0, 1).forEach((column) => next.add(column.key));
+      if (!next.size) orderedSchemaColumns.slice(0, 1).forEach((column) => next.add(column.key));
       storageSet(STORAGE_KEY_BUSINESS_DATA_COLUMNS, [...next]);
       return next;
     });
   }
 
+  function updateColumnOrder(update: (current: BusinessMetricKey[]) => BusinessMetricKey[]) {
+    setColumnOrder((current) => {
+      const next = update(normalizeColumnOrder(schemaColumns, current));
+      storageSet(STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER, next);
+      return next;
+    });
+  }
+
+  function moveColumn(key: BusinessMetricKey, offset: -1 | 1) {
+    updateColumnOrder((current) => {
+      const fromIndex = current.indexOf(key);
+      const toIndex = fromIndex + offset;
+      if (fromIndex < 0 || toIndex < 0 || toIndex >= current.length) return current;
+      const next = [...current];
+      [next[fromIndex], next[toIndex]] = [next[toIndex], next[fromIndex]];
+      return next;
+    });
+  }
+
+  function reorderColumn(sourceKey: BusinessMetricKey, targetKey: BusinessMetricKey) {
+    if (sourceKey === targetKey) return;
+    updateColumnOrder((current) => {
+      const fromIndex = current.indexOf(sourceKey);
+      const toIndex = current.indexOf(targetKey);
+      if (fromIndex < 0 || toIndex < 0) return current;
+      const next = [...current];
+      next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, sourceKey);
+      return next;
+    });
+  }
+
+  function updateColumnWidth(key: BusinessMetricKey, width: number) {
+    setColumnWidths((current) => {
+      const next = { ...current, [key]: clampColumnWidth(width) };
+      storageSet(STORAGE_KEY_BUSINESS_DATA_COLUMN_WIDTHS, next);
+      return next;
+    });
+  }
+
+  function resetColumnWidth(key: BusinessMetricKey) {
+    setColumnWidths((current) => {
+      const next = { ...current };
+      delete next[key];
+      storageSet(STORAGE_KEY_BUSINESS_DATA_COLUMN_WIDTHS, next);
+      return next;
+    });
+  }
+
+  function startColumnResize(event: React.PointerEvent<HTMLSpanElement>, key: BusinessMetricKey) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    columnResizeState.current = {
+      key,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: columnWidths[key] || defaultMetricColumnWidth
+    };
+    setResizingColumnKey(key);
+  }
+
+  function resizeColumn(event: React.PointerEvent<HTMLSpanElement>) {
+    const resize = columnResizeState.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    updateColumnWidth(resize.key, resize.startWidth + event.clientX - resize.startX);
+  }
+
+  function finishColumnResize(event: React.PointerEvent<HTMLSpanElement>) {
+    const resize = columnResizeState.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    columnResizeState.current = null;
+    setResizingColumnKey(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+
+  function resizeColumnByKeyboard(event: React.KeyboardEvent<HTMLSpanElement>, key: BusinessMetricKey) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    updateColumnWidth(key, (columnWidths[key] || defaultMetricColumnWidth) + (event.key === "ArrowLeft" ? -8 : 8));
+  }
+
   function resetColumns() {
     const next = new Set(schemaColumns.filter((column) => column.defaultVisible !== false).map((column) => column.key));
     if (!next.size) schemaColumns.forEach((column) => next.add(column.key));
+    const nextOrder = schemaColumns.map((column) => column.key);
     storageSet(STORAGE_KEY_BUSINESS_DATA_COLUMNS, [...next]);
+    storageSet(STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER, nextOrder);
+    storageSet(STORAGE_KEY_BUSINESS_DATA_COLUMN_WIDTHS, {});
     setVisibleColumnKeys(next);
+    setColumnOrder(nextOrder);
+    setColumnWidths({});
   }
 
-  function toggleStore(id: string) {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  function toggleStores(ids: string[]) {
+    setSelectedIds((current) => toggleStoreIds(current, ids));
   }
 
   function toggleVisibleStores() {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (allVisibleSelected) filteredStores.forEach((store) => next.delete(store.id));
-      else filteredStores.forEach((store) => next.add(store.id));
-      return next;
-    });
+    toggleStores(filteredStores.map((store) => store.id));
   }
 
   return (
@@ -932,25 +1068,7 @@ export function BusinessDataPage() {
                 <span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" />正在读取店铺</span>
               </div>
             ) : filteredStores.length ? (
-              <div className="divide-y divide-[#edf1f6]">
-                {filteredStores.map((store) => (
-                  <button
-                    className={cn("grid w-full grid-cols-[20px_minmax(0,1fr)] gap-2 px-3 py-2.5 text-left transition-colors hover:bg-[#f8fbff]", selectedIds.has(store.id) ? "bg-[#fffaf7]" : "bg-white")}
-                    key={store.id}
-                    type="button"
-                    onClick={() => toggleStore(store.id)}
-                  >
-                    <span className="pt-1"><CheckboxBox checked={selectedIds.has(store.id)} /></span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-[12px] font-semibold text-[#1d2939]">{store.name}</span>
-                      <span className="mt-1 flex min-w-0 items-center gap-2 text-[12px] text-[#667085]">
-                        <span className="truncate">ID: {store.id}</span>
-                        <StatusTag status={store.status} />
-                      </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <GroupedStoreSelectionList stores={filteredStores} selectedIds={selectedIds} onToggleIds={toggleStores} />
             ) : (
               <div className="grid h-full min-h-[220px] place-items-center px-4 text-center text-[13px] leading-6 text-[#667085]">
                 {loadState === "error" ? loadMessage || "店铺读取失败" : "暂无匹配店铺"}
@@ -1076,28 +1194,93 @@ export function BusinessDataPage() {
                   <div className="text-[12px] font-semibold text-[#344054]">指标列</div>
                   <button className="h-7 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" onClick={resetColumns}>恢复默认</button>
                 </div>
-                <div className="grid grid-cols-6 gap-2 max-[1600px]:grid-cols-4 max-[1180px]:grid-cols-3 max-[760px]:grid-cols-2">
-                  {schemaColumns.map((column) => (
-                    <button
-                      className={cn("flex h-8 min-w-0 items-center gap-2 rounded-md border px-2 text-left text-[12px] font-medium", visibleColumnKeys.has(column.key) ? "border-brand-fox bg-brand-foxSoft text-brand-navy" : "border-[#dbe5f2] bg-white text-[#667085]")}
+                <div className="grid max-h-[240px] grid-cols-5 gap-2 overflow-y-auto pr-1 max-[1600px]:grid-cols-4 max-[1180px]:grid-cols-3 max-[760px]:grid-cols-2 max-[520px]:grid-cols-1">
+                  {orderedSchemaColumns.map((column, index) => (
+                    <div
+                      className={cn(
+                        "flex h-9 min-w-0 items-center rounded-md border bg-white text-[12px] transition-colors",
+                        visibleColumnKeys.has(column.key) ? "border-brand-fox bg-brand-foxSoft text-brand-navy" : "border-[#dbe5f2] text-[#667085]",
+                        draggedColumnKey === column.key ? "opacity-50" : "",
+                        dragOverColumnKey === column.key ? "ring-2 ring-brand-fox/30" : ""
+                      )}
                       key={column.key}
-                      type="button"
-                      onClick={() => toggleColumn(column.key)}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
+                        if (draggedColumnKey && draggedColumnKey !== column.key) setDragOverColumnKey(column.key);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const sourceKey = (event.dataTransfer.getData("text/plain") || draggedColumnKey) as BusinessMetricKey;
+                        if (businessMetricKeySet.has(sourceKey)) reorderColumn(sourceKey, column.key);
+                        setDraggedColumnKey(null);
+                        setDragOverColumnKey(null);
+                      }}
                     >
-                      <CheckboxBox checked={visibleColumnKeys.has(column.key)} />
-                      <span className="truncate">{column.label}</span>
-                      {column.group ? <span className="ml-auto shrink-0 text-[11px] text-[#98a2b3]">{column.group}</span> : null}
-                    </button>
+                      <span
+                        className="grid h-full w-7 shrink-0 cursor-grab place-items-center text-[#98a2b3] active:cursor-grabbing"
+                        draggable
+                        title={`拖动 ${column.label}`}
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData("text/plain", column.key);
+                          setDraggedColumnKey(column.key);
+                        }}
+                        onDragEnd={() => {
+                          setDraggedColumnKey(null);
+                          setDragOverColumnKey(null);
+                        }}
+                      >
+                        <GripVertical className="size-[14px]" strokeWidth={2} />
+                      </span>
+                      <button className="flex h-full min-w-0 flex-1 items-center gap-2 text-left font-medium" type="button" onClick={() => toggleColumn(column.key)}>
+                        <CheckboxBox checked={visibleColumnKeys.has(column.key)} />
+                        <span className="truncate">{column.label}</span>
+                        {column.group ? <span className="ml-auto shrink-0 text-[11px] text-[#98a2b3]">{column.group}</span> : null}
+                      </button>
+                      <button className="grid size-7 shrink-0 place-items-center text-[#667085] hover:text-brand-navy disabled:cursor-not-allowed disabled:opacity-30" type="button" disabled={index === 0} aria-label={`左移 ${column.label}`} title={`左移 ${column.label}`} onClick={() => moveColumn(column.key, -1)}>
+                        <ArrowLeft className="size-[13px]" strokeWidth={2} />
+                      </button>
+                      <button className="grid size-7 shrink-0 place-items-center text-[#667085] hover:text-brand-navy disabled:cursor-not-allowed disabled:opacity-30" type="button" disabled={index === orderedSchemaColumns.length - 1} aria-label={`右移 ${column.label}`} title={`右移 ${column.label}`} onClick={() => moveColumn(column.key, 1)}>
+                        <ArrowRight className="size-[13px]" strokeWidth={2} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
             ) : null}
-            <table className="w-full border-separate border-spacing-0 text-left text-[12px]" style={{ minWidth: tableMinWidth }}>
+            <table className="table-fixed border-separate border-spacing-0 text-left text-[12px]" style={{ width: tableMinWidth, minWidth: tableMinWidth }}>
+              <colgroup>
+                <col style={{ width: shopColumnWidth }} />
+                {visibleColumns.map((column) => <col key={column.key} style={{ width: columnWidths[column.key] || defaultMetricColumnWidth }} />)}
+              </colgroup>
               <thead className="sticky top-0 z-20 bg-[#fbfcff] text-[#344054] shadow-[inset_0_-1px_0_#e6ebf3]">
                 <tr className="h-10">
                   <th className="sticky left-0 z-30 bg-[#fbfcff] px-3 font-semibold shadow-[inset_-1px_0_0_#edf1f6]" style={{ width: shopColumnWidth, minWidth: shopColumnWidth, maxWidth: shopColumnWidth }}>店铺名称</th>
                   {visibleColumns.map((column) => (
-                    <th className="whitespace-nowrap bg-[#fbfcff] px-3 font-semibold" key={column.key}>{column.label}</th>
+                    <th className="relative overflow-hidden whitespace-nowrap bg-[#fbfcff] px-3 pr-4 font-semibold" key={column.key}>
+                      <span className="block overflow-hidden text-ellipsis" title={column.label}>{column.label}</span>
+                      <span
+                        className={cn(
+                          "absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize touch-none select-none outline-none before:absolute before:inset-y-2 before:right-[3px] before:w-px before:bg-[#d0d5dd] hover:before:bg-brand-fox focus-visible:before:bg-brand-fox",
+                          resizingColumnKey === column.key ? "before:w-0.5 before:bg-brand-fox" : ""
+                        )}
+                        role="separator"
+                        aria-label={`调整 ${column.label} 列宽`}
+                        aria-orientation="vertical"
+                        aria-valuemin={minMetricColumnWidth}
+                        aria-valuemax={maxMetricColumnWidth}
+                        aria-valuenow={columnWidths[column.key] || defaultMetricColumnWidth}
+                        tabIndex={0}
+                        title={`调整 ${column.label} 列宽`}
+                        onDoubleClick={() => resetColumnWidth(column.key)}
+                        onKeyDown={(event) => resizeColumnByKeyboard(event, column.key)}
+                        onPointerDown={(event) => startColumnResize(event, column.key)}
+                        onPointerMove={resizeColumn}
+                        onPointerUp={finishColumnResize}
+                        onPointerCancel={finishColumnResize}
+                      />
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -1113,7 +1296,7 @@ export function BusinessDataPage() {
                     {visibleColumns.map((column) => {
                       const resolvedTone = typeof column.tone === "function" ? column.tone(row) : column.tone;
                       return (
-                        <td className={cn("whitespace-nowrap px-3", toneClass(resolvedTone), resolvedTone ? "font-semibold" : "")} key={column.key}>
+                        <td className={cn("overflow-hidden text-ellipsis whitespace-nowrap px-3", toneClass(resolvedTone), resolvedTone ? "font-semibold" : "")} key={column.key} title={formatColumnValue(row[column.key], column.format, metricAvailable(row, column.key))}>
                           {formatColumnValue(row[column.key], column.format, metricAvailable(row, column.key))}
                         </td>
                       );

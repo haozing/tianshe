@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import {
   AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
   Banknote,
   Check,
   ChevronDown,
   CircleDollarSign,
   CircleStop,
   Download,
+  GripVertical,
   Landmark,
   Loader2,
   PanelLeftClose,
@@ -22,8 +25,10 @@ import {
 } from "lucide-react";
 import { cancelDoudianStoreOperation, fetchDoudianFundsData, fetchDoudianFundsDataLatest, listDoudianStores } from "../bridge/client";
 import { loadDoudianAdapterPayload } from "../bridge/doudianAdapter";
-import { STORAGE_KEY_FUNDS_DATA_COLUMNS, storageGet, storageSet } from "../bridge/storage";
+import { STORAGE_KEY_FUNDS_DATA_COLUMN_ORDER, STORAGE_KEY_FUNDS_DATA_COLUMN_WIDTHS, STORAGE_KEY_FUNDS_DATA_COLUMNS, storageGet, storageSet } from "../bridge/storage";
 import { addDoudianProgressListener } from "../domain/doudian";
+import { toggleStoreIds } from "../domain/doudian/storeSelection";
+import { GroupedStoreSelectionList } from "./GroupedStoreSelectionList";
 import { cn } from "../lib/utils";
 import type { DoudianFundsDataRow, DoudianRunDetail, DoudianStoreStatus, DoudianStoreSummary } from "../types";
 
@@ -62,6 +67,7 @@ const fundsMetricKeys = [
 ] as const;
 
 type FundsMetricKey = typeof fundsMetricKeys[number];
+type FundsColumnWidths = Partial<Record<FundsMetricKey, number>>;
 
 interface StoreOption {
   id: string;
@@ -179,6 +185,9 @@ const CURRENT_SNAPSHOT_LABEL = "当前资金快照";
 const DEFAULT_AUTO_REFRESH_TTL_MS = 5 * 60 * 1000;
 const columnFormatSet = new Set<string>(["money", "number"]);
 const toneSet = new Set<string>(["default", "blue", "green", "warning", "danger"]);
+const defaultMetricColumnWidth = 112;
+const minMetricColumnWidth = 72;
+const maxMetricColumnWidth = 360;
 const defaultSortOptions = [
   { key: "withdrawBalance", label: "可提现金额", direction: "desc" },
   { key: "pendingSettleAmount", label: "待结算金额", direction: "desc" },
@@ -291,7 +300,7 @@ function fundsRowFromRemote(row: DoudianFundsDataRow, store?: StoreOption, detai
     .sort();
   return {
     shopId: String(row.shopId || store?.id || ""),
-    shopName: String(row.shopName || store?.name || ""),
+    shopName: String(store?.name || row.shopName || ""),
     group: String(row.group || store?.group || "未分组"),
     status: normalizeStoreStatus(row.status || store?.status),
     lastMessage: detail?.message,
@@ -411,9 +420,21 @@ function getFundsFieldSchema(adapter: unknown): RemoteFundsFieldSchema {
   return schema && typeof schema === "object" ? schema as RemoteFundsFieldSchema : {};
 }
 
-function fundsColumnStorageKey(schemaVersion?: string) {
+function fundsColumnPreferenceStorageKey(baseKey: string, schemaVersion?: string) {
   const suffix = String(schemaVersion || "fallback").toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
-  return `${STORAGE_KEY_FUNDS_DATA_COLUMNS}_${suffix || "fallback"}`;
+  return `${baseKey}_${suffix || "fallback"}`;
+}
+
+function fundsColumnStorageKey(schemaVersion?: string) {
+  return fundsColumnPreferenceStorageKey(STORAGE_KEY_FUNDS_DATA_COLUMNS, schemaVersion);
+}
+
+function fundsColumnOrderStorageKey(schemaVersion?: string) {
+  return fundsColumnPreferenceStorageKey(STORAGE_KEY_FUNDS_DATA_COLUMN_ORDER, schemaVersion);
+}
+
+function fundsColumnWidthsStorageKey(schemaVersion?: string) {
+  return fundsColumnPreferenceStorageKey(STORAGE_KEY_FUNDS_DATA_COLUMN_WIDTHS, schemaVersion);
 }
 
 function visibleColumnKeySet(schemaColumns: DataColumn[], schemaVersion?: string) {
@@ -421,6 +442,40 @@ function visibleColumnKeySet(schemaColumns: DataColumn[], schemaVersion?: string
   const valid = saved.filter((key) => fundsMetricKeySet.has(key));
   const initial = valid.length ? valid : schemaColumns.filter((column) => column.defaultVisible !== false).map((column) => column.key);
   return new Set(initial.length ? initial : defaultColumnKeys);
+}
+
+function normalizeColumnOrder(schemaColumns: DataColumn[], preferredOrder: readonly string[]) {
+  const schemaKeys = schemaColumns.map((column) => column.key);
+  const schemaKeySet = new Set<FundsMetricKey>(schemaKeys);
+  const seen = new Set<FundsMetricKey>();
+  const orderedKeys = preferredOrder.filter((key): key is FundsMetricKey => {
+    if (!fundsMetricKeySet.has(key) || !schemaKeySet.has(key as FundsMetricKey) || seen.has(key as FundsMetricKey)) return false;
+    seen.add(key as FundsMetricKey);
+    return true;
+  });
+  return [...orderedKeys, ...schemaKeys.filter((key) => !seen.has(key))];
+}
+
+function savedColumnOrder(schemaColumns: DataColumn[], schemaVersion?: string) {
+  const saved = storageGet<string[]>(fundsColumnOrderStorageKey(schemaVersion), []);
+  return normalizeColumnOrder(schemaColumns, Array.isArray(saved) ? saved : []);
+}
+
+function clampColumnWidth(width: number) {
+  return Math.min(maxMetricColumnWidth, Math.max(minMetricColumnWidth, Math.round(width)));
+}
+
+function normalizeColumnWidths(schemaColumns: DataColumn[], widths: unknown): FundsColumnWidths {
+  if (!widths || typeof widths !== "object" || Array.isArray(widths)) return {};
+  const source = widths as Record<string, unknown>;
+  return Object.fromEntries(schemaColumns.flatMap((column) => {
+    const width = source[column.key];
+    return typeof width === "number" && Number.isFinite(width) ? [[column.key, clampColumnWidth(width)]] : [];
+  })) as FundsColumnWidths;
+}
+
+function savedColumnWidths(schemaColumns: DataColumn[], schemaVersion?: string) {
+  return normalizeColumnWidths(schemaColumns, storageGet<unknown>(fundsColumnWidthsStorageKey(schemaVersion), {}));
 }
 
 function formatMoney(value: number) {
@@ -656,12 +711,18 @@ export function FundsDataPage() {
   const [activeOperationId, setActiveOperationId] = useState("");
   const [fieldSchema, setFieldSchema] = useState<RemoteFundsFieldSchema>({});
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<Set<string>>(() => visibleColumnKeySet(tableColumns));
+  const [columnOrder, setColumnOrder] = useState<FundsMetricKey[]>(() => savedColumnOrder(tableColumns));
+  const [columnWidths, setColumnWidths] = useState<FundsColumnWidths>(() => savedColumnWidths(tableColumns));
   const [columnPanelOpen, setColumnPanelOpen] = useState(false);
+  const [draggedColumnKey, setDraggedColumnKey] = useState<FundsMetricKey | null>(null);
+  const [dragOverColumnKey, setDragOverColumnKey] = useState<FundsMetricKey | null>(null);
+  const [resizingColumnKey, setResizingColumnKey] = useState<FundsMetricKey | null>(null);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [adapterVersion, setAdapterVersion] = useState("");
   const [fieldSchemaVersion, setFieldSchemaVersion] = useState("");
   const [exportFormat, setExportFormat] = useState<ExportFormat>("Excel");
   const [autoRefreshTtlMs, setAutoRefreshTtlMs] = useState(DEFAULT_AUTO_REFRESH_TTL_MS);
+  const columnResizeState = useRef<{ key: FundsMetricKey; pointerId: number; startX: number; startWidth: number } | null>(null);
 
   function commitFundsRows(rows: FundsRow[]) {
     fundsRowsRef.current = rows;
@@ -882,9 +943,14 @@ export function FundsDataPage() {
         const cachePolicy = fundsPolicy.cachePolicy && typeof fundsPolicy.cachePolicy === "object" ? fundsPolicy.cachePolicy as Record<string, unknown> : {};
         const configuredTtl = Number(cachePolicy.autoRefreshTtlMs);
         setAutoRefreshTtlMs(Number.isFinite(configuredTtl) && configuredTtl >= 0 ? configuredTtl : DEFAULT_AUTO_REFRESH_TTL_MS);
-        setVisibleColumnKeys((current) => {
-          const currentValid = [...current].filter((key) => columns.some((column) => column.key === key));
-          const next = currentValid.length ? new Set(currentValid) : visibleColumnKeySet(columns, schema.version);
+        const nextOrder = savedColumnOrder(columns, schema.version);
+        const nextWidths = savedColumnWidths(columns, schema.version);
+        storageSet(fundsColumnOrderStorageKey(schema.version), nextOrder);
+        storageSet(fundsColumnWidthsStorageKey(schema.version), nextWidths);
+        setColumnOrder(nextOrder);
+        setColumnWidths(nextWidths);
+        setVisibleColumnKeys(() => {
+          const next = visibleColumnKeySet(columns, schema.version);
           storageSet(fundsColumnStorageKey(schema.version), [...next]);
           return next;
         });
@@ -970,13 +1036,20 @@ export function FundsDataPage() {
   }, [fundsRows, selectedIds, selectedSort?.direction, selectedSort?.key]);
 
   const schemaColumns = useMemo(() => normalizeRemoteColumns(fieldSchema), [fieldSchema]);
-  const columnStorageKey = fundsColumnStorageKey(fieldSchema.version || fieldSchemaVersion);
+  const schemaVersion = fieldSchema.version || fieldSchemaVersion;
+  const columnStorageKey = fundsColumnStorageKey(schemaVersion);
+  const columnOrderStorageKey = fundsColumnOrderStorageKey(schemaVersion);
+  const columnWidthsStorageKey = fundsColumnWidthsStorageKey(schemaVersion);
+  const orderedSchemaColumns = useMemo(() => {
+    const columnByKey = new Map(schemaColumns.map((column) => [column.key, column]));
+    return normalizeColumnOrder(schemaColumns, columnOrder).map((key) => columnByKey.get(key) as DataColumn);
+  }, [columnOrder, schemaColumns]);
   const visibleColumns = useMemo(() => {
-    const next = schemaColumns.filter((column) => visibleColumnKeys.has(column.key));
-    return next.length ? next : schemaColumns;
-  }, [schemaColumns, visibleColumnKeys]);
+    const next = orderedSchemaColumns.filter((column) => visibleColumnKeys.has(column.key));
+    return next.length ? next : orderedSchemaColumns;
+  }, [orderedSchemaColumns, visibleColumnKeys]);
   const shopColumnWidth = 174;
-  const tableMinWidth = Math.max(1120, shopColumnWidth + visibleColumns.length * 104);
+  const tableMinWidth = Math.max(1120, shopColumnWidth + visibleColumns.reduce((total, column) => total + (columnWidths[column.key] || defaultMetricColumnWidth), 0));
   const summarySchema = useMemo(() => normalizeRemoteSummary(fieldSchema), [fieldSchema]);
   const aggregate = useMemo(() => aggregateRows(selectedRows), [selectedRows]);
   const { totals, freshCounts, staleCounts } = aggregate;
@@ -987,6 +1060,21 @@ export function FundsDataPage() {
   const failedDetailCount = fundsDetails.filter((detail) => detail.ok === false).length;
   const staleStoreCount = selectedRows.filter((row) => fundsMetricKeys.some((key) => row.metricStates[key] === "stale")).length;
   const unavailableStoreCount = selectedRows.filter((row) => fundsMetricKeys.some((key) => row.metricStates[key] === "unavailable")).length;
+  const metricLabelByKey = new Map<FundsMetricKey, string>(tableColumns.map((column) => [column.key, column.label]));
+  schemaColumns.forEach((column) => metricLabelByKey.set(column.key, column.label));
+  const unavailableMetricDetails = fundsMetricKeys.map((key) => ({
+    key,
+    label: metricLabelByKey.get(key) || key,
+    storeCount: selectedRows.filter((row) => row.metricStates[key] === "unavailable").length
+  })).filter((item) => item.storeCount > 0);
+  const unavailableMetricNames = unavailableMetricDetails.map((item) => item.label);
+  const unavailableMetricLead = unavailableMetricNames[0] || "未知指标";
+  const unavailableWarningTitle = unavailableStoreCount
+    ? `${unavailableStoreCount} 家不可用：${unavailableMetricLead}${unavailableMetricNames.length > 1 ? `等 ${unavailableMetricNames.length} 项` : ""}`
+    : "";
+  const unavailableWarningDetail = unavailableMetricDetails.length
+    ? `不可用指标：${unavailableMetricDetails.map((item) => `${item.label}（${item.storeCount} 家）`).join("、")}。页面以 -- 显示，不计为零。`
+    : "";
   const dataTimestamps = selectedRows.map((row) => Date.parse(row.dataUpdatedAt || "")).filter(Number.isFinite).sort((left, right) => left - right);
   const displayedDataAt = dataTimestamps.length ? new Date(staleStoreCount ? dataTimestamps[0] : dataTimestamps.at(-1) || dataTimestamps[0]) : null;
   const selectedRowsAllUnavailable = fundsState === "ready" && selectedRows.length > 0 && selectedRows.every((row) => !fundsRowHasKnownMetric(row));
@@ -995,8 +1083,6 @@ export function FundsDataPage() {
     ? `${failedDetailCount} 家同步失败`
     : staleStoreCount
       ? `${staleStoreCount} 家正在显示历史有效值`
-      : unavailableStoreCount
-        ? `${unavailableStoreCount} 家存在不可用指标`
     : selectedRowsAllUnavailable && !previewMode
       ? `${selectedRows.length} 家未命中资金指标`
       : riskStoreCount
@@ -1006,8 +1092,6 @@ export function FundsDataPage() {
     ? "本次同步失败，已保留最近成功数据；请确认登录态后重试。"
     : staleStoreCount
       ? "部分来源本次未取得数据，金额保留为最近成功值，数据时间见单元格提示。"
-      : unavailableStoreCount
-        ? "部分指标从未成功取得，页面以 -- 显示，不计为零。"
     : selectedRowsAllUnavailable && !previewMode
       ? "资金桥接或字段映射尚未返回可展示的金额。"
       : riskStoreCount
@@ -1059,35 +1143,112 @@ export function FundsDataPage() {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
       else next.add(key);
-      if (!next.size) schemaColumns.slice(0, 1).forEach((column) => next.add(column.key));
+      if (!next.size) orderedSchemaColumns.slice(0, 1).forEach((column) => next.add(column.key));
       storageSet(columnStorageKey, [...next]);
       return next;
     });
   }
 
+  function updateColumnOrder(update: (current: FundsMetricKey[]) => FundsMetricKey[]) {
+    setColumnOrder((current) => {
+      const next = update(normalizeColumnOrder(schemaColumns, current));
+      storageSet(columnOrderStorageKey, next);
+      return next;
+    });
+  }
+
+  function moveColumn(key: FundsMetricKey, offset: -1 | 1) {
+    updateColumnOrder((current) => {
+      const fromIndex = current.indexOf(key);
+      const toIndex = fromIndex + offset;
+      if (fromIndex < 0 || toIndex < 0 || toIndex >= current.length) return current;
+      const next = [...current];
+      [next[fromIndex], next[toIndex]] = [next[toIndex], next[fromIndex]];
+      return next;
+    });
+  }
+
+  function reorderColumn(sourceKey: FundsMetricKey, targetKey: FundsMetricKey) {
+    if (sourceKey === targetKey) return;
+    updateColumnOrder((current) => {
+      const fromIndex = current.indexOf(sourceKey);
+      const toIndex = current.indexOf(targetKey);
+      if (fromIndex < 0 || toIndex < 0) return current;
+      const next = [...current];
+      next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, sourceKey);
+      return next;
+    });
+  }
+
+  function updateColumnWidth(key: FundsMetricKey, width: number) {
+    setColumnWidths((current) => {
+      const next = { ...current, [key]: clampColumnWidth(width) };
+      storageSet(columnWidthsStorageKey, next);
+      return next;
+    });
+  }
+
+  function resetColumnWidth(key: FundsMetricKey) {
+    setColumnWidths((current) => {
+      const next = { ...current };
+      delete next[key];
+      storageSet(columnWidthsStorageKey, next);
+      return next;
+    });
+  }
+
+  function startColumnResize(event: React.PointerEvent<HTMLSpanElement>, key: FundsMetricKey) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    columnResizeState.current = {
+      key,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: columnWidths[key] || defaultMetricColumnWidth
+    };
+    setResizingColumnKey(key);
+  }
+
+  function resizeColumn(event: React.PointerEvent<HTMLSpanElement>) {
+    const resize = columnResizeState.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    updateColumnWidth(resize.key, resize.startWidth + event.clientX - resize.startX);
+  }
+
+  function finishColumnResize(event: React.PointerEvent<HTMLSpanElement>) {
+    const resize = columnResizeState.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    columnResizeState.current = null;
+    setResizingColumnKey(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+
+  function resizeColumnByKeyboard(event: React.KeyboardEvent<HTMLSpanElement>, key: FundsMetricKey) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    updateColumnWidth(key, (columnWidths[key] || defaultMetricColumnWidth) + (event.key === "ArrowLeft" ? -8 : 8));
+  }
+
   function resetColumns() {
     const next = new Set(schemaColumns.filter((column) => column.defaultVisible !== false).map((column) => column.key));
     if (!next.size) schemaColumns.forEach((column) => next.add(column.key));
+    const nextOrder = schemaColumns.map((column) => column.key);
     storageSet(columnStorageKey, [...next]);
+    storageSet(columnOrderStorageKey, nextOrder);
+    storageSet(columnWidthsStorageKey, {});
     setVisibleColumnKeys(next);
+    setColumnOrder(nextOrder);
+    setColumnWidths({});
   }
 
-  function toggleStore(id: string) {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  function toggleStores(ids: string[]) {
+    setSelectedIds((current) => toggleStoreIds(current, ids));
   }
 
   function toggleVisibleStores() {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (allVisibleSelected) filteredStores.forEach((store) => next.delete(store.id));
-      else filteredStores.forEach((store) => next.add(store.id));
-      return next;
-    });
+    toggleStores(filteredStores.map((store) => store.id));
   }
 
   return (
@@ -1130,25 +1291,7 @@ export function FundsDataPage() {
                 <span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" />正在读取店铺</span>
               </div>
             ) : filteredStores.length ? (
-              <div className="divide-y divide-[#edf1f6]">
-                {filteredStores.map((store) => (
-                  <button
-                    className={cn("grid w-full grid-cols-[20px_minmax(0,1fr)] gap-2 px-3 py-2.5 text-left transition-colors hover:bg-[#f8fbff]", selectedIds.has(store.id) ? "bg-[#fffaf7]" : "bg-white")}
-                    key={store.id}
-                    type="button"
-                    onClick={() => toggleStore(store.id)}
-                  >
-                    <span className="pt-1"><CheckboxBox checked={selectedIds.has(store.id)} /></span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-[12px] font-semibold text-[#1d2939]">{store.name}</span>
-                      <span className="mt-1 flex min-w-0 items-center gap-2 text-[12px] text-[#667085]">
-                        <span className="truncate">ID: {store.id}</span>
-                        <StatusTag status={store.status} />
-                      </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <GroupedStoreSelectionList stores={filteredStores} selectedIds={selectedIds} onToggleIds={toggleStores} />
             ) : (
               <div className="grid h-full min-h-[220px] place-items-center px-4 text-center text-[13px] leading-6 text-[#667085]">
                 {loadState === "error" ? loadMessage || "店铺读取失败" : "暂无匹配店铺"}
@@ -1214,7 +1357,7 @@ export function FundsDataPage() {
         </section>
 
         <section className="grid min-h-0 grid-rows-[44px_minmax(0,1fr)_38px] overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-          <div className="flex items-center justify-between gap-3 border-b border-[#edf1f6] px-3.5">
+          <div className="relative z-40 flex items-center justify-between gap-3 border-b border-[#edf1f6] px-3.5">
             <div className="flex min-w-0 items-center gap-2">
               <WalletCards className="size-[16px] text-brand-navy" strokeWidth={2.2} />
               <strong className="text-[15px] font-semibold text-[#101828]">店铺资金明细</strong>
@@ -1234,6 +1377,32 @@ export function FundsDataPage() {
                   <span className="truncate">{fundsWarningTitle}</span>
                 </span>
               ) : null}
+              {fundsState !== "loading" && unavailableStoreCount ? (
+                <div className="group relative min-w-0 shrink-0">
+                  <span
+                    className="inline-flex h-6 max-w-[360px] items-center gap-1 rounded-md border border-[#ffdca8] bg-[#fff7e8] px-2 text-[12px] font-semibold text-[#b54708] outline-none focus-visible:ring-2 focus-visible:ring-brand-fox/30"
+                    tabIndex={0}
+                    aria-label={unavailableWarningDetail}
+                  >
+                    <ShieldAlert className="size-[13px] shrink-0" strokeWidth={2} />
+                    <span className="truncate">{unavailableWarningTitle}</span>
+                  </span>
+                  <div className="pointer-events-none invisible absolute left-0 top-[30px] z-50 w-[min(420px,calc(100vw-32px))] rounded-md border border-[#ffdca8] bg-white p-3 text-[#344054] opacity-0 shadow-[0_12px_28px_rgba(15,23,42,0.14)] transition-opacity group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:visible group-focus-within:opacity-100" role="tooltip">
+                    <div className="mb-2 flex items-center justify-between gap-3 text-[12px] font-semibold">
+                      <span>不可用指标</span>
+                      <span className="text-[#b54708]">{unavailableMetricDetails.length} 项</span>
+                    </div>
+                    <div className="max-h-[240px] divide-y divide-[#edf1f6] overflow-y-auto">
+                      {unavailableMetricDetails.map((item) => (
+                        <div className="flex min-h-8 items-center justify-between gap-4 py-1.5 text-[12px]" key={item.key}>
+                          <span className="min-w-0 truncate" title={item.label}>{item.label}</span>
+                          <span className="shrink-0 text-[#b54708]">{item.storeCount} 家</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <NativeSelect value={sortKey} options={sortOptions.map((option) => option.label)} onChange={setSortKey} />
@@ -1251,28 +1420,93 @@ export function FundsDataPage() {
                   <div className="text-[12px] font-semibold text-[#344054]">指标列</div>
                   <button className="h-7 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" onClick={resetColumns}>恢复默认</button>
                 </div>
-                <div className="grid grid-cols-6 gap-2 max-[1600px]:grid-cols-4 max-[1180px]:grid-cols-3 max-[760px]:grid-cols-2">
-                  {schemaColumns.map((column) => (
-                    <button
-                      className={cn("flex h-8 min-w-0 items-center gap-2 rounded-md border px-2 text-left text-[12px] font-medium", visibleColumnKeys.has(column.key) ? "border-brand-fox bg-brand-foxSoft text-brand-navy" : "border-[#dbe5f2] bg-white text-[#667085]")}
+                <div className="grid max-h-[240px] grid-cols-5 gap-2 overflow-y-auto pr-1 max-[1600px]:grid-cols-4 max-[1180px]:grid-cols-3 max-[760px]:grid-cols-2 max-[520px]:grid-cols-1">
+                  {orderedSchemaColumns.map((column, index) => (
+                    <div
+                      className={cn(
+                        "flex h-9 min-w-0 items-center rounded-md border bg-white text-[12px] transition-colors",
+                        visibleColumnKeys.has(column.key) ? "border-brand-fox bg-brand-foxSoft text-brand-navy" : "border-[#dbe5f2] text-[#667085]",
+                        draggedColumnKey === column.key ? "opacity-50" : "",
+                        dragOverColumnKey === column.key ? "ring-2 ring-brand-fox/30" : ""
+                      )}
                       key={column.key}
-                      type="button"
-                      onClick={() => toggleColumn(column.key)}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
+                        if (draggedColumnKey && draggedColumnKey !== column.key) setDragOverColumnKey(column.key);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const sourceKey = (event.dataTransfer.getData("text/plain") || draggedColumnKey) as FundsMetricKey;
+                        if (fundsMetricKeySet.has(sourceKey)) reorderColumn(sourceKey, column.key);
+                        setDraggedColumnKey(null);
+                        setDragOverColumnKey(null);
+                      }}
                     >
-                      <CheckboxBox checked={visibleColumnKeys.has(column.key)} />
-                      <span className="truncate">{column.label}</span>
-                      {column.group ? <span className="ml-auto shrink-0 text-[11px] text-[#98a2b3]">{column.group}</span> : null}
-                    </button>
+                      <span
+                        className="grid h-full w-7 shrink-0 cursor-grab place-items-center text-[#98a2b3] active:cursor-grabbing"
+                        draggable
+                        title={`拖动 ${column.label}`}
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData("text/plain", column.key);
+                          setDraggedColumnKey(column.key);
+                        }}
+                        onDragEnd={() => {
+                          setDraggedColumnKey(null);
+                          setDragOverColumnKey(null);
+                        }}
+                      >
+                        <GripVertical className="size-[14px]" strokeWidth={2} />
+                      </span>
+                      <button className="flex h-full min-w-0 flex-1 items-center gap-2 text-left font-medium" type="button" onClick={() => toggleColumn(column.key)}>
+                        <CheckboxBox checked={visibleColumnKeys.has(column.key)} />
+                        <span className="truncate">{column.label}</span>
+                        {column.group ? <span className="ml-auto shrink-0 text-[11px] text-[#98a2b3]">{column.group}</span> : null}
+                      </button>
+                      <button className="grid size-7 shrink-0 place-items-center text-[#667085] hover:text-brand-navy disabled:cursor-not-allowed disabled:opacity-30" type="button" disabled={index === 0} aria-label={`左移 ${column.label}`} title={`左移 ${column.label}`} onClick={() => moveColumn(column.key, -1)}>
+                        <ArrowLeft className="size-[13px]" strokeWidth={2} />
+                      </button>
+                      <button className="grid size-7 shrink-0 place-items-center text-[#667085] hover:text-brand-navy disabled:cursor-not-allowed disabled:opacity-30" type="button" disabled={index === orderedSchemaColumns.length - 1} aria-label={`右移 ${column.label}`} title={`右移 ${column.label}`} onClick={() => moveColumn(column.key, 1)}>
+                        <ArrowRight className="size-[13px]" strokeWidth={2} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
             ) : null}
-            <table className="w-full border-separate border-spacing-0 text-left text-[12px]" style={{ minWidth: tableMinWidth }}>
+            <table className="table-fixed border-separate border-spacing-0 text-left text-[12px]" style={{ width: tableMinWidth, minWidth: tableMinWidth }}>
+              <colgroup>
+                <col style={{ width: shopColumnWidth }} />
+                {visibleColumns.map((column) => <col key={column.key} style={{ width: columnWidths[column.key] || defaultMetricColumnWidth }} />)}
+              </colgroup>
               <thead className="sticky top-0 z-20 bg-[#fbfcff] text-[#344054] shadow-[inset_0_-1px_0_#e6ebf3]">
                 <tr className="h-10">
                   <th className="sticky left-0 z-30 bg-[#fbfcff] px-3 font-semibold shadow-[inset_-1px_0_0_#edf1f6]" style={{ width: shopColumnWidth, minWidth: shopColumnWidth, maxWidth: shopColumnWidth }}>店铺名称</th>
                   {visibleColumns.map((column) => (
-                    <th className="whitespace-nowrap bg-[#fbfcff] px-3 font-semibold" key={column.key}>{column.label}</th>
+                    <th className="relative overflow-hidden whitespace-nowrap bg-[#fbfcff] px-3 pr-4 font-semibold" key={column.key}>
+                      <span className="block overflow-hidden text-ellipsis" title={column.label}>{column.label}</span>
+                      <span
+                        className={cn(
+                          "absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize touch-none select-none outline-none before:absolute before:inset-y-2 before:right-[3px] before:w-px before:bg-[#d0d5dd] hover:before:bg-brand-fox focus-visible:before:bg-brand-fox",
+                          resizingColumnKey === column.key ? "before:w-0.5 before:bg-brand-fox" : ""
+                        )}
+                        role="separator"
+                        aria-label={`调整 ${column.label} 列宽`}
+                        aria-orientation="vertical"
+                        aria-valuemin={minMetricColumnWidth}
+                        aria-valuemax={maxMetricColumnWidth}
+                        aria-valuenow={columnWidths[column.key] || defaultMetricColumnWidth}
+                        tabIndex={0}
+                        title={`调整 ${column.label} 列宽`}
+                        onDoubleClick={() => resetColumnWidth(column.key)}
+                        onKeyDown={(event) => resizeColumnByKeyboard(event, column.key)}
+                        onPointerDown={(event) => startColumnResize(event, column.key)}
+                        onPointerMove={resizeColumn}
+                        onPointerUp={finishColumnResize}
+                        onPointerCancel={finishColumnResize}
+                      />
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -1291,9 +1525,9 @@ export function FundsDataPage() {
                       const updatedAt = formatDataTime(row.metricUpdatedAt[column.key] || row.dataUpdatedAt);
                       return (
                         <td
-                          className={cn("whitespace-nowrap px-3", toneClass(resolvedTone), resolvedTone ? "font-semibold" : "")}
+                          className={cn("overflow-hidden text-ellipsis whitespace-nowrap px-3", toneClass(resolvedTone), resolvedTone ? "font-semibold" : "")}
                           key={column.key}
-                          title={metricState === "unavailable" ? "本次未取得该指标" : metricState === "stale" ? `历史有效值${updatedAt ? `，数据截至 ${updatedAt}` : ""}` : updatedAt ? `数据时间 ${updatedAt}` : undefined}
+                          title={metricState === "unavailable" ? `${column.label}：本次未取得该指标` : metricState === "stale" ? `历史有效值${updatedAt ? `，数据截至 ${updatedAt}` : ""}` : updatedAt ? `数据时间 ${updatedAt}` : undefined}
                         >
                           {metricState === "unavailable" ? (
                             <span className="text-[#98a2b3]">--</span>
@@ -1326,10 +1560,11 @@ export function FundsDataPage() {
           </div>
 
           <div className="flex items-center justify-between gap-3 border-t border-[#edf1f6] px-4 text-[12px] text-[#667085]">
-            <span className="min-w-0 truncate" title={fundsWarningDetail || fundsMessage}>
+            <span className="min-w-0 truncate" title={[fundsWarningDetail, unavailableWarningDetail, fundsMessage].filter(Boolean).join(" ")}>
               共 {selectedRows.length} 家店铺，最近同步 {lastSyncAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}
               {displayedDataAt ? `，数据截至 ${displayedDataAt.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}` : ""}
               {fundsWarningTitle ? `，${fundsWarningTitle}` : ""}
+              {unavailableWarningTitle ? `，${unavailableWarningTitle}` : ""}
             </span>
             <span className="inline-flex items-center gap-2">
               <Banknote className="size-[14px]" strokeWidth={2} />

@@ -16,8 +16,10 @@ import {
   Wand2
 } from "lucide-react";
 import { fetchDoudianOpportunityReport, fetchDoudianOpportunityReportLatest, listDoudianStores } from "../bridge/client";
+import { toggleStoreIds } from "../domain/doudian/storeSelection";
 import { cn } from "../lib/utils";
 import { remoteAsset } from "../lib/assets";
+import { GroupedStoreSelectionList } from "./GroupedStoreSelectionList";
 import type {
   DoudianOpportunityClueRow,
   DoudianOpportunityExecution,
@@ -310,6 +312,12 @@ export function OpportunityReportPage() {
     () => stores.filter((store) => selectedShopIds.has(store.shopId)),
     [selectedShopIds, stores]
   );
+  const selectableStores = useMemo(() => stores.map((store) => ({
+    id: store.shopId,
+    name: store.shopName || `抖店 ${store.shopId}`,
+    group: store.groupName || "未分组",
+    status: store.status
+  })), [stores]);
 
   const filters = useMemo<DoudianOpportunityFilters>(() => ({
     keyword: query.trim(),
@@ -421,17 +429,12 @@ export function OpportunityReportPage() {
     { label: "执行结果", value: `${successExecutionCount}/${executions.length || 0}`, detail: failedExecutionCount ? `${failedExecutionCount} 项待复核` : "最近一次队列", tone: failedExecutionCount ? "warning" : "default" }
   ];
 
-  function toggleStore(shopId: string) {
-    setSelectedShopIds((current) => {
-      const next = new Set(current);
-      if (next.has(shopId)) next.delete(shopId);
-      else next.add(shopId);
-      return next;
-    });
+  function toggleStores(shopIds: string[]) {
+    setSelectedShopIds((current) => toggleStoreIds(current, shopIds));
   }
 
   function selectAllStores() {
-    setSelectedShopIds((current) => current.size === stores.length ? new Set() : new Set(stores.map((store) => store.shopId)));
+    toggleStores(selectableStores.map((store) => store.id));
   }
 
   function toggleOpportunity(id: string) {
@@ -870,14 +873,10 @@ export function OpportunityReportPage() {
                 {selectedShopIds.size === stores.length ? "清空" : "全选"}
               </button>
             </div>
-            <div className="grid max-h-[180px] gap-2 overflow-auto pr-1">
-              {stores.length ? stores.map((store) => (
-                <label className="flex min-h-9 cursor-pointer items-center gap-2 rounded-md border border-[#edf1f6] bg-[#fbfcff] px-2.5 py-1.5 text-[13px] font-semibold text-[#344054] hover:border-brand-fox" key={store.shopId}>
-                  <input checked={selectedShopIds.has(store.shopId)} className="size-4 accent-brand-fox" type="checkbox" onChange={() => toggleStore(store.shopId)} />
-                  <span className="min-w-0 flex-1 truncate" title={store.shopName}>{store.shopName}</span>
-                  <span className="shrink-0 text-[11px] text-[#98a2b3]">{store.status}</span>
-                </label>
-              )) : (
+            <div className="max-h-[240px] overflow-auto rounded-md border border-[#edf1f6]">
+              {stores.length ? (
+                <GroupedStoreSelectionList stores={selectableStores} selectedIds={selectedShopIds} onToggleIds={toggleStores} />
+              ) : (
                 <div className="rounded-lg border border-[#edf1f6] bg-[#fbfcff] p-3 text-[12px] text-[#667085]">暂无店铺台账</div>
               )}
             </div>

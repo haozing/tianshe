@@ -21,7 +21,9 @@ import {
   XCircle
 } from "lucide-react";
 import { fetchDoudianBulkDeleteProducts, listDoudianStores } from "../bridge/client";
+import { toggleStoreIds } from "../domain/doudian/storeSelection";
 import { cn } from "../lib/utils";
+import { GroupedStoreSelectionList } from "./GroupedStoreSelectionList";
 import type {
   DoudianBulkDeleteAction,
   DoudianBulkDeleteCandidate,
@@ -720,26 +722,14 @@ export function BulkDeletePage() {
     }
   }
 
-  function toggleVisibleStores() {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (allVisibleSelected) filteredStores.forEach((store) => next.delete(store.id));
-      else filteredStores.forEach((store) => next.add(store.id));
-      return next;
-    });
+  function toggleStores(ids: string[]) {
+    setSelectedIds((current) => toggleStoreIds(current, ids));
     setPreviewPage(0);
     setAnalyzed(false);
   }
 
-  function toggleStore(id: string) {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-    setPreviewPage(0);
-    setAnalyzed(false);
+  function toggleVisibleStores() {
+    toggleStores(filteredStores.map((store) => store.id));
   }
 
   function toggleProduct(id: string) {
@@ -987,25 +977,7 @@ export function BulkDeletePage() {
                 <span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" />正在读取店铺</span>
               </div>
             ) : filteredStores.length ? (
-              <div className="divide-y divide-[#edf1f6]">
-                {filteredStores.map((store) => (
-                  <button
-                    className={cn("grid w-full grid-cols-[20px_minmax(0,1fr)] gap-2 px-3 py-2.5 text-left transition-colors hover:bg-[#f8fbff]", selectedIds.has(store.id) ? "bg-[#fffaf7]" : "bg-white")}
-                    key={store.id}
-                    type="button"
-                    onClick={() => toggleStore(store.id)}
-                  >
-                    <span className="pt-1"><CheckboxBox checked={selectedIds.has(store.id)} /></span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-[12px] font-semibold text-[#1d2939]">{store.name}</span>
-                      <span className="mt-1 flex min-w-0 items-center gap-2 text-[12px] text-[#667085]">
-                        <span className="truncate">ID: {store.id}</span>
-                        <StatusTag status={store.status} />
-                      </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <GroupedStoreSelectionList stores={filteredStores} selectedIds={selectedIds} onToggleIds={toggleStores} />
             ) : (
               <div className="grid h-full min-h-[220px] place-items-center px-4 text-center text-[13px] leading-6 text-[#667085]">
                 {loadState === "error" ? loadMessage || "店铺读取失败" : "暂无匹配店铺"}

@@ -536,6 +536,9 @@ function planKeyFromMetricPath(path: string) {
 }
 
 function normalizeBusinessMetricValue(field: BusinessField, value: number) {
+  if (["logisticsScore", "productScore", "serviceScore", "disputeDeduction"].includes(field)) {
+    return Math.max(0, Math.round(value * 100) / 100);
+  }
   if (["dealAmount", "refundAmount", "platformSubsidyAmount", "customerPrice"].includes(field)) {
     return Math.round(value * 100) / 100;
   }

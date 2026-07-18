@@ -1,7 +1,7 @@
 # Bridge Permission Matrix
 
 > status: ok
-> generatedAt: 2026-07-10T01:13:48.447Z
+> generatedAt: 2026-07-18T01:16:12.905Z
 
 ## Scope
 

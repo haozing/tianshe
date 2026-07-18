@@ -25,8 +25,10 @@ import { cancelDoudianStoreOperation, fetchDoudianViolationsData, fetchDoudianVi
 import { loadDoudianAdapterPayload } from "../bridge/doudianAdapter";
 import { STORAGE_KEY_VIOLATIONS_COLUMNS, storageGet, storageSet } from "../bridge/storage";
 import { addDoudianProgressListener } from "../domain/doudian";
+import { toggleStoreIds } from "../domain/doudian/storeSelection";
 import { cn } from "../lib/utils";
 import type { DoudianRunDetail, DoudianStoreStatus, DoudianStoreSummary, DoudianViolationRecord, DoudianViolationsDataResult, DoudianViolationsDataRow } from "../types";
+import { GroupedStoreSelectionList } from "./GroupedStoreSelectionList";
 
 type LoadState = "loading" | "ready" | "error";
 type ViolationLoadState = "idle" | "loading" | "ready" | "partial" | "error";
@@ -577,7 +579,7 @@ function numberValue(value: unknown) {
 function rowFromRemote(row: DoudianViolationsDataRow, store?: StoreOption, detail?: { ok?: boolean; message?: string }): ViolationRow {
   const next: ViolationRow = {
     shopId: String(row.shopId || store?.id || ""),
-    shopName: String(row.shopName || store?.name || row.shopId || ""),
+    shopName: String(store?.name || row.shopName || row.shopId || ""),
     group: String(row.group || store?.group || "未分组"),
     status: normalizeStoreStatus(row.status || store?.status),
     ok: detail?.ok ?? true,
@@ -595,7 +597,7 @@ function rowFromRemote(row: DoudianViolationsDataRow, store?: StoreOption, detai
   return next;
 }
 
-function recordFromRemote(record: DoudianViolationRecord): ViolationRecord {
+function recordFromRemote(record: DoudianViolationRecord, store?: StoreOption): ViolationRecord {
   const fallbackId = [
     record.shopId || "shop",
     record.objectId || record.productId || "no-object",
@@ -605,7 +607,7 @@ function recordFromRemote(record: DoudianViolationRecord): ViolationRecord {
   return {
     id: String(record.id || fallbackId),
     shopId: String(record.shopId || ""),
-    shopName: String(record.shopName || ""),
+    shopName: String(store?.name || record.shopName || ""),
     group: String(record.group || "未分组"),
     objectType: normalizeObjectType(record.objectType),
     objectId: String(record.objectId || record.productId || ""),
@@ -828,11 +830,12 @@ export function ViolationsPage() {
     const details = detailArray(result.details);
     const detailById = new Map(details.map((detail) => [String(detail.shopId || ""), detail]));
     const rowById = new Map((result.rows || []).map((row) => [String(row.shopId || ""), row]));
+    const storeById = new Map(baseStores.map((store) => [store.id, store]));
     const nextRows = baseStores.map((store) => {
       const row = rowById.get(store.id);
       return row ? rowFromRemote(row, store, detailById.get(store.id)) : zeroViolationRow(store);
     });
-    const nextRecords = (result.records || []).map(recordFromRemote);
+    const nextRecords = (result.records || []).map((record) => recordFromRemote(record, storeById.get(String(record.shopId || ""))));
     window.chihuNative?.logs?.report({
       category: "doudian-violations-page",
       event: "apply-result",
@@ -1191,22 +1194,12 @@ export function ViolationsPage() {
     setVisibleColumnKeys(next);
   }
 
-  function toggleStore(id: string) {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  function toggleStores(ids: string[]) {
+    setSelectedIds((current) => toggleStoreIds(current, ids));
   }
 
   function toggleVisibleStores() {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (allVisibleSelected) filteredStores.forEach((store) => next.delete(store.id));
-      else filteredStores.forEach((store) => next.add(store.id));
-      return next;
-    });
+    toggleStores(filteredStores.map((store) => store.id));
   }
 
   return (
@@ -1249,25 +1242,7 @@ export function ViolationsPage() {
                 <span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" />正在读取店铺</span>
               </div>
             ) : filteredStores.length ? (
-              <div className="divide-y divide-[#edf1f6]">
-                {filteredStores.map((store) => (
-                  <button
-                    className={cn("grid w-full grid-cols-[20px_minmax(0,1fr)] gap-2 px-3 py-2.5 text-left transition-colors hover:bg-[#f8fbff]", selectedIds.has(store.id) ? "bg-[#fffaf7]" : "bg-white")}
-                    key={store.id}
-                    type="button"
-                    onClick={() => toggleStore(store.id)}
-                  >
-                    <span className="pt-1"><CheckboxBox checked={selectedIds.has(store.id)} /></span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-[12px] font-semibold text-[#1d2939]">{store.name}</span>
-                      <span className="mt-1 flex min-w-0 items-center gap-2 text-[12px] text-[#667085]">
-                        <span className="truncate">ID: {store.id}</span>
-                        <StatusTag status={store.status} />
-                      </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <GroupedStoreSelectionList stores={filteredStores} selectedIds={selectedIds} onToggleIds={toggleStores} />
             ) : (
               <div className="grid h-full min-h-[220px] place-items-center px-4 text-center text-[13px] leading-6 text-[#667085]">
                 {loadState === "error" ? loadMessage || "店铺读取失败" : "暂无匹配店铺"}

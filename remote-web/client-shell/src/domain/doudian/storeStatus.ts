@@ -9,6 +9,7 @@ import { listStoreLedger, upsertStoreLedgers } from "./storeGroups";
 import { runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { dispatchDoudianProgress } from "./progress";
 import { currentShopState, policyNumber } from "./storeResponse";
+import { confirmedStoreIdentityPatch } from "./storeIdentity";
 
 interface RefreshStatusPayload {
   operationId: string;
@@ -69,6 +70,7 @@ async function refreshOneStore(store: DoudianStoreSummary, args: RefreshStatusPa
   let message = "校验失败，已保留本地店铺台账，请按需重新获取或单店修复";
   let failureReason = "check-failed";
   let diagnostic: unknown;
+  let identityPatch: ReturnType<typeof confirmedStoreIdentityPatch> = {};
 
   if (args.mockStatus) {
     status = args.mockStatus;
@@ -105,6 +107,7 @@ async function refreshOneStore(store: DoudianStoreSummary, args: RefreshStatusPa
       status = ok ? "online" : "check_failed";
       message = ok ? "登录有效" : state.message || "当前登录店铺与目标店铺不一致，已保留台账";
       failureReason = ok ? "" : state.reason || "shop-mismatch";
+      if (ok) identityPatch = confirmedStoreIdentityPatch(store, state);
       diagnostic = {
         source: result.source,
         status: result.status,
@@ -118,6 +121,7 @@ async function refreshOneStore(store: DoudianStoreSummary, args: RefreshStatusPa
 
   const next: DoudianStoreSummary = {
     ...store,
+    ...identityPatch,
     status,
     updatedAt: timestamp,
     lastLoginCheckAt: timestamp,
@@ -136,7 +140,7 @@ async function refreshOneStore(store: DoudianStoreSummary, args: RefreshStatusPa
     taskType: "refreshDoudianStoreStatus",
     status: "running",
     progress: Math.round((index / Math.max(total, 1)) * 100),
-    message: `${store.shopName}: ${message}`
+    message: `${next.shopName}: ${message}`
   });
   return {
     store: next,

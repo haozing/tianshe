@@ -22,9 +22,11 @@ import {
 import { cancelDoudianStoreOperation, fetchDoudianStaleGoodsCleanup, listDoudianStores, restoreDoudianStaleGoodsOperations, restoreDoudianStaleGoodsScan, selectAndParseCompassFile } from "../bridge/client";
 import { loadDoudianAdapterPayload } from "../bridge/doudianAdapter";
 import { addDoudianProgressListener } from "../domain/doudian";
+import { toggleStoreIds } from "../domain/doudian/storeSelection";
 import { STORAGE_KEY_STALE_GOODS_COLUMNS, storageGet, storageSet } from "../bridge/storage";
 import { cn } from "../lib/utils";
 import type { DoudianAdapterConfig, DoudianStaleGoodsCandidate, DoudianStaleGoodsRules, DoudianStoreStatus, DoudianStoreSummary } from "../types";
+import { GroupedStoreSelectionList } from "./GroupedStoreSelectionList";
 
 type LoadState = "loading" | "ready" | "error";
 type CleanupState = "idle" | "loading" | "ready" | "error";
@@ -567,7 +569,7 @@ function normalizeRemoteCandidate(row: DoudianStaleGoodsCandidate, fallbackStore
     candidateId: String(row.candidateId || row.id || ""),
     sourceRunId: String(row.sourceRunId || ""),
     shopId: String(row.shopId || fallbackStore?.id || ""),
-    shopName: String(row.shopName || fallbackStore?.name || ""),
+    shopName: String(fallbackStore?.name || row.shopName || ""),
     group: String(row.group || fallbackStore?.group || ""),
     productId,
     title: String(row.title || productId || "未命名商品"),
@@ -1622,22 +1624,12 @@ export function SlowMovingCleanupPage() {
     setVisibleColumnKeys(next);
   }
 
-  function toggleStore(id: string) {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  function toggleStores(ids: string[]) {
+    setSelectedIds((current) => toggleStoreIds(current, ids));
   }
 
   function toggleVisibleStores() {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (allVisibleSelected) filteredStores.forEach((store) => next.delete(store.id));
-      else filteredStores.forEach((store) => next.add(store.id));
-      return next;
-    });
+    toggleStores(filteredStores.map((store) => store.id));
   }
 
   function toggleCandidate(id: string) {
@@ -1807,7 +1799,7 @@ export function SlowMovingCleanupPage() {
     rules.requireSameStyleRisk,
     rules.requireBadTitle
   ].filter(Boolean).length;
-  const skipRuleCount = [rules.skipCreatedDaysEnabled, rules.skipListedDaysEnabled].filter(Boolean).length;
+  const timeRuleCount = [rules.skipCreatedDaysEnabled, rules.skipListedDaysEnabled].filter(Boolean).length;
   const mainRowsClass = analysisStarted ? "grid-rows-[42px_auto_minmax(0,1fr)]" : "grid-rows-[42px_minmax(0,1fr)]";
 
   return (
@@ -1850,25 +1842,7 @@ export function SlowMovingCleanupPage() {
                 <span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" />正在读取店铺</span>
               </div>
             ) : filteredStores.length ? (
-              <div className="divide-y divide-[#edf1f6]">
-                {filteredStores.map((store) => (
-                  <button
-                    className={cn("grid w-full grid-cols-[20px_minmax(0,1fr)] gap-2 px-3 py-2.5 text-left transition-colors hover:bg-[#f8fbff]", selectedIds.has(store.id) ? "bg-[#fffaf7]" : "bg-white")}
-                    key={store.id}
-                    type="button"
-                    onClick={() => toggleStore(store.id)}
-                  >
-                    <span className="pt-1"><CheckboxBox checked={selectedIds.has(store.id)} /></span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-[12px] font-semibold text-[#1d2939]">{store.name}</span>
-                      <span className="mt-1 flex min-w-0 items-center gap-2 text-[12px] text-[#667085]">
-                        <span className="truncate">ID: {store.id}</span>
-                        <StatusTag status={store.status} />
-                      </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <GroupedStoreSelectionList stores={filteredStores} selectedIds={selectedIds} onToggleIds={toggleStores} />
             ) : (
               <div className="grid h-full min-h-[220px] place-items-center px-4 text-center text-[13px] leading-6 text-[#667085]">
                 {loadState === "error" ? loadMessage || "店铺读取失败" : "暂无匹配店铺"}
@@ -1980,8 +1954,8 @@ export function SlowMovingCleanupPage() {
                     <div>启用条件</div>
                   </div>
                   <div>
-                    <div className="text-[18px] font-bold leading-6 text-[#b54708]">{skipRuleCount}</div>
-                    <div>保护条件</div>
+                    <div className="text-[18px] font-bold leading-6 text-[#b54708]">{timeRuleCount}</div>
+                    <div>时间条件</div>
                   </div>
                   <div className="col-span-2 truncate border-t border-[#edf1f6] pt-2">{selectedIds.size} 家店铺 · {productSourceLabel} · {trafficPeriodLabel}</div>
                 </div>
@@ -2008,12 +1982,12 @@ export function SlowMovingCleanupPage() {
 
                 <div className="grid gap-3 border-b border-[#edf1f6] pb-5">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <strong className="text-[14px] font-semibold text-[#101828]">不标记符合以下条件的商品为滞销商品</strong>
-                    <span className="text-[12px] text-[#667085]">新品保护条件命中时会直接跳过</span>
+                    <strong className="text-[14px] font-semibold text-[#101828]">商品时间条件</strong>
+                    <span className="text-[12px] text-[#667085]">达到设定天数后才会进行后续操作</span>
                   </div>
                   <div className="grid grid-cols-2 gap-3 max-[920px]:grid-cols-1">
-                    <ConditionInput checked={rules.skipCreatedDaysEnabled} label="创建时间未满" operator="<" value={rules.noSalesDays} unit="天" onCheckedChange={(value) => setRule("skipCreatedDaysEnabled", value)} onValueChange={(value) => setRule("noSalesDays", value)} />
-                    <ConditionInput checked={rules.skipListedDaysEnabled} label="上架时间未满" operator="<" value={rules.listedDays} unit="天" onCheckedChange={(value) => setRule("skipListedDaysEnabled", value)} onValueChange={(value) => setRule("listedDays", value)} />
+                    <ConditionInput checked={rules.skipCreatedDaysEnabled} label="创建时间" operator="≥" value={rules.noSalesDays} unit="天" onCheckedChange={(value) => setRule("skipCreatedDaysEnabled", value)} onValueChange={(value) => setRule("noSalesDays", value)} />
+                    <ConditionInput checked={rules.skipListedDaysEnabled} label="上架时间" operator="≥" value={rules.listedDays} unit="天" onCheckedChange={(value) => setRule("skipListedDaysEnabled", value)} onValueChange={(value) => setRule("listedDays", value)} />
                   </div>
                 </div>
 

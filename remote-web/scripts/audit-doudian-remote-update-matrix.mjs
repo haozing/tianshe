@@ -422,7 +422,8 @@ const checks = [
       Number(businessDatePresets["7d"]?.endOffsetDays) === -1 &&
       Number(businessDatePresets["30d"]?.startOffsetDays) === -30 &&
       Number(businessDatePresets["30d"]?.endOffsetDays) === -1 &&
-      ["today", "7d", "30d"].every((preset) => (
+      !("earlyMorningShiftDays" in businessDatePresets.today) &&
+      ["yesterday", "7d", "30d"].every((preset) => (
         Number(businessDatePresets[preset]?.earlyMorningStartHour) === 1 &&
         Number(businessDatePresets[preset]?.earlyMorningBeforeHour) === 9 &&
         Number(businessDatePresets[preset]?.earlyMorningShiftDays) === -1

@@ -30,7 +30,7 @@ import type { WorkspaceState } from "../types";
 import { cn, isActiveRoute } from "../lib/utils";
 import { remoteAsset } from "../lib/assets";
 import { closeMainWindow, getDesktopVersionData, minimizeMainWindow, reloadMainWindowUrl, startDesktopUpdate, toggleMaximizeMainWindow } from "../bridge/client";
-import { addPreferencesListener, getPreferences, releaseChannelLabel, releaseChannelToUpdateChannel, savePreferences } from "../bridge/storage";
+import { addPreferencesListener, getPreferences, hasRecentReleaseRedirect, markReleaseRedirect, releaseChannelLabel, releaseChannelToUpdateChannel, savePreferences } from "../bridge/storage";
 import type { ChihuPreferences, ReleaseChannel } from "../bridge/storage";
 import type { NativeUpdateVersionData } from "../native/types";
 
@@ -596,7 +596,7 @@ function ProfileMenuV2({
     if (targetUrl === window.location.href) return "same";
     if (!(await remoteEntryAvailable(targetUrl))) return "unavailable";
     try {
-      window.sessionStorage.setItem(`chihu20_release_redirect:${channel}:${targetUrl}`, "1");
+      markReleaseRedirect(channel, targetUrl);
       return await reloadMainWindowUrl(targetUrl) ? "reloaded" : "error";
     } catch {
       return "error";
@@ -701,10 +701,9 @@ function ProfileMenuV2({
     async function alignRemoteEntry() {
       const targetUrl = remoteUrlForReleaseChannel(preferences.releaseChannel);
       if (!targetUrl || targetUrl === window.location.href) return;
-      const redirectKey = `chihu20_release_redirect:${preferences.releaseChannel}:${targetUrl}`;
-      if (window.sessionStorage.getItem(redirectKey)) return;
+      if (hasRecentReleaseRedirect(preferences.releaseChannel, targetUrl)) return;
       if (!(await remoteEntryAvailable(targetUrl)) || cancelled) return;
-      window.sessionStorage.setItem(redirectKey, "1");
+      markReleaseRedirect(preferences.releaseChannel, targetUrl);
       await reloadMainWindowUrl(targetUrl).catch(() => undefined);
     }
     void alignRemoteEntry();

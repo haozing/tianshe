@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
   Loader2,
@@ -10,6 +11,7 @@ import {
 import { cancelDoudianStoreOperation, fetchDoudianOpportunityPipelineRun, fetchDoudianOpportunityPipelineSummary, fetchDoudianOpportunityReportLatest, listDoudianOpportunityCandidatesPage, listDoudianOpportunityStoreCategories, listDoudianStores, restoreDoudianOpportunityPipelineTask, runDoudianOpportunityPipelineTask } from "../bridge/client";
 import { addDoudianProgressListener } from "../domain/doudian/progress";
 import { activeStoreRefs, activeStoreSelection, reconcileSelectedShopIds, restoredActiveShopIds, storeIdentityKey } from "../domain/doudian/opportunityStoreState";
+import { groupStoresByName, toggleStoreIds } from "../domain/doudian/storeSelection";
 import { cn } from "../lib/utils";
 import type {
   DoudianOpportunityClueRow,
@@ -379,6 +381,13 @@ export function OpportunityProductPrematchPage() {
     return next;
   }, [candidates]);
 
+  const storeGroups = useMemo(() => groupStoresByName(stores.map((store) => ({
+    id: store.shopId,
+    name: store.shopName || `抖店 ${store.shopId}`,
+    group: store.groupName || "未分组",
+    status: store.status
+  }))), [stores]);
+
   const storeRunRows = useMemo(() => {
     const detailsByIdentity = new Map(
       runDetails
@@ -715,17 +724,16 @@ export function OpportunityProductPrematchPage() {
     }
   }
 
+  function toggleStores(shopIds: string[]) {
+    setSelectedShopIds((current) => toggleStoreIds(current, shopIds));
+  }
+
   function selectAllStores() {
-    setSelectedShopIds((current) => current.size === stores.length ? new Set() : new Set(stores.map((store) => store.shopId)));
+    toggleStores(stores.map((store) => store.shopId));
   }
 
   function toggleStore(shopId: string) {
-    setSelectedShopIds((current) => {
-      const next = new Set(current);
-      if (next.has(shopId)) next.delete(shopId);
-      else next.add(shopId);
-      return next;
-    });
+    toggleStores([shopId]);
   }
 
   function toggleNumberSelection(value: number, setter: (updater: (current: number[]) => number[]) => void) {
@@ -855,6 +863,31 @@ export function OpportunityProductPrematchPage() {
                     </label>
                   </div>
                 </div>
+                {storeGroups.length ? (
+                  <div className="flex min-h-[38px] shrink-0 items-center gap-2 overflow-x-auto border-b border-[#edf1f6] bg-white px-3 py-1.5">
+                    <span className="shrink-0 text-[12px] font-semibold text-[#667085]">按分组</span>
+                    {storeGroups.map((group) => {
+                      const ids = group.stores.map((store) => store.id);
+                      const selectedCount = ids.filter((id) => selectedShopIds.has(id)).length;
+                      const allSelected = selectedCount === ids.length;
+                      const someSelected = selectedCount > 0 && !allSelected;
+                      return (
+                        <button
+                          className={cn("inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[12px] font-semibold transition-colors", selectedCount ? "border-[#ffc8ad] bg-[#fff7f2] text-[#c43d13]" : "border-[#dbe5f2] bg-white text-[#475467] hover:border-brand-fox hover:text-brand-fox")}
+                          key={group.name}
+                          type="button"
+                          onClick={() => toggleStores(ids)}
+                        >
+                          <span className={cn("grid size-4 place-items-center rounded border", selectedCount ? "border-brand-fox bg-brand-fox text-white" : "border-[#cfd8e6] bg-white text-transparent")}>
+                            {someSelected ? <span className="h-0.5 w-2 rounded bg-current" /> : <Check className="size-3" strokeWidth={3} />}
+                          </span>
+                          <span>{group.name}</span>
+                          <span className="text-[11px] opacity-70">{selectedCount}/{ids.length}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
                 <div className="grid min-h-[38px] shrink-0 grid-cols-[60px_minmax(120px,1fr)_78px_68px_68px_82px_82px] items-center border-b border-[#edf1f6] bg-[#fbfcff] text-[12px] font-semibold text-[#667085]">
                   <span className="text-center">序号</span>
                   <span className="px-3">店铺名称</span>

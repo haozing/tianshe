@@ -80,5 +80,9 @@ assert.match(pageSource, /无罗盘明细商品按零流量处理/);
 assert.match(pageSource, /不可判定/);
 assert.match(pageSource, /店铺扫描诊断/);
 assert.match(pageSource, /cancelDoudianStoreOperation/);
+assert.match(pageSource, /label="创建时间" operator="≥"/);
+assert.match(pageSource, /label="上架时间" operator="≥"/);
+assert.match(pageSource, /达到设定天数后才会进行后续操作/);
+assert.doesNotMatch(pageSource, /创建时间未满|上架时间未满/);
 
 console.log("STALE_GOODS_CLEANUP_CONTRACT_OK");

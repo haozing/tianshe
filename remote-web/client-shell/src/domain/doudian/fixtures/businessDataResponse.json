@@ -1,5 +1,5 @@
 {
-  "source": "redacted-contract-sample-derived-from-runtime-shape",
+  "source": "xzb-20260717-index-DZJSRSiR-runtime-shape",
   "responses": {
     "businessCoreIndex": {
       "code": 0,
@@ -18,7 +18,7 @@
                   "product_click_ucnt": { "index_value": { "value": { "value": 19 } } },
                   "product_show_cnt": { "index_value": { "value": { "value": 612 } } },
                   "product_click_cnt": { "index_value": { "value": { "value": 31 } } },
-                  "refund_amt_rate": { "index_value": { "value": { "value": 0 } } },
+                  "refund_amt_rate": { "index_value": { "value": { "value": 0.0425 } } },
                   "refund_order_cnt": { "index_value": { "value": { "value": 0 } } },
                   "rfndsuc_amt": { "index_value": { "value": { "value": 0 } } }
                 }
@@ -38,20 +38,78 @@
         "unsend": 3,
         "unprocess": 1,
         "abnormal_package": 0,
-        "service_order": 0
+        "service_order": 0,
+        "lay_out_data": [
+          {
+            "layout_id": 1000,
+            "cards": [
+              {
+                "data": {
+                  "todo_list_card_data": {
+                    "todo_list": [
+                      { "key": "unpaid", "val": 6 },
+                      {
+                        "key": "unsend",
+                        "val": 3,
+                        "remain_carousel_items": [
+                          { "key": "ship_within_24H", "val": 2 },
+                          { "key": "ship_delay", "val": 1 }
+                        ]
+                      },
+                      { "key": "unprocess", "val": 1 },
+                      { "key": "abnormal_package", "val": 0 },
+                      { "key": "service_order", "val": 0 },
+                      { "key": "to_berectified_risk", "val": 2 },
+                      { "key": "violation_pending", "val": 4 }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "layout_id": 170,
+            "cards": [
+              {
+                "data": {
+                  "shop_info_card_data": {
+                    "expr_score": {
+                      "main_compass": { "val": 4.82 },
+                      "compass_list": [
+                        { "title": "商品", "val": 4.71 },
+                        { "title": "物流", "val": 4.63 },
+                        { "title": "服务", "val": 4.76 }
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        ]
       }
     },
-    "businessWarnTicket": { "code": 0, "data": { "total": 0 } },
-    "businessCreditScoreBase": { "code": 0, "data": { "score": 53 } },
+    "businessExperienceOverview": {
+      "code": 0,
+      "data": {
+        "goods_score": { "value": 4.71 },
+        "logistics_score": { "value": 4.63 },
+        "service_score": { "value": 4.76 },
+        "bad_behavior_deduct_score": { "value": 0.12 }
+      }
+    },
+    "businessWarnTicket": { "code": 0, "data": { "total": 7 } },
+    "businessCreditScoreBase": { "code": 0, "data": { "scoreInfo": { "score": 53 } } },
     "businessCreditScoreLevel": { "code": 0, "data": { "level": 3 } },
     "businessOnSaleProducts": { "code": 0, "data": { "total_product_num": 1285 } },
-    "businessOfflineProducts": { "code": 0, "data": { "total": 4 } },
+    "businessOfflineProducts": { "code": 0, "total": 4 },
     "businessSmartActivityCoupon": { "code": 0, "data": { "total": 2 } },
     "businessSmartActivityDirectDiscount": { "code": 0, "data": { "total": 1 } },
     "businessSmartActivityNewUserBonus": { "code": 0, "data": { "total": 1 } }
   },
   "expected": {
     "dealAmount": 153.44,
+    "refundRate": 4.25,
     "orderCount": 2,
     "buyers": 2,
     "customerPrice": 76.72,
@@ -61,7 +119,22 @@
     "productClickCount": 31,
     "onSaleProductCount": 1285,
     "offlineProductCount": 4,
-    "experienceScore": 53,
+    "experienceScore": 4.82,
+    "reputationScore": 53,
+    "productScore": 4.71,
+    "logisticsScore": 4.63,
+    "serviceScore": 4.76,
+    "disputeDeduction": 0.12,
+    "unpaidOrders": 6,
+    "pendingShipment": 3,
+    "ship24h": 2,
+    "overdueShipment": 1,
+    "afterSalePending": 1,
+    "abnormalPackage": 0,
+    "serviceOrder": 0,
+    "rectificationRisk": 2,
+    "violationPending": 4,
+    "latest7dUnreadWarning": 7,
     "couponActive": 2
   },
   "explicitZeroResponses": {

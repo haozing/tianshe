@@ -1,6 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { useRef } from "react";
 import {
   AlertTriangle,
   Check,
@@ -44,8 +43,6 @@ type OperationKey = "fetchStores" | "refreshStatus" | "deleteStores" | "updateGr
 type NoticeTone = "success" | "warning" | "info" | "error";
 type StoreListState = "loading" | "ready" | "error";
 const STORE_PAGE_SIZE = 80;
-const AUTO_LOGIN_REFRESH_TTL_MS = 10 * 60 * 1000;
-const AUTO_LOGIN_REFRESH_MAX_ROWS = 30;
 
 interface StoreRow {
   id: string;
@@ -348,11 +345,6 @@ function rowNeedsAttention(row: StoreRow) {
 
 function rowRecentResult(row: StoreRow) {
   return row.lastResult || row.lastCheckMessage || row.lastFailureMessage || statusCopy[row.status]?.label || "未知";
-}
-
-function rowNeedsAutoLoginRefresh(row: StoreRow, now = Date.now()) {
-  const checkedAt = timestamp(row.lastLoginCheckAt || row.lastResultAt);
-  return !checkedAt || now - checkedAt >= AUTO_LOGIN_REFRESH_TTL_MS;
 }
 
 function estimateOperationTime(operation: OperationKey, targetCount: number) {
@@ -677,7 +669,6 @@ function GroupManagementDialog({
 
 export function StoreManagementPage() {
   const nativeBridge = hasNativeStoreBridge();
-  const autoLoginRefreshStartedRef = useRef(false);
   const [rows, setRows] = useState<StoreRow[]>(() => nativeBridge ? [] : demoRows);
   const [selectedIds, setSelectedIds] = useState(() => new Set<string>());
   const [groupFilter, setGroupFilter] = useState("全部分组");
@@ -714,7 +705,6 @@ export function StoreManagementPage() {
         setRows(nextRows);
         setStoreGroups(mapGroupsToRows(result.groups || []));
         setStoreListState("ready");
-        void runAutoLoginRefresh(nextRows);
       } else {
         setRows([]);
         setStoreGroups([]);
@@ -904,27 +894,6 @@ export function StoreManagementPage() {
   function rememberRun(title: string, tone: NoticeTone, summary: string, details: RunDetail[], result?: DoudianStoreResult) {
     setNotice({ tone, message: summary });
     setLastRun({ title, tone, summary, details, result, at: new Date().toISOString() });
-  }
-
-  async function runAutoLoginRefresh(nextRows: StoreRow[]) {
-    if (!nativeBridge || autoLoginRefreshStartedRef.current || !nextRows.length) return;
-    const allStaleRows = nextRows.filter((row) => rowNeedsAutoLoginRefresh(row));
-    const staleRows = allStaleRows.slice(0, AUTO_LOGIN_REFRESH_MAX_ROWS);
-    if (!staleRows.length) return;
-    autoLoginRefreshStartedRef.current = true;
-    const operationId = createStoreOperationId();
-    const ids = staleRows.map((row) => row.id);
-    setActiveOperationId(operationId);
-    setOperationBusy(true);
-    try {
-      const result = await refreshDoudianStoreStatus(ids, operationId);
-      applyStores(result);
-    } catch {
-      // Automatic refresh is intentionally silent on the store management page.
-    } finally {
-      setOperationBusy(false);
-      setActiveOperationId((current) => current === operationId ? null : current);
-    }
   }
 
   async function runRepairStores(ids: string[]) {

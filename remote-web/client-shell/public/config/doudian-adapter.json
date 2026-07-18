@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "contractVersion": "doudian-adapter.v1",
   "platform": "doudian",
-  "version": "2026.07.16.remote-adapter-business-funds-quality-v2",
+  "version": "2026.07.18.remote-adapter-business-xzb-contract-v5",
   "source": "remote-web",
   "capabilities": {
     "actions": [
@@ -47,6 +47,7 @@
       "currentShop",
       "businessCoreIndex",
       "businessHomepage",
+      "businessExperienceOverview",
       "businessWarnTicket",
       "businessCreditScoreBase",
       "businessCreditScoreLevel",
@@ -406,6 +407,7 @@
     "currentShop": "/shopuser/tshoplevel/getshoplevel",
     "businessCoreIndex": "https://compass.jinritemai.com/compass_api/shop/common/homepage/core_index_v3",
     "businessHomepage": "/pc/api/home/homepage",
+    "businessExperienceOverview": "/governance/shop/experiencescore/getOverviewByVersion",
     "businessWarnTicket": "/governance/shop/penalty/get_warnticket_list",
     "businessSmartActivity": "/marketing/smart_activity/v1/get_participant_activity",
     "businessCreditScoreBase": "/ecology/front/shopXzg/score/base",
@@ -542,6 +544,7 @@
       "/byteshop",
       "/compass_api/shop/common/homepage/core_index_v3",
       "/pc/api/home/homepage",
+      "/governance/shop/experiencescore/getOverviewByVersion",
       "/governance/shop/penalty/get_warnticket_list",
       "/governance/shop/penalty/get_penalty_list",
       "/marketing/smart_activity/v1/get_participant_activity",
@@ -732,7 +735,7 @@
         "dealAmount": 100,
         "refundAmount": 100,
         "customerPrice": 100,
-        "refundRate": 1,
+        "refundRate": 0.01,
         "platformSubsidyAmount": 100
       },
       "fields": {
@@ -826,6 +829,7 @@
         },
         "violationPending": {
           "paths": [
+            "businessHomepage.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=violation_pending].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=col_violation_pending].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=col_violation_pending].value",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=col_violation_pending].num",
@@ -837,23 +841,18 @@
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=pending_processing_count].num",
             "businessHomepage.data.data.col_violation_pending",
             "businessHomepage.data.data.violation_pending",
-            "businessHomepage.data.data.pending_processing_count",
-            "businessWarnTicket.data.data.total",
-            "businessWarnTicket.data.data.count",
-            "businessWarnTicket.data.total",
-            "businessWarnTicket.data.count"
+            "businessHomepage.data.data.pending_processing_count"
           ],
           "aliases": [
             "col_violation_pending",
             "violation_pending",
             "pending_processing_count",
-            "warn_ticket_count",
-            "warningCount",
             "violationPending"
           ]
         },
         "pendingShipment": {
           "paths": [
+            "businessHomepage.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unsend].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unsend].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unsend].value",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unsend].num",
@@ -874,6 +873,7 @@
         },
         "ship24h": {
           "paths": [
+            "businessHomepage.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unsend].remain_carousel_items[key=ship_within_24H].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=col_order_exp_ship].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=col_order_exp_ship].value",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=col_order_exp_ship].num",
@@ -896,6 +896,7 @@
         },
         "overdueShipment": {
           "paths": [
+            "businessHomepage.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unsend].remain_carousel_items[key=ship_delay].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unsend].remain_carousel_items[key=ship_delay].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unsend].remain_carousel_items[key=ship_delay].value",
             "businessHomepage.data.data.overdue_shipment",
@@ -978,16 +979,18 @@
         },
         "experienceScore": {
           "paths": [
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.main_compass.val",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.main_compass.value",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.main_compass.val",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.main_compass.value",
-            "businessCreditScoreBase.data.data.score",
+            "businessHomepage.data.experience_score",
+            "businessHomepage.data.shop_score",
             "businessHomepage.data.data.experience_score",
             "businessHomepage.data.data.shop_score"
           ],
           "aliases": [
             "experience_score",
-            "shop_score",
-            "score"
+            "shop_score"
           ]
         },
         "refundRate": {
@@ -999,6 +1002,9 @@
             "businessHomepage.data.refund_rate",
             "businessHomepage.data.data.refund_rate"
           ],
+          "pathScales": {
+            "businessHomepage.": 1
+          },
           "aliases": [
             "refund_amt_rate",
             "refund_rate",
@@ -1007,11 +1013,21 @@
         },
         "logisticsScore": {
           "paths": [
+            "businessExperienceOverview.data.logistics_score.value",
+            "businessExperienceOverview.data.logistics_score.val",
+            "businessExperienceOverview.data.data.logistics_score.value",
+            "businessExperienceOverview.data.data.logistics_score.val",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[title=物流].val",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[title=物流].value",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[name=物流].val",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[name=物流].value",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[title=物流].val",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[title=物流].value",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[name=物流].val",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[name=物流].value",
+            "businessHomepage.data.logistics_score",
             "businessHomepage.data.data.logistics_score",
+            "businessCreditScoreBase.data.logistics_score",
             "businessCreditScoreBase.data.data.logistics_score"
           ],
           "aliases": [
@@ -1022,21 +1038,39 @@
         },
         "disputeDeduction": {
           "paths": [
+            "businessExperienceOverview.data.bad_behavior_deduct_score.value",
+            "businessExperienceOverview.data.bad_behavior_deduct_score.val",
+            "businessExperienceOverview.data.data.bad_behavior_deduct_score.value",
+            "businessExperienceOverview.data.data.bad_behavior_deduct_score.val",
+            "businessHomepage.data.dispute_deduction",
+            "businessCreditScoreBase.data.dispute_deduction",
             "businessHomepage.data.data.dispute_deduction",
             "businessCreditScoreBase.data.data.dispute_deduction"
           ],
           "aliases": [
+            "bad_behavior_score",
+            "bad_behavior_deduct_score",
             "dispute_deduction",
             "disputeDeduction"
           ]
         },
         "productScore": {
           "paths": [
+            "businessExperienceOverview.data.goods_score.value",
+            "businessExperienceOverview.data.goods_score.val",
+            "businessExperienceOverview.data.data.goods_score.value",
+            "businessExperienceOverview.data.data.goods_score.val",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[title=商品].val",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[title=商品].value",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[name=商品].val",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[name=商品].value",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[title=商品].val",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[title=商品].value",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[name=商品].val",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[name=商品].value",
+            "businessHomepage.data.product_score",
             "businessHomepage.data.data.product_score",
+            "businessCreditScoreBase.data.product_score",
             "businessCreditScoreBase.data.data.product_score"
           ],
           "aliases": [
@@ -1048,11 +1082,21 @@
         },
         "serviceScore": {
           "paths": [
+            "businessExperienceOverview.data.service_score.value",
+            "businessExperienceOverview.data.service_score.val",
+            "businessExperienceOverview.data.data.service_score.value",
+            "businessExperienceOverview.data.data.service_score.val",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[title=服务].val",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[title=服务].value",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[name=服务].val",
+            "businessHomepage.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[name=服务].value",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[title=服务].val",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[title=服务].value",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[name=服务].val",
             "businessHomepage.data.data.lay_out_data[layout_id=170].cards.0.data.shop_info_card_data.expr_score.compass_list[name=服务].value",
+            "businessHomepage.data.service_score",
             "businessHomepage.data.data.service_score",
+            "businessCreditScoreBase.data.service_score",
             "businessCreditScoreBase.data.data.service_score"
           ],
           "aliases": [
@@ -1075,6 +1119,7 @@
         },
         "rectificationRisk": {
           "paths": [
+            "businessHomepage.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=to_berectified_risk].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=col_to_berectified_risk].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=col_to_berectified_risk].value",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=col_to_berectified_risk].num",
@@ -1092,6 +1137,7 @@
         },
         "unpaidOrders": {
           "paths": [
+            "businessHomepage.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unpaid].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unpaid].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unpaid].value",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unpaid].num",
@@ -1104,6 +1150,7 @@
         },
         "afterSalePending": {
           "paths": [
+            "businessHomepage.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=unprocess].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=col_aftersale].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=col_aftersale].value",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=col_aftersale].num",
@@ -1121,6 +1168,7 @@
         },
         "abnormalPackage": {
           "paths": [
+            "businessHomepage.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=abnormal_package].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=abnormal_package].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=abnormal_package].value",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=abnormal_package].num",
@@ -1133,6 +1181,7 @@
         },
         "serviceOrder": {
           "paths": [
+            "businessHomepage.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=service_order].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=service_order].val",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=service_order].value",
             "businessHomepage.data.data.lay_out_data[layout_id=1000].cards.0.data.todo_list_card_data.todo_list[key=service_order].num",
@@ -1183,6 +1232,8 @@
         },
         "offlineProductCount": {
           "paths": [
+            "businessOfflineProducts.total",
+            "businessOfflineProducts.total_product_num",
             "businessOfflineProducts.data.total",
             "businessOfflineProducts.data.data.total",
             "businessOfflineProducts.data.data.total_product_num",
@@ -1237,6 +1288,10 @@
         },
         "reputationScore": {
           "paths": [
+            "businessCreditScoreBase.data.scoreInfo.score",
+            "businessCreditScoreBase.data.score_info.score",
+            "businessCreditScoreBase.data.reputation_score",
+            "businessCreditScoreBase.data.score",
             "businessCreditScoreBase.data.data.scoreInfo.score",
             "businessCreditScoreBase.data.data.score_info.score",
             "businessCreditScoreBase.data.data.reputation_score",
@@ -2455,6 +2510,26 @@
       },
       "retryOnHttpError": true,
       "maxAttempts": 2,
+      "retryDelayMs": 1200,
+      "retryBackoff": "linear"
+    },
+    "businessExperienceOverview": {
+      "endpointKey": "businessExperienceOverview",
+      "sign": false,
+      "includeEmptySignature": false,
+      "optional": true,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/mshop/homepage/index",
+      "headers": {
+        "Accept": "application/json, text/plain, */*"
+      },
+      "query": {
+        "exp_version": "release",
+        "new_shop_version": "release",
+        "source": "1"
+      },
+      "retryOnHttpError": false,
+      "maxAttempts": 1,
       "retryDelayMs": 1200,
       "retryBackoff": "linear"
     },
@@ -3699,6 +3774,7 @@
       "requestPlans": [
         "businessCoreIndex",
         "businessHomepage",
+        "businessExperienceOverview",
         "businessWarnTicket",
         "businessSmartActivityCoupon",
         "businessSmartActivityDirectDiscount",
@@ -3712,6 +3788,7 @@
         [
           "businessCoreIndex",
           "businessHomepage",
+          "businessExperienceOverview",
           "businessWarnTicket",
           "businessCreditScoreBase",
           "businessCreditScoreLevel",
@@ -3760,14 +3837,17 @@
         "onSaleProductCount"
       ],
       "optionalPlans": [
+        "businessExperienceOverview",
         "businessSmartActivityCoupon",
         "businessSmartActivityDirectDiscount",
         "businessSmartActivityNewUserBonus",
+        "businessCreditScoreBase",
+        "businessCreditScoreLevel",
         "businessOnSaleProducts",
         "businessOfflineProducts"
       ],
       "fieldSchema": {
-        "version": "2026.07.16.business-data-fields-v2-quality",
+        "version": "2026.07.18.business-data-fields-v4-xzb-verified",
         "columns": [
           {
             "key": "dealAmount",
@@ -4023,7 +4103,7 @@
           },
           {
             "key": "disputeDeduction",
-            "label": "差评扣分",
+            "label": "差行为扣分",
             "format": "number",
             "group": "体验",
             "defaultVisible": true,
@@ -4162,11 +4242,7 @@
           "legacyActiveKey": "0",
           "startOffsetDays": 0,
           "endOffsetDays": 0,
-          "sameDay": true,
-          "earlyMorningBeforeHour": 9,
-          "earlyMorningFallbackPreset": "",
-          "earlyMorningStartHour": 1,
-          "earlyMorningShiftDays": -1
+          "sameDay": true
         },
         "yesterday": {
           "dateType": "yesterday",
@@ -4174,7 +4250,11 @@
           "legacyActiveKey": "1",
           "startOffsetDays": -1,
           "endOffsetDays": -1,
-          "sameDay": true
+          "sameDay": true,
+          "earlyMorningBeforeHour": 9,
+          "earlyMorningFallbackPreset": "",
+          "earlyMorningStartHour": 1,
+          "earlyMorningShiftDays": -1
         },
         "7d": {
           "dateType": "recent7",

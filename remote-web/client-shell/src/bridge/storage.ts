@@ -7,9 +7,14 @@ export const STORAGE_KEY_DIAGNOSTICS = "chihu20_diagnostics";
 export const STORAGE_KEY_DOUDIAN_ADAPTER_LKG = "chihu20_doudian_adapter_lkg";
 export const STORAGE_KEY_DOUDIAN_ADAPTER_STATUS = "chihu20_doudian_adapter_status";
 export const STORAGE_KEY_BUSINESS_DATA_COLUMNS = "chihu20_business_data_columns";
+export const STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER = "chihu20_business_data_column_order";
+export const STORAGE_KEY_BUSINESS_DATA_COLUMN_WIDTHS = "chihu20_business_data_column_widths";
 export const STORAGE_KEY_FUNDS_DATA_COLUMNS = "chihu20_funds_data_columns";
+export const STORAGE_KEY_FUNDS_DATA_COLUMN_ORDER = "chihu20_funds_data_column_order";
+export const STORAGE_KEY_FUNDS_DATA_COLUMN_WIDTHS = "chihu20_funds_data_column_widths";
 export const STORAGE_KEY_VIOLATIONS_COLUMNS = "chihu20_violations_columns";
 export const STORAGE_KEY_STALE_GOODS_COLUMNS = "chihu20_stale_goods_columns";
+export const STORAGE_KEY_RELEASE_REDIRECTS = "chihu20_release_redirects";
 export const STORAGE_KEY_WORKSPACE = "chihu20_workspace";
 
 export const STORAGE_KEYS = [
@@ -20,9 +25,24 @@ export const STORAGE_KEYS = [
   STORAGE_KEY_DOUDIAN_ADAPTER_LKG,
   STORAGE_KEY_DOUDIAN_ADAPTER_STATUS,
   STORAGE_KEY_BUSINESS_DATA_COLUMNS,
+  STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER,
+  STORAGE_KEY_BUSINESS_DATA_COLUMN_WIDTHS,
   STORAGE_KEY_FUNDS_DATA_COLUMNS,
+  STORAGE_KEY_FUNDS_DATA_COLUMN_ORDER,
+  STORAGE_KEY_FUNDS_DATA_COLUMN_WIDTHS,
   STORAGE_KEY_VIOLATIONS_COLUMNS,
   STORAGE_KEY_STALE_GOODS_COLUMNS,
+  STORAGE_KEY_RELEASE_REDIRECTS,
+  STORAGE_KEY_WORKSPACE
+] as const;
+
+export const STORAGE_HEALTH_KEYS = [
+  STORAGE_KEY_META,
+  STORAGE_KEY_PREFERENCES,
+  STORAGE_KEY_CONFIG_CACHE,
+  STORAGE_KEY_DIAGNOSTICS,
+  STORAGE_KEY_DOUDIAN_ADAPTER_LKG,
+  STORAGE_KEY_DOUDIAN_ADAPTER_STATUS,
   STORAGE_KEY_WORKSPACE
 ] as const;
 
@@ -128,6 +148,31 @@ export function releaseChannelToUpdateChannel(channel: ReleaseChannel) {
   return channel === "beta" ? "beta" : "latest";
 }
 
+const RELEASE_REDIRECT_TTL_MS = 5 * 60 * 1000;
+
+function activeReleaseRedirects(now = Date.now()) {
+  const redirects = objectRecord(storageGet<unknown>(STORAGE_KEY_RELEASE_REDIRECTS, {}));
+  return Object.fromEntries(Object.entries(redirects).filter(([, timestamp]) => (
+    typeof timestamp === "number" && Number.isFinite(timestamp) && timestamp > 0 && now - timestamp < RELEASE_REDIRECT_TTL_MS
+  )));
+}
+
+function releaseRedirectId(channel: ReleaseChannel, targetUrl: string) {
+  return `${channel}:${targetUrl}`;
+}
+
+export function hasRecentReleaseRedirect(channel: ReleaseChannel, targetUrl: string) {
+  return releaseRedirectId(channel, targetUrl) in activeReleaseRedirects();
+}
+
+export function markReleaseRedirect(channel: ReleaseChannel, targetUrl: string) {
+  const now = Date.now();
+  storageSet(STORAGE_KEY_RELEASE_REDIRECTS, {
+    ...activeReleaseRedirects(now),
+    [releaseRedirectId(channel, targetUrl)]: now
+  });
+}
+
 export function initStorage() {
   const now = new Date().toISOString();
   const meta = storageGet<{ initializedAt?: string }>(STORAGE_KEY_META, {});
@@ -160,5 +205,5 @@ export function initStorage() {
 }
 
 export function refreshStorageHealth() {
-  return STORAGE_KEYS.every((key) => storageGet(key, null) !== null) ? "ok" : "missing";
+  return STORAGE_HEALTH_KEYS.every((key) => storageGet(key, null) !== null) ? "ok" : "missing";
 }
