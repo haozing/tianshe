@@ -10,6 +10,9 @@ import type {
   DoudianOpportunityGoodsMatchType,
   DoudianOpportunityCandidatePage,
   DoudianOpportunityMatchRules,
+  DoudianOpportunityFavoritesResult,
+  DoudianOpportunityAutoFavoriteFilters,
+  DoudianOpportunityAutoFavoritesResult,
   DoudianOpportunityPrematchMode,
   DoudianOpportunityReportResult,
   DoudianOpportunityStoreCategoryLedger,
@@ -35,6 +38,7 @@ import {
   fetchOpportunityPipelineSummary,
   fetchOpportunityReport,
   fetchOpportunityReportLatest,
+  fetchOpportunityFavoriteCategories,
   listOpportunityPipelineCandidatesPage,
   listOpportunityStoreCategoryLedger,
   restoreLatestStaleGoodsScan,
@@ -539,6 +543,103 @@ export async function fetchDoudianOpportunityReport(args: {
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
   return fetchOpportunityReport(nextArgs);
+}
+
+export async function clearDoudianInvalidOpportunityFavorites(args: {
+  shopIds?: string[];
+  storeRefs?: DoudianStoreIdentityRef[];
+  operationId?: string;
+  forceAdapter?: boolean;
+} = {}): Promise<DoudianOpportunityFavoritesResult> {
+  const nextArgs = await withDoudianAdapter({
+    shopIds: args.shopIds || [],
+    storeRefs: args.storeRefs || [],
+    ...(args.operationId ? { operationId: args.operationId } : {})
+  }, { force: args.forceAdapter === true });
+  const identityKey = (ref: DoudianStoreIdentityRef) => `${ref.tenantId}::${ref.shopId}::${ref.storeGeneration}`;
+  const dedupeKey = JSON.stringify({
+    storeRefs: [...(args.storeRefs || [])].map(identityKey).sort(),
+    action: "clear-invalid",
+    adapterVersion: nextArgs.doudianAdapter.adapter.version || ""
+  });
+  return runDoudianStoreTask({
+    taskType: "opportunityFavoritesClearInvalid",
+    operationId: args.operationId,
+    adapterVersion: nextArgs.doudianAdapter.adapter.version,
+    ruleVersion: nextArgs.doudianAdapter.scripts?.version || "",
+    metadata: {
+      dedupeKey,
+      replaceActive: true,
+      shopCount: args.storeRefs?.length || args.shopIds?.length || 0,
+      action: "clear-invalid"
+    },
+    payload: nextArgs
+  }, 300000) as Promise<DoudianOpportunityFavoritesResult>;
+}
+
+export async function fetchDoudianFavoriteCategories(args: {
+  shopIds?: string[];
+  storeRefs?: DoudianStoreIdentityRef[];
+  forceAdapter?: boolean;
+} = {}) {
+  const nextArgs = await withDoudianAdapter({
+    shopIds: args.shopIds || [],
+    storeRefs: args.storeRefs || [],
+    mode: "opportunity-auto-favorites"
+  }, { force: args.forceAdapter === true });
+  return fetchOpportunityFavoriteCategories({
+    doudianAdapter: nextArgs.doudianAdapter,
+    shopIds: args.shopIds || [],
+    storeRefs: args.storeRefs || []
+  });
+}
+
+export async function runDoudianOpportunityAutoFavorites(args: {
+  shopIds?: string[];
+  storeRefs?: DoudianStoreIdentityRef[];
+  filters?: DoudianOpportunityAutoFavoriteFilters;
+  operationId?: string;
+  forceAdapter?: boolean;
+  dryRun?: boolean;
+} = {}): Promise<DoudianOpportunityAutoFavoritesResult> {
+  const nextArgs = await withDoudianAdapter({
+    mode: "opportunity-auto-favorites",
+    shopIds: args.shopIds || [],
+    storeRefs: args.storeRefs || [],
+    ...(args.filters ? { favoriteFilters: args.filters } : {}),
+    ...(args.dryRun ? { dryRun: true } : {}),
+    ...(args.operationId ? { operationId: args.operationId } : {})
+  }, { force: args.forceAdapter === true });
+  const dedupeKey = JSON.stringify({
+    shopIds: [...(args.shopIds || [])].sort(),
+    storeRefs: (args.storeRefs || []).map((ref) => `${ref.tenantId}::${ref.shopId}::${ref.storeGeneration}`).sort(),
+    filters: args.filters || {},
+    adapterVersion: nextArgs.doudianAdapter.adapter.version || ""
+  });
+  const policy = nextArgs.doudianAdapter.adapter.policies as Record<string, unknown>;
+  const autoCollect = ((policy.opportunityFavorites as Record<string, unknown> | undefined)?.autoCollect || {}) as Record<string, unknown>;
+  const requestedLimit = Number(args.filters?.perStoreLimit ?? autoCollect.perStoreLimit ?? 1000);
+  const perStoreLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(1000, Math.floor(requestedLimit))) : 1000;
+  const configuredDelay = Number(autoCollect.collectDelayMs ?? 1200);
+  const collectDelayMs = Number.isFinite(configuredDelay) ? Math.max(0, configuredDelay) : 1200;
+  const storeCount = Math.max(1, args.storeRefs?.length || args.shopIds?.length || 1);
+  const timeoutMs = Math.max(1800000, storeCount * (300000 + perStoreLimit * collectDelayMs));
+  return runDoudianStoreTask({
+    taskType: "opportunityAutoFavorites",
+    operationId: args.operationId,
+    adapterVersion: nextArgs.doudianAdapter.adapter.version,
+    ruleVersion: nextArgs.doudianAdapter.scripts?.version || "",
+    metadata: {
+      dedupeKey,
+      replaceActive: true,
+      shopCount: args.storeRefs?.length || args.shopIds?.length || 0,
+      action: "auto-favorite"
+    },
+    payload: {
+      ...nextArgs,
+      filters: args.filters || {}
+    }
+  }, timeoutMs) as Promise<DoudianOpportunityAutoFavoritesResult>;
 }
 
 export async function runDoudianOpportunityPipelineTask(args: {

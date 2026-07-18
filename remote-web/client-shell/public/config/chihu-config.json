@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.18.business-data-store-ux-v1",
+  "version": "2026.07.18.opportunity-favorites-cleanup-v4",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -34,7 +34,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "16e0d9c-dirty",
-    "buildTime": "2026-07-18T01:23:39.873Z"
+    "gitCommit": "f7ea3f3-dirty",
+    "buildTime": "2026-07-18T06:58:43.279Z"
   }
 }

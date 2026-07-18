@@ -3,6 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   AlertCircle,
   BarChart3,
+  Bookmark,
   Building2,
   ChevronRight,
   CheckCircle2,
@@ -58,7 +59,9 @@ const warningSubRoutes: SecondaryRoute[] = [
 ];
 
 const opportunitySubRoutes: SecondaryRoute[] = [
-  { label: "商机提报", route: "/opportunities/product-prematch", Icon: Target }
+  { label: "商机提报", route: "/opportunities/product-prematch", Icon: Target },
+  { label: "自动收藏商机", route: "/opportunities/favorites", Icon: Bookmark },
+  { label: "清理失效收藏", route: "/opportunities/favorites/cleanup", Icon: Trash2 }
 ];
 
 const productSubRoutes: SecondaryRoute[] = [

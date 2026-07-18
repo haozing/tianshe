@@ -1,6 +1,6 @@
 {
   "name": "@chihu/client-shell",
-  "version": "2026.07.18-business-data-store-ux-v1",
+  "version": "2026.07.18-opportunity-favorites-cleanup-v3",
   "private": true,
   "type": "module",
   "scripts": {

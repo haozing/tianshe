@@ -4,6 +4,8 @@ export * from "./fileImport";
 export * from "./fundsData";
 export * from "./operation";
 export * from "./opportunityReport";
+export * from "./opportunityFavorites";
+export * from "./opportunityAutoFavorites";
 export * from "./progress";
 export * from "./productCatalog";
 export * from "./repository";

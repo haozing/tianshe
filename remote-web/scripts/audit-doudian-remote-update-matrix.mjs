@@ -18,6 +18,8 @@ const businessDataClientPath = join(clientShellRoot, "domain", "doudian", "busin
 const fundsDataClientPath = join(clientShellRoot, "domain", "doudian", "fundsData.ts");
 const violationsDataClientPath = join(clientShellRoot, "domain", "doudian", "violationsData.ts");
 const staleGoodsClientPath = join(clientShellRoot, "domain", "doudian", "staleGoods.ts");
+const opportunityFavoritesClientPath = join(clientShellRoot, "domain", "doudian", "opportunityFavorites.ts");
+const opportunityFavoritesPagePath = join(clientShellRoot, "components", "OpportunityFavoritesPage.tsx");
 const storeImportClientPath = join(clientShellRoot, "domain", "doudian", "storeImport.ts");
 const storeGroupsClientPath = join(clientShellRoot, "domain", "doudian", "storeGroups.ts");
 const taskClientPath = join(clientShellRoot, "domain", "doudian", "taskClient.ts");
@@ -144,6 +146,8 @@ const businessDataClient = existsSync(businessDataClientPath) ? readFileSync(bus
 const fundsDataClient = existsSync(fundsDataClientPath) ? readFileSync(fundsDataClientPath, "utf8") : "";
 const violationsDataClient = existsSync(violationsDataClientPath) ? readFileSync(violationsDataClientPath, "utf8") : "";
 const staleGoodsClient = existsSync(staleGoodsClientPath) ? readFileSync(staleGoodsClientPath, "utf8") : "";
+const opportunityFavoritesClient = existsSync(opportunityFavoritesClientPath) ? readFileSync(opportunityFavoritesClientPath, "utf8") : "";
+const opportunityFavoritesPage = existsSync(opportunityFavoritesPagePath) ? readFileSync(opportunityFavoritesPagePath, "utf8") : "";
 const storeImportClient = existsSync(storeImportClientPath) ? readFileSync(storeImportClientPath, "utf8") : "";
 const storeGroupsClient = existsSync(storeGroupsClientPath) ? readFileSync(storeGroupsClientPath, "utf8") : "";
 const taskClient = existsSync(taskClientPath) ? readFileSync(taskClientPath, "utf8") : "";
@@ -331,6 +335,27 @@ const checks = [
     source: rel(adapterPath)
   },
   {
+    key: "opportunityFavoritesClearInvalidRemote",
+    ok: adapter.endpoints?.opportunityFavoriteClearInvalid === "/api/commop/business_chance_center/clue/collect/clear" &&
+      adapter.requestPlans?.opportunityFavoriteClearInvalid?.method === "POST" &&
+      !("body" in (adapter.requestPlans?.opportunityFavoriteClearInvalid || {})) &&
+      adapter.requestPlans?.opportunityFavoriteClearInvalid?.signStrategy === "mstoken-myargs" &&
+      adapter.requestPlans?.opportunityFavoriteClearInvalid?.localSignerOnly === true &&
+      adapter.requestPlans?.opportunityFavoriteClearInvalid?.signRequireMsToken === false &&
+      adapter.requestPlans?.opportunityFavoriteClearInvalid?.signIncludeEmptyMsToken === true &&
+      adapter.requestPlans?.opportunityFavoriteClearInvalid?.maxAttempts === 1 &&
+      adapter.policies?.opportunityFavorites?.clearInvalidRequestPlan === "opportunityFavoriteClearInvalid" &&
+      hasActions(adapter.operationPlans?.clearInvalidOpportunityFavorites, ["clearInvalidOpportunityFavorites", "recordStoreAttempts"]) &&
+      opportunityFavoritesClient.includes("assertMutationStoreActive") &&
+      opportunityFavoritesClient.includes("currentShopState") &&
+      opportunityFavoritesClient.includes("successFlag === true") &&
+      opportunityFavoritesClient.includes('event: "clear-invalid-store-result"') &&
+      opportunityFavoritesClient.includes('event: "clear-invalid-run-summary"') &&
+      opportunityFavoritesPage.includes("clearDoudianInvalidOpportunityFavorites") &&
+      app.includes("/opportunities/favorites"),
+    source: rel(opportunityFavoritesClientPath)
+  },
+  {
     key: "businessDataNoStaleSmartActivityPlan",
     ok: !staleBusinessSmartActivityPresent,
     source: rel(adapterPath)
@@ -482,6 +507,7 @@ const checks = [
       hasActions(adapter.operationPlans?.refreshStatus, ["refreshStores", "updateStores", "recordStoreAttempts"]) &&
       hasActions(adapter.operationPlans?.refreshStore, ["getShopUserInfo"]) &&
       hasActions(adapter.operationPlans?.fetchBusinessData, ["collectBusinessData", "recordStoreAttempts"]) &&
+      hasActions(adapter.operationPlans?.clearInvalidOpportunityFavorites, ["clearInvalidOpportunityFavorites", "recordStoreAttempts"]) &&
       hasActions(adapter.operationPlans?.openStore, ["openWindow", "loadUrl"]),
     source: rel(adapterPath)
   },
@@ -492,7 +518,7 @@ const checks = [
   },
   {
     key: "remoteDomainConsumesRequestPlans",
-    ok: [businessDataClient, fundsDataClient, violationsDataClient, staleGoodsClient, storeImportClient].every((source) => source.includes("runDoudianRequestPlan")) &&
+    ok: [businessDataClient, fundsDataClient, violationsDataClient, staleGoodsClient, opportunityFavoritesClient, storeImportClient].every((source) => source.includes("runDoudianRequestPlan")) &&
       requestPlanClient.includes("requireChihuNative().cookies.getHeader") &&
       requestPlanClient.includes("requireChihuNative().http.request") &&
       requestPlanClient.includes("signDoudianRequest"),

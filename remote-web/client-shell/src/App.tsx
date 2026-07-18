@@ -43,6 +43,8 @@ import { HomePage } from "./components/HomePage";
 import { LicenseGateScreen, LicenseRenewDialog } from "./components/LicenseGate";
 import { ModulePage } from "./components/ModulePage";
 import { OpportunityProductPrematchPage } from "./components/OpportunityProductPrematchPage";
+import { OpportunityFavoritesPage } from "./components/OpportunityFavoritesPage";
+import { OpportunityAutoFavoritesPage } from "./components/OpportunityAutoFavoritesPage";
 import { ShellHeader } from "./components/ShellHeader";
 import { SlowMovingCleanupPage } from "./components/SlowMovingCleanupPage";
 import { StoreManagementPage } from "./components/StoreManagementPage";
@@ -358,7 +360,7 @@ export function App() {
               <span className="min-w-0 break-words">{state.manifestError}</span>
             </div>
           ) : null}
-          <div className={`min-h-0 flex-1 ${state.route === "/stores" || state.route === "/stores/business-data" || state.route === "/stores/funds" || state.route === "/warnings" || state.route === "/opportunities" || state.route === "/opportunities/product-prematch" || effectiveRoute === "/products/slow-moving" || effectiveRoute === "/products/bulk-delete" ? "overflow-hidden" : "overflow-auto"}`}>
+          <div className={`min-h-0 flex-1 ${state.route === "/stores" || state.route === "/stores/business-data" || state.route === "/stores/funds" || state.route === "/warnings" || state.route === "/opportunities" || state.route === "/opportunities/product-prematch" || state.route === "/opportunities/favorites" || state.route === "/opportunities/favorites/cleanup" || effectiveRoute === "/products/slow-moving" || effectiveRoute === "/products/bulk-delete" ? "overflow-hidden" : "overflow-auto"}`}>
             {state.route === "/system/diagnostics" ? (
               <DiagnosticsPage state={state} />
             ) : state.route === "/stores" ? (
@@ -369,6 +371,10 @@ export function App() {
               <FundsDataPage />
             ) : state.route === "/warnings" ? (
               <ViolationsPage />
+            ) : state.route === "/opportunities/favorites" ? (
+              <OpportunityAutoFavoritesPage />
+            ) : state.route === "/opportunities/favorites/cleanup" ? (
+              <OpportunityFavoritesPage />
             ) : state.route === "/opportunities" || state.route === "/opportunities/product-prematch" ? (
               <OpportunityProductPrematchPage />
             ) : effectiveRoute === "/products/slow-moving" ? (

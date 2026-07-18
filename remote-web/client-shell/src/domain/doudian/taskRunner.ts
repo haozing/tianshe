@@ -9,6 +9,8 @@ import { runFetchDoudianStoresTask } from "./storeImport";
 import { runProductCatalogSyncTask } from "./productCatalog";
 import { runRefreshDoudianStoreStatusTask } from "./storeStatus";
 import { cancelOpportunityPipelineSubmitTask, runOpportunityPipelineSubmitTask } from "./opportunityReport";
+import { clearInvalidOpportunityFavorites } from "./opportunityFavorites";
+import { runOpportunityAutoFavorites } from "./opportunityAutoFavorites";
 import { fetchBusinessData } from "./businessData";
 import { fetchFundsData } from "./fundsData";
 import { fetchViolationsData } from "./violationsData";
@@ -188,6 +190,16 @@ async function runDomainTask(channel: BroadcastChannel, operationId: string, tas
         operationId,
         ...payload
       } as unknown as Parameters<typeof runOpportunityPipelineSubmitTask>[0]);
+    } else if (task.taskType === "opportunityFavoritesClearInvalid") {
+      result = await clearInvalidOpportunityFavorites({
+        operationId,
+        ...payload
+      } as unknown as Parameters<typeof clearInvalidOpportunityFavorites>[0]);
+    } else if (task.taskType === "opportunityAutoFavorites") {
+      result = await runOpportunityAutoFavorites({
+        operationId,
+        ...payload
+      } as unknown as Parameters<typeof runOpportunityAutoFavorites>[0]);
     } else {
       throw new Error(`unsupported task type: ${task.taskType}`);
     }

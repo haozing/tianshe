@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "contractVersion": "doudian-adapter.v1",
   "platform": "doudian",
-  "version": "2026.07.18.remote-adapter-business-xzb-contract-v5",
+  "version": "2026.07.18.remote-adapter-opportunity-favorites-v8",
   "source": "remote-web",
   "capabilities": {
     "actions": [
@@ -33,7 +33,8 @@
       "scanOpportunityClues",
       "scanOpportunityProducts",
       "executeOpportunitySubmit",
-      "executeOpportunityCollect"
+      "executeOpportunityCollect",
+      "clearInvalidOpportunityFavorites"
     ],
     "scriptKeys": [
       "collectRoleShopNames",
@@ -82,7 +83,8 @@
       "opportunityCategoryList",
       "opportunityClueGoodsList",
       "opportunityProductList",
-      "opportunityCollectClue"
+      "opportunityCollectClue",
+      "opportunityFavoriteClearInvalid"
     ],
     "unknownActionPolicy": "fail"
   },
@@ -393,6 +395,21 @@
           "action": "recordStoreAttempts"
         }
       ]
+    },
+    "clearInvalidOpportunityFavorites": {
+      "version": "doudian-operation-plan.v1",
+      "actions": [
+        {
+          "action": "clearInvalidOpportunityFavorites",
+          "requestPlans": [
+            "currentShop",
+            "opportunityFavoriteClearInvalid"
+          ]
+        },
+        {
+          "action": "recordStoreAttempts"
+        }
+      ]
     }
   },
   "origin": "https://fxg.jinritemai.com",
@@ -440,7 +457,8 @@
     "opportunityCategoryList": "/api/commop/business_chance_center/shop_full_category/list",
     "opportunityClueGoodsList": "/api/commop/business_chance_center/product/list",
     "opportunityProductList": "/product/tproduct/list",
-    "opportunityCollectClue": "/api/commop/business_chance_center/clue/auto_submit/open"
+    "opportunityCollectClue": "/api/commop/business_chance_center/clue/auto_submit/open",
+    "opportunityFavoriteClearInvalid": "/api/commop/business_chance_center/clue/collect/clear"
   },
   "selectors": {
     "headerShopName": [
@@ -3481,8 +3499,17 @@
         0,
         "0"
       ],
-      "successPaths": [
-        "data"
+      "successPaths": [],
+      "allowSuccessCodeOnly": true,
+      "failureMessages": [
+        "未登录",
+        "请登录",
+        "环境存在风险",
+        "访问过于频繁",
+        "操作太频繁",
+        "风控",
+        "滑块",
+        "验证"
       ]
     },
     "opportunityCategoryList": {
@@ -3623,8 +3650,59 @@
         0,
         "0"
       ],
+      "successPaths": [],
+      "allowSuccessCodeOnly": true,
+      "failureMessages": [
+        "未登录",
+        "请登录",
+        "环境存在风险",
+        "访问过于频繁",
+        "操作太频繁",
+        "风控",
+        "滑块",
+        "验证"
+      ]
+    },
+    "opportunityFavoriteClearInvalid": {
+      "endpointKey": "opportunityFavoriteClearInvalid",
+      "method": "POST",
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerOnly": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter/Records?activeTab=auto_sign_up",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "signQuery": "",
+      "signBody": "",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,th;q=0.8,en;q=0.7",
+        "Origin": "https://fxg.jinritemai.com"
+      },
+      "retryOnHttpError": false,
+      "retryOnBusinessFailure": false,
+      "maxAttempts": 1,
+      "successCodes": [
+        0,
+        "0"
+      ],
       "successPaths": [
-        "data"
+        "success"
+      ],
+      "failureMessages": [
+        "登录",
+        "风控",
+        "验证",
+        "频繁"
       ]
     }
   },
@@ -5191,6 +5269,48 @@
         "executePartial": "批量删除部分失败，{failureCount} 家店铺未成功",
         "executeDone": "已提交 {count} 个商品批量删除",
         "cancelled": "批量删除任务已取消"
+      }
+    },
+    "opportunityFavorites": {
+      "concurrency": 2,
+      "matchById": true,
+      "matchByName": true,
+      "clearInvalidRequestPlan": "opportunityFavoriteClearInvalid",
+      "autoCollect": {
+        "clueListRequestPlan": "opportunityClueRealtimeList",
+        "categoryListRequestPlan": "opportunityCategoryList",
+        "collectRequestPlan": "opportunityCollectClue",
+        "pageSize": 18,
+        "maxPagesPerQuery": 60,
+        "perStoreLimit": 1000,
+        "collectDelayMs": 1200,
+        "queryModes": [
+          {
+            "id": "trading-high",
+            "label": "成交高",
+            "sortField": "TRADING_AMOUNT"
+          },
+          {
+            "id": "growth-fast",
+            "label": "增速快",
+            "sortField": "PAY_AMOUNT_RATE"
+          },
+          {
+            "id": "competition-low",
+            "label": "竞争小",
+            "sortField": "ONLINE_PRODUCT_NUMSO"
+          }
+        ]
+      },
+      "messages": {
+        "checking": "正在校验店铺登录态",
+        "clearing": "正在清理失效商机",
+        "storeDone": "失效商机清理请求成功",
+        "storeFailed": "失效商机清理失败",
+        "done": "已完成 {successCount} 家店铺",
+        "partial": "已完成 {successCount} 家，{failureCount} 家失败",
+        "failed": "所选店铺均未清理成功",
+        "cancelled": "已停止后续店铺；停止前提交的清理请求不会撤销"
       }
     },
     "opportunityReport": {
