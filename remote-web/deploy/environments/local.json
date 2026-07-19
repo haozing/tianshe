@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "environment": "local",
-  "releaseId": "2026.07.18.marketing-foundation-v1",
+  "releaseId": "2026.07.19.marketing-pilot-v1",
   "origins": {
     "newRemoteWebOrigin": "http://chihu-remote.localhost:4173/new-remote-web/",
     "remoteConfigUrl": "http://chihu-remote.localhost:4173/new-remote-web/config/chihu-config.json",
