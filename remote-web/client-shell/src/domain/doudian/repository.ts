@@ -1,5 +1,5 @@
 import { requireNativeData } from "../../nativeData/client";
-import type { CursorPage, NativeDataRecordStoreName } from "../../nativeData/types";
+import type { CursorPage, NativeDataRecordStoreName, NativeDataUpdatedCursor, NativeDataUpdatedCursorPage } from "../../nativeData/types";
 
 export const DOUDIAN_DB_NAME = "chihu-business.sqlite3";
 export const DOUDIAN_LEGACY_INDEXEDDB_NAME = "chihu20_doudian";
@@ -37,6 +37,7 @@ export const DOUDIAN_OBJECT_STORES = [
   "opportunity_pipeline_candidates_v2",
   "opportunity_pipeline_submit_tasks_v2",
   "opportunity_pipeline_operation_events_v2",
+  "remote_feature_records_v1",
   "operations",
   "runtime_meta"
 ] as const satisfies readonly NativeDataRecordStoreName[];
@@ -64,7 +65,8 @@ const NATIVE_BATCH_WRITE_STORES = new Set<DoudianObjectStoreName>([
   "opportunity_clue_word_cache_shards_v2",
   "opportunity_pipeline_candidates_v2",
   "opportunity_pipeline_submit_tasks_v2",
-  "opportunity_pipeline_operation_events_v2"
+  "opportunity_pipeline_operation_events_v2",
+  "remote_feature_records_v1"
 ]);
 const NATIVE_BATCH_RECORD_LIMIT = 500;
 const NATIVE_BATCH_PAYLOAD_LIMIT = 4 * 1024 * 1024;
@@ -312,6 +314,24 @@ export async function repositoryListByPrefix<T extends { id?: string }>(
     nextCursor: extra && items.length ? String(items[items.length - 1].id || "") : null,
     hasMore: Boolean(extra && items.length)
   };
+}
+
+export async function repositoryQueryByPrefix<T extends { id?: string }>(
+  storeName: DoudianObjectStoreName,
+  recordIdPrefix: string,
+  options: { cursor?: NativeDataUpdatedCursor | null; pageSize?: number } = {}
+): Promise<NativeDataUpdatedCursorPage<T>> {
+  const prefix = String(recordIdPrefix || "").trim();
+  if (!prefix) throw new Error("recordIdPrefix is required");
+  const queryByPrefix = requireNativeData().records.queryByPrefix;
+  if (!queryByPrefix) throw new Error("records.queryByPrefix is unavailable; update the desktop client");
+  return queryByPrefix<T & Record<string, unknown>>({
+    storeName,
+    recordIdPrefix: prefix,
+    order: "updated_desc",
+    cursor: options.cursor || undefined,
+    limit: Math.max(1, Math.min(500, Math.floor(Number(options.pageSize || 100))))
+  }) as Promise<NativeDataUpdatedCursorPage<T>>;
 }
 
 export async function repositoryDelete(storeName: DoudianObjectStoreName, id: string): Promise<void> {

@@ -7,6 +7,7 @@ export type DoudianTaskMessage =
   | { type: "task:start"; operation: DoudianOperationRecord; task: DoudianTaskRequest }
   | { type: "task:cancel"; operationId: string }
   | { type: "task:progress"; operationId: string; progress: number; message?: string }
+  | { type: "task:heartbeat"; operationId: string; inFlightMutations: number }
   | { type: "task:result"; operationId: string; resultSummary?: string; result?: unknown }
   | { type: "task:error"; operationId: string; error: string }
   | { type: "task:ready"; href: string };
@@ -25,7 +26,7 @@ export interface DoudianTaskRequest {
 export interface DoudianProgressDetail {
   operationId: string;
   taskType?: string;
-  status: "running" | "succeeded" | "partial" | "failed" | "cancelled";
+  status: "running" | "cancelling" | "interrupted" | "reconciling" | "succeeded" | "partial" | "failed" | "cancelled";
   progress: number;
   message?: string;
   resultSummary?: string;

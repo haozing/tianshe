@@ -7,16 +7,18 @@ const domainUrl = new URL("../src/domain/doudian/opportunityAutoFavorites.ts", i
 const pageUrl = new URL("../src/components/OpportunityAutoFavoritesPage.tsx", import.meta.url);
 const runnerUrl = new URL("../src/domain/doudian/taskRunner.ts", import.meta.url);
 const appUrl = new URL("../src/App.tsx", import.meta.url);
+const featureRoutesUrl = new URL("../src/featureRoutes.tsx", import.meta.url);
 
 async function loadContract() {
-  const [config, domain, page, runner, app] = await Promise.all([
+  const [config, domain, page, runner, app, featureRoutes] = await Promise.all([
     readFile(configUrl, "utf8").then(JSON.parse),
     readFile(domainUrl, "utf8"),
     readFile(pageUrl, "utf8"),
     readFile(runnerUrl, "utf8"),
-    readFile(appUrl, "utf8")
+    readFile(appUrl, "utf8"),
+    readFile(featureRoutesUrl, "utf8")
   ]);
-  return { config, domain, page, runner, app };
+  return { config, domain, page, runner, app, featureRoutes };
 }
 
 test("keeps ranked favorites independent from opportunity association", async () => {
@@ -68,10 +70,11 @@ test("loops selected modes, deduplicates clues and stops a store at the favorite
 });
 
 test("exposes auto favorites and invalid cleanup as separate routes", async () => {
-  const { app } = await loadContract();
+  const { app, featureRoutes } = await loadContract();
 
-  assert.match(app, /state\.route === "\/opportunities\/favorites"/);
-  assert.match(app, /<OpportunityAutoFavoritesPage/);
-  assert.match(app, /state\.route === "\/opportunities\/favorites\/cleanup"/);
-  assert.match(app, /<OpportunityFavoritesPage/);
+  assert.match(featureRoutes, /route: "\/opportunities\/favorites"/);
+  assert.match(featureRoutes, /component: OpportunityAutoFavoritesPage/);
+  assert.match(featureRoutes, /route: "\/opportunities\/favorites\/cleanup"/);
+  assert.match(featureRoutes, /component: OpportunityFavoritesPage/);
+  assert.match(app, /resolveFeatureRoutes/);
 });

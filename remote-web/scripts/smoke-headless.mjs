@@ -8,6 +8,7 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const root = resolve(__dirname, "..");
 const artifacts = join(root, "artifacts");
 mkdirSync(artifacts, { recursive: true });
+const releaseManifest = JSON.parse(readFileSync(join(root, "new-remote-web", "release-manifest.json"), "utf8"));
 
 const edgePath = process.env.EDGE_PATH || "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
 const baseUrl = process.env.BASE_URL || "http://chihu-remote.localhost:4173";
@@ -19,13 +20,13 @@ const smokeOutputPrefix = process.env.SMOKE_OUTPUT_PREFIX || "smoke";
 const checks = [
   {
     name: "root redirects to new remote",
-    url: `${baseUrl}/`,
+    url: `${baseUrl}/?smoke=1`,
     terms: ["赤狐管家", "预警/违规", "获取店铺"],
     selectors: ["data-foundation-shell=\"ready\"", "data-client-shell=\"ready\"", "data-single-entry=\"true\""]
   },
   {
     name: "new remote renders client shell",
-    url: `${baseUrl}/new-remote-web/`,
+    url: `${baseUrl}/new-remote-web/?smoke=1`,
     terms: ["赤狐管家", "预警/违规", "获取店铺"],
     selectors: [
       "data-foundation-shell=\"ready\"",
@@ -34,25 +35,25 @@ const checks = [
       "data-config-status=\"ready\"",
       "data-config-schema=\"1\"",
       "data-storage-health=\"ok\"",
-      "data-release-manifest=\"/new-remote-web/release-manifest.json\""
+       "data-release-manifest=\"./release-manifest.json\""
     ]
   },
   {
     name: "config error is explicit",
-    url: `${baseUrl}/new-remote-web/?configUrl=./config/invalid-config.json`,
+    url: `${baseUrl}/new-remote-web/?configUrl=./config/invalid-config.json&smoke=1`,
     terms: ["Config error", "赤狐管家"],
     selectors: ["data-config-status=\"error\"", "data-single-entry=\"true\""]
   },
   {
     name: "system diagnostics route renders",
-    url: `${baseUrl}/new-remote-web/?route=/system/diagnostics`,
+    url: `${baseUrl}/new-remote-web/?route=/system/diagnostics&smoke=1`,
     terms: ["Diagnostics", "storage_checked", "manifest_loaded"],
     selectors: ["data-foundation-shell=\"ready\"", "data-route-slot=\"ready\""]
   },
   {
     name: "release manifest loads",
     url: `${baseUrl}/new-remote-web/release-manifest.json`,
-    terms: ["2026.07.04.client-shell", "remote-html", "single active entry"],
+    terms: [String(releaseManifest.releaseId || ""), "remote-html", "single active entry"],
     selectors: []
   }
 ];

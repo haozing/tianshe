@@ -162,8 +162,9 @@ createServer(async (req, res) => {
     return;
   }
 
-  if (req.url === "/") {
-    res.writeHead(302, { Location: "/new-remote-web/" });
+  if (req.url.split("?")[0] === "/") {
+    const query = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+    res.writeHead(302, { Location: `/new-remote-web/${query}` });
     res.end();
     return;
   }

@@ -1,4 +1,4 @@
-import { quickTasks } from "../data/modules";
+import type { ResolvedFeatureRoute } from "../featureRoutes";
 import { remoteAsset } from "../lib/assets";
 
 const statusCards = [
@@ -8,9 +8,8 @@ const statusCards = [
   { label: "最近同步", value: "10:24", detail: "本地状态", href: "#/system/diagnostics" }
 ];
 
-const taskRoutes = ["#/stores", "#/warnings", "#/products/slow-moving"];
-
-export function HomePage() {
+export function HomePage({ routes }: { routes: ResolvedFeatureRoute[] }) {
+  const quickEntries = routes.filter((route) => route.homeEntry).slice(0, 6);
   return (
     <>
       <section className="grid min-h-[214px] gap-5 rounded-lg border border-brand-line bg-white px-6 py-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)] max-[760px]:px-4" data-business-slot="ready">
@@ -51,11 +50,11 @@ export function HomePage() {
         </div>
       </section>
       <section className="mt-3.5 grid grid-cols-3 gap-3 max-[760px]:grid-cols-1">
-        {quickTasks.map((task, index) => (
-          <a key={task.title} className="min-w-0 rounded-lg border border-brand-line bg-white p-3.5 no-underline shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-colors hover:border-brand-fox hover:bg-brand-foxSoft" href={taskRoutes[index] || "#/stores"}>
-            <span className="mb-1.5 inline-flex text-xs font-extrabold text-brand-fox">{task.tag}</span>
-            <strong className="mb-1 block">{task.title}</strong>
-            <p className="m-0 leading-relaxed text-shell-muted">{task.description}</p>
+        {quickEntries.map((route) => (
+          <a key={route.route} className="min-w-0 rounded-lg border border-brand-line bg-white p-3.5 no-underline shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-colors hover:border-brand-fox hover:bg-brand-foxSoft" href={`#${route.route}`}>
+            <span className="mb-1.5 inline-flex text-xs font-extrabold text-brand-fox">{route.navigation.topLabel}</span>
+            <strong className="mb-1 block">{route.homeEntry?.title}</strong>
+            <p className="m-0 leading-relaxed text-shell-muted">{route.homeEntry?.description}</p>
           </a>
         ))}
       </section>

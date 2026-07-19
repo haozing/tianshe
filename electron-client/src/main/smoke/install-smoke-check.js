@@ -49,7 +49,7 @@ function installSmokeCheck(win) {
 
     probing = true;
     try {
-      const probeTimeoutCapMs = scenario === "bridge" ? 40000 : 10000;
+      const probeTimeoutCapMs = scenario === "bridge" ? 40000 : scenario === "marketing-read" ? 240000 : 10000;
       const probeTimeoutMs = Math.min(probeTimeoutCapMs, Math.max(3000, timeoutMs - (Date.now() - startedAt) - 500));
       const result = await Promise.race([
         win.webContents.executeJavaScript(`
@@ -96,6 +96,61 @@ function installSmokeCheck(win) {
             href: location.href,
             textSample: text.slice(0, 240)
           };
+
+          if (result.scenario === "marketing-read") {
+            const runtimeDeadline = Date.now() + 10000;
+            while (!window.chihuMarketingReadRuntime && Date.now() < runtimeDeadline) await sleep(100);
+            if (!window.chihuMarketingReadRuntime) throw new Error("chihuMarketingReadRuntime missing");
+            result.marketingRead = await withTimeout("marketingReadProbe", window.chihuMarketingReadRuntime.probe(), 220000);
+            const routeExpectations = [
+              ["/marketing/limited-time", "限时限量购", "创建活动"],
+              ["/marketing/new-user-bonus", "新人礼金", "新建礼金"],
+              ["/marketing/coupons", "通用优惠券", "新建优惠券"]
+            ];
+            const routeChecks = [];
+            for (const [route, heading, createLabel] of routeExpectations) {
+              location.hash = route;
+              const routeDeadline = Date.now() + 5000;
+              while (Date.now() < routeDeadline && !Array.from(document.querySelectorAll("h1")).some((item) => item.textContent?.trim() === heading)) await sleep(50);
+              const createButton = Array.from(document.querySelectorAll("button")).find((item) => item.textContent?.trim() === createLabel);
+              routeChecks.push({
+                route,
+                heading: Array.from(document.querySelectorAll("h1")).some((item) => item.textContent?.trim() === heading),
+                createDisabled: createButton?.disabled === true
+              });
+            }
+
+            let marketingChildId = null;
+            let mobile = null;
+            try {
+              const mobileUrl = new URL(location.href);
+              mobileUrl.hash = "/marketing/coupons";
+              marketingChildId = await withTimeout("marketingMobileWindowOpen", window.client.openWindow({
+                url: mobileUrl.toString(),
+                isNotShow: true,
+                width: 390,
+                height: 844,
+                title: "CHIHU Marketing Mobile Probe",
+                devTools: false
+              }), 10000);
+              mobile = await withTimeout("marketingMobileWindowEval", window.client.executeJavaScriptBrowserWindow({
+                winId: marketingChildId,
+                timeoutMs: 10000,
+                jsContent: '(async()=>{const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const deadline=Date.now()+7000;while(Date.now()<deadline&&!Array.from(document.querySelectorAll("h1")).some(e=>e.textContent.trim()==="通用优惠券"))await sleep(50);const heading=Array.from(document.querySelectorAll("h1")).find(e=>e.textContent.trim()==="通用优惠券");const button=Array.from(document.querySelectorAll("button")).find(e=>e.textContent.trim()==="新建优惠券");const workspace=heading&&heading.closest("section")?.parentElement;const columns=workspace?getComputedStyle(workspace).gridTemplateColumns:"";const rect=button?.getBoundingClientRect();const clippedButtons=Array.from(document.querySelectorAll("button")).filter(e=>e.clientWidth>0&&e.scrollWidth>e.clientWidth+2).length;const overflowElements=Array.from(document.querySelectorAll("*")).map(e=>({e,r:e.getBoundingClientRect()})).filter(({r})=>r.right>innerWidth+2||r.left< -2).slice(0,12).map(({e,r})=>({tag:e.tagName,className:String(e.className||"").slice(0,160),left:Math.round(r.left),right:Math.round(r.right),width:Math.round(r.width)}));return{innerWidth,innerHeight,heading:!!heading,createDisabled:button?.disabled===true,createVisible:!!rect&&rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight,singleColumn:columns&&!columns.includes(" "),horizontalOverflow:document.documentElement.scrollWidth>innerWidth+2,clippedButtons,overflowElements};})()'
+              }), 15000);
+            } finally {
+              if (marketingChildId) await window.client.destroyBrowserWindow({ winId: marketingChildId }).catch(() => {});
+            }
+            result.marketingUi = { routeChecks, mobile };
+            result.marketingUiOk = routeChecks.every((item) => item.heading && item.createDisabled) &&
+              mobile?.innerWidth <= 410 && mobile?.innerHeight >= 760 && mobile?.heading === true &&
+              mobile?.createDisabled === true && mobile?.createVisible === true && mobile?.singleColumn === true &&
+              mobile?.horizontalOverflow === false && mobile?.clippedButtons === 0;
+            result.marketingReadOk = result.marketingRead.ok === true && result.marketingRead.writeActionsEnabled === false && result.marketingUiOk === true;
+            result.textSample = "[redacted for marketing read probe]";
+            resolve(result);
+            return;
+          }
 
           if (result.scenario === "cookie") {
             const cookie = {
@@ -1691,11 +1746,18 @@ function installSmokeCheck(win) {
         scenario === "ui-contract" ? result.uiContractOk :
         scenario === "maintenance" ? result.maintenanceOk :
         scenario === "sqlite" ? result.sqliteOk :
+        scenario === "marketing-read" ? result.marketingReadOk :
         result.bridgeOk;
       const ok = result.hasShell && result.hasClient && result.methodCount >= 33 && scenarioOk;
       if (ok) {
         clearTimeout(timer);
         finish(0, result);
+        return;
+      }
+
+      if (scenario === "marketing-read") {
+        clearTimeout(timer);
+        finish(1, result);
         return;
       }
 

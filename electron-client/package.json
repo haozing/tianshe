@@ -26,6 +26,7 @@
     "smoke:sqlite": "node scripts/run-smoke.js sqlite",
     "smoke:ui-contract": "node scripts/run-smoke.js ui-contract",
     "smoke:maintenance": "node scripts/run-smoke.js maintenance",
+    "smoke:marketing-read": "node scripts/run-smoke.js marketing-read",
     "check:desktop-ui-manual-evidence": "node scripts/check-desktop-ui-manual-evidence.js",
     "check:desktop-ui-manual-ready": "node scripts/check-desktop-ui-manual-evidence.js --require-complete",
     "record:desktop-ui-manual-evidence": "node scripts/record-desktop-ui-manual-evidence.js",
@@ -36,6 +37,7 @@
     "check:opportunity-data": "node scripts/check-opportunity-data.js",
     "test:database-timeout": "node --test test/database-timeout-recovery.test.js",
     "test:http-lossless-json": "node --test test/http-lossless-json.test.js",
+    "test:marketing-foundation": "node --test test/marketing-foundation.test.js test/http-lossless-json.test.js",
     "test:store-deletion-opportunity": "node --test test/store-deletion-opportunity-cascade.test.js"
   },
   "dependencies": {

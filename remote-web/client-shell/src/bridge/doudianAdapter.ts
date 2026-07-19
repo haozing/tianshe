@@ -1,4 +1,5 @@
-import type { DoudianAdapterConfig, DoudianAdapterPayload } from "../types";
+import type { DoudianAdapterConfig, DoudianAdapterPayload, MarketingFeature } from "../types";
+import { isValidMarketingContractConfig, isValidMarketingMutationActionConfig } from "./marketingContract";
 import { buildDoudianScripts } from "./doudianScripts";
 import {
   STORAGE_KEY_DOUDIAN_ADAPTER_LKG,
@@ -7,9 +8,10 @@ import {
   storageSet
 } from "./storage";
 
-export const DOUDIAN_ADAPTER_URL = "./config/doudian-adapter.json";
+export const DOUDIAN_ADAPTER_URL = "./config/doudian-adapter.marketing-pilot.json";
 
 let doudianAdapterPromise: Promise<DoudianAdapterPayload> | null = null;
+let doudianAdapterPromiseUrl = "";
 
 type AdapterSource = "remote" | "last-known-good";
 
@@ -76,8 +78,17 @@ function isValidCapabilities(value: unknown): boolean {
     isOptionalStringArray(capabilities.actions) &&
     isOptionalStringArray(capabilities.scriptKeys) &&
     isOptionalStringArray(capabilities.requestPlanSteps) &&
-    (capabilities.unknownActionPolicy === undefined || ["fail", "skip", "remote-fallback"].includes(capabilities.unknownActionPolicy))
+    (capabilities.unknownActionPolicy === undefined || ["fail", "skip", "remote-fallback"].includes(capabilities.unknownActionPolicy)) &&
+    (capabilities.marketing === undefined || isPlainObject(capabilities.marketing))
   );
+}
+
+export function isValidMarketingMutationAction(config: DoudianAdapterConfig, feature: MarketingFeature, action: string) {
+  return isValidMarketingMutationActionConfig(config, feature, action);
+}
+
+export function isValidMarketingContract(config: DoudianAdapterConfig) {
+  return isValidMarketingContractConfig(config);
 }
 
 function isValidOperationPlans(value: unknown): boolean {
@@ -377,6 +388,7 @@ export function isDoudianAdapterConfig(value: unknown): value is DoudianAdapterC
     isValidBusinessContract(config) &&
     isValidFundsContract(config) &&
     isValidViolationsContract(config)
+    && isValidMarketingContract(config)
   );
 }
 
@@ -444,9 +456,17 @@ export function getDoudianAdapterStatus() {
 }
 
 export async function loadDoudianAdapterPayload(options: LoadDoudianAdapterOptions = {}): Promise<DoudianAdapterPayload> {
-  if (options.force) doudianAdapterPromise = null;
+  const query = new URLSearchParams(window.location.search);
+  const override = query.get("doudianAdapterUrl");
+  const urlValue = override || DOUDIAN_ADAPTER_URL;
+  const resolvedUrl = new URL(urlValue, window.location.href);
+  if (resolvedUrl.origin !== window.location.origin) throw new Error("doudian adapter override must be same-origin");
+  const adapterUrl = resolvedUrl.toString();
+  if (options.force || doudianAdapterPromiseUrl !== adapterUrl) doudianAdapterPromise = null;
   if (!doudianAdapterPromise) {
-    const url = options.force ? `${DOUDIAN_ADAPTER_URL}?t=${Date.now()}` : DOUDIAN_ADAPTER_URL;
+    doudianAdapterPromiseUrl = adapterUrl;
+    const url = new URL(adapterUrl);
+    if (options.force) url.searchParams.set("t", String(Date.now()));
     doudianAdapterPromise = fetch(url, { cache: options.force ? "no-store" : "no-cache" })
       .then(async (response) => {
         if (!response.ok) throw new Error(`doudian adapter load failed: ${response.status}`);

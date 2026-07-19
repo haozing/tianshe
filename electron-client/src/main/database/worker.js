@@ -552,6 +552,7 @@ const NATIVE_RECORD_STORES = new Set([
   "opportunity_pipeline_candidates_v2",
   "opportunity_pipeline_submit_tasks_v2",
   "opportunity_pipeline_operation_events_v2",
+  "remote_feature_records_v1",
   "operations",
   "runtime_meta"
 ]);
@@ -1224,8 +1225,56 @@ function listNativeRecords(args = {}) {
   };
 }
 
+function nextRecordPrefix(prefix) {
+  for (let index = prefix.length - 1; index >= 0; index -= 1) {
+    const code = prefix.charCodeAt(index);
+    if (code < 0xffff) return `${prefix.slice(0, index)}${String.fromCharCode(code + 1)}`;
+  }
+  return `${prefix}\uffff`;
+}
+
+function queryNativeRecordsByPrefix(args = {}) {
+  const storeName = normalizeRecordStoreName(args.storeName || args.store);
+  const recordIdPrefix = normalizeString(args.recordIdPrefix);
+  if (!recordIdPrefix) throw createError("NATIVE_DATA_BAD_ARGUMENT", "records.queryByPrefix requires recordIdPrefix");
+  if (args.order !== undefined && args.order !== "updated_desc") {
+    throw createError("NATIVE_DATA_BAD_ARGUMENT", "records.queryByPrefix only supports updated_desc");
+  }
+  const limit = validatePageSize(args.limit, 100, 1000);
+  const cursor = args.cursor && typeof args.cursor === "object" ? args.cursor : {};
+  const cursorUpdatedAt = normalizeString(cursor.updatedAt);
+  const cursorRecordId = normalizeString(cursor.recordId);
+  if ((cursorUpdatedAt && !cursorRecordId) || (!cursorUpdatedAt && cursorRecordId)) {
+    throw createError("NATIVE_DATA_BAD_ARGUMENT", "records.queryByPrefix cursor requires updatedAt and recordId");
+  }
+  const upperBound = nextRecordPrefix(recordIdPrefix);
+  const cursorCondition = cursorUpdatedAt
+    ? "AND (updated_at < ? OR (updated_at = ? AND record_id < ?))"
+    : "";
+  const params = [storeName, recordIdPrefix, upperBound];
+  if (cursorUpdatedAt) params.push(cursorUpdatedAt, cursorUpdatedAt, cursorRecordId);
+  const rows = ensureDb().prepare(`
+    SELECT * FROM native_records
+    WHERE store_name = ?
+      AND record_id >= ?
+      AND record_id < ?
+      ${cursorCondition}
+    ORDER BY updated_at DESC, record_id DESC
+    LIMIT ?
+  `).all(...params, limit + 1);
+  const pageRows = rows.slice(0, limit);
+  const last = pageRows[pageRows.length - 1];
+  return {
+    items: pageRows.map(formatNativeRecord),
+    nextCursor: rows.length > limit && last
+      ? { updatedAt: last.updated_at, recordId: last.record_id }
+      : null,
+    hasMore: rows.length > limit
+  };
+}
+
 function queryNativeOperations(args = {}) {
-  const allowedStatuses = new Set(["created", "running", "succeeded", "partial", "failed", "cancelled"]);
+  const allowedStatuses = new Set(["created", "running", "cancelling", "interrupted", "reconciling", "succeeded", "partial", "failed", "cancelled"]);
   const statuses = Array.from(new Set((Array.isArray(args.statuses) ? args.statuses : [])
     .map(normalizeString)
     .filter((status) => allowedStatuses.has(status))));
@@ -2894,6 +2943,7 @@ function handle(method, args = {}) {
     case "records.get": return getNativeRecord(args);
     case "records.getMany": return getManyNativeRecords(args);
     case "records.list": return listNativeRecords(args);
+    case "records.queryByPrefix": return queryNativeRecordsByPrefix(args);
     case "records.latest": return latestNativeRecord(normalizeRecordStoreName(args.storeName || args.store));
     case "records.queryOperations": return queryNativeOperations(args);
     case "records.cleanupOperations": return cleanupNativeOperations(args);

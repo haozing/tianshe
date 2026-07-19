@@ -180,6 +180,7 @@ const nativeData = {
     get: invoke("native:data:records:get"),
     getMany: invoke("native:data:records:getMany"),
     list: invoke("native:data:records:list"),
+    queryByPrefix: invoke("native:data:records:queryByPrefix"),
     latest: invoke("native:data:records:latest"),
     queryOperations: invoke("native:data:records:queryOperations"),
     cleanupOperations: invoke("native:data:records:cleanupOperations"),

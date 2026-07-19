@@ -31,6 +31,7 @@ function registerBusinessDatabaseHandlers() {
   ipcMain.handle("native:data:records:get", request("records.get", "interactive"));
   ipcMain.handle("native:data:records:getMany", request("records.getMany", "interactive"));
   ipcMain.handle("native:data:records:list", request("records.list", "interactive"));
+  ipcMain.handle("native:data:records:queryByPrefix", request("records.queryByPrefix", "interactive"));
   ipcMain.handle("native:data:records:latest", request("records.latest", "interactive"));
   ipcMain.handle("native:data:records:queryOperations", request("records.queryOperations", "interactive"));
   ipcMain.handle("native:data:records:cleanupOperations", request("records.cleanupOperations", "write"));

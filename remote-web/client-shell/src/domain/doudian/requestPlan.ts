@@ -5,6 +5,9 @@ import { signDoudianRequest } from "./signer";
 import { XZB_SIGN_USER_AGENT } from "./xzbSigner";
 import { detailedDoudianLoggingEnabled, reportDoudianDiagnostic } from "./diagnosticLog";
 import { requestRetryDelayMs } from "./requestRetryPolicy";
+import { clampRequestTimeoutMs, mutationRequestPlanSafetyError } from "./requestPlanSafety";
+
+export { clampRequestTimeoutMs } from "./requestPlanSafety";
 
 const losslessJson = JSONbigFactory({ storeAsString: true });
 
@@ -90,6 +93,8 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   context?: Record<string, unknown>;
   trackWindow?: (winId: number) => void;
   shouldCancel?: () => boolean;
+  beginMutation?: () => void;
+  endMutation?: () => void;
 }): Promise<RequestPlanResult> {
   const startedAt = Date.now();
   let attemptCount = 0;
@@ -100,6 +105,10 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   });
   const adapter = payload.adapter;
   const plan = (adapter.requestPlans?.[args.planKey] || {}) as Record<string, unknown>;
+  const mutationSafetyError = mutationRequestPlanSafetyError(plan);
+  if (mutationSafetyError) {
+    return finalize({ ok: false, status: 0, data: null, error: `unsafe mutation request plan: ${args.planKey}: ${mutationSafetyError}`, source: args.planKey, nonRetryable: true });
+  }
   const endpointKey = typeof plan.endpointKey === "string" ? plan.endpointKey : args.planKey;
   const endpoint = adapter.endpoints[endpointKey];
   if (!endpoint) return finalize({ ok: false, status: 0, data: null, error: `missing endpoint: ${endpointKey}`, source: args.planKey });
@@ -111,51 +120,57 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   }
   const runRequest = async (attempt: number | string = 0) => {
     attemptCount += 1;
-    let result: RequestPlanResult;
-    if (plan.requestMode === "page-fetch") {
-      result = await pageFetchJson(args.partition, url, args.planKey, plan, context, args.trackWindow);
-    } else {
-      let requestUrl = url;
-      if (plan.sign === true) {
-        const sign = await signDoudianRequest(payload, {
-          targetUrl: url,
-          partition: args.partition,
-          planKey: args.planKey,
-          plan,
-          context,
-          trackWindow: args.trackWindow
-        });
-        if (sign.ok && sign.query) {
-          const signedUrl = new URL(url);
-          signedUrl.search = sign.query.startsWith("?") ? sign.query : `?${sign.query}`;
-          requestUrl = signedUrl.toString();
-        } else if (plan.pageFetchOnSignFailure === true) {
-          result = await pageFetchJson(args.partition, url, args.planKey, plan, context, args.trackWindow);
-          await reportPlanSummary(args.planKey, args.partition, attempt, result, adapter, plan);
-          return result;
-        } else {
-          result = {
-            ok: false,
-            status: 0,
-            data: null,
-            error: `sign failed${sign.reason ? `: ${sign.reason}` : ""}`,
-            source: args.planKey,
-            url,
-            nonRetryable: true,
-            signFailureReason: sign.reason
-          };
-          await reportPlanSummary(args.planKey, args.partition, attempt, result, adapter, plan);
-          return result;
+    const mutation = plan.mutation === true;
+    if (mutation) args.beginMutation?.();
+    try {
+      let result: RequestPlanResult;
+      if (plan.requestMode === "page-fetch") {
+        result = await pageFetchJson(args.partition, url, args.planKey, plan, context, args.trackWindow);
+      } else {
+        let requestUrl = url;
+        if (plan.sign === true) {
+          const sign = await signDoudianRequest(payload, {
+            targetUrl: url,
+            partition: args.partition,
+            planKey: args.planKey,
+            plan,
+            context,
+            trackWindow: args.trackWindow
+          });
+          if (sign.ok && sign.query) {
+            const signedUrl = new URL(url);
+            signedUrl.search = sign.query.startsWith("?") ? sign.query : `?${sign.query}`;
+            requestUrl = signedUrl.toString();
+          } else if (plan.pageFetchOnSignFailure === true) {
+            result = await pageFetchJson(args.partition, url, args.planKey, plan, context, args.trackWindow);
+            await reportPlanSummary(args.planKey, args.partition, attempt, result, adapter, plan);
+            return result;
+          } else {
+            result = {
+              ok: false,
+              status: 0,
+              data: null,
+              error: `sign failed${sign.reason ? `: ${sign.reason}` : ""}`,
+              source: args.planKey,
+              url,
+              nonRetryable: true,
+              signFailureReason: sign.reason
+            };
+            await reportPlanSummary(args.planKey, args.partition, attempt, result, adapter, plan);
+            return result;
+          }
+        }
+        const headers = await buildRequestHeaders(adapter, args.partition, requestUrl, plan, args.headers, context);
+        result = await requestJson(args.partition, requestUrl, headers, args.planKey, plan, context);
+        if (headers.cookie) {
+          result.requestCookieState = summarizeCookieHeader(headers.cookie);
         }
       }
-      const headers = await buildRequestHeaders(adapter, args.partition, requestUrl, plan, args.headers, context);
-      result = await requestJson(args.partition, requestUrl, headers, args.planKey, plan, context);
-      if (headers.cookie) {
-        result.requestCookieState = summarizeCookieHeader(headers.cookie);
-      }
+      await reportPlanSummary(args.planKey, args.partition, attempt, result, adapter, plan);
+      return result;
+    } finally {
+      if (mutation) args.endMutation?.();
     }
-    await reportPlanSummary(args.planKey, args.partition, attempt, result, adapter, plan);
-    return result;
   };
 
   let response = await runRequest();
@@ -710,7 +725,7 @@ async function requestJson(partition: string, url: string, headers: Record<strin
     headers,
     body,
     responseType,
-    timeoutMs: 15000
+    timeoutMs: clampRequestTimeoutMs(plan.timeoutMs)
   });
   const result = response as { ok?: boolean; status?: number; headers?: Record<string, unknown>; data?: unknown; error?: { message?: string } | string };
   return {
@@ -729,7 +744,7 @@ async function pageFetchJson(partition: string, url: string, source: string, pla
   const native = requireChihuNative();
   const method = String(plan.method || "GET").toUpperCase() as "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   const body = method === "GET" ? undefined : interpolateDeep(plan.body, context);
-  const timeoutMs = Math.max(1000, Number(plan.pageFetchTimeoutMs || plan.timeoutMs || 15000));
+  const timeoutMs = clampRequestTimeoutMs(plan.pageFetchTimeoutMs ?? plan.timeoutMs);
   const headers = {
     accept: "application/json, text/plain, */*",
     ...stringRecord(plan.headers)

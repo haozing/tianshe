@@ -2,12 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   AlertCircle,
-  BarChart3,
-  Bookmark,
-  Building2,
   ChevronRight,
   CheckCircle2,
-  CircleDollarSign,
   Crown,
   CreditCard,
   Download,
@@ -19,13 +15,8 @@ import {
   Loader2,
   RefreshCcw,
   Settings,
-  ShieldAlert,
-  ShoppingBag,
-  Target,
-  Trash2,
   X
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import type { LicenseStatus } from "../bridge/license";
 import type { WorkspaceState } from "../types";
 import { cn, isActiveRoute } from "../lib/utils";
@@ -34,49 +25,35 @@ import { closeMainWindow, getDesktopVersionData, minimizeMainWindow, reloadMainW
 import { addPreferencesListener, getPreferences, hasRecentReleaseRedirect, markReleaseRedirect, releaseChannelLabel, releaseChannelToUpdateChannel, savePreferences } from "../bridge/storage";
 import type { ChihuPreferences, ReleaseChannel } from "../bridge/storage";
 import type { NativeUpdateVersionData } from "../native/types";
-
-type SecondaryRoute = {
-  label: string;
-  route: string;
-  Icon: LucideIcon;
-};
+import type { ResolvedFeatureRoute } from "../featureRoutes";
 
 type TopRoute = {
   label: string;
   route: string;
   href: string;
-  subRoutes: SecondaryRoute[];
+  topOrder: number;
+  subRoutes: ResolvedFeatureRoute[];
 };
 
-const storeSubRoutes: SecondaryRoute[] = [
-  { label: "店铺管理", route: "/stores", Icon: Building2 },
-  { label: "经营数据", route: "/stores/business-data", Icon: BarChart3 },
-  { label: "资金数据", route: "/stores/funds", Icon: CircleDollarSign }
-];
+function buildTopRoutes(routes: ResolvedFeatureRoute[]): TopRoute[] {
+  const groups = new Map<string, TopRoute>();
+  for (const feature of routes) {
+    const current = groups.get(feature.parentRoute);
+    if (current) current.subRoutes.push(feature);
+    else groups.set(feature.parentRoute, {
+      label: feature.navigation.topLabel,
+      route: feature.parentRoute,
+      href: feature.route,
+      topOrder: feature.navigation.topOrder,
+      subRoutes: [feature]
+    });
+  }
+  return Array.from(groups.values())
+    .sort((left, right) => left.topOrder - right.topOrder)
+    .map((group) => ({ ...group, subRoutes: group.subRoutes.sort((left, right) => left.navigation.order - right.navigation.order) }));
+}
 
-const warningSubRoutes: SecondaryRoute[] = [
-  { label: "违规管理", route: "/warnings", Icon: ShieldAlert }
-];
-
-const opportunitySubRoutes: SecondaryRoute[] = [
-  { label: "商机提报", route: "/opportunities/product-prematch", Icon: Target },
-  { label: "自动收藏商机", route: "/opportunities/favorites", Icon: Bookmark },
-  { label: "清理失效收藏", route: "/opportunities/favorites/cleanup", Icon: Trash2 }
-];
-
-const productSubRoutes: SecondaryRoute[] = [
-  { label: "清理滞销", route: "/products/slow-moving", Icon: ShoppingBag },
-  { label: "批量删除", route: "/products/bulk-delete", Icon: Trash2 }
-];
-
-const topRoutes: TopRoute[] = [
-  { label: "店铺管理", route: "/stores", href: "/stores", subRoutes: storeSubRoutes },
-  { label: "预警/违规", route: "/warnings", href: "/warnings", subRoutes: warningSubRoutes },
-  { label: "商机中心", route: "/opportunities", href: "/opportunities/product-prematch", subRoutes: opportunitySubRoutes },
-  { label: "商品管理", route: "/products", href: "/products/slow-moving", subRoutes: productSubRoutes }
-];
-
-function activeSecondaryRoute(route: string, routes: SecondaryRoute[]) {
+function activeSecondaryRoute(route: string, routes: ResolvedFeatureRoute[]) {
   const exact = routes.find((item) => route === item.route)?.route;
   if (exact) {
     return exact;
@@ -968,17 +945,20 @@ function ProfileMenuV2({
 
 export function ShellHeader({
   route,
+  routes,
   workspace,
   licenseStatus,
   onOpenLicenseDialog
 }: {
   route: string;
+  routes: ResolvedFeatureRoute[];
   workspace: WorkspaceState;
   licenseStatus?: LicenseStatus;
   onOpenLicenseDialog?: () => void;
 }) {
+  const topRoutes = useMemo(() => buildTopRoutes(routes), [routes]);
   const activeTopRoute = topRoutes.find((item) => isActiveRoute(route, item.route)) || topRoutes[0];
-  const secondaryRoutes = activeTopRoute.subRoutes;
+  const secondaryRoutes = activeTopRoute?.subRoutes || [];
   const subActive = activeSecondaryRoute(route, secondaryRoutes);
 
   return (
@@ -1011,13 +991,15 @@ export function ShellHeader({
           })}
         </nav>
 
-        <div className="app-no-drag flex shrink-0 items-center gap-2.5 px-4 text-[13px] text-[#475467]">
-          <ProfileMenuV2 workspace={workspace} licenseStatus={licenseStatus} onOpenLicenseDialog={onOpenLicenseDialog} />
-          <button className="inline-flex h-7 items-center gap-1.5 px-2 text-[12px] font-bold text-[#a45b00] transition-colors hover:text-[#8a4b00]" type="button" onClick={onOpenLicenseDialog}>
-            <Crown className="size-[14px]" strokeWidth={2} />
-            <span>卡密续费</span>
-          </button>
-          <span className="h-5 w-px bg-[#e5ebf2]" />
+        <div className="app-no-drag flex shrink-0 items-center gap-2.5 px-4 text-[13px] text-[#475467] max-[860px]:gap-1 max-[860px]:px-2">
+          <div className="contents max-[860px]:hidden">
+            <ProfileMenuV2 workspace={workspace} licenseStatus={licenseStatus} onOpenLicenseDialog={onOpenLicenseDialog} />
+            <button className="inline-flex h-7 items-center gap-1.5 px-2 text-[12px] font-bold text-[#a45b00] transition-colors hover:text-[#8a4b00]" type="button" onClick={onOpenLicenseDialog}>
+              <Crown className="size-[14px]" strokeWidth={2} />
+              <span>卡密续费</span>
+            </button>
+            <span className="h-5 w-px bg-[#e5ebf2]" />
+          </div>
           <button className="grid size-7 place-items-center rounded-md text-[#667085] transition-colors hover:bg-brand-foxSoft hover:text-brand-navy" type="button" aria-label="最小化" onClick={() => void minimizeMainWindow()}>
             <Minus className="size-[15px]" strokeWidth={2} />
           </button>
@@ -1034,7 +1016,7 @@ export function ShellHeader({
         <nav className="scrollbar-none flex min-w-0 flex-1 items-center gap-3 overflow-x-auto px-5" aria-label="子路由">
           {secondaryRoutes.map((item) => {
             const active = subActive === item.route;
-            const Icon = item.Icon;
+            const Icon = item.navigation.icon;
             return (
               <a
                 className={cn(
@@ -1042,10 +1024,10 @@ export function ShellHeader({
                   active ? "text-brand-navy" : "text-[#475467]"
                 )}
                 href={"#" + item.route}
-                key={item.label}
+                key={item.navigation.label}
               >
                 <Icon className="size-[16px]" strokeWidth={2} />
-                <span>{item.label}</span>
+                <span>{item.navigation.label}</span>
               </a>
             );
           })}

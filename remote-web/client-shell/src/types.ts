@@ -68,6 +68,13 @@ export interface DoudianAdapterConfig {
     scriptKeys?: string[];
     requestPlanSteps?: string[];
     unknownActionPolicy?: "fail" | "skip" | "remote-fallback";
+    marketing?: {
+      contractVersion: string;
+      features: Record<MarketingFeature, {
+        read: boolean;
+        writeActions: string[];
+      }>;
+    };
   };
   operationPlans?: Record<string, {
     version?: string;
@@ -187,11 +194,16 @@ export interface DoudianAdapterStatus {
     scriptKeys?: string[];
     requestPlanSteps?: string[];
     unknownActionPolicy?: "fail" | "skip" | "remote-fallback";
+    marketing?: DoudianAdapterConfig["capabilities"] extends infer T
+      ? T extends { marketing?: infer M } ? M : never
+      : never;
   };
   loadedAt: string;
   lastGoodAt: string;
   lastFailureReason: string;
 }
+
+export type MarketingFeature = "limited_time" | "new_user_bonus" | "general_coupon";
 
 export interface DoudianAdapterScripts {
   version: string;
@@ -1310,6 +1322,22 @@ declare global {
         ok: boolean;
         coverageKey: string;
         status: string;
+      }>;
+    };
+    chihuMarketingReadRuntime?: {
+      probe: () => Promise<{
+        ok: boolean;
+        storeCount: number;
+        writeActionsEnabled: boolean;
+        checks: Array<{
+          feature: string;
+          action: string;
+          ok: boolean;
+          status: string;
+          count: number;
+          storesTried?: number;
+          skipped?: boolean;
+        }>;
       }>;
     };
     client?: Record<string, unknown> & {

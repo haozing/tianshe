@@ -92,6 +92,8 @@ function stateFilePath() {
 }
 
 let stateCache = null;
+let stateWriteQueue = Promise.resolve();
+let licenseRefreshPromise = null;
 
 async function readState() {
   if (stateCache) return stateCache;
@@ -106,20 +108,25 @@ async function readState() {
 }
 
 async function writeState(patch) {
-  const current = await readState();
-  const next = {
-    ...current,
-    ...patch,
-    stateVersion: STATE_VERSION,
-    updatedAt: new Date().toISOString()
+  const write = async () => {
+    const current = await readState();
+    const next = {
+      ...current,
+      ...patch,
+      stateVersion: STATE_VERSION,
+      updatedAt: new Date().toISOString()
+    };
+    const filePath = stateFilePath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const tempPath = `${filePath}.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+    await fs.writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+    await fs.rename(tempPath, filePath);
+    stateCache = next;
+    return next;
   };
-  const filePath = stateFilePath();
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-  await fs.rename(tempPath, filePath);
-  stateCache = next;
-  return next;
+  const pending = stateWriteQueue.then(write, write);
+  stateWriteQueue = pending.then(() => undefined, () => undefined);
+  return pending;
 }
 
 async function clearLocalLicenseState() {
@@ -548,7 +555,7 @@ async function ensureDeviceSynced(options = {}) {
   };
 }
 
-async function refreshLicenseStatus(args = {}) {
+async function refreshLicenseStatusInternal(args = {}) {
   const config = getLicenseConfig();
   if (config.bypass) return getStoredLicenseStatus({ status: "bypass" });
   const device = await ensureDeviceSynced({ force: true });
@@ -566,6 +573,17 @@ async function refreshLicenseStatus(args = {}) {
   });
   cacheLicenseForIpc(status);
   return status;
+}
+
+async function refreshLicenseStatus(args = {}) {
+  if (licenseRefreshPromise) return licenseRefreshPromise;
+  const pending = refreshLicenseStatusInternal(args);
+  licenseRefreshPromise = pending;
+  try {
+    return await pending;
+  } finally {
+    if (licenseRefreshPromise === pending) licenseRefreshPromise = null;
+  }
 }
 
 async function checkLicense(args = {}) {

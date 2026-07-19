@@ -51,7 +51,7 @@ import {
   runDoudianStoreTask,
   cancelDoudianTask,
   renameStoreGroup,
-  restoreDoudianTasks,
+  resubscribeDoudianTasks,
   runProductCatalogSyncTask,
   updateStoreGroup,
   type DoudianOperationRecord
@@ -458,7 +458,7 @@ export async function restoreDoudianStaleGoodsScan(runId?: string) {
 }
 
 export async function restoreDoudianStaleGoodsOperations() {
-  return (await restoreDoudianTasks()).filter((record) => record.taskType === "staleGoodsScan" || record.taskType === "staleGoodsExecute");
+  return (await resubscribeDoudianTasks()).filter((record) => record.taskType === "staleGoodsScan" || record.taskType === "staleGoodsExecute");
 }
 
 export async function fetchDoudianBulkDeleteProducts(args: {
@@ -723,7 +723,7 @@ export async function fetchDoudianOpportunityPipelineSummary(args: { runId?: str
 }
 
 export async function restoreDoudianOpportunityPipelineTask(): Promise<DoudianOperationRecord | null> {
-  const records = await restoreDoudianTasks();
+  const records = await resubscribeDoudianTasks();
   return records
     .filter((record) => record.taskType === "opportunityPipelineSubmit")
     .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;

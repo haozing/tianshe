@@ -6,7 +6,7 @@ import {
   addDoudianProgressListener,
   cancelDoudianTask,
   runDoudianRepositorySelfCheck,
-  restoreDoudianTasks,
+  resubscribeDoudianTasks,
   startMockLongDoudianTask,
   type DoudianOperationRecord,
   type DoudianProgressDetail
@@ -49,7 +49,7 @@ export function DiagnosticsPage({ state }: { state: ShellState }) {
 
   useEffect(() => {
     let cancelled = false;
-    restoreDoudianTasks().then((records) => {
+    resubscribeDoudianTasks().then((records) => {
       if (cancelled) return;
       setActiveCount(records.length);
       setOperation(records[0] || null);

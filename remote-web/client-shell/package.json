@@ -6,13 +6,15 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "build:release": "npm test && npm run typecheck && npm run build && npm run obfuscate:release && npm run release:sync",
+    "build:release": "npm test && npm run typecheck && npm run test:marketing-fixtures && npm run build && npm run obfuscate:release && npm run release:sync",
     "obfuscate:release": "node ../scripts/obfuscate-release.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "release:sync": "node ../scripts/update-release-manifest.mjs",
     "test": "node --experimental-strip-types --test test/*.test.mjs",
     "test:store-state": "node --experimental-strip-types --test test/opportunity-store-state.test.mjs",
     "test:business-data-contract": "node --test test/business-data-xzb-contract.test.mjs",
+    "test:marketing-fixtures": "node ../scripts/audit-doudian-marketing-fixtures.mjs",
+    "sync:marketing-read-pilot": "node ../scripts/sync-doudian-marketing-read-pilot.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

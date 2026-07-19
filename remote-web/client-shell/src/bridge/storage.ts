@@ -16,6 +16,10 @@ export const STORAGE_KEY_VIOLATIONS_COLUMNS = "chihu20_violations_columns";
 export const STORAGE_KEY_STALE_GOODS_COLUMNS = "chihu20_stale_goods_columns";
 export const STORAGE_KEY_RELEASE_REDIRECTS = "chihu20_release_redirects";
 export const STORAGE_KEY_WORKSPACE = "chihu20_workspace";
+export const STORAGE_KEY_MARKETING_LIMITED_TIME_DRAFT = "chihu20_marketing_limited_time_draft";
+export const STORAGE_KEY_MARKETING_NEW_USER_BONUS_DRAFT = "chihu20_marketing_new_user_bonus_draft";
+export const STORAGE_KEY_MARKETING_COUPON_DRAFT = "chihu20_marketing_coupon_draft";
+export const STORAGE_KEY_MARKETING_TABLE_PREFERENCES = "chihu20_marketing_table_preferences";
 
 export const STORAGE_KEYS = [
   STORAGE_KEY_META,
@@ -33,7 +37,11 @@ export const STORAGE_KEYS = [
   STORAGE_KEY_VIOLATIONS_COLUMNS,
   STORAGE_KEY_STALE_GOODS_COLUMNS,
   STORAGE_KEY_RELEASE_REDIRECTS,
-  STORAGE_KEY_WORKSPACE
+  STORAGE_KEY_WORKSPACE,
+  STORAGE_KEY_MARKETING_LIMITED_TIME_DRAFT,
+  STORAGE_KEY_MARKETING_NEW_USER_BONUS_DRAFT,
+  STORAGE_KEY_MARKETING_COUPON_DRAFT,
+  STORAGE_KEY_MARKETING_TABLE_PREFERENCES
 ] as const;
 
 export const STORAGE_HEALTH_KEYS = [

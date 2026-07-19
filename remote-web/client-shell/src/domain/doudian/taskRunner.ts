@@ -15,10 +15,16 @@ import { fetchBusinessData } from "./businessData";
 import { fetchFundsData } from "./fundsData";
 import { fetchViolationsData } from "./violationsData";
 import { fetchStaleGoodsCleanup } from "./staleGoods";
+import { runMarketingTask } from "./marketing";
+import { isDoudianMutationTask, mutationCancellationOutcome } from "./taskSafety";
 
 interface RunningTask {
   cancelled: boolean;
+  mutation: boolean;
+  inFlightMutations: number;
+  mutationStarted: boolean;
   timer?: number;
+  heartbeatTimer?: number;
   cleanup?: () => Promise<void> | void;
   cancelCleanup?: () => Promise<void> | void;
   windows?: number[];
@@ -75,9 +81,20 @@ function startTask(channel: BroadcastChannel, message: Extract<DoudianTaskMessag
   return true;
 }
 
+function startHeartbeat(channel: BroadcastChannel, operationId: string, state: RunningTask) {
+  const send = () => post(channel, { type: "task:heartbeat", operationId, inFlightMutations: state.inFlightMutations });
+  send();
+  state.heartbeatTimer = window.setInterval(send, 2000);
+}
+
+function stopHeartbeat(state: RunningTask) {
+  if (state.heartbeatTimer) window.clearInterval(state.heartbeatTimer);
+}
+
 function runMockLongTask(channel: BroadcastChannel, operationId: string, task: DoudianTaskRequest) {
-  const state: RunningTask = { cancelled: false };
+  const state: RunningTask = { cancelled: false, mutation: false, inFlightMutations: 0, mutationStarted: false };
   runningTasks.set(operationId, state);
+  startHeartbeat(channel, operationId, state);
   const durationMs = Math.max(500, Number(task.durationMs || 2500));
   const stepMs = Math.max(100, Number(task.stepMs || 250));
   const startedAt = Date.now();
@@ -85,6 +102,7 @@ function runMockLongTask(channel: BroadcastChannel, operationId: string, task: D
   const tick = () => {
     if (state.cancelled) {
       post(channel, { type: "task:result", operationId, resultSummary: "cancelled" });
+      stopHeartbeat(state);
       runningTasks.delete(operationId);
       return;
     }
@@ -100,6 +118,7 @@ function runMockLongTask(channel: BroadcastChannel, operationId: string, task: D
 
     if (progress >= 100) {
       post(channel, { type: "task:result", operationId, resultSummary: "mock task completed" });
+      stopHeartbeat(state);
       runningTasks.delete(operationId);
       return;
     }
@@ -115,6 +134,7 @@ async function cancelTask(operationId: string) {
   if (!task) return;
   task.cancelled = true;
   if (task.timer) window.clearTimeout(task.timer);
+  if (task.mutation) return;
   try {
     await task.cancelCleanup?.();
   } catch {
@@ -128,55 +148,63 @@ async function cancelTask(operationId: string) {
 }
 
 async function runDomainTask(channel: BroadcastChannel, operationId: string, task: DoudianTaskRequest) {
-  const state: RunningTask = { cancelled: false, windows: [] };
+  const state: RunningTask = {
+    cancelled: false,
+    mutation: isDoudianMutationTask(task),
+    inFlightMutations: 0,
+    mutationStarted: false,
+    windows: []
+  };
   state.cleanup = async () => {
     const native = window.chihuNative;
     if (!native?.windows.destroy) return;
     await Promise.all((state.windows || []).map((winId) => native.windows.destroy({ winId }).catch(() => null)));
   };
   const payload = {
+    operationId,
     ...(task.payload || {}),
     isCancelled: () => state.cancelled,
+    beginMutation: () => {
+      state.mutationStarted = true;
+      state.inFlightMutations += 1;
+    },
+    endMutation: () => {
+      state.inFlightMutations = Math.max(0, state.inFlightMutations - 1);
+    },
     trackWindow: (winId: number) => {
       if (Number.isInteger(winId)) state.windows?.push(winId);
     }
   };
   runningTasks.set(operationId, state);
+  startHeartbeat(channel, operationId, state);
   try {
     let result: unknown = null;
     if (task.taskType === "fetchDoudianStores") {
       result = await runFetchDoudianStoresTask({
-        operationId,
         ...payload
       } as unknown as Parameters<typeof runFetchDoudianStoresTask>[0]);
     } else if (task.taskType === "refreshDoudianStoreStatus") {
       result = await runRefreshDoudianStoreStatusTask({
-        operationId,
         ...payload
       } as unknown as Parameters<typeof runRefreshDoudianStoreStatusTask>[0]);
     } else if (task.taskType === "syncProductCatalog") {
       result = await runProductCatalogSyncTask({
-        operationId,
         ...payload
       } as unknown as Parameters<typeof runProductCatalogSyncTask>[0]);
     } else if (task.taskType === "businessData") {
       result = await fetchBusinessData({
-        operationId,
         ...payload
       } as unknown as Parameters<typeof fetchBusinessData>[0]);
     } else if (task.taskType === "fundsData") {
       result = await fetchFundsData({
-        operationId,
         ...payload
       } as unknown as Parameters<typeof fetchFundsData>[0]);
     } else if (task.taskType === "violationsData") {
       result = await fetchViolationsData({
-        operationId,
         ...payload
       } as unknown as Parameters<typeof fetchViolationsData>[0]);
     } else if (task.taskType === "staleGoodsScan" || task.taskType === "staleGoodsExecute") {
       result = await fetchStaleGoodsCleanup({
-        operationId,
         ...payload
       } as unknown as Parameters<typeof fetchStaleGoodsCleanup>[0]);
     } else if (task.taskType === "opportunityPipelineSubmit") {
@@ -187,30 +215,38 @@ async function runDomainTask(channel: BroadcastChannel, operationId: string, tas
         });
       };
       result = await runOpportunityPipelineSubmitTask({
-        operationId,
         ...payload
       } as unknown as Parameters<typeof runOpportunityPipelineSubmitTask>[0]);
     } else if (task.taskType === "opportunityFavoritesClearInvalid") {
       result = await clearInvalidOpportunityFavorites({
-        operationId,
         ...payload
       } as unknown as Parameters<typeof clearInvalidOpportunityFavorites>[0]);
     } else if (task.taskType === "opportunityAutoFavorites") {
       result = await runOpportunityAutoFavorites({
-        operationId,
         ...payload
       } as unknown as Parameters<typeof runOpportunityAutoFavorites>[0]);
+    } else if (task.taskType === "marketingTask") {
+      result = await runMarketingTask(payload as unknown as Parameters<typeof runMarketingTask>[0]);
     } else {
       throw new Error(`unsupported task type: ${task.taskType}`);
     }
-    if (state.cancelled) {
+    if (state.cancelled && !state.mutation) {
       post(channel, { type: "task:result", operationId, resultSummary: "cancelled", result: { ok: false, status: "cancelled", message: "已取消任务" } });
+    } else if (state.cancelled) {
+      const outcome = mutationCancellationOutcome({ mutation: true, mutationStarted: state.mutationStarted, result });
+      post(channel, {
+        type: "task:result",
+        operationId,
+        resultSummary: outcome.resultSummary,
+        result: outcome.result
+      });
     } else {
       post(channel, { type: "task:result", operationId, resultSummary: "completed", result: channelResult(task, result) });
     }
   } catch (error) {
     post(channel, { type: "task:error", operationId, error: error instanceof Error ? error.message : String(error) });
   } finally {
+    stopHeartbeat(state);
     await state.cleanup?.();
     runningTasks.delete(operationId);
   }
@@ -234,7 +270,10 @@ export function installDoudianTaskRunner() {
   runnerWindow.__chihuDoudianTaskCancel = async (operationId) => {
     if (!isTargetTask(operationId)) return false;
     await cancelTask(operationId);
+    const task = runningTasks.get(operationId);
+    if (task?.mutation) return true;
     post(channel, { type: "task:result", operationId, resultSummary: "cancelled", result: { ok: false, status: "cancelled", message: "已取消任务" } });
+    if (task) stopHeartbeat(task);
     runningTasks.delete(operationId);
     return true;
   };

@@ -109,6 +109,7 @@ export type NativeDataRecordStoreName =
   | "opportunity_pipeline_candidates_v2"
   | "opportunity_pipeline_submit_tasks_v2"
   | "opportunity_pipeline_operation_events_v2"
+  | "remote_feature_records_v1"
   | "operations"
   | "runtime_meta";
 
@@ -155,6 +156,17 @@ export interface NativeDataOperationCleanupResult {
   cutoff: string;
   retentionDays: number;
   maxTerminalRecords: number;
+}
+
+export interface NativeDataUpdatedCursor {
+  updatedAt: string;
+  recordId: string;
+}
+
+export interface NativeDataUpdatedCursorPage<T> {
+  items: T[];
+  nextCursor: NativeDataUpdatedCursor | null;
+  hasMore: boolean;
 }
 
 export interface StoreIdentityArgs {
@@ -517,6 +529,7 @@ export interface NativeDataApi {
     get: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; id: string }) => Promise<T | null>;
     getMany?: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; ids: string[] }) => Promise<T[]>;
     list: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; cursor?: string; limit?: number }) => Promise<CursorPage<T>>;
+    queryByPrefix?: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; recordIdPrefix: string; order: "updated_desc"; cursor?: NativeDataUpdatedCursor; limit?: number }) => Promise<NativeDataUpdatedCursorPage<T>>;
     latest?: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName }) => Promise<T | null>;
     queryOperations?: <T extends Record<string, unknown>>(args: { statuses?: string[]; taskType?: string; updatedAfter?: string; limit?: number }) => Promise<T[]>;
     cleanupOperations?: (args: { retentionDays?: number; maxTerminalRecords?: number }) => Promise<NativeDataOperationCleanupResult>;

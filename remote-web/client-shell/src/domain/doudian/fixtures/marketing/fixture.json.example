@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "feature": "general_coupon",
+  "action": "list",
+  "phase": "read",
+  "scenario": "success",
+  "capturedAt": "2026-07-18T00:00:00.000Z",
+  "redaction": {
+    "enabled": true,
+    "shopIdentityReplaced": true,
+    "requestValuesRemoved": true,
+    "sensitiveHeadersRemoved": true
+  },
+  "request": {
+    "method": "POST",
+    "path": "/redacted/marketing/list",
+    "queryKeys": ["appid"],
+    "bodyKeys": ["page", "page_size"],
+    "refererPath": "/ffa/marketing",
+    "signStrategy": "mstoken-myargs"
+  },
+  "response": {
+    "httpStatus": 200,
+    "businessCode": "0",
+    "body": {
+      "code": 0,
+      "data": {
+        "list": [
+          {
+            "id": "90071992547409930",
+            "status": "active",
+            "name": "redacted-entity"
+          }
+        ]
+      }
+    }
+  },
+  "expected": {
+    "entityIds": ["90071992547409930"]
+  }
+}

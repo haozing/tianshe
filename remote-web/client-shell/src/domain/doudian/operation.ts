@@ -1,6 +1,6 @@
 import { repositoryAcquireOperation, repositoryCleanupOperations, repositoryGet, repositoryPut, repositoryQueryOperations } from "./repository";
 
-export type DoudianOperationStatus = "created" | "running" | "succeeded" | "partial" | "failed" | "cancelled";
+export type DoudianOperationStatus = "created" | "running" | "cancelling" | "interrupted" | "reconciling" | "succeeded" | "partial" | "failed" | "cancelled";
 
 export interface DoudianOperationRecord {
   id: string;
@@ -16,6 +16,10 @@ export interface DoudianOperationRecord {
   adapterVersion?: string;
   ruleVersion?: string;
   runnerWinId?: number;
+  ownerSessionId?: string;
+  heartbeatAt?: string;
+  cancelRequestedAt?: string;
+  adapterSnapshotHash?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -35,6 +39,8 @@ export function createOperation(input: {
   adapterVersion?: string;
   ruleVersion?: string;
   metadata?: Record<string, unknown>;
+  ownerSessionId?: string;
+  adapterSnapshotHash?: string;
 }): DoudianOperationRecord {
   const timestamp = now();
   return {
@@ -47,6 +53,8 @@ export function createOperation(input: {
     progress: 0,
     adapterVersion: input.adapterVersion || "",
     ruleVersion: input.ruleVersion || "",
+    ownerSessionId: input.ownerSessionId || "",
+    adapterSnapshotHash: input.adapterSnapshotHash || "",
     metadata: input.metadata || {}
   };
 }
@@ -88,7 +96,7 @@ export async function updateOperation(operationId: string, patch: Partial<Doudia
 export async function listActiveOperations(): Promise<DoudianOperationRecord[]> {
   await cleanupOperationHistory();
   return repositoryQueryOperations<DoudianOperationRecord>({
-    statuses: ["created", "running"],
+    statuses: ["created", "running", "cancelling", "interrupted", "reconciling"],
     limit: 1000
   });
 }
@@ -108,11 +116,27 @@ export async function cleanupOperationHistory(force = false) {
 }
 
 export async function markOperationRunning(operationId: string, runnerWinId?: number) {
-  return updateOperation(operationId, { status: "running", runnerWinId });
+  return updateOperation(operationId, { status: "running", runnerWinId, heartbeatAt: now() });
+}
+
+export async function markOperationCancelling(operationId: string) {
+  return updateOperation(operationId, { status: "cancelling", cancelRequestedAt: now() });
+}
+
+export async function markOperationInterrupted(operationId: string, error = "runner interrupted") {
+  return updateOperation(operationId, { status: "interrupted", error, runnerWinId: undefined });
+}
+
+export async function markOperationReconciling(operationId: string, resultSummary = "reconciliation required") {
+  return updateOperation(operationId, { status: "reconciling", resultSummary, runnerWinId: undefined });
+}
+
+export async function markOperationHeartbeat(operationId: string) {
+  return updateOperation(operationId, { heartbeatAt: now() });
 }
 
 export async function markOperationProgress(operationId: string, progress: number) {
-  return updateOperation(operationId, { status: "running", progress });
+  return updateOperation(operationId, { progress, heartbeatAt: now() });
 }
 
 export async function markOperationResult(operationId: string, resultSummary = "completed", status: "succeeded" | "partial" | "failed" = "succeeded") {

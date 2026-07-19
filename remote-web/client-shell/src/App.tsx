@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { defaultConfig, loadConfig, loadManifest, RELEASE_MANIFEST_URL } from "./bridge/config";
-import { runBridgeSelfCheck } from "./bridge/client";
+import { listDoudianStores, runBridgeSelfCheck } from "./bridge/client";
 import { getDoudianAdapterStatus, loadDoudianAdapterPayload } from "./bridge/doudianAdapter";
 import {
   checkLicense,
@@ -19,7 +19,7 @@ import {
   addDoudianProgressListener,
   cancelDoudianTask,
   getDoudianTaskStatus,
-  restoreDoudianTasks,
+  resubscribeDoudianTasks,
   runDoudianBulkDeleteSelfCheck,
   runDoudianBusinessDataSelfCheck,
   runDoudianFileImportSelfCheck,
@@ -32,26 +32,22 @@ import {
   runDoudianStaleGoodsScanSelfCheck,
   runDoudianViolationsDataSelfCheck,
   runDoudianRepositorySelfCheck,
+  cleanupMarketingRecords,
+  marketingWriteEnabled,
+  marketingAdapterSnapshotHash,
+  startMarketingScheduleRunner,
+  runDoudianStoreTask,
+  type MarketingTaskResult,
   startMockLongDoudianTask,
   type DoudianProgressDetail
 } from "./domain/doudian";
 import { DiagnosticsPage } from "./components/DiagnosticsPage";
-import { BusinessDataPage } from "./components/BusinessDataPage";
-import { BulkDeletePage } from "./components/BulkDeletePage";
-import { FundsDataPage } from "./components/FundsDataPage";
 import { HomePage } from "./components/HomePage";
 import { LicenseGateScreen, LicenseRenewDialog } from "./components/LicenseGate";
-import { ModulePage } from "./components/ModulePage";
-import { OpportunityProductPrematchPage } from "./components/OpportunityProductPrematchPage";
-import { OpportunityFavoritesPage } from "./components/OpportunityFavoritesPage";
-import { OpportunityAutoFavoritesPage } from "./components/OpportunityAutoFavoritesPage";
 import { ShellHeader } from "./components/ShellHeader";
-import { SlowMovingCleanupPage } from "./components/SlowMovingCleanupPage";
-import { StoreManagementPage } from "./components/StoreManagementPage";
-import { ViolationsPage } from "./components/ViolationsPage";
-import { allModules } from "./data/modules";
+import { findFeatureRoute, firstAvailableRoute, resolveFeatureRoutes } from "./featureRoutes";
 import { currentRoute } from "./lib/utils";
-import type { DiagnosticEvent, ShellState } from "./types";
+import type { DiagnosticEvent, DoudianAdapterPayload, ShellState } from "./types";
 
 const initialBridge = {
   ok: false,
@@ -100,8 +96,8 @@ export function App() {
   const [licenseRedeeming, setLicenseRedeeming] = useState(false);
   const [licenseMessage, setLicenseMessage] = useState("");
   const [licenseDialogOpen, setLicenseDialogOpen] = useState(false);
-
-  const moduleMap = useMemo(() => new Map(allModules.map((item) => [item.route, item])), []);
+  const [adapterPayload, setAdapterPayload] = useState<DoudianAdapterPayload | null>(null);
+  const [routeGuardMessage, setRouteGuardMessage] = useState("");
 
   useEffect(() => {
     const onHashChange = () => {
@@ -112,6 +108,32 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const enabled = !!adapterPayload && state.config.features.marketingMenu?.enabled === true && state.config.features.marketingLimitedTime?.enabled === true && marketingWriteEnabled(state.config, adapterPayload.adapter, "limited_time", "tool_renew");
+    if (!enabled || !adapterPayload) return startMarketingScheduleRunner({ enabled: false, execute: async () => ({ ok: false }) });
+    return startMarketingScheduleRunner({
+      enabled: true,
+      execute: async (schedule) => {
+        if (!schedule.adapterSnapshotHash || schedule.adapterSnapshotHash !== marketingAdapterSnapshotHash(adapterPayload)) return { ok: false };
+        const result = await runDoudianStoreTask({
+          taskType: "marketingTask",
+          adapterVersion: adapterPayload.adapter.version,
+          ruleVersion: adapterPayload.scripts?.version || "",
+          metadata: { mutation: true, replaceActive: false, adapterSnapshotHash: marketingAdapterSnapshotHash(adapterPayload), dedupeKey: `${schedule.id}:${schedule.nextRunAt}` },
+          payload: {
+            feature: schedule.feature,
+            action: "tool_renew",
+            stores: [{ shopId: schedule.shopId, shopName: schedule.shopId, partition: schedule.partition, tenantId: schedule.tenantId, storeGeneration: schedule.storeGeneration }],
+            context: { entityIds: [schedule.entityId], intervalDays: Math.max(1, Math.round(schedule.intervalMs / 86_400_000)) },
+            config: state.config,
+            doudianAdapter: adapterPayload
+          }
+        }, 900_000) as unknown as MarketingTaskResult;
+        return { ok: result.status === "ok", operationId: result.operationId };
+      }
+    });
+  }, [adapterPayload, state.config]);
+
+  useEffect(() => {
     const progressEvents: DoudianProgressDetail[] = [];
     const remove = addDoudianProgressListener((progressEvent) => {
       progressEvents.push(progressEvent.detail);
@@ -120,7 +142,7 @@ export function App() {
       startMock: startMockLongDoudianTask,
       cancel: cancelDoudianTask,
       getStatus: getDoudianTaskStatus,
-      restore: restoreDoudianTasks,
+      restore: resubscribeDoudianTasks,
       repositorySelfCheck: runDoudianRepositorySelfCheck,
       snapshot: () => ({ progressEvents: [...progressEvents] })
     };
@@ -153,10 +175,94 @@ export function App() {
         doudianAdapter: await loadDoudianAdapterPayload({ force: true })
       })
     };
+    window.chihuMarketingReadRuntime = {
+      probe: async () => {
+        const [{ config }, doudianAdapter, storeResult] = await Promise.all([
+          loadConfig(),
+          loadDoudianAdapterPayload({ force: true }),
+          listDoudianStores()
+        ]);
+        const stores = (storeResult.stores || []).filter((item) => item.status === "online" && item.partition).slice(0, 5);
+        if (!stores.length) throw new Error("no online Doudian store is available for the marketing read probe");
+        const checks: Array<{ feature: string; action: string; ok: boolean; status: string; count: number; storesTried?: number; skipped?: boolean; diagnostic?: string }> = [];
+        const diagnostic = (result: MarketingTaskResult) => String(result.stores.find((item) => !item.ok)?.message || "")
+          .replace(/\b\d{6,}\b/g, "[id]")
+          .slice(0, 160);
+        const runRead = async (feature: "limited_time" | "new_user_bonus" | "general_coupon", action: "load_products" | "list" | "detail", store: typeof stores[number], context: Record<string, unknown> = {}) => runDoudianStoreTask({
+          taskType: "marketingTask",
+          adapterVersion: doudianAdapter.adapter.version,
+          ruleVersion: doudianAdapter.scripts?.version || "",
+          metadata: {
+            mutation: false,
+            replaceActive: true,
+            adapterSnapshotHash: marketingAdapterSnapshotHash(doudianAdapter),
+            dedupeKey: `marketing-read-probe:${feature}:${action}:${Date.now()}`
+          },
+          payload: {
+            feature,
+            action,
+            stores: [{ shopId: store.shopId, shopName: store.shopName, partition: store.partition, tenantId: store.tenantId, storeGeneration: store.storeGeneration }],
+            context,
+            config,
+            doudianAdapter
+          }
+        }, 180_000) as unknown as Promise<MarketingTaskResult>;
+        for (const feature of ["limited_time", "new_user_bonus", "general_coupon"] as const) {
+          const products = await runRead(feature, "load_products", stores[0]);
+          checks.push({ feature, action: "load_products", ok: products.status === "ok", status: products.status, count: products.entities?.length || 0, storesTried: 1, diagnostic: diagnostic(products) });
+          let list: MarketingTaskResult | null = null;
+          let firstSuccessfulList: MarketingTaskResult | null = null;
+          let lastFailedList: MarketingTaskResult | null = null;
+          let listStore = stores[0];
+          let firstSuccessfulStore = stores[0];
+          let storesTried = 0;
+          for (const candidate of stores) {
+            storesTried += 1;
+            const candidateList = await runRead(feature, "list", candidate);
+            if (candidateList.status === "ok") {
+              if (!firstSuccessfulList) {
+                firstSuccessfulList = candidateList;
+                firstSuccessfulStore = candidate;
+              }
+              if (candidateList.entities.length > 0) {
+                list = candidateList;
+                listStore = candidate;
+                break;
+              }
+            } else {
+              lastFailedList = candidateList;
+            }
+          }
+          if (!list && firstSuccessfulList) {
+            list = firstSuccessfulList;
+            listStore = firstSuccessfulStore;
+          }
+          if (!list) list = lastFailedList;
+          if (!list) throw new Error(`marketing list probe did not run for ${feature}`);
+          const firstEntityId = list.entities?.[0]?.entityId || "";
+          checks.push({ feature, action: "list", ok: list.status === "ok", status: list.status, count: list.entities?.length || 0, storesTried, diagnostic: diagnostic(list) });
+          if (!firstEntityId) {
+            checks.push({ feature, action: "detail", ok: false, status: "not-run-empty-list", count: 0, storesTried, skipped: true });
+            continue;
+          }
+          const detail = await runRead(feature, "detail", listStore, { entityId: firstEntityId });
+          checks.push({ feature, action: "detail", ok: detail.status === "ok" && detail.entities.length > 0, status: detail.status, count: detail.entities.length, storesTried, diagnostic: diagnostic(detail) });
+        }
+        return {
+          ok: checks.every((check) => check.ok),
+          storeCount: storeResult.stores?.length || 0,
+          writeActionsEnabled: config.features.marketingWriteActions?.enabled === true,
+          checks
+        };
+      }
+    };
+    void resubscribeDoudianTasks().catch(() => undefined);
+    void cleanupMarketingRecords().catch(() => undefined);
     return () => {
       remove();
       delete window.chihuDoudianTaskRuntime;
       delete window.chihuDoudianStoreRuntime;
+      delete window.chihuMarketingReadRuntime;
     };
   }, []);
 
@@ -232,6 +338,7 @@ export function App() {
       let manifestError = "";
       let bridge = initialBridge;
       let doudianAdapter = getDoudianAdapterStatus();
+      let loadedAdapterPayload: DoudianAdapterPayload | null = null;
       let storageHealth = "unknown" as ShellState["storageHealth"];
 
       try {
@@ -263,7 +370,7 @@ export function App() {
           missingMethods: bridge.missingMethods
         }));
         try {
-          await loadDoudianAdapterPayload();
+          loadedAdapterPayload = await loadDoudianAdapterPayload();
         } catch (error) {
           push(event("error", "doudian-adapter", "adapter_error", {
             message: error instanceof Error ? error.message : String(error)
@@ -281,6 +388,7 @@ export function App() {
       } catch {}
 
       if (!cancelled) {
+        setAdapterPayload(loadedAdapterPayload);
         setState((current) => ({
           ...current,
           config: nextConfig,
@@ -302,14 +410,24 @@ export function App() {
     };
   }, []);
 
-  const routeAliases = useMemo(() => new Map([
-    ["/products", "/products/slow-moving"]
-  ]), []);
-  const effectiveRoute = routeAliases.get(state.route) || state.route;
-  const selectedModule = moduleMap.get(effectiveRoute);
+  const resolvedRoutes = useMemo(() => resolveFeatureRoutes(state.config, adapterPayload?.adapter), [state.config, adapterPayload]);
+  const requestedDefinition = findFeatureRoute(state.route);
+  const activeDefinition = findFeatureRoute(state.route, resolvedRoutes);
+  const diagnosticsRoute = state.route === "/system/diagnostics";
+  const effectiveRoute = diagnosticsRoute ? "/system/diagnostics" : activeDefinition?.route || firstAvailableRoute(resolvedRoutes);
+  const ActiveComponent = activeDefinition?.component;
   const configStatus = state.configError ? "error" : "ready";
   const bridgeStatus = state.bridge.ok ? "ready" : "missing";
-  const licenseReady = Boolean(licenseStatus.licensed || licenseStatus.bypass);
+  const smokeMode = location.hostname === "chihu-remote.localhost" && new URLSearchParams(location.search).get("smoke") === "1";
+  const licenseReady = smokeMode || Boolean(licenseStatus.licensed || licenseStatus.bypass);
+
+  useEffect(() => {
+    const accessResolutionReady = state.configSource !== "none" || state.configError !== "" || adapterPayload !== null;
+    if (!accessResolutionReady || diagnosticsRoute || !requestedDefinition || activeDefinition) return;
+    setRouteGuardMessage(`${requestedDefinition.navigation.label}当前不可用，已返回可用页面。`);
+    const fallback = firstAvailableRoute(resolvedRoutes);
+    if (state.route !== fallback) location.hash = `#${fallback}`;
+  }, [activeDefinition, diagnosticsRoute, requestedDefinition, resolvedRoutes, state.route]);
 
   if (!licenseReady) {
     return (
@@ -343,6 +461,7 @@ export function App() {
       >
         <ShellHeader
           route={state.route}
+          routes={resolvedRoutes}
           workspace={state.workspace}
           licenseStatus={licenseStatus}
           onOpenLicenseDialog={() => setLicenseDialogOpen(true)}
@@ -360,31 +479,14 @@ export function App() {
               <span className="min-w-0 break-words">{state.manifestError}</span>
             </div>
           ) : null}
-          <div className={`min-h-0 flex-1 ${state.route === "/stores" || state.route === "/stores/business-data" || state.route === "/stores/funds" || state.route === "/warnings" || state.route === "/opportunities" || state.route === "/opportunities/product-prematch" || state.route === "/opportunities/favorites" || state.route === "/opportunities/favorites/cleanup" || effectiveRoute === "/products/slow-moving" || effectiveRoute === "/products/bulk-delete" ? "overflow-hidden" : "overflow-auto"}`}>
-            {state.route === "/system/diagnostics" ? (
+          {routeGuardMessage ? <div className="flex min-h-[38px] items-center justify-between gap-3 rounded-lg border border-[#ffdca8] bg-[#fff7e8] px-3 py-2 text-[13px] text-[#8a4b00]"><span>{routeGuardMessage}</span><button className="font-semibold" type="button" onClick={() => setRouteGuardMessage("")}>关闭</button></div> : null}
+          <div className={`min-h-0 flex-1 ${activeDefinition?.overflow === "hidden" ? "overflow-hidden" : "overflow-auto"}`} data-resolved-route={effectiveRoute}>
+            {effectiveRoute === "/system/diagnostics" ? (
               <DiagnosticsPage state={state} />
-            ) : state.route === "/stores" ? (
-              <StoreManagementPage />
-            ) : state.route === "/stores/business-data" ? (
-              <BusinessDataPage />
-            ) : state.route === "/stores/funds" ? (
-              <FundsDataPage />
-            ) : state.route === "/warnings" ? (
-              <ViolationsPage />
-            ) : state.route === "/opportunities/favorites" ? (
-              <OpportunityAutoFavoritesPage />
-            ) : state.route === "/opportunities/favorites/cleanup" ? (
-              <OpportunityFavoritesPage />
-            ) : state.route === "/opportunities" || state.route === "/opportunities/product-prematch" ? (
-              <OpportunityProductPrematchPage />
-            ) : effectiveRoute === "/products/slow-moving" ? (
-              <SlowMovingCleanupPage />
-            ) : effectiveRoute === "/products/bulk-delete" ? (
-              <BulkDeletePage />
-            ) : selectedModule ? (
-              <ModulePage module={selectedModule} />
+            ) : ActiveComponent ? (
+              <ActiveComponent />
             ) : (
-              <HomePage />
+              <HomePage routes={resolvedRoutes} />
             )}
           </div>
         </section>

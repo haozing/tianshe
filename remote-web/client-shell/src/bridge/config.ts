@@ -21,7 +21,12 @@ export function defaultConfig(): ChihuConfig {
       diagnostics: { enabled: true },
       bridgeSelfCheck: { enabled: true },
       storageHealth: { enabled: true },
-      businessSlot: { enabled: true }
+      businessSlot: { enabled: true },
+      marketingMenu: { enabled: true },
+      marketingLimitedTime: { enabled: true },
+      marketingNewUserBonus: { enabled: true },
+      marketingGeneralCoupon: { enabled: true },
+      marketingWriteActions: { enabled: true }
     },
     assets: {
       shellEntry: "./app.js",

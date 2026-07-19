@@ -24,6 +24,11 @@ const axiosInstance = axios.create({
   decompress: true
 });
 
+function normalizeNativeTimeoutMs(value, fallback = 30000) {
+  const numeric = Number(value == null ? fallback : value);
+  return Math.max(5000, Math.min(120000, Number.isFinite(numeric) ? Math.floor(numeric) : fallback));
+}
+
 function getImageBase64(url) {
   return new Promise((resolve, reject) => {
     const protocol = url.startsWith("https") ? https : http;
@@ -163,7 +168,7 @@ async function nativeHttpRequest(args = {}) {
       method: args.method || "GET",
       headers,
       data: requestBody,
-      timeout: args.timeoutMs || 30000,
+      timeout: normalizeNativeTimeoutMs(args.timeoutMs),
       responseType,
       validateStatus: () => true
     });
@@ -223,7 +228,7 @@ function registerHttpHandlers() {
       ...args.axiosParmars,
       httpAgent,
       httpsAgent,
-      timeout: args.axiosParamsTimeout || 30000
+      timeout: normalizeNativeTimeoutMs(args.axiosParamsTimeout)
     };
 
     const requestUrl = typeof axiosParams.url === "string" ? axiosParams.url : undefined;
@@ -250,4 +255,4 @@ function registerHttpHandlers() {
   });
 }
 
-module.exports = { nativeHttpRequest, registerHttpHandlers };
+module.exports = { nativeHttpRequest, normalizeNativeTimeoutMs, registerHttpHandlers };

@@ -18,6 +18,18 @@ if (!process.env.ELECTRON_GET_NO_PROGRESS) {
 const electronBin = require("electron");
 const scenario = process.argv[2] || process.env.CHIHU_E2E_SMOKE_SCENARIO || "bridge";
 
+function marketingReadHomeUrl(value) {
+  const url = new URL(value);
+  url.searchParams.set("smoke", "1");
+  if (!url.searchParams.has("configUrl")) {
+    url.searchParams.set("configUrl", "./config/chihu-config.marketing-pilot.json");
+  }
+  if (!url.searchParams.has("doudianAdapterUrl")) {
+    url.searchParams.set("doudianAdapterUrl", "./config/doudian-adapter.marketing-pilot.json");
+  }
+  return url.toString();
+}
+
 const binaryBody = "chihu-http-smoke-binary";
 const fileDownloadBody = "chihu-file-smoke-download";
 const uploadExpectedText = "chihu-file-upload-payload";
@@ -205,11 +217,15 @@ async function createHttpSmokeServer() {
 function writeSmokeArtifact(result) {
   fs.mkdirSync(artifactsDir, { recursive: true });
   const outputPath = path.join(artifactsDir, `smoke-${scenario}.json`);
+  const sanitizedResult = scenario === "marketing-read" ? {
+    ...result,
+    textSample: "[redacted for marketing read probe]"
+  } : result;
   const report = {
     generatedAt: new Date().toISOString(),
     scenario,
     ok: result && result.ok === true,
-    result,
+    result: sanitizedResult,
     redaction: {
       cookieValuesIncluded: false,
       tokenValuesIncluded: false,
@@ -221,14 +237,22 @@ function writeSmokeArtifact(result) {
 
 async function main() {
   const httpSmoke = ["bridge", "http", "files", "logs", "ui-contract", "maintenance"].includes(scenario) ? await createHttpSmokeServer() : null;
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), `chihu-electron-smoke-${scenario}-`));
+  const configuredUserDataDir = String(process.env.CHIHU_SMOKE_USER_DATA_DIR || "").trim();
+  if (scenario === "marketing-read" && !configuredUserDataDir) {
+    throw new Error("CHIHU_SMOKE_USER_DATA_DIR is required for marketing-read and must point to a dedicated test profile");
+  }
+  const userDataDir = configuredUserDataDir || fs.mkdtempSync(path.join(os.tmpdir(), `chihu-electron-smoke-${scenario}-`));
+  const ownsUserDataDir = !configuredUserDataDir;
+  const defaultHomeUrl = process.env.CHIHU_HOME_URL || process.env.CHIHU_REMOTE_WEB_URL || "http://chihu-remote.localhost:4173/new-remote-web/";
+  const homeUrl = scenario === "marketing-read" ? marketingReadHomeUrl(defaultHomeUrl) : defaultHomeUrl;
   const env = {
     ...process.env,
     CHIHU_E2E_SMOKE: "1",
     CHIHU_E2E_SMOKE_SCENARIO: scenario,
-    CHIHU_E2E_TIMEOUT_MS: process.env.CHIHU_E2E_TIMEOUT_MS || (scenario === "bridge" ? "45000" : scenario === "sqlite" ? "30000" : "15000"),
+    ...(scenario === "marketing-read" ? { CHIHU_LICENSE_BYPASS: "1" } : {}),
+    CHIHU_E2E_TIMEOUT_MS: process.env.CHIHU_E2E_TIMEOUT_MS || (scenario === "bridge" ? "45000" : scenario === "marketing-read" ? "240000" : scenario === "sqlite" ? "30000" : "15000"),
     CHIHU_USER_DATA_DIR: userDataDir,
-    CHIHU_HOME_URL: process.env.CHIHU_HOME_URL || process.env.CHIHU_REMOTE_WEB_URL || "http://chihu-remote.localhost:4173/new-remote-web/"
+    CHIHU_HOME_URL: homeUrl
   };
 
   if (httpSmoke) {
@@ -249,6 +273,7 @@ async function main() {
 
   let output = "";
   const cleanup = () => {
+    if (!ownsUserDataDir) return;
     try {
       fs.rmSync(userDataDir, { recursive: true, force: true });
     } catch {}
@@ -310,6 +335,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error);
-  process.exit(1);
+  process.stderr.write(`${error && error.stack ? error.stack : String(error)}\n`);
+  process.exitCode = 1;
 });

@@ -5,10 +5,14 @@ import {
   createOperation,
   getOperation,
   listActiveOperations,
+  markOperationCancelling,
   markOperationCancelled,
   markOperationError,
   markOperationFullResult,
   markOperationProgress,
+  markOperationHeartbeat,
+  markOperationInterrupted,
+  markOperationReconciling,
   markOperationResult,
   markOperationRunning,
   saveOperation,
@@ -22,8 +26,11 @@ import {
 } from "./progress";
 import { cancelOpportunityPipelineSubmitTask } from "./opportunityReport";
 import type { DoudianStoreResult } from "../../types";
+import { isDoudianMutationTask, restartRecoveryStatus } from "./taskSafety";
+import { reconcileMarketingOperation } from "./marketing/reconcile";
 
 const runnerWindows = new Map<string, number>();
+const APP_SESSION_ID = `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 let channel: BroadcastChannel | null = null;
 const DEFAULT_RUNNER_PARTITION = "persist:chihu-default";
 const MAX_OPERATION_RESULT_RECORD_BYTES = 4 * 1024 * 1024;
@@ -151,6 +158,10 @@ function isTerminal(record?: DoudianOperationRecord | null) {
   return !!record && ["succeeded", "partial", "failed", "cancelled"].includes(record.status);
 }
 
+function isMutationOperation(record?: DoudianOperationRecord | null) {
+  return isDoudianMutationTask(record);
+}
+
 function resultOperationStatus(result: unknown): "succeeded" | "partial" | "failed" {
   if (!result || typeof result !== "object") return "succeeded";
   const record = result as { ok?: unknown; status?: unknown };
@@ -192,13 +203,17 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
     const existing = await getOperation(message.operationId);
     if (isTerminal(existing)) return;
     const record = await markOperationProgress(message.operationId, message.progress);
-    dispatchDoudianProgress({
+      dispatchDoudianProgress({
       operationId: message.operationId,
       taskType: record?.taskType,
-      status: "running",
+      status: record?.status === "cancelling" ? "cancelling" : record?.status === "reconciling" ? "reconciling" : "running",
       progress: message.progress,
       message: message.message
     });
+  }
+  if (message.type === "task:heartbeat") {
+    const existing = await getOperation(message.operationId);
+    if (!isTerminal(existing)) await markOperationHeartbeat(message.operationId);
   }
   if (message.type === "task:result") {
     const existing = await getOperation(message.operationId);
@@ -209,10 +224,14 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
     const resultStatus = message.result && typeof message.result === "object"
       ? String((message.result as { status?: unknown }).status || "")
       : "";
+    const needsReconciliation = ["unknown", "reconciling"].includes(resultStatus) ||
+      (message.resultSummary !== "cancelled before mutation" && existing?.status === "cancelling" && isMutationOperation(existing) && resultStatus === "cancelled");
     const operationStatus = resultOperationStatus(message.result);
     const persistResult = message.result === undefined || shouldPersistOperationResult(message.result);
     const record = existing?.status === "cancelled"
       ? existing
+      : needsReconciliation
+        ? await markOperationReconciling(message.operationId, message.resultSummary || "reconciliation required")
       : message.resultSummary === "cancelled" || resultStatus === "cancelled"
         ? await markOperationCancelled(message.operationId)
       : message.result !== undefined
@@ -226,11 +245,12 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
     dispatchDoudianProgress({
       operationId: message.operationId,
       taskType: record?.taskType,
-      status: record?.status === "cancelled" ? "cancelled" : record?.status === "partial" ? "partial" : record?.status === "failed" ? "failed" : "succeeded",
+      status: record?.status === "reconciling" ? "reconciling" : record?.status === "cancelled" ? "cancelled" : record?.status === "partial" ? "partial" : record?.status === "failed" ? "failed" : "succeeded",
       progress: record?.progress ?? 100,
       resultSummary: message.resultSummary
-    });
-    void reportOperationLog(record?.status === "cancelled" ? "cancelled" : record?.status === "partial" ? "partial" : record?.status === "failed" ? "failed" : "succeeded", record || null, {
+      });
+      if (record?.status === "reconciling" && record.taskType === "marketingTask") void reconcileMarketingOperation(message.operationId).catch(() => null);
+      void reportOperationLog(record?.status === "cancelled" ? "cancelled" : record?.status === "partial" ? "partial" : record?.status === "failed" ? "failed" : "succeeded", record || null, {
       resultSummary: message.resultSummary || "",
       resultPersisted: persistResult,
       ...taskResultLogSummary(record?.taskType, message.result)
@@ -244,16 +264,19 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
       resolveWaiters(message.operationId, existing);
       return;
     }
-    const record = await markOperationError(message.operationId, message.error);
+    const record = existing?.status === "cancelling" && isMutationOperation(existing)
+      ? await markOperationReconciling(message.operationId, "mutation failed without a definitive response")
+      : await markOperationError(message.operationId, message.error);
     dispatchDoudianProgress({
       operationId: message.operationId,
       taskType: record?.taskType,
-      status: "failed",
+      status: record?.status === "reconciling" ? "reconciling" : "failed",
       progress: record?.progress ?? 0,
       error: message.error
     });
     void reportOperationLog("failed", record || null, { error: message.error });
     await destroyRunnerWindow(message.operationId);
+    if (record?.status === "reconciling" && record.taskType === "marketingTask") void reconcileMarketingOperation(message.operationId).catch(() => null);
     resolveWaiters(message.operationId, record || null);
   }
 }
@@ -307,6 +330,13 @@ function taskDedupeKey(task: DoudianTaskRequest) {
 }
 
 async function startDoudianTaskInternal(task: DoudianTaskRequest): Promise<DoudianOperationRecord> {
+  task = {
+    ...task,
+    metadata: {
+      ...(task.metadata || {}),
+      mutation: isDoudianMutationTask(task)
+    }
+  };
   if (task.metadata?.replaceActive === true) {
     const active = await listActiveOperations();
     const superseded = active.filter((record) => record.taskType === task.taskType);
@@ -319,7 +349,9 @@ async function startDoudianTaskInternal(task: DoudianTaskRequest): Promise<Doudi
     taskType: task.taskType,
     adapterVersion: task.adapterVersion,
     ruleVersion: task.ruleVersion,
-    metadata: task.metadata
+    metadata: task.metadata,
+    ownerSessionId: APP_SESSION_ID,
+    adapterSnapshotHash: String(task.metadata?.adapterSnapshotHash || "")
   });
   const dedupeKey = taskDedupeKey(task);
   if (dedupeKey) {
@@ -387,23 +419,21 @@ export async function startDoudianTask(task: DoudianTaskRequest): Promise<Doudia
   }
 }
 
-async function stopRunnerWindow(operationId: string) {
+async function requestRunnerCancellation(operationId: string) {
   const native = getChihuNative();
   const existing = await getOperation(operationId);
   const winId = runnerWindows.get(operationId) || existing?.runnerWinId;
+  let acknowledged = false;
   if (native?.windows.eval && winId) {
-    await native.windows.eval({
+    acknowledged = await native.windows.eval({
       winId,
       code: `window.__chihuDoudianTaskCancel && window.__chihuDoudianTaskCancel(${JSON.stringify(operationId)})`,
       timeoutMs: 3000
-    }).catch(() => null);
+    }).catch(() => false) === true;
   }
   getChannel().postMessage({ type: "task:cancel", operationId });
-  await new Promise((resolve) => window.setTimeout(resolve, 350));
-  if (native?.windows.destroy && winId) {
-    await native.windows.destroy({ winId }).catch(() => null);
-  }
-  runnerWindows.delete(operationId);
+  const info = native?.windows.getInfo && winId ? await native.windows.getInfo({ winId }).catch(() => null) : null;
+  return { acknowledged, winId, alive: acknowledged || info !== null };
 }
 
 async function cleanupCancelledDoudianTask(record: DoudianOperationRecord | null | undefined) {
@@ -416,30 +446,61 @@ async function cleanupCancelledDoudianTask(record: DoudianOperationRecord | null
 
 export async function cancelDoudianTask(operationId: string) {
   const existing = await getOperation(operationId);
-  await stopRunnerWindow(operationId);
-  await cleanupCancelledDoudianTask(existing);
-  const record = await markOperationCancelled(operationId);
+  if (!existing || isTerminal(existing)) return existing;
+  const cancelling = await markOperationCancelling(operationId);
   dispatchDoudianProgress({
     operationId,
-    taskType: record?.taskType,
-    status: "cancelled",
-    progress: record?.progress ?? 0,
-    resultSummary: "cancelled"
+    taskType: cancelling?.taskType,
+    status: "cancelling",
+    progress: cancelling?.progress ?? 0,
+    resultSummary: "cancellation requested"
   });
-  void reportOperationLog("cancelled", record || null);
-  resolveWaiters(operationId, record || null);
-  return record;
+  const { alive } = await requestRunnerCancellation(operationId);
+  if (alive) return cancelling;
+  if (isMutationOperation(existing)) {
+    await markOperationInterrupted(operationId, "mutation runner is unavailable");
+    return markOperationReconciling(operationId, "runner unavailable; reconciliation required");
+  }
+  await cleanupCancelledDoudianTask(existing);
+  const cancelled = await markOperationCancelled(operationId);
+  resolveWaiters(operationId, cancelled || null);
+  return cancelled;
 }
 
 export async function getDoudianTaskStatus(operationId: string) {
   return getOperation(operationId);
 }
 
-export async function restoreDoudianTasks() {
+export async function resubscribeDoudianTasks() {
   getChannel();
   const records = await listActiveOperations();
-  return records;
+  const native = getChihuNative();
+  const rawWindows = native?.windows.getAll ? await native.windows.getAll().catch(() => []) : [];
+  const windowIds = new Set((Array.isArray(rawWindows) ? rawWindows : []).map((item) => Number((item as { id?: unknown }).id)).filter(Number.isInteger));
+  const output: DoudianOperationRecord[] = [];
+  for (const record of records) {
+    if (record.runnerWinId && windowIds.has(record.runnerWinId) && record.status !== "reconciling") {
+      runnerWindows.set(record.operationId, record.runnerWinId);
+      output.push(record);
+      continue;
+    }
+    await markOperationInterrupted(record.operationId, "runner missing after application restart");
+    if (restartRecoveryStatus(isMutationOperation(record)) === "reconciling") {
+      const reconciling = await markOperationReconciling(record.operationId, "application restarted; reconciliation required");
+      const resolved = record.taskType === "marketingTask"
+        ? await reconcileMarketingOperation(record.operationId).catch(() => null)
+        : null;
+      if (resolved) output.push(resolved);
+      else if (reconciling) output.push(reconciling);
+    } else {
+      await markOperationError(record.operationId, "read task interrupted; start a new query");
+    }
+  }
+  return output;
 }
+
+/** @deprecated This only re-subscribes living runners and interrupts stale operations. */
+export const restoreDoudianTasks = resubscribeDoudianTasks;
 
 export async function waitForDoudianTaskResult(operationId: string, timeoutMs = 120000): Promise<DoudianOperationRecord | null> {
   const current = await getOperation(operationId);
@@ -464,6 +525,13 @@ export async function runDoudianStoreTask(task: DoudianTaskRequest, timeoutMs = 
   const operation = await startDoudianTask(task);
   const result = await waitForDoudianTaskResult(operation.operationId, timeoutMs).catch(async (error) => {
     const message = error instanceof Error ? error.message : String(error);
+    if (isDoudianMutationTask(task)) {
+      await markOperationInterrupted(operation.operationId, message);
+      const reconciling = await markOperationReconciling(operation.operationId, "task wait timed out; reconciliation required");
+      await requestRunnerCancellation(operation.operationId).catch(() => null);
+      if (task.taskType === "marketingTask") void reconcileMarketingOperation(operation.operationId).catch(() => null);
+      return reconciling;
+    }
     const failed = await markOperationError(operation.operationId, message);
     dispatchDoudianProgress({
       operationId: operation.operationId,
@@ -473,7 +541,8 @@ export async function runDoudianStoreTask(task: DoudianTaskRequest, timeoutMs = 
       error: message
     });
     void reportOperationLog("failed", failed || null, { error: message, source: "wait-result" });
-    await stopRunnerWindow(operation.operationId).catch(() => null);
+    await requestRunnerCancellation(operation.operationId).catch(() => null);
+    await destroyRunnerWindow(operation.operationId);
     return failed || getOperation(operation.operationId);
   });
   if (!result) return { ok: false, status: "missing", operationId: operation.operationId, message: "task result missing", stores: [] };
@@ -483,6 +552,7 @@ export async function runDoudianStoreTask(task: DoudianTaskRequest, timeoutMs = 
       : { ok: false, status: "failed", operationId: operation.operationId, message: result.error || "task failed", stores: [] };
   }
   if (result.status === "cancelled") return { ok: false, status: "cancelled", operationId: operation.operationId, message: "已取消任务", stores: [] };
+  if (result.status === "reconciling" || result.status === "interrupted") return { ok: false, status: result.status, operationId: operation.operationId, message: result.resultSummary || "任务需要对账", stores: [] };
   return (result.result && typeof result.result === "object")
     ? result.result as DoudianStoreResult
     : { ok: true, operationId: operation.operationId, message: result.resultSummary || "completed", stores: [] };

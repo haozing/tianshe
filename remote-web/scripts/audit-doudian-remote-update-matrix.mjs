@@ -27,6 +27,15 @@ const taskRunnerPath = join(clientShellRoot, "domain", "doudian", "taskRunner.ts
 const bridgeClientPath = join(clientShellRoot, "bridge", "client.ts");
 const progressClientPath = join(clientShellRoot, "domain", "doudian", "progress.ts");
 const repositoryClientPath = join(clientShellRoot, "domain", "doudian", "repository.ts");
+const marketingRoutesPath = join(clientShellRoot, "featureRoutes.tsx");
+const marketingTaskPath = join(clientShellRoot, "domain", "doudian", "marketing", "task.ts");
+const marketingContractPath = join(clientShellRoot, "bridge", "marketingContract.ts");
+const marketingRecordRepositoryPath = join(clientShellRoot, "domain", "doudian", "marketing", "repository.ts");
+const marketingPagePaths = [
+  join(clientShellRoot, "components", "marketing", "LimitedTimePage.tsx"),
+  join(clientShellRoot, "components", "marketing", "NewUserBonusPage.tsx"),
+  join(clientShellRoot, "components", "marketing", "GeneralCouponPage.tsx")
+];
 const outputPath = join(remoteRoot, "artifacts", "doudian-remote-update-matrix.json");
 const leakageOutputPath = join(remoteRoot, "artifacts", "doudian-local-leakage-audit.json");
 const leakageScriptPath = join(remoteRoot, "scripts", "audit-doudian-local-leakage.mjs");
@@ -155,6 +164,11 @@ const taskRunner = existsSync(taskRunnerPath) ? readFileSync(taskRunnerPath, "ut
 const bridgeClient = existsSync(bridgeClientPath) ? readFileSync(bridgeClientPath, "utf8") : "";
 const progressClient = existsSync(progressClientPath) ? readFileSync(progressClientPath, "utf8") : "";
 const repositoryClient = existsSync(repositoryClientPath) ? readFileSync(repositoryClientPath, "utf8") : "";
+const marketingRoutes = existsSync(marketingRoutesPath) ? readFileSync(marketingRoutesPath, "utf8") : "";
+const marketingTask = existsSync(marketingTaskPath) ? readFileSync(marketingTaskPath, "utf8") : "";
+const marketingContract = existsSync(marketingContractPath) ? readFileSync(marketingContractPath, "utf8") : "";
+const marketingRecordRepository = existsSync(marketingRecordRepositoryPath) ? readFileSync(marketingRecordRepositoryPath, "utf8") : "";
+const marketingPages = marketingPagePaths.map((path) => existsSync(path) ? readFileSync(path, "utf8") : "");
 const electronAdapterPath = join(repoRoot, "electron-client", "src", "main", "doudian", "adapter.js");
 const electronAdapter = existsSync(electronAdapterPath) ? readFileSync(electronAdapterPath, "utf8") : "";
 const leakageRun = spawnSync(process.execPath, [leakageScriptPath], {
@@ -352,7 +366,7 @@ const checks = [
       opportunityFavoritesClient.includes('event: "clear-invalid-store-result"') &&
       opportunityFavoritesClient.includes('event: "clear-invalid-run-summary"') &&
       opportunityFavoritesPage.includes("clearDoudianInvalidOpportunityFavorites") &&
-      app.includes("/opportunities/favorites"),
+      marketingRoutes.includes("/opportunities/favorites"),
     source: rel(opportunityFavoritesClientPath)
   },
   {
@@ -497,6 +511,18 @@ const checks = [
     key: "capabilitiesRemote",
     ok: hasArray(adapter.capabilities?.actions) && hasArray(adapter.capabilities?.scriptKeys),
     source: rel(adapterPath)
+  },
+  {
+    key: "marketingRemoteUpdateMatrix",
+    ok: marketingRoutes.includes("/marketing/limited-time") &&
+      marketingRoutes.includes("/marketing/new-user-bonus") &&
+      marketingRoutes.includes("/marketing/coupons") &&
+      marketingRoutes.includes("resolveFeatureRoutes") &&
+      marketingTask.includes("runMarketingReadRequest") &&
+      marketingContract.includes("isValidMarketingContractConfig") &&
+      marketingRecordRepository.includes("remote_feature_records_v1") &&
+      marketingPages.every((source) => source.includes("MarketingWorkspacePage")),
+    source: rel(marketingRoutesPath)
   },
   {
     key: "operationPlansRemote",

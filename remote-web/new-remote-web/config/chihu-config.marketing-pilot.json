@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "version": "2026.07.18.marketing-foundation-v1-read-pilot-v1",
+  "configTtlSeconds": 300,
+  "entry": {
+    "newRemoteOrigin": "./"
+  },
+  "shell": {
+    "mode": "foundation",
+    "enabled": true,
+    "shellVersion": "client-shell"
+  },
+  "features": {
+    "diagnostics": {
+      "enabled": true
+    },
+    "bridgeSelfCheck": {
+      "enabled": true
+    },
+    "storageHealth": {
+      "enabled": true
+    },
+    "businessSlot": {
+      "enabled": true
+    },
+    "marketingMenu": {
+      "enabled": true
+    },
+    "marketingLimitedTime": {
+      "enabled": true
+    },
+    "marketingNewUserBonus": {
+      "enabled": true
+    },
+    "marketingGeneralCoupon": {
+      "enabled": true
+    },
+    "marketingWriteActions": {
+      "enabled": true
+    }
+  },
+  "assets": {
+    "shellEntry": "./app.js",
+    "cssEntry": "./styles.css",
+    "manifestUrl": "./release-manifest.json"
+  },
+  "diagnostics": {
+    "enabled": true,
+    "sampleRate": 1
+  },
+  "release": {
+    "gitCommit": "cbcf533-dirty",
+    "buildTime": "2026-07-18T14:45:03.936Z"
+  }
+}
