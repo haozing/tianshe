@@ -4,7 +4,7 @@ import { firstPathValue, requestPlanResponseOk, runDoudianRequestPlan } from "..
 import { isUnknownWriteResponse } from "../requestPlanSafety";
 import { getMarketingRun, queryMarketingAttempts, saveMarketingAttempts, saveMarketingRun } from "./repository";
 import type { MarketingStoreAttempt, MarketingRun } from "./types";
-import { marketingReconciliationCompletionStatus, marketingReconciliationDecision } from "./reconciliationPolicy";
+import { marketingReconciledRun, marketingReconciliationCompletionStatus, marketingReconciliationDecision } from "./reconciliationPolicy";
 import { marketingAdapterSnapshotHash } from "./snapshot";
 
 const reconcileLocks = new Map<string, Promise<DoudianOperationRecord | null>>();
@@ -162,7 +162,7 @@ async function reconcileMarketingOperationInternal(operationId: string, input: {
   }
 
   const nextStatus = marketingReconciliationCompletionStatus({ attemptCount: attempts.length, unresolved, failed, confirmed });
-  if (run) await saveMarketingRun({ ...run, status: nextStatus, updatedAt: new Date().toISOString() });
+  if (run) await saveMarketingRun(marketingReconciledRun(run, attempts.length, nextStatus, { unresolved, failed, confirmed }));
   if (unresolved > 0) {
     const currentTimer = reconcileTimers.get(operationId);
     if (currentTimer) window.clearTimeout(currentTimer);

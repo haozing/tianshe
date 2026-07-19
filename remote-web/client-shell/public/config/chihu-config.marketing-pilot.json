@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.19.marketing-pilot-v1",
+  "version": "2026.07.19.marketing-write-v2",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "cbcf533-dirty",
-    "buildTime": "2026-07-18T14:45:03.936Z"
+    "gitCommit": "d0500f8-dirty",
+    "buildTime": "2026-07-19T08:34:13.981Z"
   }
 }

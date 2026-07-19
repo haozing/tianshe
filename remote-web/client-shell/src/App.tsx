@@ -128,7 +128,17 @@ export function App() {
             doudianAdapter: adapterPayload
           }
         }, 900_000) as unknown as MarketingTaskResult;
-        return { ok: result.status === "ok", operationId: result.operationId };
+        const entity = result.entities?.[0];
+        const start = Date.parse(entity?.startTime || "");
+        const end = Date.parse(entity?.endTime || "");
+        const intervalMs = Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : schedule.intervalMs;
+        return {
+          ok: result.status === "ok" && !!entity?.entityId,
+          operationId: result.operationId,
+          entityId: entity?.entityId,
+          intervalMs,
+          nextRunAt: Number.isFinite(end) ? new Date(Math.max(Date.now(), end - 24 * 60 * 60 * 1000)).toISOString() : undefined
+        };
       }
     });
   }, [adapterPayload, state.config]);
@@ -176,6 +186,83 @@ export function App() {
       })
     };
     window.chihuMarketingReadRuntime = {
+      writeProbe: async () => {
+        if (new URLSearchParams(window.location.search).get("smoke") !== "1") throw new Error("marketing write probe requires smoke mode");
+        const [{ config }, doudianAdapter, storeResult] = await Promise.all([
+          loadConfig(),
+          loadDoudianAdapterPayload({ force: true }),
+          listDoudianStores()
+        ]);
+        const stores = (storeResult.stores || []).filter((item) => item.status === "online" && item.partition);
+        const store = stores[0];
+        if (!store) throw new Error("no online Doudian store is available for the marketing write probe");
+        if (!marketingWriteEnabled(config, doudianAdapter.adapter, "general_coupon", "create") || !marketingWriteEnabled(config, doudianAdapter.adapter, "general_coupon", "cancel")) {
+          throw new Error("general coupon create/cancel capability is not enabled");
+        }
+        const run = (action: "create" | "cancel" | "detail", context: Record<string, unknown>) => runDoudianStoreTask({
+          taskType: "marketingTask",
+          adapterVersion: doudianAdapter.adapter.version,
+          ruleVersion: doudianAdapter.scripts?.version || "",
+          metadata: {
+            mutation: action !== "detail",
+            replaceActive: action === "detail",
+            adapterSnapshotHash: marketingAdapterSnapshotHash(doudianAdapter),
+            dedupeKey: `marketing-live-write-probe:${action}:${Date.now()}`
+          },
+          payload: {
+            feature: "general_coupon",
+            action,
+            stores: [{ shopId: store.shopId, shopName: store.shopName, partition: store.partition, tenantId: store.tenantId, storeGeneration: store.storeGeneration }],
+            context,
+            config,
+            doudianAdapter
+          }
+        }, 180_000) as unknown as Promise<MarketingTaskResult>;
+        const startTime = new Date(Date.now() + 15 * 60_000).toISOString();
+        const endTime = new Date(Date.parse(startTime) + 24 * 60 * 60_000).toISOString();
+        const create = await run("create", {
+          scope: "shop",
+          startTime,
+          endTime,
+          discountMode: "discount",
+          discountValue: "9.9",
+          issueCount: "1",
+          perUserLimit: "1",
+          officialRenew: false,
+          couponValidityMode: "days",
+          couponValidDays: "1",
+          couponNameMode: "prefix",
+          couponNamePrefix: "赤狐实测",
+          couponProductsPerCoupon: "200",
+          productIds: [],
+          productIdsByShop: { [store.shopId]: [] },
+          selectedProductsByShop: { [store.shopId]: [] }
+        });
+        const created = create.entities?.find((entity) => entity.entityId);
+        if (create.status !== "ok" || !created?.entityId) {
+          return { ok: false, storeCount: stores.length, createStatus: create.status, cancelStatus: "not-run", verificationStatus: "not-run", cleanupRequired: create.status === "ok" };
+        }
+        const selectedEntity = { ...created, rawStatus: created.rawStatus || "13", status: created.status || "未开始" };
+        const cancel = await run("cancel", {
+          entityId: created.entityId,
+          entityIds: [created.entityId],
+          selectedEntity,
+          selectedEntities: [selectedEntity],
+          entityIdsByShop: { [store.shopId]: [created.entityId] },
+          selectedEntitiesByShop: { [store.shopId]: [selectedEntity] }
+        });
+        const detail = await run("detail", { entityId: created.entityId });
+        const verifiedStatus = detail.entities?.[0]?.rawStatus || "";
+        const cancelled = cancel.status === "ok" && verifiedStatus === "2";
+        return {
+          ok: create.status === "ok" && cancelled,
+          storeCount: stores.length,
+          createStatus: create.status,
+          cancelStatus: cancel.status,
+          verificationStatus: verifiedStatus === "2" ? "cancelled" : verifiedStatus || detail.status,
+          cleanupRequired: !cancelled
+        };
+      },
       probe: async () => {
         const [{ config }, doudianAdapter, storeResult] = await Promise.all([
           loadConfig(),

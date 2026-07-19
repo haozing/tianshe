@@ -55,7 +55,7 @@ const mutationTimeoutBlock = source.taskClient.slice(mutationTimeoutStart, sourc
 const checks = [
   {
     key: "marketingPagesDefaultOpen",
-    ok: ["marketingMenu", "marketingLimitedTime", "marketingNewUserBonus", "marketingGeneralCoupon"].every((key) => config.features?.[key]?.enabled === true) && !source.access.includes("marketingWriteActions"),
+    ok: ["marketingMenu", "marketingLimitedTime", "marketingNewUserBonus", "marketingGeneralCoupon"].every((key) => config.features?.[key]?.enabled === true) && source.access.includes("marketingWriteActions"),
     source: relative(repoRoot, configPath)
   },
   {
@@ -80,7 +80,7 @@ const checks = [
   },
   {
     key: "marketingDispatcherInputAndIdentityGate",
-    ok: source.task.includes("assertMarketingTaskInput(args)") && source.task.includes("assertMutationStoreActive") && source.task.includes("hash(context)"),
+    ok: source.task.includes("assertMarketingTaskInput(args)") && source.task.includes("assertMutationStoreActive") && source.task.includes("hash(baseContext)"),
     source: relative(repoRoot, files.task)
   },
   {
@@ -95,7 +95,7 @@ const checks = [
   },
   {
     key: "marketingFixtureGate",
-    ok: source.fixtures.includes("DOUDIAN_MARKETING_FIXTURES_OK") && source.fixtures.includes("missingCases") && source.fixtures.includes("unsafe integer must be stored as a string") && source.fixtures.includes("MARKETING_FIXTURE_FORCE_PHASE4") && source.fixtures.includes("reconcile"),
+    ok: source.fixtures.includes("DOUDIAN_MARKETING_FIXTURES_OK") && source.fixtures.includes("missingRealCases") && source.fixtures.includes("real-session-capture") && source.fixtures.includes("unsafe integer must be stored as a string") && source.fixtures.includes("MARKETING_REQUIRE_REAL_FIXTURES") && source.fixtures.includes("writeGateClosed"),
     source: relative(repoRoot, files.fixtures)
   },
   {
@@ -114,15 +114,35 @@ const checks = [
     source: "electron-client/src"
   },
   {
-    key: "adapterAdvertisesValidatedCreateOnly",
-    ok: Object.entries(adapter.capabilities?.marketing?.features || {}).length === 3 && Object.entries(adapter.capabilities.marketing.features).every(([feature, capability]) => {
-      const contract = adapter.policies?.marketing?.features?.[feature]?.writeActions?.create;
+    key: "marketingMutationsRemainSingleSend",
+    ok: Object.values(adapter.policies?.marketing?.features || {}).every((feature) => Object.values(feature.writeActions || {}).every((contract) => {
       const mutation = adapter.requestPlans?.[contract?.mutationPlanKey];
       const reconcile = adapter.requestPlans?.[contract?.reconcilePlanKey];
-      return capability.read === true && JSON.stringify(capability.writeActions) === JSON.stringify(["create"]) &&
-        mutation?.mutation === true && mutation?.maxAttempts === 1 && mutation?.retryOnHttpError === false && mutation?.retryOnBusinessFailure === false &&
-        reconcile?.mutation !== true && Array.isArray(contract?.precheckPlanKeys) && contract.precheckPlanKeys.length > 0;
-    }),
+      const prechecks = Array.isArray(contract?.precheckPlanKeys) ? contract.precheckPlanKeys : [];
+      const deferredValidation = contract?.deferredValidation === true && adapter.requestPlans?.[contract?.validationPlanKey]?.mutation !== true;
+      return mutation?.mutation === true && mutation?.maxAttempts === 1 && mutation?.retryOnHttpError === false && mutation?.retryOnBusinessFailure === false && mutation?.prepareRetryAttempts === 0 &&
+        reconcile?.mutation !== true && (prechecks.length > 0 || deferredValidation) && prechecks.every((planKey) => adapter.requestPlans?.[planKey]?.mutation !== true);
+    })),
+    source: existsSync(adapterPath) ? relative(repoRoot, adapterPath) : relative(repoRoot, fallbackAdapterPath)
+  },
+  {
+    key: "marketingWritesAdvertiseCompleteContractMatrix",
+    ok: config.features?.marketingWriteActions?.enabled === true &&
+      Object.entries(adapter.capabilities?.marketing?.features || {}).length === 3 &&
+      Object.entries(adapter.capabilities.marketing.features).every(([feature, capability]) => {
+        const policyActions = Object.keys(adapter.policies?.marketing?.features?.[feature]?.writeActions || {}).sort();
+        const advertisedActions = Array.isArray(capability.writeActions) ? [...capability.writeActions].sort() : [];
+        return capability.read === true && JSON.stringify(advertisedActions) === JSON.stringify(policyActions);
+      }) &&
+      adapter.responseMappings?.marketing?.limited_time?.fields?.entityId?.paths?.includes("campagin_id") &&
+      adapter.responseMappings?.marketing?.limited_time?.fields?.startTime?.paths?.includes("begin_time") &&
+      adapter.responseMappings?.marketing?.limited_time?.fields?.productCount?.paths?.includes("product_total") &&
+      adapter.responseMappings?.marketing?.limited_time?.fields?.platformError?.paths?.includes("reject_msg") &&
+      adapter.responseMappings?.marketing?.limited_time?.preflight?.rejectedItemPaths?.some((path) => path.includes("campaign_check_res")) &&
+      adapter.responseMappings?.marketing?.limited_time?.fields?.status?.valueMap?.[3] === "已失效" &&
+      adapter.responseMappings?.marketing?.limited_time?.fields?.status?.valueMap?.[4] === "已结束" &&
+      adapter.responseMappings?.marketing?.limited_time?.fields?.status?.valueMap?.[6] === "处理中" &&
+      adapter.responseMappings?.marketing?.limited_time?.reconciliation?.completeByDefault === false,
     source: existsSync(adapterPath) ? relative(repoRoot, adapterPath) : relative(repoRoot, fallbackAdapterPath)
   }
 ];

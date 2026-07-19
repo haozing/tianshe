@@ -17,8 +17,8 @@ import type { LicenseStatus } from "../bridge/license";
 import { cn } from "../lib/utils";
 import { remoteAsset } from "../lib/assets";
 
-const DESKTOP_SETUP_DOWNLOAD_URL = "http://chihu.facaishe.cn/desktop/win/chihu-guanjia-2.1.15-phase2-setup.exe";
-const DESKTOP_SETUP_FILE_NAME = "chihu-guanjia-2.1.15-phase2-setup.exe";
+const DESKTOP_SETUP_DOWNLOAD_URL = "http://chihu.facaishe.cn/desktop/win/chihu-guanjia-2.1.16-phase2-setup.exe";
+const DESKTOP_SETUP_FILE_NAME = "chihu-guanjia-2.1.16-phase2-setup.exe";
 
 type ClientUpdatePhase = "idle" | "checking" | "downloading" | "downloaded" | "error";
 

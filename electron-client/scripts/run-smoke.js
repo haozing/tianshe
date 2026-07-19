@@ -217,7 +217,7 @@ async function createHttpSmokeServer() {
 function writeSmokeArtifact(result) {
   fs.mkdirSync(artifactsDir, { recursive: true });
   const outputPath = path.join(artifactsDir, `smoke-${scenario}.json`);
-  const sanitizedResult = scenario === "marketing-read" ? {
+  const sanitizedResult = ["marketing-read", "marketing-write"].includes(scenario) ? {
     ...result,
     textSample: "[redacted for marketing read probe]"
   } : result;
@@ -238,19 +238,19 @@ function writeSmokeArtifact(result) {
 async function main() {
   const httpSmoke = ["bridge", "http", "files", "logs", "ui-contract", "maintenance"].includes(scenario) ? await createHttpSmokeServer() : null;
   const configuredUserDataDir = String(process.env.CHIHU_SMOKE_USER_DATA_DIR || "").trim();
-  if (scenario === "marketing-read" && !configuredUserDataDir) {
-    throw new Error("CHIHU_SMOKE_USER_DATA_DIR is required for marketing-read and must point to a dedicated test profile");
+  if (["marketing-read", "marketing-write"].includes(scenario) && !configuredUserDataDir) {
+    throw new Error(`CHIHU_SMOKE_USER_DATA_DIR is required for ${scenario} and must point to an explicitly selected profile`);
   }
   const userDataDir = configuredUserDataDir || fs.mkdtempSync(path.join(os.tmpdir(), `chihu-electron-smoke-${scenario}-`));
   const ownsUserDataDir = !configuredUserDataDir;
   const defaultHomeUrl = process.env.CHIHU_HOME_URL || process.env.CHIHU_REMOTE_WEB_URL || "http://chihu-remote.localhost:4173/new-remote-web/";
-  const homeUrl = scenario === "marketing-read" ? marketingReadHomeUrl(defaultHomeUrl) : defaultHomeUrl;
+  const homeUrl = ["marketing-read", "marketing-write"].includes(scenario) ? marketingReadHomeUrl(defaultHomeUrl) : defaultHomeUrl;
   const env = {
     ...process.env,
     CHIHU_E2E_SMOKE: "1",
     CHIHU_E2E_SMOKE_SCENARIO: scenario,
-    ...(scenario === "marketing-read" ? { CHIHU_LICENSE_BYPASS: "1" } : {}),
-    CHIHU_E2E_TIMEOUT_MS: process.env.CHIHU_E2E_TIMEOUT_MS || (scenario === "bridge" ? "45000" : scenario === "marketing-read" ? "240000" : scenario === "sqlite" ? "30000" : "15000"),
+    ...(["marketing-read", "marketing-write"].includes(scenario) ? { CHIHU_LICENSE_BYPASS: "1" } : {}),
+    CHIHU_E2E_TIMEOUT_MS: process.env.CHIHU_E2E_TIMEOUT_MS || (scenario === "bridge" ? "45000" : ["marketing-read", "marketing-write"].includes(scenario) ? "240000" : scenario === "sqlite" ? "30000" : "15000"),
     CHIHU_USER_DATA_DIR: userDataDir,
     CHIHU_HOME_URL: homeUrl
   };

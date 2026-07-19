@@ -21,6 +21,7 @@ export function marketingWriteAccessEnabled(
   mutationActionValid: boolean
 ) {
   return marketingPageAccessEnabled(config, adapter, feature, pageFlag, contractValid) &&
+    config.features?.marketingWriteActions?.enabled === true &&
     adapter?.capabilities?.marketing?.features?.[feature]?.writeActions?.includes(action) === true &&
     mutationActionValid;
 }

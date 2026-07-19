@@ -52,10 +52,10 @@ function configureUpdater(updater, args = {}) {
 
   if (useDevUpdateConfig) {
     const configPath = process.env.CHIHU_DEV_UPDATE_CONFIG || path.join(__dirname, "..", "dev-update-config.json");
-    if (fs.existsSync(configPath)) {
-      updater.updateConfigPath = configPath;
-    }
+    if (!fs.existsSync(configPath)) return { ok: false, reason: "dev_update_config_missing" };
+    updater.updateConfigPath = configPath;
   }
+  return { ok: true };
 }
 
 function normalizeUpdateInfo(updater, updateInfo) {
@@ -93,7 +93,11 @@ async function startAutoUpdate(context, args = {}) {
 
   isCheckingUpdate = true;
   updater.autoDownload = false;
-  configureUpdater(updater, args);
+  const configured = configureUpdater(updater, args);
+  if (!configured.ok) {
+    isCheckingUpdate = false;
+    return { ok: true, skipped: true, reason: configured.reason };
+  }
 
   updater.once("update-available", (info) => {
     emitToMain(context, "update-available", info);
@@ -159,7 +163,20 @@ async function getClientVersionData(args = {}) {
 
   try {
     updater.autoDownload = false;
-    configureUpdater(updater, args);
+    const configured = configureUpdater(updater, args);
+    if (!configured.ok) {
+      return {
+        ok: true,
+        status: "unavailable",
+        channel: updater.channel || normalizeUpdateChannel(args.channel || DEFAULT_UPDATE_CHANNEL),
+        reason: configured.reason,
+        hasUpdate: false,
+        isNewVersion: true,
+        currentVersion: app.getVersion(),
+        latestVersion: app.getVersion(),
+        newVersion: app.getVersion()
+      };
+    }
     const result = await updater.checkForUpdates();
     return normalizeUpdateInfo(updater, result && result.updateInfo);
   } catch (error) {

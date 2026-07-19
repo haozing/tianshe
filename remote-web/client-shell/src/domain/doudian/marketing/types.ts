@@ -16,7 +16,7 @@ export type MarketingAction = MarketingReadAction | MarketingWriteAction;
 
 export const MARKETING_WRITE_ACTIONS: Record<MarketingFeature, readonly MarketingWriteAction[]> = {
   limited_time: ["create", "disable", "end", "toggle_renew", "revive", "copy", "bulk_edit", "remove_products", "tool_renew"],
-  new_user_bonus: ["create", "disable", "toggle_renew"],
+  new_user_bonus: ["create", "disable"],
   general_coupon: ["create", "cancel", "toggle_renew"]
 };
 
@@ -25,22 +25,55 @@ export interface MarketingDraft {
   name: string;
   startTime: string;
   endTime: string;
-  discountMode: "discount" | "reduce" | "threshold";
+  discountMode: "one_price_discount" | "fixed_price" | "discount" | "reduce" | "threshold";
   discountValue: string;
   issueCount: string;
   perUserLimit: string;
   officialRenew: boolean;
   toolRenew: boolean;
   toolRenewIntervalDays: string;
-  activityType: "flash" | "limited";
-  stockMode: "sku" | "activity";
+  activityType: "flash" | "limited" | "ordinary";
+  timeMode: "preset" | "range" | "recurring";
+  activityDurationMinutes: string;
+  productLimitPerActivity: string;
+  stockLimitMode: "unlimited" | "limited";
+  stockMode: "all" | "percent" | "fixed";
+  stockPercent: string;
   stockValue: string;
+  purchaseLimitMode: "unlimited" | "limited";
   purchaseLimit: string;
-  scheduleSlices: string;
-  skuMode: "all" | "selected";
+  skuMode: "all" | "exclude_lowest" | "lowest" | "highest" | "max_stock" | "min_stock" | "first" | "last";
+  lowestSkuOverride: boolean;
+  lowestSkuValue: string;
+  lowestSkuReduction: string;
+  lowestSkuSelection: "first" | "last" | "random" | "all";
+  priceTiers: Array<{ minPrice: string; maxPrice: string; value: string; reduction: string; purchaseLimit: string }>;
+  pricePrecision: "2" | "1" | "0" | "custom";
+  priceFraction: string;
+  autoMinPrice15: boolean;
+  nameMode: "random" | "prefix" | "prefix_random";
+  orderExpireSeconds: string;
+  warmupEnabled: boolean;
+  warmupMinutes: string;
   newUserDurationDays: string;
+  newUserNameMode: "default" | "prefix";
+  newUserNamePrefix: string;
+  newUserFloatingAmount: boolean;
+  newUserReductionAmount: string;
+  newUserMaximumReductionAmount: string;
+  newUserAverageDiscount: string;
+  newUserMaximumDiscount: string;
+  newUserMaximumDiscountValue: string;
+  newUserProductsPerActivity: string;
   couponType: "product" | "shop";
   thresholdAmount: string;
+  couponValidityMode: "same" | "days" | "range";
+  couponValidDays: string;
+  couponUseStartTime: string;
+  couponUseEndTime: string;
+  couponNameMode: "default" | "first_product_id" | "prefix";
+  couponNamePrefix: string;
+  couponProductsPerCoupon: string;
 }
 
 export interface MarketingTaskStore {
@@ -63,10 +96,14 @@ export interface MarketingTaskPayload {
 
 export interface MarketingEntity {
   entityId: string;
+  coreEntityId?: string;
   shopId: string;
   shopName: string;
   name: string;
   status: string;
+  rawStatus?: string;
+  activityType?: string;
+  discountType?: string;
   startTime: string;
   endTime: string;
   platformError: string;
@@ -79,17 +116,41 @@ export interface MarketingEntity {
   failureReason?: string;
   autoRenew?: boolean;
   toolRenew?: boolean;
+  limitStockType?: string;
   updatedAt?: string;
+  couponType?: string;
+  favouredType?: number;
+  discountTenths?: number;
+  creditFen?: number;
+  thresholdFen?: number;
+  totalAmount?: number;
+  unlimitedStock?: boolean;
+  leftAmount?: number;
+  usedAmount?: number;
+  validPeriodDays?: number;
+  useStartTime?: string;
+  useEndTime?: string;
 }
 
 export interface MarketingStoreReadResult {
   shopId: string;
   shopName: string;
   ok: boolean;
-  status: "ok" | "failed" | "cancelled" | "accepted" | "unknown" | "reconciling";
+  status: "ok" | "partial" | "failed" | "cancelled" | "accepted" | "unknown" | "reconciling";
   message: string;
   entities: MarketingEntity[];
   total: number;
+  activityCount?: number;
+  createdActivityCount?: number;
+  failedActivityCount?: number;
+  unknownActivityCount?: number;
+  productCount?: number;
+  itemRejections?: Array<{
+    itemType: "product" | "sku";
+    itemId: string;
+    reasonCode: string;
+    message: string;
+  }>;
 }
 
 export interface MarketingTaskResult {
@@ -102,6 +163,11 @@ export interface MarketingTaskResult {
   entities: MarketingEntity[];
   successCount: number;
   failureCount: number;
+  activityCount?: number;
+  createdActivityCount?: number;
+  failedActivityCount?: number;
+  unknownActivityCount?: number;
+  productCount?: number;
   operationId?: string;
 }
 
@@ -124,6 +190,13 @@ export interface MarketingRun {
   updatedAt: string;
   failureShardIds?: string[];
   failureCount?: number;
+  successCount?: number;
+  message?: string;
+  activityCount?: number;
+  createdActivityCount?: number;
+  failedActivityCount?: number;
+  unknownActivityCount?: number;
+  productCount?: number;
 }
 
 export interface MarketingStoreAttempt {

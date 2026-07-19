@@ -5,6 +5,12 @@
   "phase": "read",
   "scenario": "success",
   "capturedAt": "2026-07-18T00:00:00.000Z",
+  "provenance": {
+    "captureKind": "real-session-capture",
+    "captureId": "controlled-store-general-coupon-list-success-001",
+    "sourceArtifact": "secure/redacted-captures/general-coupon-list-success.json",
+    "captureSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
   "redaction": {
     "enabled": true,
     "shopIdentityReplaced": true,

@@ -1325,6 +1325,14 @@ declare global {
       }>;
     };
     chihuMarketingReadRuntime?: {
+      writeProbe: () => Promise<{
+        ok: boolean;
+        storeCount: number;
+        createStatus: string;
+        cancelStatus: string;
+        verificationStatus: string;
+        cleanupRequired: boolean;
+      }>;
       probe: () => Promise<{
         ok: boolean;
         storeCount: number;

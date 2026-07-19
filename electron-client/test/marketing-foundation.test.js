@@ -88,10 +88,16 @@ test("native HTTP timeout uses the shared bounded contract", () => {
   assert.equal(normalizeNativeTimeoutMs(500000), 120000);
 });
 
-test("marketing smoke requires an explicit dedicated profile and never selects production userData", () => {
+test("marketing smoke requires an explicitly selected profile and never selects production userData implicitly", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "scripts", "run-smoke.js"), "utf8");
-  assert.match(source, /CHIHU_SMOKE_USER_DATA_DIR is required for marketing-read/);
+  assert.match(source, /CHIHU_SMOKE_USER_DATA_DIR is required for \$\{scenario\}/);
   assert.match(source, /configuredUserDataDir \|\| fs\.mkdtempSync/);
   assert.doesNotMatch(source, /process\.env\.APPDATA/);
-  assert.match(source, /scenario === "marketing-read" \? \{ CHIHU_LICENSE_BYPASS: "1" \}/);
+  assert.match(source, /\["marketing-read", "marketing-write"\]\.includes\(scenario\).*CHIHU_LICENSE_BYPASS/);
+});
+
+test("development update checks skip both entry points when no explicit config exists", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "main", "ipc", "updates.js"), "utf8");
+  assert.equal((source.match(/const configured = configureUpdater\(updater, args\);/g) || []).length, 2);
+  assert.equal((source.match(/if \(!configured\.ok\)/g) || []).length, 2);
 });

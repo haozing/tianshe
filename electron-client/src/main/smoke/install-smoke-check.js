@@ -49,7 +49,7 @@ function installSmokeCheck(win) {
 
     probing = true;
     try {
-      const probeTimeoutCapMs = scenario === "bridge" ? 40000 : scenario === "marketing-read" ? 240000 : 10000;
+      const probeTimeoutCapMs = scenario === "bridge" ? 40000 : ["marketing-read", "marketing-write"].includes(scenario) ? 240000 : 10000;
       const probeTimeoutMs = Math.min(probeTimeoutCapMs, Math.max(3000, timeoutMs - (Date.now() - startedAt) - 500));
       const result = await Promise.race([
         win.webContents.executeJavaScript(`
@@ -96,6 +96,17 @@ function installSmokeCheck(win) {
             href: location.href,
             textSample: text.slice(0, 240)
           };
+
+          if (result.scenario === "marketing-write") {
+            const runtimeDeadline = Date.now() + 10000;
+            while (!window.chihuMarketingReadRuntime && Date.now() < runtimeDeadline) await sleep(100);
+            if (!window.chihuMarketingReadRuntime) throw new Error("chihuMarketingReadRuntime missing");
+            result.marketingWrite = await withTimeout("marketingWriteProbe", window.chihuMarketingReadRuntime.writeProbe(), 220000);
+            result.marketingWriteOk = result.marketingWrite.ok === true && result.marketingWrite.cleanupRequired === false;
+            result.textSample = "[redacted for marketing write probe]";
+            resolve(result);
+            return;
+          }
 
           if (result.scenario === "marketing-read") {
             const runtimeDeadline = Date.now() + 10000;
@@ -146,7 +157,7 @@ function installSmokeCheck(win) {
               mobile?.innerWidth <= 410 && mobile?.innerHeight >= 760 && mobile?.heading === true &&
               mobile?.createDisabled === true && mobile?.createVisible === true && mobile?.singleColumn === true &&
               mobile?.horizontalOverflow === false && mobile?.clippedButtons === 0;
-            result.marketingReadOk = result.marketingRead.ok === true && result.marketingRead.writeActionsEnabled === false && result.marketingUiOk === true;
+            result.marketingReadOk = result.marketingRead.ok === true && result.marketingRead.writeActionsEnabled === true && result.marketingUiOk === true;
             result.textSample = "[redacted for marketing read probe]";
             resolve(result);
             return;
@@ -1746,6 +1757,7 @@ function installSmokeCheck(win) {
         scenario === "ui-contract" ? result.uiContractOk :
         scenario === "maintenance" ? result.maintenanceOk :
         scenario === "sqlite" ? result.sqliteOk :
+        scenario === "marketing-write" ? result.marketingWriteOk :
         scenario === "marketing-read" ? result.marketingReadOk :
         result.bridgeOk;
       const ok = result.hasShell && result.hasClient && result.methodCount >= 33 && scenarioOk;
@@ -1755,7 +1767,7 @@ function installSmokeCheck(win) {
         return;
       }
 
-      if (scenario === "marketing-read") {
+      if (["marketing-read", "marketing-write"].includes(scenario)) {
         clearTimeout(timer);
         finish(1, result);
         return;

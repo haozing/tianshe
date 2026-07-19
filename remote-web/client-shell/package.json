@@ -1,6 +1,6 @@
 {
   "name": "@chihu/client-shell",
-  "version": "2026.07.19-marketing-pilot-v1",
+  "version": "2026.07.19-marketing-pilot-v2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,6 +14,8 @@
     "test:store-state": "node --experimental-strip-types --test test/opportunity-store-state.test.mjs",
     "test:business-data-contract": "node --test test/business-data-xzb-contract.test.mjs",
     "test:marketing-fixtures": "node ../scripts/audit-doudian-marketing-fixtures.mjs",
+    "test:marketing-real-fixtures": "node ../scripts/audit-doudian-marketing-fixtures.mjs --require-real",
+    "generate:marketing-fixtures": "node ../scripts/generate-doudian-marketing-fixtures.mjs",
     "sync:marketing-read-pilot": "node ../scripts/sync-doudian-marketing-read-pilot.mjs",
     "typecheck": "tsc --noEmit"
   },

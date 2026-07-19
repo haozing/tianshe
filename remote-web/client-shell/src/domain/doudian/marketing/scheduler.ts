@@ -6,7 +6,15 @@ import { marketingScheduleDue, nextMarketingScheduleTime } from "./schedulerPoli
 let scheduleTimer: number | null = null;
 const scheduleLocks = new Set<string>();
 
-export function startMarketingScheduleRunner(options: { enabled: boolean; intervalMs?: number; execute: (schedule: MarketingSchedule) => Promise<{ ok: boolean; operationId?: string }> }) {
+export interface MarketingScheduleExecutionResult {
+  ok: boolean;
+  operationId?: string;
+  entityId?: string;
+  intervalMs?: number;
+  nextRunAt?: string;
+}
+
+export function startMarketingScheduleRunner(options: { enabled: boolean; intervalMs?: number; execute: (schedule: MarketingSchedule) => Promise<MarketingScheduleExecutionResult> }) {
   if (scheduleTimer !== null) window.clearInterval(scheduleTimer);
   if (!options.enabled) { scheduleTimer = null; return () => undefined; }
   const tick = () => { void runDueMarketingSchedules({ limit: 10, execute: options.execute }).catch(() => undefined); };
@@ -26,14 +34,18 @@ export async function claimMarketingSchedule(schedule: MarketingSchedule, now = 
   return claimed;
 }
 
-export async function completeMarketingSchedule(schedule: MarketingSchedule, result: { ok: boolean; operationId?: string }, now = Date.now()) {
+export async function completeMarketingSchedule(schedule: MarketingSchedule, result: MarketingScheduleExecutionResult, now = Date.now()) {
+  const intervalMs = result.ok && Number.isFinite(result.intervalMs) ? Math.max(60_000, Number(result.intervalMs)) : schedule.intervalMs;
+  const requestedNext = Date.parse(result.nextRunAt || "");
   const next: MarketingSchedule = {
     ...schedule,
+    entityId: result.ok && result.entityId ? result.entityId : schedule.entityId,
+    intervalMs,
     status: result.ok ? "active" : "failed",
     leaseUntil: undefined,
     lastRunAt: new Date(now).toISOString(),
     lastOperationId: result.operationId || schedule.lastOperationId,
-    nextRunAt: result.ok ? nextMarketingScheduleTime(schedule, now) : schedule.nextRunAt,
+    nextRunAt: result.ok ? (Number.isFinite(requestedNext) ? new Date(requestedNext).toISOString() : nextMarketingScheduleTime({ ...schedule, intervalMs }, now)) : schedule.nextRunAt,
     failureCount: result.ok ? schedule.failureCount : schedule.failureCount + 1,
     updatedAt: new Date(now).toISOString()
   };
@@ -41,7 +53,7 @@ export async function completeMarketingSchedule(schedule: MarketingSchedule, res
   return next;
 }
 
-export async function runDueMarketingSchedules(options: { now?: number; limit?: number; execute: (schedule: MarketingSchedule) => Promise<{ ok: boolean; operationId?: string }> }) {
+export async function runDueMarketingSchedules(options: { now?: number; limit?: number; execute: (schedule: MarketingSchedule) => Promise<MarketingScheduleExecutionResult> }) {
   const now = options.now ?? Date.now();
   const limit = Math.max(1, options.limit || 20);
   const results: MarketingSchedule[] = [];

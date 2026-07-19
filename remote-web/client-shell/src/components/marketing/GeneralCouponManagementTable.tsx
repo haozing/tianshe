@@ -1,0 +1,18 @@
+import { Square, StopCircle } from "lucide-react";
+import { generalCouponDiscountSummary, generalCouponUseTimeSummary, type MarketingEntity } from "../../domain/doudian";
+
+function statusTone(status: string) {
+  if (status.includes("生效")) return "border-[#bff0cf] bg-[#eafaf0] text-[#087443]";
+  if (status.includes("作废") || status.includes("过期")) return "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]";
+  return "border-[#dbe5f2] bg-[#f8fafc] text-[#52627a]";
+}
+
+export function GeneralCouponManagementTable({ rows, selectedKeys, onToggle, onDetail }: { rows: MarketingEntity[]; selectedKeys: ReadonlySet<string>; onToggle: (entity: MarketingEntity) => void; onDetail: (entity: MarketingEntity) => void }) {
+  if (!rows.length) return <div className="grid min-h-[300px] place-items-center text-[12px] text-[#667085]">选择店铺后刷新优惠券列表</div>;
+  return <table className="w-full min-w-[1220px] border-collapse text-left text-[12px]"><thead><tr className="sticky top-0 z-10 border-b border-[#e6ebf3] bg-[#f8fafc] text-[#667085]"><th className="w-10 px-4 py-3" /><th className="min-w-[250px] px-2 py-3">优惠券信息</th><th className="min-w-[300px] px-3 py-3">领取 / 使用时间</th><th className="px-3 py-3">店铺</th><th className="px-3 py-3">状态</th><th className="px-3 py-3">领取量 / 发放量</th><th className="px-3 py-3">核销量</th><th className="px-3 py-3">自动续期</th><th className="px-3 py-3">操作</th></tr></thead><tbody>{rows.map((entity, index) => {
+    const key = `${entity.shopId}:${entity.entityId}`;
+    const selected = selectedKeys.has(key);
+    const issued = entity.totalAmount != null && entity.leftAmount != null ? Math.max(0, entity.totalAmount - entity.leftAmount) : undefined;
+    return <tr className={`border-b border-[#edf1f6] text-[#344054] ${selected ? "bg-[#fffaf6]" : ""}`} key={`${key}:${index}`}><td className="px-4 py-3"><button className="grid size-6 place-items-center text-[#52627a]" type="button" title={selected ? "取消选择优惠券" : "选择优惠券"} onClick={() => onToggle(entity)}>{selected ? <StopCircle className="size-4 text-[#ff5020]" /> : <Square className="size-4" />}</button></td><td className="px-2 py-3"><strong className="block text-[#073b7a]">{generalCouponDiscountSummary(entity)}</strong><span className="mt-1 block max-w-[280px] truncate font-semibold text-[#1d2939]" title={entity.name}>{entity.name}</span><span className="mt-1 block text-[11px] text-[#667085]">{entity.couponType || entity.activityType || "优惠券"} · <span className="font-mono text-[#98a2b3]">{entity.entityId}</span></span></td><td className="px-3 py-3 text-[11px] text-[#52627a]"><span className="block"><b className="mr-1 text-[#ff5020]">领</b>{entity.startTime || "-"} - {entity.endTime || "-"}</span><span className="mt-1 block"><b className="mr-1 text-[#087443]">用</b>{generalCouponUseTimeSummary(entity)}</span></td><td className="max-w-[180px] px-3 py-3"><span className="block truncate" title={entity.shopName}>{entity.shopName}</span></td><td className="px-3 py-3"><span className={`inline-flex rounded-sm border px-2 py-0.5 ${statusTone(entity.status)}`}>{entity.status}</span></td><td className="px-3 py-3 font-semibold">{issued ?? "-"} / {entity.unlimitedStock ? "不限" : entity.totalAmount ?? "-"}</td><td className="px-3 py-3">{entity.usedAmount ?? 0}</td><td className="px-3 py-3">{entity.autoRenew ? <span className="font-semibold text-[#087443]">已开启</span> : <span className="text-[#98a2b3]">未开启</span>}</td><td className="px-3 py-3"><button className="font-semibold text-[#073b7a]" type="button" onClick={() => onDetail(entity)}>详情</button></td></tr>;
+  })}</tbody></table>;
+}

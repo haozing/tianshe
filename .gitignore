@@ -20,3 +20,9 @@ node_modules/
 archive
 docs
 kmsource
+remote-web/client-shell/src/domain/doudian
+!remote-web/client-shell/src/domain/doudian/
+remote-web/client-shell/src/domain/doudian/*
+!remote-web/client-shell/src/domain/doudian/marketing/
+remote-web/client-shell/src/domain/doudian/marketing/*
+!remote-web/client-shell/src/domain/doudian/marketing/storeContext.ts

@@ -8,7 +8,7 @@ const REQUIRED_READ_ACTIONS: Record<MarketingContractFeature, string[]> = {
 };
 const ALLOWED_WRITE_ACTIONS: Record<MarketingContractFeature, string[]> = {
   limited_time: ["create", "disable", "end", "toggle_renew", "revive", "copy", "bulk_edit", "remove_products", "tool_renew"],
-  new_user_bonus: ["create", "disable", "toggle_renew"],
+  new_user_bonus: ["create", "disable"],
   general_coupon: ["create", "cancel", "toggle_renew"]
 };
 
@@ -59,13 +59,14 @@ function validReadPlanReference(config: Record<string, unknown>, value: unknown)
   return textList(value, false) && (value as string[]).every((planKey) => validReadPlan(config, planKey));
 }
 
-function validMutationPlan(config: Record<string, unknown>, mutationPlanKey: unknown, reconcilePlanKey: unknown, precheckPlanKeys: unknown) {
+function validMutationPlan(config: Record<string, unknown>, mutationPlanKey: unknown, reconcilePlanKey: unknown, precheckPlanKeys: unknown, deferredValidation: unknown, validationPlanKey: unknown) {
   const mutation = plan(config, mutationPlanKey);
   const reconcile = plan(config, reconcilePlanKey);
   const prechecks = Array.isArray(precheckPlanKeys) ? precheckPlanKeys : [];
+  const validPrecheck = textList(prechecks) && (prechecks.length > 0 || (deferredValidation === true && validReadPlan(config, validationPlanKey)));
   const timeoutMs = Number(mutation?.timeoutMs);
   return !!mutation && !!reconcile && planEndpointExists(config, mutation) && planEndpointExists(config, reconcile) &&
-    textList(prechecks, false) && prechecks.every((planKey) => validReadPlan(config, planKey)) &&
+    validPrecheck && prechecks.every((planKey) => validReadPlan(config, planKey)) &&
     mutation.mutation === true && Number(mutation.maxAttempts) === 1 &&
     mutation.retryOnHttpError === false && mutation.retryOnBusinessFailure === false &&
     Number(mutation.prepareRetryAttempts) === 0 && Number.isFinite(timeoutMs) && timeoutMs >= 5000 && timeoutMs <= 120000 &&
@@ -85,7 +86,10 @@ export function isValidMarketingMutationActionConfig(input: unknown, feature: Ma
   const preflight = objectValue(mapping?.preflight);
   if (action === "create" && !textList(preflight?.eligiblePaths, false) && !textList(preflight?.rejectedItemPaths, false)) return false;
   if (action !== "create" && !textList(preflight?.statusPaths, false)) return false;
-  return !!contract && validMutationPlan(config, contract.mutationPlanKey, contract.reconcilePlanKey, contract.precheckPlanKeys);
+  if (!contract || !validMutationPlan(config, contract.mutationPlanKey, contract.reconcilePlanKey, contract.precheckPlanKeys, contract.deferredValidation, contract.validationPlanKey)) return false;
+  const scopedPrechecks = objectValue(contract.precheckPlanKeysByScope);
+  if (Object.values(scopedPrechecks || {}).some((value) => !textList(value, false) || !(value as string[]).every((planKey) => validReadPlan(config, planKey)))) return false;
+  return true;
 }
 
 export function isValidMarketingContractConfig(input: unknown) {
