@@ -1,11 +1,11 @@
 {
   "name": "@chihu/client-shell",
-  "version": "2026.07.19-marketing-pilot-v2",
+  "version": "2026.07.20-freemium-v2",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "vite build",
+    "build": "node --experimental-strip-types ../scripts/export-doudian-window-commands.mjs && vite build",
     "build:release": "npm test && npm run typecheck && npm run test:marketing-fixtures && npm run build && npm run obfuscate:release && npm run release:sync",
     "obfuscate:release": "node ../scripts/obfuscate-release.mjs",
     "preview": "vite preview --host 127.0.0.1",

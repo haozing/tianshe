@@ -457,7 +457,8 @@ export function getDoudianAdapterStatus() {
 
 export async function loadDoudianAdapterPayload(options: LoadDoudianAdapterOptions = {}): Promise<DoudianAdapterPayload> {
   const query = new URLSearchParams(window.location.search);
-  const override = query.get("doudianAdapterUrl");
+  const smokeOverrideAllowed = window.location.hostname.endsWith(".localhost") && query.get("smoke") === "1";
+  const override = smokeOverrideAllowed ? query.get("doudianAdapterUrl") : null;
   const urlValue = override || DOUDIAN_ADAPTER_URL;
   const resolvedUrl = new URL(urlValue, window.location.href);
   if (resolvedUrl.origin !== window.location.origin) throw new Error("doudian adapter override must be same-origin");

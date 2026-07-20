@@ -1,5 +1,6 @@
 import { getChihuNative } from "../native/client";
 import type { NativeLicenseStatus } from "../native/types";
+export { canAccessTier, paidAccessRefreshDelayMs, type AccessTier } from "../access";
 
 export type LicenseStatus = NativeLicenseStatus;
 
@@ -7,6 +8,11 @@ export const initialLicenseStatus: LicenseStatus = {
   ok: false,
   configured: false,
   licensed: false,
+  allowFreeFeatures: true,
+  allowPaidFeatures: false,
+  paidAccessGranted: false,
+  paidAccessSource: "none",
+  verificationPending: false,
   status: "pending",
   reason: "",
   message: ""
@@ -26,8 +32,13 @@ function normalizeLicenseStatus(status: NativeLicenseStatus | null | undefined):
   return {
     ...status,
     configured: Boolean(status.configured),
-    licensed: Boolean(status.licensed),
-    allowPaidFeatures: Boolean(status.allowPaidFeatures ?? status.licensed),
+    licensed: status.paidAccessGranted === true,
+    allowFreeFeatures: Boolean(status.allowFreeFeatures),
+    allowPaidFeatures: Boolean(status.allowPaidFeatures),
+    paidAccessGranted: status.paidAccessGranted === true,
+    paidAccessSource: ["server", "redeem", "bypass"].includes(String(status.paidAccessSource)) ? status.paidAccessSource : "none",
+    paidAccessLeaseRemainingSeconds: Number.isFinite(Number(status.paidAccessLeaseRemainingSeconds)) ? Math.max(0, Number(status.paidAccessLeaseRemainingSeconds)) : 0,
+    verificationPending: status.verificationPending === true,
     remainingSeconds: Number.isFinite(Number(status.remainingSeconds)) ? Number(status.remainingSeconds) : 0
   };
 }

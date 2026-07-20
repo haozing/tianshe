@@ -1,6 +1,5 @@
 import type { DoudianOperationRecord } from "./operation";
 
-export const DOUDIAN_TASK_CHANNEL = "chihu-doudian-task";
 export const DOUDIAN_PROGRESS_EVENT = "chihu-doudian-progress";
 
 export type DoudianTaskMessage =
@@ -9,8 +8,7 @@ export type DoudianTaskMessage =
   | { type: "task:progress"; operationId: string; progress: number; message?: string }
   | { type: "task:heartbeat"; operationId: string; inFlightMutations: number }
   | { type: "task:result"; operationId: string; resultSummary?: string; result?: unknown }
-  | { type: "task:error"; operationId: string; error: string }
-  | { type: "task:ready"; href: string };
+  | { type: "task:error"; operationId: string; error: string };
 
 export interface DoudianTaskRequest {
   operationId?: string;
@@ -31,10 +29,6 @@ export interface DoudianProgressDetail {
   message?: string;
   resultSummary?: string;
   error?: string;
-}
-
-export function createTaskChannel() {
-  return new BroadcastChannel(DOUDIAN_TASK_CHANNEL);
 }
 
 export function dispatchDoudianProgress(detail: DoudianProgressDetail) {

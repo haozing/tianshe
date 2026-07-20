@@ -8,8 +8,21 @@ const { Readable } = require("node:stream");
 const axios = require("axios");
 
 const DEFAULT_DOWNLOAD_TIMEOUT = 120000;
+const MAX_SELECTED_FILE_BYTES = 100 * 1024 * 1024;
 const TEMP_SUFFIX = ".downloading";
 const downloadTasks = new Map();
+const selectedFiles = new Map();
+
+function selectedFileKey(filePath) {
+  return path.resolve(String(filePath || "")).toLowerCase();
+}
+
+function rememberSelectedFile(event, filePath) {
+  const senderId = event.sender.id;
+  selectedFiles.set(senderId, selectedFileKey(filePath));
+  event.sender.once("did-start-navigation", () => selectedFiles.delete(senderId));
+  event.sender.once("destroyed", () => selectedFiles.delete(senderId));
+}
 
 function getTask(taskId) {
   const id = String(taskId || "").trim();
@@ -69,6 +82,7 @@ async function selectDirectoryDialog(event, options = {}) {
 async function selectFileDialog(event, options = {}) {
   if (process.env.CHIHU_E2E_SMOKE === "1" && options.chihu_e2e_mock_path) {
     const filePath = String(options.chihu_e2e_mock_path);
+    rememberSelectedFile(event, filePath);
     return {
       ok: true,
       canceled: false,
@@ -85,6 +99,7 @@ async function selectFileDialog(event, options = {}) {
   });
   if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
   const filePath = result.filePaths[0];
+  rememberSelectedFile(event, filePath);
   return {
     ok: true,
     canceled: false,
@@ -96,11 +111,12 @@ async function selectFileDialog(event, options = {}) {
 async function readFileRaw(options = {}) {
   const filePath = String(options.filePath || "").trim();
   const encoding = options.encoding === "base64" ? "base64" : "utf8";
-  const maxBytes = Number(options.maxBytes || 0);
+  const requestedMaxBytes = Number(options.maxBytes || MAX_SELECTED_FILE_BYTES);
+  const maxBytes = Math.max(1, Math.min(MAX_SELECTED_FILE_BYTES, Number.isFinite(requestedMaxBytes) ? requestedMaxBytes : MAX_SELECTED_FILE_BYTES));
   if (!filePath) return { ok: false, message: "missing filePath" };
   try {
     const stat = fs.statSync(filePath);
-    if (maxBytes > 0 && stat.size > maxBytes) {
+    if (stat.size > maxBytes) {
       return { ok: false, message: "file exceeds maxBytes", fileName: path.basename(filePath), size: stat.size };
     }
     return {
@@ -290,7 +306,13 @@ function registerFileHandlers() {
   registerUploadHandler();
   ipcMain.handle("selectDirectory", (event, args) => selectDirectoryDialog(event, args));
   ipcMain.handle("native:files:selectFile", (event, args) => selectFileDialog(event, args));
-  ipcMain.handle("native:files:readFile", (_event, args) => readFileRaw(args));
+  ipcMain.handle("native:files:readFile", (event, args = {}) => {
+    const senderId = event.sender.id;
+    const selected = selectedFiles.get(senderId);
+    if (!selected || selected !== selectedFileKey(args.filePath)) throw new Error("file path was not selected by this page");
+    selectedFiles.delete(senderId);
+    return readFileRaw(args);
+  });
   ipcMain.handle("native:files:download", (_event, args) => downloadFileToPath(args));
   ipcMain.handle("downloadFileToPath", (_event, args) => downloadFileToPath(args));
   ipcMain.handle("cancelDownloadFileToPath", (_event, args) => cancelTask(args && args.taskId));

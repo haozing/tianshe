@@ -7,7 +7,9 @@ let scheduleTimer: number | null = null;
 const scheduleLocks = new Set<string>();
 
 export interface MarketingScheduleExecutionResult {
-  ok: boolean;
+  outcome: "executed" | "deferred";
+  ok?: boolean;
+  reason?: "license_required" | "auth_check_failed";
   operationId?: string;
   entityId?: string;
   intervalMs?: number;
@@ -35,6 +37,19 @@ export async function claimMarketingSchedule(schedule: MarketingSchedule, now = 
 }
 
 export async function completeMarketingSchedule(schedule: MarketingSchedule, result: MarketingScheduleExecutionResult, now = Date.now()) {
+  if (result.outcome === "deferred") {
+    const deferred: MarketingSchedule = {
+      ...schedule,
+      status: "deferred",
+      leaseUntil: undefined,
+      deferredReason: result.reason || "license_required",
+      deferredAt: new Date(now).toISOString(),
+      failureCount: schedule.failureCount,
+      updatedAt: new Date(now).toISOString()
+    };
+    try { await saveMarketingSchedule(deferred); } finally { scheduleLocks.delete(schedule.id); }
+    return deferred;
+  }
   const intervalMs = result.ok && Number.isFinite(result.intervalMs) ? Math.max(60_000, Number(result.intervalMs)) : schedule.intervalMs;
   const requestedNext = Date.parse(result.nextRunAt || "");
   const next: MarketingSchedule = {
@@ -47,6 +62,8 @@ export async function completeMarketingSchedule(schedule: MarketingSchedule, res
     lastOperationId: result.operationId || schedule.lastOperationId,
     nextRunAt: result.ok ? (Number.isFinite(requestedNext) ? new Date(requestedNext).toISOString() : nextMarketingScheduleTime({ ...schedule, intervalMs }, now)) : schedule.nextRunAt,
     failureCount: result.ok ? schedule.failureCount : schedule.failureCount + 1,
+    deferredReason: undefined,
+    deferredAt: undefined,
     updatedAt: new Date(now).toISOString()
   };
   try { await saveMarketingSchedule(next); } finally { scheduleLocks.delete(schedule.id); }
@@ -65,13 +82,39 @@ export async function runDueMarketingSchedules(options: { now?: number; limit?: 
       const claimed = await claimMarketingSchedule(schedule, now);
       if (!claimed) continue;
       try {
-        results.push(await completeMarketingSchedule(claimed, await options.execute(claimed), now));
+        const execution = await options.execute(claimed);
+        results.push(await completeMarketingSchedule(claimed, execution, now));
       } catch {
-        results.push(await completeMarketingSchedule(claimed, { ok: false }, now));
+        results.push(await completeMarketingSchedule(claimed, { outcome: "executed", ok: false }, now));
       }
     }
     if (results.length >= limit || !page.hasMore || !page.nextCursor) break;
     cursor = page.nextCursor;
   }
   return results;
+}
+
+export async function rebaseDeferredMarketingSchedules(now = Date.now()) {
+  const restored: MarketingSchedule[] = [];
+  let cursor = null;
+  for (;;) {
+    const page = await queryMarketingSchedules({ cursor, pageSize: 500 });
+    for (const schedule of page.items) {
+      if (schedule.status !== "deferred") continue;
+      const next: MarketingSchedule = {
+        ...schedule,
+        status: "active",
+        nextRunAt: nextMarketingScheduleTime(schedule, now),
+        leaseUntil: undefined,
+        deferredReason: undefined,
+        deferredAt: undefined,
+        updatedAt: new Date(now).toISOString()
+      };
+      await saveMarketingSchedule(next);
+      restored.push(next);
+    }
+    if (!page.hasMore || !page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  return restored;
 }

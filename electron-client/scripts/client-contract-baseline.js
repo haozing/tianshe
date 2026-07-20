@@ -10,7 +10,6 @@ const baseClientMethods = [
   ["editBrowserWindow", "editBrowserWindow"],
   ["getBrowserWindowInfo", "getBrowserWindowInfo"],
   ["destroyBrowserWindow", "destroyBrowserWindow"],
-  ["executeJavaScriptBrowserWindow", "executeJavaScriptBrowserWindow"],
   ["reloadHomeUrl", "reloadHomeUrl"],
   ["sendNotification", "send_notification"],
   ["getMainWindowInfo", "getMainWindowInfo"],
@@ -26,18 +25,13 @@ const baseClientMethods = [
   ["getClientVersionData", "getClientVersionData"],
   ["reportClientLog", "reportClientLog"],
   ["getCrashLogDir", "getCrashLogDir"],
-  ["cleanCrashLogs", "cleanupOldCrashLogs"],
-  ["selectDirectory", "selectDirectory"],
-  ["downloadFileToPath", "downloadFileToPath"],
-  ["cancelDownloadFileToPath", "cancelDownloadFileToPath"],
-  ["saveBufferToPath", "saveBufferToPath"],
-  ["openPathInExplorer", "openPathInExplorer"]
+  ["cleanCrashLogs", "cleanupOldCrashLogs"]
 ];
 
 const chihuNativeMethods = [
   ["app.getInfo", "native:app:getInfo"],
   ["windows.open", "native:windows:open"],
-  ["windows.eval", "native:windows:eval"],
+  ["windows.command", "native:windows:command"],
   ["windows.destroy", "native:windows:destroy"],
   ["cookies.get", "native:cookies:get"],
   ["cookies.set", "native:cookies:set"],
@@ -52,7 +46,6 @@ const chihuNativeMethods = [
   ["license.clearLocal", "native:license:clearLocal"],
   ["files.selectFile", "native:files:selectFile"],
   ["files.readFile", "native:files:readFile"],
-  ["files.download", "native:files:download"],
   ["notifications.send", "native:notifications:send"],
   ["updates.start", "native:updates:start"],
   ["updates.getVersionData", "native:updates:getVersionData"],

@@ -292,25 +292,6 @@ function importActivationLogPayload(store: DoudianStoreSummary, activation: Impo
   };
 }
 
-function switchShopEvalCode(switchFactory: string, payload: unknown, timeoutMs: number) {
-  return `
-    (async () => {
-      const payload = ${JSON.stringify(payload)};
-      const timeoutMs = ${JSON.stringify(timeoutMs)};
-      const switchShop = ${switchFactory};
-      const timeout = new Promise((resolve) => {
-        setTimeout(() => resolve({ ok: false, reason: "switch-script-timeout", href: location.href, title: document.title }), timeoutMs);
-      });
-      try {
-        const result = switchShop(payload);
-        return await Promise.race([Promise.resolve(result), timeout]);
-      } catch (error) {
-        return { ok: false, reason: "switch-script-error", message: error && error.message ? error.message : String(error), href: location.href, title: document.title };
-      }
-    })();
-  `;
-}
-
 async function activateImportedStore(adapter: DoudianAdapterPayload, store: DoudianStoreSummary): Promise<ImportActivationResult> {
   const native = requireChihuNative();
   const context = { shopId: store.shopId, shopName: store.shopName };
@@ -329,11 +310,6 @@ async function activateImportedStore(adapter: DoudianAdapterPayload, store: Doud
       confirmedStore: beforeState.confirmedStore,
       message: "current shop already active"
     });
-  }
-
-  const switchFactory = adapter.scripts?.switchShopFactory;
-  if (!switchFactory) {
-    return report({ ok: false, currentShopId: beforeState.currentShopId, currentShopName: beforeState.currentShopName, message: "switchShopFactory missing" });
   }
 
   let winId: number | null = null;
@@ -363,9 +339,10 @@ async function activateImportedStore(adapter: DoudianAdapterPayload, store: Doud
     const selectDeadline = Date.now() + selectTimeoutMs;
     while (Date.now() < selectDeadline) {
       switchAttempts += 1;
-      lastSwitchResult = await native.windows.eval({
+      lastSwitchResult = await native.windows.command({
         winId,
-        code: switchShopEvalCode(switchFactory, { adapter: adapter.adapter, shop: store, context }, switchTimeoutMs),
+        command: "switch-shop",
+        args: { shop: store },
         timeoutMs: switchTimeoutMs + 2000
       }).catch((error) => ({
         ok: false,
@@ -679,9 +656,9 @@ async function waitForLoginDetection(winId: number, partition: string, args: Fet
   }
   while (Date.now() < deadline) {
     if (args.isCancelled?.()) throw new Error("cancelled");
-    const roleNames = await native.windows.eval({
+    const roleNames = await native.windows.command({
       winId,
-      code: adapter.scripts?.collectRoleShopNames || "[]",
+      command: "collect-role-shop-names",
       timeoutMs: probeEvalTimeoutMs
     }).catch(() => []);
     if (Array.isArray(roleNames) && roleNames.length > 0) {
@@ -705,9 +682,9 @@ async function waitForLoginDetection(winId: number, partition: string, args: Fet
       }
     }
 
-    isHomePage = !!(await native.windows.eval({
+    isHomePage = !!(await native.windows.command({
       winId,
-      code: adapter.scripts?.isHomePage || "false",
+      command: "is-home-page",
       timeoutMs: probeEvalTimeoutMs
     }).catch(() => false));
     homePageAttempts = isHomePage ? homePageAttempts + 1 : 0;

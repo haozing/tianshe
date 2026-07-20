@@ -12,13 +12,16 @@ export interface NativeOpenWindowRequest {
   contextIsolation?: boolean;
 }
 
-export interface NativeEvalWindowRequest {
+export interface NativeWindowCommandRequest {
   winId: number;
-  code: string;
+  command: "collect-role-shop-names" | "is-home-page" | "sign" | "switch-shop" | "page-fetch";
+  args?: Record<string, unknown>;
+  taskGrantId?: string;
   timeoutMs?: number;
 }
 
 export interface NativeHttpRequest {
+  taskGrantId?: string;
   partition?: string;
   url: string;
   method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
@@ -121,6 +124,7 @@ export interface NativeLicenseStatus {
   configured: boolean;
   bypass?: boolean;
   licensed: boolean;
+  allowFreeFeatures: boolean;
   status?: string;
   reason?: string;
   message?: string;
@@ -128,6 +132,10 @@ export interface NativeLicenseStatus {
   clientInstanceId?: string;
   authStatus?: string;
   allowPaidFeatures?: boolean;
+  paidAccessGranted: boolean;
+  paidAccessSource: "none" | "server" | "redeem" | "bypass";
+  paidAccessLeaseRemainingSeconds?: number;
+  verificationPending: boolean;
   expireAt?: string | null;
   remainingSeconds?: number;
   isPermanent?: boolean;
@@ -147,13 +155,23 @@ export interface NativeLicenseRedeemRequest {
   cardKey: string;
 }
 
+export interface NativeTaskStartRequest {
+  taskType: string;
+  clientRequestId?: string;
+  params: Record<string, unknown>;
+}
+
+export type NativeTaskStartResult =
+  | { ok: true; operationId: string; status: "started" | "deduplicated"; runnerWinId?: number }
+  | { ok: false; code: "LICENSE_REQUIRED" | "AUTH_EXPIRED" | "AUTH_CHECK_FAILED" | "TASK_TYPE_DENIED" | "TASK_PARAMS_INVALID" | string; message: string };
+
 export interface ChihuNativeApi {
   app: {
     getInfo: () => Promise<unknown>;
   };
   windows: {
     open: (args: NativeOpenWindowRequest) => Promise<number>;
-    eval: (args: NativeEvalWindowRequest) => Promise<unknown>;
+    command: (args: NativeWindowCommandRequest) => Promise<unknown>;
     destroy: (args: { winId: number }) => Promise<unknown>;
     getInfo?: (args: { winId: number }) => Promise<unknown>;
     getAll?: () => Promise<unknown>;
@@ -186,11 +204,6 @@ export interface ChihuNativeApi {
   files: {
     selectFile: (args?: SelectFileRequest) => Promise<SelectFileResult>;
     readFile: (args: ReadFileRequest) => Promise<ReadFileResult>;
-    download: (args: unknown) => Promise<unknown>;
-    selectDirectory?: (args?: unknown) => Promise<unknown>;
-    saveBufferToPath?: (args?: unknown) => Promise<unknown>;
-    openPathInExplorer?: (args?: unknown) => Promise<unknown>;
-    cancelDownload?: (args?: unknown) => Promise<unknown>;
   };
   notifications: {
     send: (args?: unknown) => Promise<unknown>;
@@ -209,6 +222,19 @@ export interface ChihuNativeApi {
   };
   text: {
     segment: (args: NativeTextSegmentRequest) => Promise<NativeTextSegmentResult>;
+  };
+  tasks: {
+    getCatalog: () => Promise<Record<string, { taskType: string; accessTier: "free" | "paid" | "recovery" | "internal"; mutation: boolean | "dynamic" }>>;
+    startRunner: (args: NativeTaskStartRequest) => Promise<NativeTaskStartResult>;
+    cancelRunner: (args: { operationId: string }) => Promise<unknown>;
+    getStatus: (args: { operationId: string }) => Promise<unknown>;
+    listStatus: () => Promise<unknown>;
+    interrupt: (args: { operationId: string; reason?: string }) => Promise<unknown>;
+    recover: (args: { operationId: string }) => Promise<unknown>;
+    authorizePlan: (args: { planKey: string; context?: Record<string, unknown>; transport?: Record<string, unknown> }) => Promise<{ ok: boolean; planKey: string; grantId?: string; expiresAt: number }>;
+    report: (message: unknown) => Promise<unknown>;
+    onCommand: (listener: (message: unknown) => void) => () => void;
+    onEvent: (listener: (message: unknown) => void) => () => void;
   };
   nativeData: NativeDataApi;
 }

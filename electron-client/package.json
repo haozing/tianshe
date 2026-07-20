@@ -1,7 +1,7 @@
 {
   "name": "chihu-electron-client",
   "private": true,
-  "version": "2.1.16-phase2",
+  "version": "2.2.0-freemium-v2",
   "description": "Readable Electron client source for CHIHU remote web migration",
   "author": "赤狐管家",
   "chihuLicense": {
@@ -31,12 +31,13 @@
     "check:desktop-ui-manual-evidence": "node scripts/check-desktop-ui-manual-evidence.js",
     "check:desktop-ui-manual-ready": "node scripts/check-desktop-ui-manual-evidence.js --require-complete",
     "record:desktop-ui-manual-evidence": "node scripts/record-desktop-ui-manual-evidence.js",
-    "check": "node scripts/check-syntax.js && node scripts/check-contract.js && node scripts/check-assets.js && node scripts/check-opportunity-data.js && npm run test:store-deletion-opportunity",
+    "check": "node scripts/check-syntax.js && node scripts/check-contract.js && node scripts/check-assets.js && node scripts/check-opportunity-data.js && npm run test:freemium && npm run test:store-deletion-opportunity",
     "check:syntax": "node scripts/check-syntax.js",
     "check:contract": "node scripts/check-contract.js",
     "check:assets": "node scripts/check-assets.js",
     "check:opportunity-data": "node scripts/check-opportunity-data.js",
     "test:database-timeout": "node --test test/database-timeout-recovery.test.js",
+    "test:freemium": "node --test test/freemium-access-model.test.js test/freemium-task-registry.test.js",
     "test:http-lossless-json": "node --test test/http-lossless-json.test.js",
     "test:marketing-foundation": "node --test test/marketing-foundation.test.js test/http-lossless-json.test.js",
     "test:store-deletion-opportunity": "node --test test/store-deletion-opportunity-cascade.test.js"

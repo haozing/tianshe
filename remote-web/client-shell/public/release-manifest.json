@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026.07.19.marketing-pilot-v2",
-  "buildTime": "2026-07-19T12:45:57.346Z",
+  "releaseId": "2026.07.20.freemium-v2",
+  "buildTime": "2026-07-20T10:05:26.117Z",
   "entry": {
-    "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
+    "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/releases/2026.07.20.freemium-v2/new-remote-web/"
   },
   "cachePolicy": {
     "html": "no-cache",
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "36ec7691df338cb71855a10d70916a6ace5a0c7b542fb2f2f734bd2d4481f63b"
+      "sha256": "5d511d16e3fc07f5117a12c12e2f85279e30e413177ce076831f8dfe1b1f617f"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,14 +36,14 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "ac4c4d075cb07832ac1a44806cc661760856645c00718b9c77597f907701ff71"
+      "sha256": "c118c8d8c971330d5b5232efccb6652758a4fc916027490f4a1ca7a98d46ddc5"
     },
     {
       "path": "new-remote-web/styles.css",
       "type": "remote-css",
       "cache": "short",
       "required": true,
-      "sha256": "bcb5726027c504f254d0eb4a7af9655f7dec0ef543fa2261c84b53cd7cbaa9e7"
+      "sha256": "a3dfd2b8515a957af17bcac6d36a1ece6d65ce9b999b8158dde785a9add583c7"
     },
     {
       "path": "new-remote-web/assets/chihu-app-icon.png",
@@ -71,7 +71,7 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "f13d254ba529935650308ec84d9bfe42ba23d90480cb57cff40afc3ae09e5fee"
+      "sha256": "6cacec29404ae5e7e53fc740485ac4a960f4fc00e65dac9bfb7e752b75449a67"
     },
     {
       "path": "new-remote-web/config/chihu-config.marketing-pilot.json",
@@ -93,6 +93,13 @@
       "cache": "no-cache",
       "required": true,
       "sha256": "15fad61acc8a7578d0a279b1bc32979fd50b4221907618ddc8a12d103af3fa1d"
+    },
+    {
+      "path": "new-remote-web/config/doudian-window-commands.json",
+      "type": "doudian-window-commands",
+      "cache": "no-cache",
+      "required": true,
+      "sha256": "05ac894850c5290fe0cd629cee3f04a292c3664369258e21fe5016e8357c7005"
     },
     {
       "path": "new-remote-web/config/update-notes.json",
@@ -134,7 +141,7 @@
     "schemaVersion": 1,
     "algorithm": "ed25519",
     "keyId": "chihu-remote-web-ed25519-2026-07",
-    "payloadSha256": "dddc12e645b9145a56047d3d983bf66bd41a35c82dd410c8534020d95d778d8a",
-    "value": "FMHMPlyrooGkSC7EVwjRnLUvlnrM3eutQEMlR/IY1HsOARP9eYyjyTvZ/nttTwHV3CH3fl6qYIsVdmA9b8JNBg=="
+    "payloadSha256": "b752f19eb1efc12cedf1fc016085bef55694a2c2a67a66f0acf77938912dcfb3",
+    "value": "6zAYS2eqbicg8iqKECcuOiMAb2p8sKakiS4lJRGBFBhxepQLm0o0IY6l/9pqKIU5b2vXWFClMQ/spf5d1/K+AA=="
   }
 }

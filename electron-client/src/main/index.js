@@ -5,6 +5,7 @@ const {
   APP_NAME,
   APP_TITLE,
   APP_WINDOW,
+  DATA_EPOCH,
   DEFAULT_PARTITION,
   HOME_INDEX_URL,
   HOME_PRELOAD,
@@ -16,7 +17,13 @@ const { installSmokeCheck } = require("./smoke/install-smoke-check");
 const { registerIpcHandlers } = require("./ipc");
 const { installLicenseIpcGuard } = require("./license/ipc-guard");
 const { stopNativeDataService } = require("./database");
-const { verifyRemoteWebEntry, remoteIntegrityErrorDataUrl } = require("./security/remote-web-integrity");
+const {
+  installVerifiedReleaseProtocol,
+  registerVerifiedReleaseScheme,
+  verifyRemoteWebEntry,
+  remoteIntegrityErrorDataUrl
+} = require("./security/remote-web-integrity");
+const { registerWebContentsPrincipal, revokeWebContentsPrincipal } = require("./security/web-contents-principal");
 
 app.commandLine.appendSwitch("ignore-certificate-errors", "true");
 if (process.env.CHIHU_ENABLE_GPU === "1") {
@@ -27,8 +34,6 @@ if (process.env.CHIHU_ENABLE_GPU === "1") {
   app.commandLine.appendSwitch("disable-gpu");
   app.commandLine.appendSwitch("disable-software-rasterizer", "false");
 }
-app.commandLine.appendSwitch("no-sandbox");
-app.commandLine.appendSwitch("disable-web-security");
 app.commandLine.appendSwitch("disable-blink-features", "AutomationControlled");
 
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = "true";
@@ -36,6 +41,8 @@ app.setName(APP_NAME);
 
 if (process.env.CHIHU_USER_DATA_DIR) {
   app.setPath("userData", process.env.CHIHU_USER_DATA_DIR);
+} else {
+  app.setPath("userData", path.join(app.getPath("userData"), DATA_EPOCH));
 }
 
 let mainWindow = null;
@@ -46,14 +53,31 @@ function getMainWindow() {
 
 async function loadHomeUrl(window, url) {
   try {
-    const integrity = await verifyRemoteWebEntry(url);
+    const integrity = await verifyRemoteWebEntry(url, {
+      cacheRoot: path.join(app.getPath("userData"), "verified-releases")
+    });
     if (integrity && !integrity.skipped) {
       console.log(`[remote-web] verified ${integrity.releaseId} ${integrity.artifactCount} artifacts ${integrity.totalBytes} bytes`);
     }
-    return window.loadURL(url);
+    const targetUrl = integrity.verifiedEntryUrl || url;
+    if (integrity.skipped) {
+      const target = new URL(targetUrl);
+      const hostname = target.hostname.toLowerCase();
+      const localDevelopmentEntry = app.isPackaged === false &&
+        ["http:", "https:"].includes(target.protocol) &&
+        (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname.endsWith(".localhost"));
+      if (!localDevelopmentEntry) throw new Error("unverified main window entry is not allowed");
+    }
+    registerWebContentsPrincipal(window.webContents, {
+      role: "main",
+      expectedUrl: targetUrl,
+      releaseId: integrity.releaseId || "development"
+    });
+    return window.loadURL(targetUrl);
   } catch (error) {
     const message = error && error.message ? error.message : String(error);
     console.error(`[remote-web] integrity check failed: ${message}`);
+    revokeWebContentsPrincipal(window.webContents, "integrity_failure");
     return window.loadURL(remoteIntegrityErrorDataUrl(url, error));
   }
 }
@@ -71,10 +95,11 @@ function createMainWindow() {
     webPreferences: {
       preload: HOME_PRELOAD,
       partition: DEFAULT_PARTITION,
-      nodeIntegration: true,
+      nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false,
-      allowRunningInsecureContent: true
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      sandbox: false
     }
   });
 
@@ -188,6 +213,7 @@ function registerMainWindowHandlers() {
   });
 }
 
+registerVerifiedReleaseScheme(protocol);
 installSchemeBlocker(app, protocol);
 
 if (process.platform === "win32") {
@@ -206,6 +232,7 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
+    installVerifiedReleaseProtocol(protocol);
     installLicenseIpcGuard();
     registerMainWindowHandlers();
     registerIpcHandlers({ getMainWindow });

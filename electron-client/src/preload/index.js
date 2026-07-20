@@ -7,6 +7,7 @@ function invoke(channel) {
 
 const INLINE_NATIVE_RECORD_BYTES = 5 * 1024 * 1024;
 const LARGE_NATIVE_RECORD_CHUNK_CHARS = 512 * 1024;
+const IS_TASK_RUNNER = new URLSearchParams(globalThis.location?.search || "").get("runner") === "1";
 
 function utf8ByteLength(value) {
   return Buffer.byteLength(String(value), "utf8");
@@ -65,13 +66,13 @@ async function putNativeDataRecord(args = {}) {
     await start({ sessionId, storeName, recordId, expectedBytes, expectedChunks: chunks.length, expectedHash });
     started = true;
     for (let index = 0; index < chunks.length; index += 1) {
-      await writeChunk({ sessionId, index, chunk: chunks[index] });
+      await writeChunk({ sessionId, storeName, recordId, index, chunk: chunks[index] });
     }
-    return await commit({ sessionId });
+    return await commit({ sessionId, storeName, recordId });
   } catch (error) {
     if (started) {
       try {
-        await abort({ sessionId });
+        await abort({ sessionId, storeName, recordId });
       } catch {}
     }
     throw error;
@@ -135,7 +136,6 @@ const client = {
   editBrowserWindow: invoke("editBrowserWindow"),
   getBrowserWindowInfo: invoke("getBrowserWindowInfo"),
   destroyBrowserWindow: invoke("destroyBrowserWindow"),
-  executeJavaScriptBrowserWindow: invoke("executeJavaScriptBrowserWindow"),
   reloadHomeUrl: invoke("reloadHomeUrl"),
   sendNotification: invoke("send_notification"),
   getMainWindowInfo: invoke("getMainWindowInfo"),
@@ -151,12 +151,7 @@ const client = {
   getClientVersionData: invoke("getClientVersionData"),
   reportClientLog: invoke("reportClientLog"),
   getCrashLogDir: invoke("getCrashLogDir"),
-  cleanCrashLogs: invoke("cleanupOldCrashLogs"),
-  selectDirectory: invoke("selectDirectory"),
-  downloadFileToPath: invoke("downloadFileToPath"),
-  cancelDownloadFileToPath: invoke("cancelDownloadFileToPath"),
-  saveBufferToPath: invoke("saveBufferToPath"),
-  openPathInExplorer: invoke("openPathInExplorer")
+  cleanCrashLogs: invoke("cleanupOldCrashLogs")
 };
 
 const nativeData = {
@@ -228,7 +223,7 @@ const chihuNative = {
   },
   windows: {
     open: invoke("native:windows:open"),
-    eval: invoke("native:windows:eval"),
+    command: invoke("native:windows:command"),
     destroy: invoke("native:windows:destroy"),
     getInfo: client.getBrowserWindowInfo,
     getAll: client.getAllBrowserWindowInfos,
@@ -260,12 +255,7 @@ const chihuNative = {
   },
   files: {
     selectFile: invoke("native:files:selectFile"),
-    readFile: invoke("native:files:readFile"),
-    download: invoke("native:files:download"),
-    selectDirectory: client.selectDirectory,
-    saveBufferToPath: client.saveBufferToPath,
-    openPathInExplorer: client.openPathInExplorer,
-    cancelDownload: client.cancelDownloadFileToPath
+    readFile: invoke("native:files:readFile")
   },
   notifications: {
     send: invoke("native:notifications:send")
@@ -284,6 +274,33 @@ const chihuNative = {
   },
   text: {
     segment: invoke("native:text:segment")
+  },
+  tasks: {
+    getCatalog: invoke("native:tasks:getCatalog"),
+    startRunner: invoke("native:tasks:startRunner"),
+    cancelRunner: invoke("native:tasks:cancelRunner"),
+    getStatus: invoke("native:tasks:getStatus"),
+    listStatus: invoke("native:tasks:listStatus"),
+    interrupt: invoke("native:tasks:interrupt"),
+    recover: invoke("native:tasks:recover"),
+    authorizePlan: invoke("native:tasks:authorizePlan"),
+    report: IS_TASK_RUNNER ? invoke("native:tasks:runnerEvent") : async () => {
+      const error = new Error("runner event reporting is unavailable in the main page");
+      error.code = "IPC_ROLE_DENIED";
+      throw error;
+    },
+    onCommand: (listener) => {
+      if (!IS_TASK_RUNNER || typeof listener !== "function") return () => undefined;
+      const handler = (_event, message) => listener(message);
+      ipcRenderer.on("chihu:tasks:command", handler);
+      return () => ipcRenderer.removeListener("chihu:tasks:command", handler);
+    },
+    onEvent: (listener) => {
+      if (IS_TASK_RUNNER || typeof listener !== "function") return () => undefined;
+      const handler = (_event, message) => listener(message);
+      ipcRenderer.on("chihu:tasks:event", handler);
+      return () => ipcRenderer.removeListener("chihu:tasks:event", handler);
+    }
   },
   nativeData
 };

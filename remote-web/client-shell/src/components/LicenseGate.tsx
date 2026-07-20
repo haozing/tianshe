@@ -17,8 +17,8 @@ import type { LicenseStatus } from "../bridge/license";
 import { cn } from "../lib/utils";
 import { remoteAsset } from "../lib/assets";
 
-const DESKTOP_SETUP_DOWNLOAD_URL = "http://chihu.facaishe.cn/desktop/win/chihu-guanjia-2.1.16-phase2-setup.exe";
-const DESKTOP_SETUP_FILE_NAME = "chihu-guanjia-2.1.16-phase2-setup.exe";
+const DESKTOP_SETUP_DOWNLOAD_URL = "http://chihu.facaishe.cn/desktop/win/chihu-guanjia-2.2.0-freemium-v2-setup.exe";
+const DESKTOP_SETUP_FILE_NAME = "chihu-guanjia-2.2.0-freemium-v2-setup.exe";
 
 type ClientUpdatePhase = "idle" | "checking" | "downloading" | "downloaded" | "error";
 
@@ -105,6 +105,8 @@ function formatRemaining(seconds?: number) {
 
 function statusCopy(status: LicenseStatus) {
   if (status.bypass) return "开发授权已开启";
+  if (status.verificationPending) return "完整版授权待刷新";
+  if (status.status === "pending") return "正在检查授权";
   if (isClientUpdateRequired(status)) return "客户端需要更新";
   if (!status.configured) return "授权服务暂不可用";
   if (status.licensed) return "设备授权有效";
@@ -115,10 +117,63 @@ function statusCopy(status: LicenseStatus) {
 }
 
 function detailCopy(status: LicenseStatus) {
+  if (status.verificationPending) return "卡密已兑换成功，正在刷新设备授权状态。当前进程可继续使用完整版。";
+  if (status.status === "pending") return "正在联网检查当前设备的完整版授权。免费功能可直接使用。";
   if (isClientUpdateRequired(status)) return "当前客户端版本过低，请更新后继续使用。";
   if (!status.configured) return "授权服务暂时无法连接，请稍后重试或联系客服。";
   if (status.licensed) return status.isPermanent ? "当前设备为永久授权。" : `授权到期：${formatExpireAt(status.expireAt)}`;
   return status.message || "请输入一张未使用过的卡密，为当前设备开通或续费 30 天。";
+}
+
+export function PaidFeatureGate({
+  status,
+  checking,
+  redeeming,
+  message,
+  onRedeem,
+  onRefresh
+}: {
+  status: LicenseStatus;
+  checking: boolean;
+  redeeming: boolean;
+  message: string;
+  onRedeem: (cardKey: string) => Promise<void>;
+  onRefresh: () => Promise<void>;
+}) {
+  return (
+    <section className="grid min-h-full place-items-center overflow-auto p-4">
+      <div className="w-[min(700px,100%)] rounded-lg border border-[#dbe5f2] bg-white shadow-[0_16px_44px_rgba(15,23,42,0.08)]">
+        <div className="border-b border-[#edf1f6] px-6 py-5 max-[640px]:px-4">
+          <div className="flex items-start gap-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-full border border-[#ffdca8] bg-[#fff7e8] text-[#b54708]">
+              <CreditCard className="size-5" strokeWidth={2.1} />
+            </span>
+            <div className="min-w-0">
+              <h1 className="m-0 text-[21px] font-semibold text-[#101828]">开通完整版</h1>
+              <p className="m-0 mt-2 text-[13px] leading-6 text-[#667085]">
+                当前页面需要有效的设备授权。
+              </p>
+            </div>
+          </div>
+          <div className="mt-4">
+            <LicenseFacts status={status} />
+          </div>
+        </div>
+        <div className="px-6 py-5 max-[640px]:px-4">
+          <div className="mb-3 text-[13px] font-medium text-[#475467]">{statusCopy(status)}</div>
+          <LicenseRedeemForm
+            status={status}
+            busy={redeeming}
+            checking={checking}
+            message={message}
+            onRedeem={onRedeem}
+            onRefresh={onRefresh}
+          />
+          {status.contact ? <p className="m-0 mt-4 text-[12px] leading-5 text-[#667085]">客服：{status.contact}</p> : null}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function LicenseFacts({ status }: { status: LicenseStatus }) {

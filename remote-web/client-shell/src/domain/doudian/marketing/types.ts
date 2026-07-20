@@ -233,7 +233,7 @@ export interface MarketingItemFailure {
   message: string;
 }
 
-export type MarketingScheduleStatus = "active" | "paused" | "running" | "completed" | "failed";
+export type MarketingScheduleStatus = "active" | "paused" | "running" | "completed" | "failed" | "deferred";
 
 export interface MarketingSchedule {
   id: string;
@@ -255,4 +255,6 @@ export interface MarketingSchedule {
   failureCount: number;
   createdAt: string;
   updatedAt: string;
+  deferredReason?: "license_required" | "auth_check_failed";
+  deferredAt?: string;
 }

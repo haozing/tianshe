@@ -112,22 +112,12 @@ export async function signDoudianRequest(payload: DoudianAdapterPayload, request
     request.trackWindow?.(winId);
     if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
 
-    const payloadForPage = {
-      targetUrl: request.targetUrl,
-      adapter: payload.adapter,
-      plan,
-      context: {
-        ...(request.context || {}),
-        partition
-      }
-    };
-    const code = `
-      (async () => {
-        const sign = ${signFactory};
-        return await sign(${JSON.stringify(payloadForPage)});
-      })();
-    `;
-    const result = await native.windows.eval({ winId, code, timeoutMs }) as Record<string, unknown> | null;
+    const result = await native.windows.command({
+      winId,
+      command: "sign",
+      args: { planKey: request.planKey || "", targetUrl: request.targetUrl, context: request.context || {} },
+      timeoutMs
+    }) as Record<string, unknown> | null;
     const query = text(result?.query || result?.myargs);
     const signature = text(result?.signature);
     if (result?.ok === true && (query || signature)) {

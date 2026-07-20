@@ -70,7 +70,8 @@ export async function loadJson<T>(url: string): Promise<T> {
 
 export async function loadConfig() {
   const query = new URLSearchParams(window.location.search);
-  const override = query.get("configUrl");
+  const smokeOverrideAllowed = window.location.hostname.endsWith(".localhost") && query.get("smoke") === "1";
+  const override = smokeOverrideAllowed ? query.get("configUrl") : null;
   const url = override || CONFIG_URL;
   const config = validateConfig(await loadJson<unknown>(url));
   storageSet(STORAGE_KEY_CONFIG_CACHE, {

@@ -16,7 +16,7 @@ if (!process.env.ELECTRON_GET_NO_PROGRESS) {
 }
 
 const electronBin = require("electron");
-const scenario = process.argv[2] || process.env.CHIHU_E2E_SMOKE_SCENARIO || "bridge";
+const scenario = process.argv[2] || process.env.CHIHU_E2E_SMOKE_SCENARIO || "freemium";
 
 function marketingReadHomeUrl(value) {
   const url = new URL(value);
@@ -249,11 +249,20 @@ async function main() {
     ...process.env,
     CHIHU_E2E_SMOKE: "1",
     CHIHU_E2E_SMOKE_SCENARIO: scenario,
+    CHIHU_EXPLICIT_TEST_MODE: "1",
     ...(["marketing-read", "marketing-write"].includes(scenario) ? { CHIHU_LICENSE_BYPASS: "1" } : {}),
-    CHIHU_E2E_TIMEOUT_MS: process.env.CHIHU_E2E_TIMEOUT_MS || (scenario === "bridge" ? "45000" : ["marketing-read", "marketing-write"].includes(scenario) ? "240000" : scenario === "sqlite" ? "30000" : "15000"),
+    CHIHU_E2E_TIMEOUT_MS: process.env.CHIHU_E2E_TIMEOUT_MS || (["bridge", "freemium"].includes(scenario) ? "45000" : ["marketing-read", "marketing-write"].includes(scenario) ? "240000" : scenario === "sqlite" ? "30000" : "15000"),
     CHIHU_USER_DATA_DIR: userDataDir,
     CHIHU_HOME_URL: homeUrl
   };
+
+  if (["files", "ui-contract"].includes(scenario)) {
+    const selectedFilePath = path.join(userDataDir, "selected-file-smoke.txt");
+    const selectedFileText = "chihu-selected-file-smoke";
+    fs.writeFileSync(selectedFilePath, selectedFileText, "utf8");
+    env.CHIHU_E2E_SELECTED_FILE_PATH = selectedFilePath;
+    env.CHIHU_E2E_SELECTED_FILE_TEXT = selectedFileText;
+  }
 
   if (httpSmoke) {
     env.CHIHU_E2E_HTTP_BASE_URL = httpSmoke.baseUrl;

@@ -1,17 +1,22 @@
 const { app, BrowserWindow, ipcMain, session, screen } = require("electron");
 const { APP_TITLE, HOME_PRELOAD, ICON_PATH } = require("../config");
 const { addDevShortcuts } = require("../utils/dev-shortcuts");
+const { registerWebContentsPrincipal } = require("../security/web-contents-principal");
+const { registerTaskChildWindow, runnerOwnsWindow, runnerWindowCommand, taskChildTarget } = require("../tasks/task-manager");
 
 const ENABLE_GPU = process.env.CHIHU_ENABLE_GPU === "1";
 
 function registerWindowHandlers() {
-  const openWindow = async (args = {}) => {
+  const openWindow = async (event, args = {}) => {
+    if (args.windowParams) throw new Error("windowParams are not accepted by the controlled window boundary");
+    const runnerTarget = taskChildTarget(event, args.url, args.partition);
+    if (runnerTarget && !args.partition) throw new Error("runner platform windows require an authorized partition");
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.workAreaSize;
     const defaultWidth = Math.round(width * 0.8);
     const defaultHeight = Math.round(height * 0.8);
 
-    const preload = args.preload || HOME_PRELOAD;
+    const preload = !app.isPackaged && args.preload ? args.preload : undefined;
     let params = {
       width: args.width || defaultWidth,
       height: args.height || defaultHeight,
@@ -34,17 +39,17 @@ function registerWindowHandlers() {
         preload,
         partition: args.partition,
         session: args.partition ? session.fromPartition(args.partition) : undefined,
-        nodeIntegration: args.nodeIntegration !== undefined ? args.nodeIntegration : true,
+        nodeIntegration: false,
         contextIsolation: args.contextIsolation !== undefined ? args.contextIsolation : true,
-        webSecurity: args.webSecurity !== undefined ? args.webSecurity : false,
-        allowRunningInsecureContent: args.allowRunningInsecureContent || false,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
         spellcheck: args.spellcheck || false,
         enableRemoteModule: args.enableRemoteModule || false,
-        devTools: args.devTools || false,
+        devTools: !app.isPackaged && args.devTools === true,
         webviewTag: args.webviewTag || false,
         enableBlinkFeatures: args.enableBlinkFeatures || "",
         hardwareAcceleration: args.hardwareAcceleration !== undefined ? args.hardwareAcceleration : ENABLE_GPU,
-        sandbox: args.sandbox || false
+        sandbox: true
       }
     };
 
@@ -63,6 +68,15 @@ function registerWindowHandlers() {
 
     const child = new BrowserWindow(params);
     child.setMenu(null);
+    const taskContext = runnerTarget ? registerTaskChildWindow(event, child, args.url, args.partition) : null;
+    if (!taskContext) {
+      const target = new URL(args.url);
+      registerWebContentsPrincipal(child.webContents, {
+        role: "platform-child",
+        expectedUrl: target.toString(),
+        allowedPlatformOrigins: [target.origin]
+      });
+    }
 
     if (args.userAgent) {
       child.webContents.setUserAgent(String(args.userAgent));
@@ -89,69 +103,72 @@ function registerWindowHandlers() {
     return child.id;
   };
 
-  const evalWindow = async (args = {}) => {
+  const commandWindow = async (event, args = {}) => {
+    const authorized = runnerWindowCommand(event, args);
+    const win = BrowserWindow.fromId(args.winId);
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return null;
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const destroyed = win.isDestroyed() || win.webContents.isDestroyed();
+        const currentUrl = !destroyed ? win.webContents.getURL() : "";
+        reject(new Error(destroyed
+          ? "window command cancelled because window was destroyed"
+          : `window command timeout after ${authorized.timeoutMs}ms (winId=${args.winId}, command=${String(args.command || "")}, url=${currentUrl})`));
+      }, authorized.timeoutMs);
+    });
     try {
-      const win = BrowserWindow.fromId(args.winId);
-      if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return null;
-
-      const timeoutMs = args.timeoutMs ?? 15000;
-      const timeout = new Promise((_, reject) => {
-        setTimeout(() => {
-          const destroyed = win.isDestroyed() || win.webContents.isDestroyed();
-          const currentUrl = !destroyed ? win.webContents.getURL() : "";
-          reject(new Error(destroyed
-            ? "executeJavaScript cancelled because window was destroyed"
-            : `executeJavaScript timeout after ${timeoutMs}ms (winId=${args.winId}, url=${currentUrl}, codeLength=${String(args.code || args.jsContent || "").length})`));
-        }, timeoutMs);
-      });
-      return await Promise.race([
-        win.webContents.executeJavaScript(args.code || args.jsContent),
-        timeout
-      ]);
-    } catch (error) {
-      const message = error && error.message ? error.message : String(error);
-      if (message.includes("window was destroyed")) {
-        console.warn("executeJavaScriptBrowserWindow skipped:", message);
-      } else {
-        console.error("executeJavaScriptBrowserWindow failed:", error);
-      }
-      return null;
+      return await Promise.race([win.webContents.executeJavaScript(authorized.script), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   };
 
-  const destroyWindow = async (args = {}) => {
+  const destroyWindow = async (event, args = {}) => {
+    if (!runnerOwnsWindow(event, args.winId)) throw new Error("runner does not own target window");
     const win = BrowserWindow.fromId(args.winId);
     if (win && !win.isDestroyed()) win.destroy();
     return { ok: true };
   };
 
-  ipcMain.handle("openWindow", async (_event, args = {}) => openWindow(args));
+  ipcMain.handle("openWindow", async (event, args = {}) => openWindow(event, args));
 
-  ipcMain.handle("native:windows:open", async (_event, args = {}) => openWindow(args));
+  ipcMain.handle("native:windows:open", async (event, args = {}) => openWindow(event, args));
 
-  ipcMain.handle("executeJavaScriptBrowserWindow", async (_event, args = {}) => evalWindow(args));
-
-  ipcMain.handle("native:windows:eval", async (_event, args = {}) => evalWindow(args));
-
-  ipcMain.handle("destroyBrowserWindow", async (_event, args = {}) => {
-    await destroyWindow(args);
+  ipcMain.handle("executeJavaScriptBrowserWindow", async () => {
+    throw new Error("arbitrary platform window scripts are disabled");
   });
 
-  ipcMain.handle("native:windows:destroy", async (_event, args = {}) => {
-    return destroyWindow(args);
+  ipcMain.handle("native:windows:eval", async () => {
+    throw new Error("arbitrary platform window scripts are disabled");
   });
 
-  ipcMain.handle("getBrowserWindowInfo", async (_event, args = {}) => {
+  ipcMain.handle("native:windows:command", async (event, args = {}) => commandWindow(event, args));
+
+  ipcMain.handle("destroyBrowserWindow", async (event, args = {}) => {
+    await destroyWindow(event, args);
+  });
+
+  ipcMain.handle("native:windows:destroy", async (event, args = {}) => {
+    return destroyWindow(event, args);
+  });
+
+  ipcMain.handle("getBrowserWindowInfo", async (event, args = {}) => {
+    if (!runnerOwnsWindow(event, args.winId)) return null;
     const win = BrowserWindow.fromId(args.winId);
     if (!win || win.isDestroyed()) return null;
     return { currentUrl: win.webContents.getURL() };
   });
 
-  ipcMain.handle("editBrowserWindow", async (_event, args = {}) => {
+  ipcMain.handle("editBrowserWindow", async (event, args = {}) => {
+    if (!runnerOwnsWindow(event, args.winId)) return null;
     const win = BrowserWindow.fromId(args.winId);
     if (!win || win.isDestroyed()) return null;
 
-    if (args.newUrl) return win.loadURL(args.newUrl);
+    if (args.newUrl) {
+      taskChildTarget(event, args.newUrl);
+      return win.loadURL(args.newUrl);
+    }
     if (args.width) win.setSize(args.width, win.getSize()[1]);
     if (args.height) win.setSize(win.getSize()[0], args.height);
     if (args.isCenten) win.center();
@@ -168,15 +185,12 @@ function registerWindowHandlers() {
     if (args.resizable !== undefined) win.setResizable(args.resizable);
     if (args.alwaysOnTop !== undefined) win.setAlwaysOnTop(args.alwaysOnTop);
     if (args.title) win.setTitle(args.title);
-    if (args.webPreferences && args.webPreferences.devTools !== undefined) {
-      if (args.webPreferences.devTools) win.webContents.openDevTools();
-      else win.webContents.closeDevTools();
-    }
+    if (args.webPreferences?.devTools === false) win.webContents.closeDevTools();
     return args.winId;
   });
 
-  ipcMain.handle("getAllBrowserWindowInfos", async () => {
-    return BrowserWindow.getAllWindows().map((win) => ({
+  ipcMain.handle("getAllBrowserWindowInfos", async (event) => {
+    return BrowserWindow.getAllWindows().filter((win) => runnerOwnsWindow(event, win.id)).map((win) => ({
       id: win.id,
       title: win.getTitle(),
       url: win.webContents.getURL(),

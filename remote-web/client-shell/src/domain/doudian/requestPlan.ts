@@ -105,6 +105,15 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   });
   const adapter = payload.adapter;
   const plan = (adapter.requestPlans?.[args.planKey] || {}) as Record<string, unknown>;
+  const taskBridge = requireChihuNative().tasks;
+  if (!taskBridge?.authorizePlan) {
+    return finalize({ ok: false, status: 0, data: null, error: "controlled task plan bridge is unavailable", source: args.planKey, nonRetryable: true });
+  }
+  try {
+    await taskBridge.authorizePlan({ planKey: args.planKey, context: args.context || {} });
+  } catch (error) {
+    return finalize({ ok: false, status: 0, data: null, error: error instanceof Error ? error.message : String(error), source: args.planKey, nonRetryable: true });
+  }
   const mutationSafetyError = mutationRequestPlanSafetyError(plan);
   if (mutationSafetyError) {
     return finalize({ ok: false, status: 0, data: null, error: `unsafe mutation request plan: ${args.planKey}: ${mutationSafetyError}`, source: args.planKey, nonRetryable: true });
@@ -715,10 +724,10 @@ function buildPlanUrl(adapter: DoudianAdapterConfig, endpoint: string, plan: Rec
 async function requestJson(partition: string, url: string, headers: Record<string, string>, source: string, plan: Record<string, unknown> = {}, context: Record<string, unknown> = {}): Promise<RequestPlanResult> {
   const method = String(plan.method || "GET").toUpperCase() as "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   const body = method === "GET" ? undefined : interpolateDeep(plan.body, context);
-  const responseType = plan.responseType === "base64" || plan.responseType === "arrayBuffer" || plan.responseType === "text" || plan.responseType === "losslessJson"
+  const responseType: "base64" | "arrayBuffer" | "text" | "losslessJson" = plan.responseType === "base64" || plan.responseType === "arrayBuffer" || plan.responseType === "text" || plan.responseType === "losslessJson"
     ? plan.responseType
     : "losslessJson";
-  const response = await requireChihuNative().http.request({
+  const transport = {
     partition,
     url,
     method,
@@ -726,7 +735,13 @@ async function requestJson(partition: string, url: string, headers: Record<strin
     body,
     responseType,
     timeoutMs: clampRequestTimeoutMs(plan.timeoutMs)
-  });
+  };
+  const native = requireChihuNative();
+  const authorization = await native.tasks?.authorizePlan({ planKey: source, context, transport }).catch(() => null);
+  if (!authorization?.grantId) {
+    return { ok: false, status: 0, data: null, error: "one-time request plan grant is unavailable", source, url, nonRetryable: true };
+  }
+  const response = await native.http.request({ ...transport, taskGrantId: authorization.grantId });
   const result = response as { ok?: boolean; status?: number; headers?: Record<string, unknown>; data?: unknown; error?: { message?: string } | string };
   return {
     ok: result.ok === true,
@@ -749,6 +764,10 @@ async function pageFetchJson(partition: string, url: string, source: string, pla
     accept: "application/json, text/plain, */*",
     ...stringRecord(plan.headers)
   };
+  const responseType: "base64" | "arrayBuffer" | "text" | "losslessJson" = plan.responseType === "base64" || plan.responseType === "arrayBuffer" || plan.responseType === "text" || plan.responseType === "losslessJson"
+    ? plan.responseType
+    : "losslessJson";
+  const transport = { partition, url, method, headers, body, responseType, timeoutMs };
   let winId: number | null = null;
   const openUrl = planWindowUrl(plan, url, context);
   try {
@@ -766,48 +785,17 @@ async function pageFetchJson(partition: string, url: string, source: string, pla
     trackWindow?.(winId);
     const bootWaitMs = Math.max(0, Number(plan.pageFetchBootWaitMs ?? 800));
     if (bootWaitMs) await delay(bootWaitMs);
-    const code = `
-      (async () => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), ${JSON.stringify(timeoutMs)});
-        try {
-          const init = {
-            method: ${JSON.stringify(method)},
-            credentials: "include",
-            headers: ${JSON.stringify(headers)},
-            signal: controller.signal
-          };
-          const body = ${JSON.stringify(body === undefined ? null : body)};
-          if (body !== null && init.method !== "GET" && init.method !== "HEAD") {
-            init.body = typeof body === "string" ? body : JSON.stringify(body);
-          }
-          const response = await fetch(${JSON.stringify(url)}, init);
-          const text = await response.text();
-          return {
-            ok: response.ok,
-            status: response.status,
-            url: response.url || ${JSON.stringify(url)},
-            pageHref: location.href,
-            pageTitle: document.title,
-            text,
-            error: response.ok ? "" : text.slice(0, 240)
-          };
-        } catch (error) {
-          return {
-            ok: false,
-            status: 0,
-            url: ${JSON.stringify(url)},
-            pageHref: location.href,
-            pageTitle: document.title,
-            data: null,
-            error: error && error.message ? error.message : String(error)
-          };
-        } finally {
-          clearTimeout(timer);
-        }
-      })();
-    `;
-    const result = await native.windows.eval({ winId, code, timeoutMs: timeoutMs + 2000 }) as { ok?: boolean; status?: number; url?: string; pageHref?: string; pageTitle?: string; text?: string; data?: unknown; error?: string } | null;
+    const authorization = await native.tasks.authorizePlan({ planKey: source, context, transport }).catch(() => null);
+    if (!authorization?.grantId) {
+      return { ok: false, status: 0, data: null, error: "one-time page fetch grant is unavailable", source, url, openUrl, nonRetryable: true };
+    }
+    const result = await native.windows.command({
+      winId,
+      command: "page-fetch",
+      args: { planKey: source, transport },
+      taskGrantId: authorization.grantId,
+      timeoutMs: timeoutMs + 2000
+    }) as { ok?: boolean; status?: number; url?: string; pageHref?: string; pageTitle?: string; text?: string; data?: unknown; error?: string } | null;
     if (!result) {
       return {
         ok: false,

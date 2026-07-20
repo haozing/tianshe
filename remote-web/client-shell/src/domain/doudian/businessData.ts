@@ -873,25 +873,6 @@ function activationLogPayload(store: DoudianStoreSummary, activation: StoreActiv
   };
 }
 
-function switchShopEvalCode(switchFactory: string, payload: unknown, timeoutMs: number) {
-  return `
-    (async () => {
-      const payload = ${JSON.stringify(payload)};
-      const timeoutMs = ${JSON.stringify(timeoutMs)};
-      const switchShop = ${switchFactory};
-      const timeout = new Promise((resolve) => {
-        setTimeout(() => resolve({ ok: false, reason: "switch-script-timeout", href: location.href, title: document.title }), timeoutMs);
-      });
-      try {
-        const result = switchShop(payload);
-        return await Promise.race([Promise.resolve(result), timeout]);
-      } catch (error) {
-        return { ok: false, reason: "switch-script-error", message: error && error.message ? error.message : String(error), href: location.href, title: document.title };
-      }
-    })();
-  `;
-}
-
 async function activateStoreView(payload: DoudianAdapterPayload, store: DoudianStoreSummary, context: Record<string, unknown>, trackWindow?: (winId: number) => void): Promise<StoreActivationResult> {
   const native = requireChihuNative();
   const report = async (activation: StoreActivationResult) => {
@@ -920,16 +901,6 @@ async function activateStoreView(payload: DoudianAdapterPayload, store: DoudianS
     });
   }
 
-  const switchFactory = payload.scripts?.switchShopFactory;
-  if (!switchFactory) {
-    return report({
-      ok: false,
-      activateUrl: "",
-      currentShopId,
-      message: "switchShopFactory missing"
-    });
-  }
-
   let winId: number | null = null;
   const activateUrl = payload.adapter.chooseEntriesUrl || payload.adapter.homeUrl || payload.adapter.loginUrl;
   try {
@@ -948,9 +919,10 @@ async function activateStoreView(payload: DoudianAdapterPayload, store: DoudianS
     const bootWaitMs = Math.max(0, policyNumber(payload.adapter, "businessData.activateBootWaitMs", 1200));
     if (bootWaitMs) await new Promise((resolve) => window.setTimeout(resolve, bootWaitMs));
     const switchTimeoutMs = Math.max(2000, policyNumber(payload.adapter, "businessData.activateScriptTimeoutMs", 5000));
-    const switchResult = await native.windows.eval({
+    const switchResult = await native.windows.command({
       winId,
-      code: switchShopEvalCode(switchFactory, { adapter: payload.adapter, shop: store, context }, switchTimeoutMs),
+      command: "switch-shop",
+      args: { shop: store },
       timeoutMs: switchTimeoutMs + 2000
     }).catch((error) => ({
       ok: false,

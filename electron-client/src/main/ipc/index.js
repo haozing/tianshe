@@ -11,9 +11,11 @@ const { registerBusinessDatabaseHandlers } = require("./business-database");
 const { registerTextSegmentationHandlers } = require("./text-segmentation");
 const { registerLicenseHandlers } = require("./license");
 const { installLicenseIpcGuard } = require("../license/ipc-guard");
+const { installTaskHandlers } = require("../tasks/task-manager");
 
 function registerIpcHandlers(context) {
   registerLicenseHandlers(context);
+  installTaskHandlers(context);
   installLicenseIpcGuard();
   registerAppInfoHandlers(context);
   registerCookieHandlers(context);

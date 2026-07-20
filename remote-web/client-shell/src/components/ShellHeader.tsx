@@ -9,6 +9,7 @@ import {
   Download,
   FileClock,
   LogOut,
+  Lock,
   Mail,
   Maximize2,
   Minus,
@@ -551,10 +552,15 @@ function ProfileMenuV2({
   onOpenLicenseDialog?: () => void;
 }) {
   const deviceNo = licenseStatus?.deviceNo || "未同步设备";
-  const userName = licenseStatus?.licensed || licenseStatus?.bypass ? deviceNo : "未授权设备";
-  const avatarText = licenseStatus?.licensed || licenseStatus?.bypass ? "D" : "!";
-  const authLine = licenseStatus?.isPermanent ? "永久授权" : `授权至 ${formatLicenseDate(licenseStatus?.expireAt)}`;
-  const remainingDays = licenseStatus?.isPermanent ? "永久" : formatLicenseDays(licenseStatus?.remainingSeconds);
+  const paid = licenseStatus?.paidAccessGranted === true;
+  const userName = paid || licenseStatus?.bypass ? deviceNo : "免费版";
+  const avatarText = paid || licenseStatus?.bypass ? "D" : "F";
+  const authLine = licenseStatus?.verificationPending
+    ? "完整版 · 授权待刷新"
+    : paid
+      ? licenseStatus?.isPermanent ? "永久完整版" : `完整版 · 有效期至 ${formatLicenseDate(licenseStatus?.expireAt)}`
+      : "免费版";
+  const remainingDays = paid ? (licenseStatus?.isPermanent ? "永久" : formatLicenseDays(licenseStatus?.remainingSeconds)) : "免费";
   const [notesOpen, setNotesOpen] = useState(false);
   const [notes, setNotes] = useState<UpdateNotesDocument>(fallbackUpdateNotes);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -813,7 +819,7 @@ function ProfileMenuV2({
   ), [downloadProgress, updateState, versionData]);
 
   const menuItems = [
-    { key: "license", label: "卡密续费", Icon: CreditCard, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} />, onClick: () => {
+    { key: "license", label: paid ? "卡密续费" : "开通完整版", Icon: CreditCard, suffix: <ChevronRight className="size-[15px] text-[#b7c0cd]" strokeWidth={1.8} />, onClick: () => {
       setProfileMenuOpen(false);
       onOpenLicenseDialog?.();
     } },
@@ -975,6 +981,7 @@ export function ShellHeader({
         <nav className="scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-5" aria-label="主路由">
           {topRoutes.map((item) => {
             const active = activeTopRoute.route === item.route;
+            const locked = item.subRoutes.some((feature) => feature.accessTier === "paid") && licenseStatus?.paidAccessGranted !== true;
             return (
               <a
                 className={cn(
@@ -985,6 +992,7 @@ export function ShellHeader({
                 key={item.label}
               >
                 <span>{item.label}</span>
+                {locked ? <Lock className="size-[13px] shrink-0 text-[#98a2b3]" strokeWidth={2} aria-label="需开通完整版" /> : null}
                 {active ? <span className="absolute inset-x-4 bottom-0 h-[2px] rounded-full bg-brand-fox" /> : null}
               </a>
             );
@@ -996,7 +1004,7 @@ export function ShellHeader({
             <ProfileMenuV2 workspace={workspace} licenseStatus={licenseStatus} onOpenLicenseDialog={onOpenLicenseDialog} />
             <button className="inline-flex h-7 items-center gap-1.5 px-2 text-[12px] font-bold text-[#a45b00] transition-colors hover:text-[#8a4b00]" type="button" onClick={onOpenLicenseDialog}>
               <Crown className="size-[14px]" strokeWidth={2} />
-              <span>卡密续费</span>
+              <span>{licenseStatus?.paidAccessGranted === true ? "卡密续费" : "开通完整版"}</span>
             </button>
             <span className="h-5 w-px bg-[#e5ebf2]" />
           </div>
@@ -1017,6 +1025,7 @@ export function ShellHeader({
           {secondaryRoutes.map((item) => {
             const active = subActive === item.route;
             const Icon = item.navigation.icon;
+            const locked = item.accessTier === "paid" && licenseStatus?.paidAccessGranted !== true;
             return (
               <a
                 className={cn(
@@ -1028,6 +1037,7 @@ export function ShellHeader({
               >
                 <Icon className="size-[16px]" strokeWidth={2} />
                 <span>{item.navigation.label}</span>
+                {locked ? <Lock className="size-[12px] shrink-0 text-[#98a2b3]" strokeWidth={2} aria-label="需开通完整版" /> : null}
               </a>
             );
           })}

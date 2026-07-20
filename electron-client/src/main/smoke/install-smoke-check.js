@@ -49,7 +49,7 @@ function installSmokeCheck(win) {
 
     probing = true;
     try {
-      const probeTimeoutCapMs = scenario === "bridge" ? 40000 : ["marketing-read", "marketing-write"].includes(scenario) ? 240000 : 10000;
+      const probeTimeoutCapMs = ["bridge", "freemium"].includes(scenario) ? 40000 : ["marketing-read", "marketing-write"].includes(scenario) ? 240000 : 10000;
       const probeTimeoutMs = Math.min(probeTimeoutCapMs, Math.max(3000, timeoutMs - (Date.now() - startedAt) - 500));
       const result = await Promise.race([
         win.webContents.executeJavaScript(`
@@ -76,7 +76,7 @@ function installSmokeCheck(win) {
             const hasShell = isCleanFoundationShell();
             const hasClient = !!window.client;
             const methodCount = hasClient ? Object.keys(window.client).length : 0;
-            if (hasShell && hasClient && methodCount >= 33) break;
+            if (hasShell && hasClient && methodCount >= 27) break;
             await sleep(100);
           }
 
@@ -96,6 +96,67 @@ function installSmokeCheck(win) {
             href: location.href,
             textSample: text.slice(0, 240)
           };
+
+          if (result.scenario === "freemium") {
+            const native = window.chihuNative;
+            const license = await withTimeout("freemiumLicense", native.license.getStatus(), 5000);
+            const health = await withTimeout("freemiumDataHealth", native.nativeData.maintenance.getHealth(), 5000);
+            let arbitraryHttpDenied = false;
+            let arbitraryUploadDenied = false;
+            let forgedRunnerDenied = false;
+            let forgedWindowCommandDenied = false;
+            try {
+              await native.http.request({ url: "http://127.0.0.1/", method: "GET", timeoutMs: 1000 });
+            } catch {
+              arbitraryHttpDenied = true;
+            }
+            try {
+              await window.client.uploadFile({ url: "http://127.0.0.1/", base64Img: "data:text/plain;base64,eA==", fileName: "x.txt" });
+            } catch {
+              arbitraryUploadDenied = true;
+            }
+            try {
+              await native.windows.open({ url: location.href + "?runner=1", show: false, waitForLoad: false });
+            } catch {
+              forgedRunnerDenied = true;
+            }
+            try {
+              await native.windows.command({ winId: 1, command: "page-fetch", args: { transport: { url: "http://127.0.0.1/" } } });
+            } catch {
+              forgedWindowCommandDenied = true;
+            }
+            location.hash = "/opportunities/product-prematch";
+            const gateDeadline = Date.now() + 5000;
+            while (Date.now() < gateDeadline && !Array.from(document.querySelectorAll("h1")).some((item) => item.textContent?.trim() === "开通完整版")) await sleep(50);
+            const gateVisible = Array.from(document.querySelectorAll("h1")).some((item) => item.textContent?.trim() === "开通完整版");
+            const lockCount = document.querySelectorAll('[aria-label="需开通完整版"]').length;
+            result.freemium = {
+              freeShellVisible: hasShell && text.includes("免费版"),
+              paidAccessGranted: license?.paidAccessGranted === true,
+              explicitAccessFields: typeof license?.allowFreeFeatures === "boolean" && typeof license?.paidAccessGranted === "boolean" && typeof license?.verificationPending === "boolean",
+              localDataAvailable: !!health,
+              gateVisible,
+              lockCount,
+              arbitraryHttpDenied,
+              arbitraryUploadDenied,
+              forgedRunnerDenied,
+              forgedWindowCommandDenied,
+              arbitraryEvalAbsent: typeof native.windows.eval === "undefined" && typeof window.client.executeJavaScriptBrowserWindow === "undefined"
+            };
+            result.freemiumOk = result.freemium.freeShellVisible &&
+              result.freemium.paidAccessGranted === false &&
+              result.freemium.explicitAccessFields &&
+              result.freemium.localDataAvailable &&
+              result.freemium.gateVisible &&
+              result.freemium.lockCount > 0 &&
+              result.freemium.arbitraryHttpDenied &&
+              result.freemium.arbitraryUploadDenied &&
+              result.freemium.forgedRunnerDenied &&
+              result.freemium.forgedWindowCommandDenied &&
+              result.freemium.arbitraryEvalAbsent;
+            resolve(result);
+            return;
+          }
 
           if (result.scenario === "marketing-write") {
             const runtimeDeadline = Date.now() + 10000;
@@ -177,7 +238,7 @@ function installSmokeCheck(win) {
               errors: []
             };
 
-            if (hasShell && hasClient && methodCount >= 33) {
+            if (hasShell && hasClient && methodCount >= 27) {
               cookie.attempted = true;
               const suffix = Date.now() + "-" + Math.random().toString(16).slice(2);
               const sourcePartition = "persist:chihu-smoke-cookie-source-" + suffix;
@@ -280,7 +341,7 @@ function installSmokeCheck(win) {
               errors: []
             };
 
-            if (hasShell && hasClient && methodCount >= 33) {
+            if (hasShell && hasClient && methodCount >= 27) {
               http.attempted = true;
               const baseUrl = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_BASE_URL || "")};
               const expectedBase64 = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_EXPECTED_BASE64 || "")};
@@ -409,109 +470,37 @@ function installSmokeCheck(win) {
           if (result.scenario === "files") {
             const files = {
               attempted: false,
-              saveBufferOk: false,
-              downloadOk: false,
-              cancelOk: false,
-              uploadOk: false,
-              missingExplorerOk: false,
+              selectOk: false,
+              readOk: false,
+              consumedGrantDenied: false,
               steps: [],
               errors: []
             };
 
-            if (hasShell && hasClient && methodCount >= 33) {
+            if (hasShell && hasClient && methodCount >= 27) {
               files.attempted = true;
-              const baseUrl = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_BASE_URL || "")};
-              const downloadBody = ${JSON.stringify(process.env.CHIHU_E2E_FILE_DOWNLOAD_BODY || "")};
-              const uploadText = ${JSON.stringify(process.env.CHIHU_E2E_UPLOAD_TEXT || "")};
-              const suffix = Date.now() + "_" + Math.random().toString(16).slice(2).replace(/[^a-z0-9_]/gi, "");
-              const tmpRoot = ${JSON.stringify(process.env.CHIHU_USER_DATA_DIR || "")} || ".";
-              const savePath = tmpRoot + "\\\\file-smoke-save-" + suffix + ".txt";
-              const downloadPath = tmpRoot + "\\\\file-smoke-download-" + suffix + ".txt";
-              const cancelPath = tmpRoot + "\\\\file-smoke-cancel-" + suffix + ".txt";
+              const selectedPath = ${JSON.stringify(process.env.CHIHU_E2E_SELECTED_FILE_PATH || "")};
+              const expectedText = ${JSON.stringify(process.env.CHIHU_E2E_SELECTED_FILE_TEXT || "")};
 
               try {
-                if (!baseUrl) throw new Error("missing CHIHU_E2E_HTTP_BASE_URL");
-
-                files.steps.push("saveBufferToPath");
-                const saveResult = await withTimeout("saveBufferToPath", window.client.saveBufferToPath({
-                  destPath: savePath,
-                  buffer: "chihu-file-save-" + suffix
-                }), 5000);
-                const savedRead = await withTimeout("readSavedText", fetch(baseUrl + "/read-file?path=" + encodeURIComponent(savePath)).then((response) => response.json()), 5000);
-                files.saveBufferOk = !!saveResult &&
-                  saveResult.isSuccess === true &&
-                  !!savedRead &&
-                  savedRead.text === "chihu-file-save-" + suffix;
-
-                files.steps.push("downloadFileToPath");
-                const downloadResult = await withTimeout("downloadFileToPath", window.client.downloadFileToPath({
-                  url: baseUrl + "/download",
-                  destPath: downloadPath,
-                  taskId: "download-" + suffix,
-                  downloadTimeout: 5000
-                }), 8000);
-                const downloadedRead = await withTimeout("readDownloadedText", fetch(baseUrl + "/read-file?path=" + encodeURIComponent(downloadPath)).then((response) => response.json()), 5000);
-                files.downloadOk = !!downloadResult &&
-                  downloadResult.isSuccess === true &&
-                  !!downloadedRead &&
-                  downloadedRead.text === downloadBody;
-
-                files.steps.push("cancelDownloadFileToPath");
-                const cancelTaskId = "cancel-" + suffix;
-                const pendingDownload = window.client.downloadFileToPath({
-                  url: baseUrl + "/slow-download",
-                  destPath: cancelPath,
-                  taskId: cancelTaskId,
-                  downloadTimeout: 20000
-                });
-                await sleep(150);
-                const cancelResult = await withTimeout("cancelDownloadFileToPath", window.client.cancelDownloadFileToPath({
-                  taskId: cancelTaskId
-                }), 5000);
-                const cancelledDownload = await withTimeout("cancelledDownload", pendingDownload, 8000);
-                files.cancelOk = !!cancelResult &&
-                  cancelResult.isSuccess === true &&
-                  !!cancelledDownload &&
-                  cancelledDownload.isSuccess === false &&
-                  cancelledDownload.message === "cancelled";
-
-                files.steps.push("uploadFile");
-                const uploadBase64 = btoa(uploadText);
-                const uploadResult = await withTimeout("uploadFile", window.client.uploadFile({
-                  url: baseUrl + "/upload",
-                  base64Img: uploadBase64,
-                  fileName: "file-smoke.txt",
-                  formFileName: "file",
-                  data: {
-                    meta: "file-smoke-meta"
-                  },
-                  headers: {},
-                  axiosParamsTimeout: 5000
-                }), 8000);
-                files.uploadOk = !!uploadResult &&
-                  !uploadResult.error &&
-                  !!uploadResult.data &&
-                  uploadResult.data.ok === true &&
-                  uploadResult.data.hasFile === true &&
-                  uploadResult.data.hasMeta === true;
-
-                files.steps.push("openPathInExplorerMissing");
-                const missingExplorer = await withTimeout("openPathInExplorerMissing", window.client.openPathInExplorer({
-                  path: tmpRoot + "\\\\missing-" + suffix
-                }), 5000);
-                files.missingExplorerOk = !!missingExplorer &&
-                  missingExplorer.isSuccess === false &&
-                  typeof missingExplorer.message === "string";
+                if (!selectedPath) throw new Error("missing CHIHU_E2E_SELECTED_FILE_PATH");
+                files.steps.push("selectFile");
+                const selected = await withTimeout("selectFile", window.chihuNative.files.selectFile({ chihu_e2e_mock_path: selectedPath }), 5000);
+                files.selectOk = selected?.ok === true && selected.filePath === selectedPath;
+                files.steps.push("readFile");
+                const read = await withTimeout("readFile", window.chihuNative.files.readFile({ filePath: selectedPath, encoding: "utf8", maxBytes: 1024 }), 5000);
+                files.readOk = read?.ok === true && read.content === expectedText;
+                try {
+                  await window.chihuNative.files.readFile({ filePath: selectedPath, encoding: "utf8", maxBytes: 1024 });
+                } catch {
+                  files.consumedGrantDenied = true;
+                }
               } catch (error) {
                 files.errors.push(error && error.message ? error.message : String(error));
               }
             }
 
-            result.filesOk = files.saveBufferOk &&
-              files.downloadOk &&
-              files.cancelOk &&
-              files.uploadOk &&
-              files.missingExplorerOk;
+            result.filesOk = files.selectOk && files.readOk && files.consumedGrantDenied;
             result.files = files;
             resolve(result);
             return;
@@ -529,7 +518,7 @@ function installSmokeCheck(win) {
               errors: []
             };
 
-            if (hasShell && hasClient && methodCount >= 33) {
+            if (hasShell && hasClient && methodCount >= 27) {
               logs.attempted = true;
               const baseUrl = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_BASE_URL || "")};
               const suffix = Date.now() + "_" + Math.random().toString(16).slice(2).replace(/[^a-z0-9_]/gi, "");
@@ -625,59 +614,34 @@ function installSmokeCheck(win) {
           if (result.scenario === "ui-contract") {
             const ui = {
               attempted: false,
-              selectDirectoryOk: false,
-              openExistingDirectoryOk: false,
-              openExistingFileOk: false,
+              selectFileOk: false,
+              readFileOk: false,
+              consumedGrantDenied: false,
               notificationContractOk: false,
               steps: [],
               errors: []
             };
 
-            if (hasShell && hasClient && methodCount >= 33) {
+            if (hasShell && hasClient && methodCount >= 27) {
               ui.attempted = true;
-              const baseUrl = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_BASE_URL || "")};
+              const selectedPath = ${JSON.stringify(process.env.CHIHU_E2E_SELECTED_FILE_PATH || "")};
+              const expectedText = ${JSON.stringify(process.env.CHIHU_E2E_SELECTED_FILE_TEXT || "")};
               const suffix = Date.now() + "_" + Math.random().toString(16).slice(2).replace(/[^a-z0-9_]/gi, "");
-              const tmpRoot = ${JSON.stringify(process.env.CHIHU_USER_DATA_DIR || "")} || ".";
-              const selectedPath = tmpRoot + "\\\\selected-" + suffix;
-              const existingDir = tmpRoot + "\\\\explorer-dir-" + suffix;
-              const existingFile = existingDir + "\\\\explorer-file.txt";
               const eventName = "chihu_ui_contract_notification_" + suffix;
 
               try {
-                if (!baseUrl) throw new Error("missing CHIHU_E2E_HTTP_BASE_URL");
-
-                ui.steps.push("selectDirectoryMock");
-                const selected = await withTimeout("selectDirectoryMock", window.client.selectDirectory({
-                  chihu_e2e_mock_path: selectedPath
-                }), 5000);
-                ui.selectDirectoryOk = !!selected &&
-                  selected.canceled === false &&
-                  selected.path === selectedPath &&
-                  selected.e2e === true;
-
-                ui.steps.push("prepareExistingPaths");
-                const writeExisting = await withTimeout("writeExistingFile", fetch(baseUrl + "/write-file?path=" + encodeURIComponent(existingFile) + "&text=ui-contract").then((response) => response.json()), 5000);
-                if (!writeExisting || writeExisting.ok !== true) throw new Error("failed to prepare existing file");
-
-                ui.steps.push("openPathInExplorerDirectoryDryRun");
-                const openDir = await withTimeout("openPathInExplorerDirectoryDryRun", window.client.openPathInExplorer({
-                  path: existingDir,
-                  chihu_e2e_dry_run: true
-                }), 5000);
-                ui.openExistingDirectoryOk = !!openDir &&
-                  openDir.isSuccess === true &&
-                  openDir.e2e === true &&
-                  openDir.targetType === "directory";
-
-                ui.steps.push("openPathInExplorerFileDryRun");
-                const openFile = await withTimeout("openPathInExplorerFileDryRun", window.client.openPathInExplorer({
-                  path: existingFile,
-                  chihu_e2e_dry_run: true
-                }), 5000);
-                ui.openExistingFileOk = !!openFile &&
-                  openFile.isSuccess === true &&
-                  openFile.e2e === true &&
-                  openFile.targetType === "file";
+                if (!selectedPath) throw new Error("missing CHIHU_E2E_SELECTED_FILE_PATH");
+                ui.steps.push("selectFile");
+                const selected = await withTimeout("selectFile", window.chihuNative.files.selectFile({ chihu_e2e_mock_path: selectedPath }), 5000);
+                ui.selectFileOk = selected?.ok === true && selected.filePath === selectedPath;
+                ui.steps.push("readFile");
+                const read = await withTimeout("readFile", window.chihuNative.files.readFile({ filePath: selectedPath, encoding: "utf8", maxBytes: 1024 }), 5000);
+                ui.readFileOk = read?.ok === true && read.content === expectedText;
+                try {
+                  await window.chihuNative.files.readFile({ filePath: selectedPath, encoding: "utf8", maxBytes: 1024 });
+                } catch {
+                  ui.consumedGrantDenied = true;
+                }
 
                 ui.steps.push("notificationContract");
                 const notificationPromise = new Promise((resolve) => {
@@ -711,9 +675,9 @@ function installSmokeCheck(win) {
               }
             }
 
-            result.uiContractOk = ui.selectDirectoryOk &&
-              ui.openExistingDirectoryOk &&
-              ui.openExistingFileOk &&
+            result.uiContractOk = ui.selectFileOk &&
+              ui.readFileOk &&
+              ui.consumedGrantDenied &&
               ui.notificationContractOk;
             result.uiContract = ui;
             resolve(result);
@@ -730,7 +694,7 @@ function installSmokeCheck(win) {
               errors: []
             };
 
-            if (hasShell && hasClient && methodCount >= 33) {
+            if (hasShell && hasClient && methodCount >= 27) {
               maintenance.attempted = true;
               const baseUrl = ${JSON.stringify(process.env.CHIHU_E2E_HTTP_BASE_URL || "")};
               const tmpRoot = ${JSON.stringify(process.env.CHIHU_USER_DATA_DIR || "")} || ".";
@@ -823,7 +787,7 @@ function installSmokeCheck(win) {
             };
 
             const nativeData = window.nativeData || (window.chihuNative && window.chihuNative.nativeData);
-            if (hasShell && hasClient && methodCount >= 33 && nativeData) {
+            if (hasShell && hasClient && methodCount >= 27 && nativeData) {
               sqlite.attempted = true;
               sqlite.exposedOk = !!nativeData.maintenance && !!nativeData.catalogJobs && !!nativeData.catalog;
               const suffix = Date.now() + "_" + Math.random().toString(16).slice(2).replace(/[^a-z0-9_]/gi, "");
@@ -1390,7 +1354,7 @@ function installSmokeCheck(win) {
             errors: []
           };
 
-          if (hasShell && hasClient && methodCount >= 33 && hasChihuNative) {
+          if (hasShell && hasClient && methodCount >= 27 && hasChihuNative) {
             bridge.attempted = true;
             let childId = null;
             let nativeChildId = null;
@@ -1750,6 +1714,7 @@ function installSmokeCheck(win) {
 
       lastProbeResult = result;
       const scenarioOk =
+        scenario === "freemium" ? result.freemiumOk :
         scenario === "cookie" ? result.cookieOk :
         scenario === "http" ? result.httpOk :
         scenario === "files" ? result.filesOk :
@@ -1760,7 +1725,7 @@ function installSmokeCheck(win) {
         scenario === "marketing-write" ? result.marketingWriteOk :
         scenario === "marketing-read" ? result.marketingReadOk :
         result.bridgeOk;
-      const ok = result.hasShell && result.hasClient && result.methodCount >= 33 && scenarioOk;
+      const ok = result.hasShell && result.hasClient && result.methodCount >= 27 && scenarioOk;
       if (ok) {
         clearTimeout(timer);
         finish(0, result);

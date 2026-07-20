@@ -7,12 +7,15 @@ const { performance } = require("node:perf_hooks");
 const { app } = require("electron");
 const { ROOT } = require("../config");
 const { nativeHttpRequest } = require("../ipc/http");
+const { developmentBypassAllowed, leaseIsActive, leaseTtlMs } = require("./access-model");
 
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 const AUTH_OBJECT_TYPE = "device_code";
 const RECENT_CHECK_MS = 10 * 60 * 1000;
 
-let activeLicenseCache = null;
+let paidAccessLease = null;
+let verificationPending = false;
+let verificationGeneration = 0;
 
 function readPackageMetadata() {
   try {
@@ -75,7 +78,12 @@ function getLicenseConfig() {
   const appId = String(process.env.CHIHU_LICENSE_APP_ID || fileLicense.appId || packageLicense.appId || "").trim();
   const appSecret = String(process.env.CHIHU_LICENSE_APP_SECRET || fileLicense.appSecret || packageLicense.appSecret || "").trim();
   const platform = String(process.env.CHIHU_LICENSE_PLATFORM || fileLicense.platform || packageLicense.platform || "windows").trim() || "windows";
-  const bypass = boolEnv("CHIHU_LICENSE_BYPASS");
+  const explicitTestMode = app.isPackaged === false && boolEnv("CHIHU_EXPLICIT_TEST_MODE");
+  const bypass = developmentBypassAllowed({
+    isPackaged: app.isPackaged,
+    explicitTestMode,
+    bypassRequested: boolEnv("CHIHU_LICENSE_BYPASS")
+  });
 
   return {
     apiBaseUrl,
@@ -83,7 +91,8 @@ function getLicenseConfig() {
     appSecret,
     platform,
     configured: Boolean(apiBaseUrl && appId && appSecret),
-    bypass
+    bypass,
+    explicitTestMode
   };
 }
 
@@ -93,7 +102,7 @@ function stateFilePath() {
 
 let stateCache = null;
 let stateWriteQueue = Promise.resolve();
-let licenseRefreshPromise = null;
+let licenseRefreshRequest = null;
 
 async function readState() {
   if (stateCache) return stateCache;
@@ -101,6 +110,10 @@ async function readState() {
     const raw = await fs.readFile(stateFilePath(), "utf8");
     const parsed = JSON.parse(raw);
     stateCache = parsed && typeof parsed === "object" ? parsed : {};
+    if (stateCache.stateVersion !== STATE_VERSION) {
+      stateCache = {};
+      await fs.rm(stateFilePath(), { force: true }).catch(() => undefined);
+    }
   } catch {
     stateCache = {};
   }
@@ -110,9 +123,18 @@ async function readState() {
 async function writeState(patch) {
   const write = async () => {
     const current = await readState();
+    const persistentPatch = { ...patch };
+    delete persistentPatch.paidAccessGranted;
+    delete persistentPatch.paidAccessSource;
+    delete persistentPatch.verificationPending;
+    delete persistentPatch.bypass;
+    delete persistentPatch.licensed;
+    delete persistentPatch.lease;
+    delete persistentPatch.expiresAtMonotonic;
+    delete persistentPatch.grantedAtMonotonic;
     const next = {
       ...current,
-      ...patch,
+      ...persistentPatch,
       stateVersion: STATE_VERSION,
       updatedAt: new Date().toISOString()
     };
@@ -131,7 +153,9 @@ async function writeState(patch) {
 
 async function clearLocalLicenseState() {
   stateCache = {};
-  activeLicenseCache = null;
+  paidAccessLease = null;
+  verificationPending = false;
+  verificationGeneration += 1;
   try {
     await fs.rm(stateFilePath(), { force: true });
   } catch {}
@@ -261,6 +285,18 @@ function responseMessage(payload, fallback) {
   return fallback;
 }
 
+function isAuthoritativeAuthDenial(code) {
+  return new Set([
+    "APP_DISABLED",
+    "AUTH_DISABLED",
+    "AUTH_EXPIRED",
+    "AUTH_FORBIDDEN",
+    "DEVICE_BANNED",
+    "DEVICE_DISABLED",
+    "LICENSE_REQUIRED"
+  ]).has(String(code || "").toUpperCase());
+}
+
 async function postClient(endpointPath, data, timeoutMs = 15000) {
   const config = getLicenseConfig();
   if (!config.configured) {
@@ -367,18 +403,25 @@ async function writeDeviceState(deviceNo, patch = {}) {
 }
 
 async function writeAuthState(deviceNo, auth, patch = {}) {
+  const persistentAuth = auth && typeof auth === "object" ? { ...auth } : auth;
+  if (persistentAuth) {
+    delete persistentAuth.licensed;
+    delete persistentAuth.paidAccessGranted;
+    delete persistentAuth.paidAccessSource;
+    delete persistentAuth.verificationPending;
+  }
   const current = await readState();
   const signingState = {
     ...current,
     ...patch,
     deviceNo,
-    auth
+    auth: persistentAuth
   };
   return writeState({
     ...patch,
     deviceNo,
-    auth,
-    authSignature: authCacheSignature(auth, signingState)
+    auth: persistentAuth,
+    authSignature: authCacheSignature(persistentAuth, signingState)
   });
 }
 
@@ -415,15 +458,77 @@ function normalizeAuthPayload(payload, data, extra = {}) {
   return status;
 }
 
+function monotonicNow() {
+  return performance.now();
+}
+
+function remainingAuthorizationMs(auth, nowMs = Date.now()) {
+  if (!auth || typeof auth !== "object") return 0;
+  if (auth.isPermanent === true) return RECENT_CHECK_MS;
+  const expireAtMs = Date.parse(String(auth.expireAt || ""));
+  const serverTimeMs = Date.parse(String(auth.serverTime || ""));
+  const checkedAtMs = Date.parse(String(auth.lastCheckedAt || ""));
+  if (Number.isFinite(expireAtMs) && Number.isFinite(serverTimeMs)) {
+    const elapsedSinceCheck = Number.isFinite(checkedAtMs) ? Math.max(0, nowMs - checkedAtMs) : 0;
+    return Math.max(0, expireAtMs - serverTimeMs - elapsedSinceCheck);
+  }
+  const elapsedSinceCheck = Number.isFinite(checkedAtMs) ? Math.max(0, nowMs - checkedAtMs) : 0;
+  return Math.max(0, numberOrZero(auth.remainingSeconds) * 1000 - elapsedSinceCheck);
+}
+
+function grantPaidAccessLease(auth, source, generation = verificationGeneration) {
+  if (!isActiveAuthorization(auth)) return null;
+  const ttlMs = leaseTtlMs({ isPermanent: auth.isPermanent, remainingMs: remainingAuthorizationMs(auth), maxLeaseMs: RECENT_CHECK_MS });
+  if (ttlMs <= 0) return null;
+  const now = monotonicNow();
+  paidAccessLease = {
+    source,
+    grantedAtMonotonic: now,
+    expiresAtMonotonic: now + ttlMs,
+    verificationGeneration: generation
+  };
+  return paidAccessLease;
+}
+
+function revokePaidAccessLease(options = {}) {
+  if (options.preserveRedeem && paidAccessLease?.source === "redeem") return;
+  paidAccessLease = null;
+}
+
+function getActivePaidAccessLease() {
+  if (!paidAccessLease) return null;
+  if (!leaseIsActive(paidAccessLease, monotonicNow())) {
+    paidAccessLease = null;
+    verificationPending = false;
+    return null;
+  }
+  return paidAccessLease;
+}
+
 function buildStoredStatus(state, patch = {}) {
   const config = getLicenseConfig();
   const hasDevice = hasValidDeviceCache(state);
   const auth = hasValidAuthCache(state) ? state.auth : {};
+  if (config.bypass && !getActivePaidAccessLease()) {
+    const now = monotonicNow();
+    paidAccessLease = {
+      source: "bypass",
+      grantedAtMonotonic: now,
+      expiresAtMonotonic: now + RECENT_CHECK_MS,
+      verificationGeneration
+    };
+  }
+  const lease = getActivePaidAccessLease();
+  const paidAccessGranted = Boolean(lease);
+  const paidAccessLeaseRemainingSeconds = lease
+    ? Math.max(0, Math.ceil((lease.expiresAtMonotonic - monotonicNow()) / 1000))
+    : 0;
   const status = {
     ok: patch.ok ?? true,
     configured: config.configured,
     bypass: config.bypass,
-    licensed: false,
+    licensed: paidAccessGranted,
+    allowFreeFeatures: Boolean(auth.allowFreeFeatures),
     status: auth.status || "unknown",
     reason: patch.reason || "",
     message: patch.message || "",
@@ -432,13 +537,17 @@ function buildStoredStatus(state, patch = {}) {
     authStatus: auth.authStatus || "",
     allowPaidFeatures: Boolean(auth.allowPaidFeatures),
     expireAt: auth.expireAt || null,
-    remainingSeconds: numberOrZero(auth.remainingSeconds),
+    remainingSeconds: Math.ceil(remainingAuthorizationMs(auth) / 1000),
     isPermanent: Boolean(auth.isPermanent),
     needRedeemOrRenew: Boolean(auth.needRedeemOrRenew),
     contact: auth.contact || "",
     requestId: auth.requestId || "",
     serverTime: auth.serverTime || "",
     lastCheckedAt: auth.lastCheckedAt || "",
+    paidAccessGranted,
+    paidAccessSource: lease?.source || "none",
+    paidAccessLeaseRemainingSeconds,
+    verificationPending,
     ...patch
   };
 
@@ -448,29 +557,28 @@ function buildStoredStatus(state, patch = {}) {
       ok: true,
       configured: true,
       licensed: true,
+      allowFreeFeatures: true,
       status: "bypass",
       authStatus: "active",
       allowPaidFeatures: true,
+      paidAccessGranted: true,
+      paidAccessSource: "bypass",
+      verificationPending: false,
       message: "development license bypass enabled"
     };
   }
-
-  status.licensed = config.configured && isActiveAuthorization({
-    ...auth,
-    allowPaidFeatures: status.allowPaidFeatures,
-    remainingSeconds: status.remainingSeconds,
-    isPermanent: status.isPermanent,
-    authStatus: status.authStatus
-  });
 
   if (!config.configured) {
     status.ok = false;
     status.status = "config_missing";
     status.reason = "LICENSE_CONFIG_MISSING";
     status.message = "授权中心未配置";
-    status.licensed = false;
+    status.paidAccessGranted = false;
+    status.paidAccessSource = "none";
     status.allowPaidFeatures = false;
   }
+
+  status.licensed = status.paidAccessGranted === true;
 
   return status;
 }
@@ -479,36 +587,6 @@ async function getStoredLicenseStatus(patch = {}) {
   await ensureIdentityState();
   const state = await readState();
   return buildStoredStatus(state, patch);
-}
-
-function monotonicNow() {
-  return performance.now();
-}
-
-function cacheLicenseForIpc(status) {
-  if (!status?.licensed) {
-    activeLicenseCache = null;
-    return;
-  }
-  const remainingMs = status.isPermanent ? RECENT_CHECK_MS : Math.max(0, Number(status.remainingSeconds || 0) * 1000);
-  const ttlMs = Math.min(RECENT_CHECK_MS, remainingMs || 0);
-  if (ttlMs <= 0) {
-    activeLicenseCache = null;
-    return;
-  }
-  activeLicenseCache = {
-    status,
-    expiresAt: monotonicNow() + ttlMs
-  };
-}
-
-function getCachedActiveLicense() {
-  if (!activeLicenseCache) return null;
-  if (activeLicenseCache.expiresAt <= monotonicNow()) {
-    activeLicenseCache = null;
-    return null;
-  }
-  return activeLicenseCache.status;
 }
 
 async function ensureDeviceSynced(options = {}) {
@@ -544,7 +622,7 @@ async function ensureDeviceSynced(options = {}) {
   if (state.deviceNo && state.deviceNo !== deviceNo) {
     devicePatch.auth = null;
     devicePatch.authSignature = "";
-    activeLicenseCache = null;
+    paidAccessLease = null;
   }
   await writeDeviceState(deviceNo, devicePatch);
   return {
@@ -558,31 +636,56 @@ async function ensureDeviceSynced(options = {}) {
 async function refreshLicenseStatusInternal(args = {}) {
   const config = getLicenseConfig();
   if (config.bypass) return getStoredLicenseStatus({ status: "bypass" });
+  const generation = Number.isInteger(args.generation) ? args.generation : verificationGeneration;
   const device = await ensureDeviceSynced({ force: true });
-  const payload = await postClient("/client/auth/check", {
-    auth_object_type: AUTH_OBJECT_TYPE,
-    check_scene: args.scene || "startup",
-    device_no: device.deviceNo
-  });
+  let payload;
+  try {
+    payload = await postClient("/client/auth/check", {
+      auth_object_type: AUTH_OBJECT_TYPE,
+      check_scene: args.scene || "startup",
+      device_no: device.deviceNo
+    });
+  } catch (error) {
+    if (generation === verificationGeneration && isAuthoritativeAuthDenial(error.code)) {
+      revokePaidAccessLease();
+      verificationPending = false;
+    }
+    throw error;
+  }
   const auth = normalizeAuthPayload(payload, payload.data || {});
+  if (generation !== verificationGeneration) {
+    return getStoredLicenseStatus({
+      ok: true,
+      status: "superseded",
+      reason: "AUTH_CHECK_SUPERSEDED",
+      message: "授权状态已由更新的检查替代"
+    });
+  }
   await writeAuthState(device.deviceNo, auth);
+  if (isActiveAuthorization(auth)) {
+    grantPaidAccessLease(auth, "server", generation);
+    verificationPending = false;
+  } else {
+    revokePaidAccessLease();
+    verificationPending = false;
+  }
   const status = await getStoredLicenseStatus({
     ok: true,
-    status: auth.licensed ? "active" : auth.authStatus || "unauthorized",
+    status: isActiveAuthorization(auth) ? "active" : auth.authStatus || "unauthorized",
     message: payload.message || ""
   });
-  cacheLicenseForIpc(status);
   return status;
 }
 
 async function refreshLicenseStatus(args = {}) {
-  if (licenseRefreshPromise) return licenseRefreshPromise;
-  const pending = refreshLicenseStatusInternal(args);
-  licenseRefreshPromise = pending;
+  const generation = Number.isInteger(args.generation) ? args.generation : verificationGeneration;
+  if (!args.force && licenseRefreshRequest?.generation === generation) return licenseRefreshRequest.promise;
+  const pending = refreshLicenseStatusInternal({ ...args, generation });
+  licenseRefreshRequest = { generation, promise: pending };
   try {
     return await pending;
   } finally {
-    if (licenseRefreshPromise === pending) licenseRefreshPromise = null;
+    if (licenseRefreshRequest?.promise === pending) licenseRefreshRequest = null;
   }
 }
 
@@ -590,6 +693,10 @@ async function checkLicense(args = {}) {
   try {
     return await refreshLicenseStatus({ scene: args.scene || "startup" });
   } catch (error) {
+    if (isAuthoritativeAuthDenial(error.code)) {
+      revokePaidAccessLease();
+      verificationPending = false;
+    }
     const status = await getStoredLicenseStatus({
       ok: false,
       status: "error",
@@ -598,8 +705,8 @@ async function checkLicense(args = {}) {
     });
     return {
       ...status,
-      licensed: false,
-      allowPaidFeatures: false
+      reason: error.code || "LICENSE_CHECK_FAILED",
+      message: error.message || String(error)
     };
   }
 }
@@ -620,6 +727,8 @@ async function redeemLicense(args = {}) {
     });
   }
 
+  verificationGeneration += 1;
+  const redeemGeneration = verificationGeneration;
   try {
     const device = await ensureDeviceSynced({ force: true });
     const payload = await postClient("/client/card/redeem", {
@@ -628,18 +737,22 @@ async function redeemLicense(args = {}) {
       device_no: device.deviceNo
     });
     const redeemAuth = normalizeAuthPayload(payload, payload.data || {}, { status: "redeemed" });
-    await writeAuthState(device.deviceNo, redeemAuth, { lastRedeemedAt: new Date().toISOString() });
+    if (!isActiveAuthorization(redeemAuth)) {
+      throw licenseError("CARD_REDEEM_INVALID", "卡密兑换结果未授予有效授权");
+    }
+    grantPaidAccessLease(redeemAuth, "redeem", redeemGeneration);
+    verificationPending = true;
+    await writeState({ lastRedeemedAt: new Date().toISOString() });
     const redeemedStatus = await getStoredLicenseStatus({
       ok: true,
       status: "redeemed",
       message: "卡密兑换成功，已绑定当前设备。"
     });
-    cacheLicenseForIpc(redeemedStatus);
     try {
-      return await refreshLicenseStatus({ scene: "after_redeem" });
+      return await refreshLicenseStatus({ scene: "after_redeem", generation: redeemGeneration, force: true });
     } catch (refreshError) {
       return {
-        ...redeemedStatus,
+        ...(await getStoredLicenseStatus()),
         ok: true,
         status: "redeemed_refresh_failed",
         message: `卡密兑换成功，但刷新授权状态失败：${refreshError.message || String(refreshError)}`
@@ -654,31 +767,35 @@ async function redeemLicense(args = {}) {
     });
     return {
       ...status,
-      licensed: false,
-      allowPaidFeatures: false
+      reason: error.code || "CARD_REDEEM_FAILED",
+      message: error.message || String(error)
     };
   }
 }
 
-async function requireLicenseForIpc(channel) {
+async function requirePaidFeature(context = {}) {
   const config = getLicenseConfig();
   if (config.bypass) return getStoredLicenseStatus({ status: "bypass" });
 
-  const cached = getCachedActiveLicense();
-  if (cached) return cached;
+  if (getActivePaidAccessLease()) return getStoredLicenseStatus();
 
   let checked;
   try {
     checked = await refreshLicenseStatus({ scene: "paid_feature" });
   } catch (error) {
-    throw licenseError(error.code || "LICENSE_REQUIRED", error.message || "请先兑换设备授权", { channel });
+    throw licenseError("AUTH_CHECK_FAILED", error.message || "授权校验失败，请联网重试", context);
   }
 
-  if (!checked.licensed) {
-    throw licenseError(checked.reason || checked.authStatus || "LICENSE_REQUIRED", checked.message || "请先兑换设备授权", { channel, status: checked });
+  if (!checked.paidAccessGranted) {
+    const code = checked.authStatus === "expired" ? "AUTH_EXPIRED" : "LICENSE_REQUIRED";
+    throw licenseError(code, checked.message || (code === "AUTH_EXPIRED" ? "设备授权已到期" : "请先开通完整版"), { ...context, status: checked });
   }
 
   return checked;
+}
+
+async function requireLicenseForIpc(channel) {
+  return requirePaidFeature({ channel });
 }
 
 module.exports = {
@@ -689,5 +806,6 @@ module.exports = {
   getLicenseStatus,
   checkLicense,
   redeemLicense,
+  requirePaidFeature,
   requireLicenseForIpc
 };

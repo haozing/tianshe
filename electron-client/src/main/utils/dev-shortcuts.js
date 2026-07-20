@@ -1,3 +1,9 @@
+const { app } = require("electron");
+
+function developmentShortcutsEnabled() {
+  return app.isPackaged === false && process.env.CHIHU_EXPLICIT_TEST_MODE === "1" && process.env.CHIHU_ENABLE_DEVTOOLS === "1";
+}
+
 function addDevShortcuts(win) {
   if (!win || win.isDestroyed()) return;
   win.webContents.on("before-input-event", (event, input) => {
@@ -5,8 +11,8 @@ function addDevShortcuts(win) {
 
     const key = String(input.key || "").toLowerCase();
     if (input.control && input.shift && key === "n") {
-      win.webContents.toggleDevTools();
       event.preventDefault();
+      if (developmentShortcutsEnabled()) win.webContents.toggleDevTools();
     }
 
     if (input.control && key === "r") {
@@ -16,5 +22,4 @@ function addDevShortcuts(win) {
   });
 }
 
-module.exports = { addDevShortcuts };
-
+module.exports = { addDevShortcuts, developmentShortcutsEnabled };

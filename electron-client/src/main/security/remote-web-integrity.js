@@ -6,6 +6,10 @@ const { net } = require("electron");
 const PUBLIC_KEY_PATH = path.join(__dirname, "remote-web-public-key.pem");
 const DEFAULT_TIMEOUT_MS = Number(process.env.CHIHU_REMOTE_INTEGRITY_TIMEOUT_MS || 15000);
 const DEFAULT_MAX_ARTIFACT_BYTES = Number(process.env.CHIHU_REMOTE_INTEGRITY_MAX_ARTIFACT_BYTES || 20 * 1024 * 1024);
+const VERIFIED_RELEASE_SCHEME = "chihu-release";
+let currentVerifiedRelease = null;
+const verifiedReleases = new Map();
+let releaseProtocolRegistered = false;
 
 function sha256(buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
@@ -181,11 +185,108 @@ async function verifyArtifact(manifestUrl, artifact) {
     path: artifact.path,
     type: artifact.type || "",
     bytes: buffer.length,
-    sha256: actual
+    sha256: actual,
+    buffer
   };
 }
 
-async function verifyRemoteWebEntry(entryUrl) {
+function safeReleaseDirectoryName(value) {
+  return String(value || "release").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "release";
+}
+
+async function persistVerifiedRelease(cacheRoot, releaseId, artifacts) {
+  if (!cacheRoot) return "";
+  const fsPromises = require("node:fs/promises");
+  const releaseRoot = path.join(cacheRoot, safeReleaseDirectoryName(releaseId));
+  const stagingRoot = `${releaseRoot}.staging-${process.pid}-${Date.now()}`;
+  await fsPromises.rm(stagingRoot, { recursive: true, force: true });
+  for (const artifact of artifacts) {
+    assertSafeArtifactPath(artifact.path);
+    const outputPath = path.join(stagingRoot, ...artifact.path.split("/"));
+    await fsPromises.mkdir(path.dirname(outputPath), { recursive: true });
+    await fsPromises.writeFile(outputPath, artifact.buffer, { mode: 0o444 });
+  }
+  await fsPromises.rm(releaseRoot, { recursive: true, force: true });
+  await fsPromises.rename(stagingRoot, releaseRoot);
+  return releaseRoot;
+}
+
+function contentTypeForPath(value) {
+  const extension = path.extname(value).toLowerCase();
+  if (extension === ".html") return "text/html; charset=utf-8";
+  if (extension === ".js" || extension === ".mjs") return "text/javascript; charset=utf-8";
+  if (extension === ".css") return "text/css; charset=utf-8";
+  if (extension === ".json") return "application/json; charset=utf-8";
+  if (extension === ".png") return "image/png";
+  if (extension === ".svg") return "image/svg+xml";
+  if (extension === ".ico") return "image/x-icon";
+  return "application/octet-stream";
+}
+
+function verifiedReleaseEntryUrl(releaseId, artifactPath) {
+  assertSafeArtifactPath(artifactPath);
+  if (!/^[a-zA-Z0-9._-]{1,120}$/.test(String(releaseId || ""))) throw new Error("releaseId is unsafe");
+  return `${VERIFIED_RELEASE_SCHEME}://verified/${encodeURIComponent(releaseId)}/${artifactPath.replace(/^\/+/, "")}`;
+}
+
+function parseVerifiedReleaseUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== `${VERIFIED_RELEASE_SCHEME}:` || url.hostname !== "verified") return null;
+    const segments = url.pathname.replace(/^\/+/, "").split("/");
+    const releaseId = decodeURIComponent(segments.shift() || "");
+    if (!/^[a-zA-Z0-9._-]{1,120}$/.test(releaseId)) return null;
+    const artifactPath = segments.map((segment) => decodeURIComponent(segment)).join("/");
+    assertSafeArtifactPath(artifactPath);
+    return { releaseId, artifactPath };
+  } catch {
+    return null;
+  }
+}
+
+function registerVerifiedReleaseScheme(protocol) {
+  if (releaseProtocolRegistered) return;
+  releaseProtocolRegistered = true;
+  protocol.registerSchemesAsPrivileged([{
+    scheme: VERIFIED_RELEASE_SCHEME,
+    privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true }
+  }]);
+}
+
+function installVerifiedReleaseProtocol(protocol) {
+  protocol.handle(VERIFIED_RELEASE_SCHEME, (request) => {
+    const parsed = parseVerifiedReleaseUrl(request.url);
+    const release = parsed ? verifiedReleases.get(parsed.releaseId) : null;
+    const artifact = parsed ? release?.artifactMap.get(parsed.artifactPath) : null;
+    if (!artifact) return new Response("verified release artifact not found", { status: 404 });
+    return new Response(artifact.buffer, {
+      status: 200,
+      headers: {
+        "Content-Type": contentTypeForPath(parsed.artifactPath),
+        "Cache-Control": "no-store",
+        "X-Chihu-Release-Id": release.releaseId,
+        "X-Content-Type-Options": "nosniff"
+      }
+    });
+  });
+}
+
+function getVerifiedReleaseSnapshot(releaseId = "") {
+  const release = releaseId ? verifiedReleases.get(String(releaseId)) : currentVerifiedRelease;
+  if (!release) return null;
+  return {
+    releaseId: release.releaseId,
+    manifestUrl: release.manifestUrl,
+    entryUrl: release.entryUrl,
+    adapterSnapshotHash: release.adapterSnapshotHash,
+    adapter: release.adapter,
+    windowCommands: release.windowCommands,
+    config: release.config,
+    cacheRoot: release.cacheRoot
+  };
+}
+
+async function verifyRemoteWebEntry(entryUrl, options = {}) {
   if (!shouldVerifyRemoteUrl(entryUrl)) {
     return { ok: true, skipped: true, reason: "local-or-disabled", entryUrl };
   }
@@ -201,16 +302,60 @@ async function verifyRemoteWebEntry(entryUrl) {
     verifiedArtifacts.push(await verifyArtifact(manifestUrl, artifact));
   }
 
+  const manifestPath = "new-remote-web/release-manifest.json";
+  verifiedArtifacts.push({
+    path: manifestPath,
+    type: "release-manifest",
+    bytes: manifestBuffer.length,
+    sha256: sha256(manifestBuffer),
+    buffer: manifestBuffer
+  });
+  const releaseId = String(manifest.releaseId || "");
+  if (!releaseId) throw new Error("release manifest releaseId is missing");
+  if (!/^[a-zA-Z0-9._-]{1,120}$/.test(releaseId)) throw new Error("release manifest releaseId is unsafe");
+  const artifactMap = new Map(verifiedArtifacts.map((artifact) => [artifact.path.replace(/^\/+/, ""), artifact]));
+  const entryArtifact = verifiedArtifacts.find((artifact) => artifact.type === "remote-html");
+  if (!entryArtifact) throw new Error("verified release entry artifact is missing");
+  const adapterArtifact = verifiedArtifacts.find((artifact) => artifact.path.endsWith("doudian-adapter.marketing-pilot.json")) || verifiedArtifacts.find((artifact) => artifact.type === "doudian-adapter");
+  const windowCommandsArtifact = verifiedArtifacts.find((artifact) => artifact.type === "doudian-window-commands");
+  const configArtifact = verifiedArtifacts.find((artifact) => artifact.path.endsWith("chihu-config.json")) || verifiedArtifacts.find((artifact) => artifact.type === "chihu-config");
+  if (!adapterArtifact || !windowCommandsArtifact || !configArtifact) throw new Error("verified release configuration snapshot is incomplete");
+  const windowCommands = JSON.parse(windowCommandsArtifact.buffer.toString("utf8"));
+  if (windowCommands.schemaVersion !== 1 || windowCommands.adapterSha256 !== adapterArtifact.sha256 || !windowCommands.commands) {
+    throw new Error("verified window command snapshot does not match the adapter");
+  }
+  const manifestSha256 = sha256(manifestBuffer);
+  const existingRelease = verifiedReleases.get(releaseId);
+  if (existingRelease && existingRelease.manifestSha256 !== manifestSha256) {
+    throw new Error(`releaseId ${releaseId} is already bound to a different verified manifest`);
+  }
+  const cacheRoot = await persistVerifiedRelease(options.cacheRoot, releaseId, verifiedArtifacts);
+  const verifiedRelease = {
+    releaseId,
+    manifestSha256,
+    manifestUrl,
+    entryUrl: verifiedReleaseEntryUrl(releaseId, entryArtifact.path),
+    adapterSnapshotHash: sha256(Buffer.concat([adapterArtifact.buffer, windowCommandsArtifact.buffer])),
+    adapter: JSON.parse(adapterArtifact.buffer.toString("utf8")),
+    windowCommands,
+    config: JSON.parse(configArtifact.buffer.toString("utf8")),
+    artifactMap,
+    cacheRoot
+  };
+  verifiedReleases.set(releaseId, verifiedRelease);
+  currentVerifiedRelease = verifiedRelease;
+
   return {
     ok: true,
     skipped: false,
     entryUrl,
     manifestUrl,
-    releaseId: manifest.releaseId || "",
+    releaseId,
+    verifiedEntryUrl: currentVerifiedRelease.entryUrl,
     signature,
     artifactCount: verifiedArtifacts.length,
     totalBytes: verifiedArtifacts.reduce((sum, item) => sum + item.bytes, 0),
-    artifacts: verifiedArtifacts
+    artifacts: verifiedArtifacts.map(({ buffer, ...artifact }) => artifact)
   };
 }
 
@@ -256,8 +401,14 @@ function remoteIntegrityErrorDataUrl(entryUrl, error) {
 }
 
 module.exports = {
+  VERIFIED_RELEASE_SCHEME,
+  getVerifiedReleaseSnapshot,
+  installVerifiedReleaseProtocol,
+  registerVerifiedReleaseScheme,
   shouldVerifyRemoteUrl,
   manifestUrlForEntry,
+  parseVerifiedReleaseUrl,
   verifyRemoteWebEntry,
+  verifiedReleaseEntryUrl,
   remoteIntegrityErrorDataUrl
 };

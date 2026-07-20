@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { defaultConfig, loadConfig, loadManifest, RELEASE_MANIFEST_URL } from "./bridge/config";
 import { listDoudianStores, runBridgeSelfCheck } from "./bridge/client";
 import { getDoudianAdapterStatus, loadDoudianAdapterPayload } from "./bridge/doudianAdapter";
 import {
+  canAccessTier,
   checkLicense,
   getLicenseStatus,
   initialLicenseStatus,
+  paidAccessRefreshDelayMs,
   redeemLicense,
   type LicenseStatus
 } from "./bridge/license";
@@ -33,9 +35,11 @@ import {
   runDoudianViolationsDataSelfCheck,
   runDoudianRepositorySelfCheck,
   cleanupMarketingRecords,
+  deferredMarketingScheduleReason,
   marketingWriteEnabled,
   marketingAdapterSnapshotHash,
   startMarketingScheduleRunner,
+  rebaseDeferredMarketingSchedules,
   runDoudianStoreTask,
   type MarketingTaskResult,
   startMockLongDoudianTask,
@@ -43,7 +47,7 @@ import {
 } from "./domain/doudian";
 import { DiagnosticsPage } from "./components/DiagnosticsPage";
 import { HomePage } from "./components/HomePage";
-import { LicenseGateScreen, LicenseRenewDialog } from "./components/LicenseGate";
+import { LicenseRenewDialog, PaidFeatureGate } from "./components/LicenseGate";
 import { ShellHeader } from "./components/ShellHeader";
 import { findFeatureRoute, firstAvailableRoute, resolveFeatureRoutes } from "./featureRoutes";
 import { currentRoute } from "./lib/utils";
@@ -98,6 +102,7 @@ export function App() {
   const [licenseDialogOpen, setLicenseDialogOpen] = useState(false);
   const [adapterPayload, setAdapterPayload] = useState<DoudianAdapterPayload | null>(null);
   const [routeGuardMessage, setRouteGuardMessage] = useState("");
+  const previousPaidAccess = useRef(false);
 
   useEffect(() => {
     const onHashChange = () => {
@@ -109,30 +114,41 @@ export function App() {
 
   useEffect(() => {
     const enabled = !!adapterPayload && state.config.features.marketingMenu?.enabled === true && state.config.features.marketingLimitedTime?.enabled === true && marketingWriteEnabled(state.config, adapterPayload.adapter, "limited_time", "tool_renew");
-    if (!enabled || !adapterPayload) return startMarketingScheduleRunner({ enabled: false, execute: async () => ({ ok: false }) });
+    if (!enabled || !adapterPayload) return startMarketingScheduleRunner({ enabled: false, execute: async () => ({ outcome: "deferred", reason: "auth_check_failed" }) });
     return startMarketingScheduleRunner({
       enabled: true,
       execute: async (schedule) => {
-        if (!schedule.adapterSnapshotHash || schedule.adapterSnapshotHash !== marketingAdapterSnapshotHash(adapterPayload)) return { ok: false };
-        const result = await runDoudianStoreTask({
-          taskType: "marketingTask",
-          adapterVersion: adapterPayload.adapter.version,
-          ruleVersion: adapterPayload.scripts?.version || "",
-          metadata: { mutation: true, replaceActive: false, adapterSnapshotHash: marketingAdapterSnapshotHash(adapterPayload), dedupeKey: `${schedule.id}:${schedule.nextRunAt}` },
-          payload: {
-            feature: schedule.feature,
-            action: "tool_renew",
-            stores: [{ shopId: schedule.shopId, shopName: schedule.shopId, partition: schedule.partition, tenantId: schedule.tenantId, storeGeneration: schedule.storeGeneration }],
-            context: { entityIds: [schedule.entityId], intervalDays: Math.max(1, Math.round(schedule.intervalMs / 86_400_000)) },
-            config: state.config,
-            doudianAdapter: adapterPayload
-          }
-        }, 900_000) as unknown as MarketingTaskResult;
+        if (!licenseStatus.paidAccessGranted) {
+          return { outcome: "deferred", reason: licenseStatus.verificationPending ? "auth_check_failed" : "license_required" };
+        }
+        if (!schedule.adapterSnapshotHash || schedule.adapterSnapshotHash !== marketingAdapterSnapshotHash(adapterPayload)) return { outcome: "executed", ok: false };
+        let result: MarketingTaskResult;
+        try {
+          result = await runDoudianStoreTask({
+            taskType: "marketingTask",
+            adapterVersion: adapterPayload.adapter.version,
+            ruleVersion: adapterPayload.scripts?.version || "",
+            metadata: { mutation: true, replaceActive: false, adapterSnapshotHash: marketingAdapterSnapshotHash(adapterPayload), dedupeKey: `${schedule.id}:${schedule.nextRunAt}` },
+            payload: {
+              feature: schedule.feature,
+              action: "tool_renew",
+              stores: [{ shopId: schedule.shopId, shopName: schedule.shopId, partition: schedule.partition, tenantId: schedule.tenantId, storeGeneration: schedule.storeGeneration }],
+              context: { entityIds: [schedule.entityId], intervalDays: Math.max(1, Math.round(schedule.intervalMs / 86_400_000)) },
+              config: state.config,
+              doudianAdapter: adapterPayload
+            }
+          }, 900_000) as unknown as MarketingTaskResult;
+        } catch (error) {
+          const reason = deferredMarketingScheduleReason(error);
+          if (reason) return { outcome: "deferred", reason };
+          throw error;
+        }
         const entity = result.entities?.[0];
         const start = Date.parse(entity?.startTime || "");
         const end = Date.parse(entity?.endTime || "");
         const intervalMs = Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : schedule.intervalMs;
         return {
+          outcome: "executed" as const,
           ok: result.status === "ok" && !!entity?.entityId,
           operationId: result.operationId,
           entityId: entity?.entityId,
@@ -141,13 +157,24 @@ export function App() {
         };
       }
     });
-  }, [adapterPayload, state.config]);
+  }, [adapterPayload, licenseStatus.paidAccessGranted, licenseStatus.verificationPending, state.config]);
+
+  useEffect(() => {
+    const paid = licenseStatus.paidAccessGranted === true;
+    if (paid && !previousPaidAccess.current) {
+      void rebaseDeferredMarketingSchedules().catch(() => undefined);
+      void cleanupMarketingRecords().catch(() => undefined);
+    }
+    previousPaidAccess.current = paid;
+  }, [licenseStatus.paidAccessGranted]);
 
   useEffect(() => {
     const progressEvents: DoudianProgressDetail[] = [];
     const remove = addDoudianProgressListener((progressEvent) => {
       progressEvents.push(progressEvent.detail);
     });
+    const smokeRuntime = location.hostname.endsWith(".localhost") && new URLSearchParams(location.search).get("smoke") === "1";
+    if (smokeRuntime) {
     window.chihuDoudianTaskRuntime = {
       startMock: startMockLongDoudianTask,
       cancel: cancelDoudianTask,
@@ -343,13 +370,15 @@ export function App() {
         };
       }
     };
+    }
     void resubscribeDoudianTasks().catch(() => undefined);
-    void cleanupMarketingRecords().catch(() => undefined);
     return () => {
       remove();
-      delete window.chihuDoudianTaskRuntime;
-      delete window.chihuDoudianStoreRuntime;
-      delete window.chihuMarketingReadRuntime;
+      if (smokeRuntime) {
+        delete window.chihuDoudianTaskRuntime;
+        delete window.chihuDoudianStoreRuntime;
+        delete window.chihuMarketingReadRuntime;
+      }
     };
   }, []);
 
@@ -386,6 +415,25 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const delayMs = paidAccessRefreshDelayMs(licenseStatus);
+    if (delayMs === null) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void checkLicense("lease_refresh").then((checked) => {
+        if (cancelled) return;
+        setLicenseStatus(checked);
+        if (!checked.paidAccessGranted) setLicenseMessage(checked.message || "授权已失效，请重新验证");
+      }).catch((error) => {
+        if (!cancelled) setLicenseMessage(error instanceof Error ? error.message : String(error));
+      });
+    }, delayMs);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [licenseStatus.lastCheckedAt, licenseStatus.paidAccessGranted, licenseStatus.paidAccessLeaseRemainingSeconds, licenseStatus.paidAccessSource]);
+
   async function refreshLicense(scene = "manual_refresh") {
     setLicenseChecking(true);
     setLicenseMessage("");
@@ -405,7 +453,8 @@ export function App() {
     try {
       const redeemed = await redeemLicense(cardKey);
       setLicenseStatus(redeemed);
-      setLicenseMessage(redeemed.status === "redeemed_refresh_failed" ? redeemed.message || "卡密兑换成功，但授权状态刷新失败。" : redeemed.licensed ? "卡密兑换成功，已绑定当前设备。" : redeemed.message || "卡密兑换失败");
+      setLicenseMessage(redeemed.status === "redeemed_refresh_failed" ? redeemed.message || "卡密兑换成功，但授权状态刷新失败。" : redeemed.paidAccessGranted ? "卡密兑换成功，已绑定当前设备。" : redeemed.message || "卡密兑换失败");
+      if (redeemed.paidAccessGranted) setLicenseDialogOpen(false);
     } finally {
       setLicenseRedeeming(false);
     }
@@ -501,33 +550,28 @@ export function App() {
   const requestedDefinition = findFeatureRoute(state.route);
   const activeDefinition = findFeatureRoute(state.route, resolvedRoutes);
   const diagnosticsRoute = state.route === "/system/diagnostics";
+  const homeRoute = state.route === "/";
+  const routeResolutionReady = state.configSource !== "none" && (adapterPayload !== null || state.doudianAdapter.lastFailureReason !== "");
+  const routeState = !routeResolutionReady
+    ? "loading"
+    : diagnosticsRoute || homeRoute
+      ? "active"
+      : !requestedDefinition || !activeDefinition
+        ? "unavailable"
+        : canAccessTier(licenseStatus, activeDefinition.accessTier)
+          ? "active"
+          : "locked";
   const effectiveRoute = diagnosticsRoute ? "/system/diagnostics" : activeDefinition?.route || firstAvailableRoute(resolvedRoutes);
   const ActiveComponent = activeDefinition?.component;
   const configStatus = state.configError ? "error" : "ready";
   const bridgeStatus = state.bridge.ok ? "ready" : "missing";
-  const smokeMode = location.hostname === "chihu-remote.localhost" && new URLSearchParams(location.search).get("smoke") === "1";
-  const licenseReady = smokeMode || Boolean(licenseStatus.licensed || licenseStatus.bypass);
 
   useEffect(() => {
-    const accessResolutionReady = state.configSource !== "none" || state.configError !== "" || adapterPayload !== null;
-    if (!accessResolutionReady || diagnosticsRoute || !requestedDefinition || activeDefinition) return;
-    setRouteGuardMessage(`${requestedDefinition.navigation.label}当前不可用，已返回可用页面。`);
+    if (routeState !== "unavailable" || diagnosticsRoute || homeRoute) return;
+    setRouteGuardMessage(`${requestedDefinition?.navigation.label || "该页面"}当前不可用，已返回可用页面。`);
     const fallback = firstAvailableRoute(resolvedRoutes);
     if (state.route !== fallback) location.hash = `#${fallback}`;
-  }, [activeDefinition, diagnosticsRoute, requestedDefinition, resolvedRoutes, state.route]);
-
-  if (!licenseReady) {
-    return (
-      <LicenseGateScreen
-        status={licenseStatus}
-        checking={licenseChecking}
-        redeeming={licenseRedeeming}
-        message={licenseMessage}
-        onRedeem={submitLicenseCard}
-        onRefresh={() => refreshLicense("manual_refresh").then(() => undefined)}
-      />
-    );
-  }
+  }, [diagnosticsRoute, homeRoute, requestedDefinition, resolvedRoutes, routeState, state.route]);
 
   return (
     <>
@@ -568,7 +612,18 @@ export function App() {
           ) : null}
           {routeGuardMessage ? <div className="flex min-h-[38px] items-center justify-between gap-3 rounded-lg border border-[#ffdca8] bg-[#fff7e8] px-3 py-2 text-[13px] text-[#8a4b00]"><span>{routeGuardMessage}</span><button className="font-semibold" type="button" onClick={() => setRouteGuardMessage("")}>关闭</button></div> : null}
           <div className={`min-h-0 flex-1 ${activeDefinition?.overflow === "hidden" ? "overflow-hidden" : "overflow-auto"}`} data-resolved-route={effectiveRoute}>
-            {effectiveRoute === "/system/diagnostics" ? (
+            {routeState === "loading" ? (
+              <div className="grid min-h-full place-items-center text-[13px] font-medium text-[#667085]">正在加载功能配置...</div>
+            ) : routeState === "locked" ? (
+              <PaidFeatureGate
+                status={licenseStatus}
+                checking={licenseChecking}
+                redeeming={licenseRedeeming}
+                message={licenseMessage}
+                onRedeem={submitLicenseCard}
+                onRefresh={() => refreshLicense("paid_route_refresh").then(() => undefined)}
+              />
+            ) : effectiveRoute === "/system/diagnostics" ? (
               <DiagnosticsPage state={state} />
             ) : ActiveComponent ? (
               <ActiveComponent />

@@ -11,6 +11,7 @@ import type {
   DoudianOpportunityCandidatePage,
   DoudianOpportunityMatchRules,
   DoudianOpportunityFavoritesResult,
+  DoudianOpportunityFavoriteCategory,
   DoudianOpportunityAutoFavoriteFilters,
   DoudianOpportunityAutoFavoritesResult,
   DoudianOpportunityPrematchMode,
@@ -31,14 +32,11 @@ import {
   createStoreGroup,
   deleteEmptyStoreGroup,
   deleteStoreLedger,
-  fetchBulkDeleteProducts,
   fetchBusinessDataLatest,
   fetchFundsDataLatest,
   fetchOpportunityPipelineRun,
   fetchOpportunityPipelineSummary,
-  fetchOpportunityReport,
   fetchOpportunityReportLatest,
-  fetchOpportunityFavoriteCategories,
   listOpportunityPipelineCandidatesPage,
   listOpportunityStoreCategoryLedger,
   restoreLatestStaleGoodsScan,
@@ -490,11 +488,12 @@ export async function fetchDoudianBulkDeleteProducts(args: {
     ...(args.confirmText ? { confirmText: args.confirmText } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
-  return fetchBulkDeleteProducts({
-    ...nextArgs,
-    ...(args.onProgress ? { onProgress: args.onProgress } : {}),
-    ...(args.shouldCancel ? { shouldCancel: args.shouldCancel } : {})
-  });
+  return runDoudianStoreTask({
+    taskType: args.mode === "execute" ? "bulkDeleteExecute" : "bulkDeleteScan",
+    operationId: args.operationId,
+    metadata: { mutation: args.mode === "execute", replaceActive: true },
+    payload: nextArgs
+  }, 900000) as Promise<DoudianBulkDeleteResult>;
 }
 
 export async function fetchDoudianOpportunityReport(args: {
@@ -542,7 +541,13 @@ export async function fetchDoudianOpportunityReport(args: {
     ...(args.skipSubmittedProductInSameClue !== undefined ? { skipSubmittedProductInSameClue: args.skipSubmittedProductInSameClue } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
-  return fetchOpportunityReport(nextArgs);
+  const mode = args.mode || "clue-scan";
+  return runDoudianStoreTask({
+    taskType: ["clue-scan", "product-scan", "product-prematch"].includes(mode) ? "opportunityReportScan" : "opportunityReportAction",
+    operationId: args.operationId,
+    metadata: { mutation: !["clue-scan", "product-scan", "product-prematch", "latest"].includes(mode), replaceActive: true },
+    payload: nextArgs
+  }, 900000) as Promise<DoudianOpportunityReportResult>;
 }
 
 export async function clearDoudianInvalidOpportunityFavorites(args: {
@@ -581,17 +586,17 @@ export async function fetchDoudianFavoriteCategories(args: {
   shopIds?: string[];
   storeRefs?: DoudianStoreIdentityRef[];
   forceAdapter?: boolean;
-} = {}) {
+} = {}): Promise<{ ok: boolean; status?: string; message?: string; categories: DoudianOpportunityFavoriteCategory[] }> {
   const nextArgs = await withDoudianAdapter({
     shopIds: args.shopIds || [],
     storeRefs: args.storeRefs || [],
     mode: "opportunity-auto-favorites"
   }, { force: args.forceAdapter === true });
-  return fetchOpportunityFavoriteCategories({
-    doudianAdapter: nextArgs.doudianAdapter,
-    shopIds: args.shopIds || [],
-    storeRefs: args.storeRefs || []
-  });
+  return runDoudianStoreTask({
+    taskType: "opportunityFavoriteCategories",
+    metadata: { mutation: false, replaceActive: true },
+    payload: nextArgs
+  }, 300000) as Promise<{ ok: boolean; status?: string; message?: string; categories: DoudianOpportunityFavoriteCategory[] }>;
 }
 
 export async function runDoudianOpportunityAutoFavorites(args: {
