@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "releaseId": "2026.07.20.freemium-v2",
-  "buildTime": "2026-07-20T10:05:26.117Z",
+  "buildTime": "2026-07-20T11:30:21.672Z",
   "entry": {
     "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/releases/2026.07.20.freemium-v2/new-remote-web/"
   },
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "5d511d16e3fc07f5117a12c12e2f85279e30e413177ce076831f8dfe1b1f617f"
+      "sha256": "84c14e2fa44ae5329fcc0158123096b56ad2f9fa7297fd3a75cc51066728c82b"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,7 +36,7 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "c118c8d8c971330d5b5232efccb6652758a4fc916027490f4a1ca7a98d46ddc5"
+      "sha256": "3a87db20dc3dac96e9a06329d23eeadcc1bf8804f08f03d35d565cf21010c9c1"
     },
     {
       "path": "new-remote-web/styles.css",
@@ -71,7 +71,7 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "6cacec29404ae5e7e53fc740485ac4a960f4fc00e65dac9bfb7e752b75449a67"
+      "sha256": "d98850d762ad700a0683916f33eb32c99ee066772fa6bd8c86e52784973be1a8"
     },
     {
       "path": "new-remote-web/config/chihu-config.marketing-pilot.json",
@@ -106,7 +106,7 @@
       "type": "update-notes",
       "cache": "no-cache",
       "required": true,
-      "sha256": "253e94a506440a2d024984550e1d5cbb4a58db33411a13c25a008b88222d7036"
+      "sha256": "e5a7396115e8a538322daf3fe474d01f1b75697a7a539f908756116af64d4c9f"
     },
     {
       "path": "new-remote-web/config/invalid-config.json",
@@ -141,7 +141,7 @@
     "schemaVersion": 1,
     "algorithm": "ed25519",
     "keyId": "chihu-remote-web-ed25519-2026-07",
-    "payloadSha256": "b752f19eb1efc12cedf1fc016085bef55694a2c2a67a66f0acf77938912dcfb3",
-    "value": "6zAYS2eqbicg8iqKECcuOiMAb2p8sKakiS4lJRGBFBhxepQLm0o0IY6l/9pqKIU5b2vXWFClMQ/spf5d1/K+AA=="
+    "payloadSha256": "5368d1e999c8e0a61684c6fc7e761dbb3a43fd992720dffb3c3c83c6e5a6a9cd",
+    "value": "BOFzof4qy91GEV7CHn+KoQZgkfI9AF+0IwHMeolSl2gs1aMXHxWw3Ijd8nTsXJD1HHoETzU+6XLIS06X7gC+DQ=="
   }
 }
