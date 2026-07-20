@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, protocol } = require("electron");
+const { app, BrowserWindow, ipcMain, protocol, session } = require("electron");
 const path = require("node:path");
 
 const {
@@ -232,7 +232,7 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
-    installVerifiedReleaseProtocol(protocol);
+    installVerifiedReleaseProtocol(session.fromPartition(DEFAULT_PARTITION).protocol);
     installLicenseIpcGuard();
     registerMainWindowHandlers();
     registerIpcHandlers({ getMainWindow });
