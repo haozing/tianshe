@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.20.freemium-v2",
+  "version": "2026.07.21.opportunity-validation-v1",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "2a0a692",
-    "buildTime": "2026-07-20T11:30:21.672Z"
+    "gitCommit": "0b999e2",
+    "buildTime": "2026-07-21T02:05:21.295Z"
   }
 }
