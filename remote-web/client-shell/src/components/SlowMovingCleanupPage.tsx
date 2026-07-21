@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowLeft,
   Archive,
   Check,
   ChevronDown,
@@ -1562,6 +1563,12 @@ export function SlowMovingCleanupPage() {
     setCleanupMessage("");
   }
 
+  function returnToResults() {
+    setAnalysisStarted(true);
+    setCleanupState("ready");
+    setCleanupMessage("");
+  }
+
   function handleCompassFile(file?: File) {
     setCompassFileName(file?.name || "");
     setCompassRows([]);
@@ -1797,6 +1804,7 @@ export function SlowMovingCleanupPage() {
   const noSalesTypeLabel = noSalesTypeOptions.find((option) => option.value === rules.noSalesType)?.label || rules.noSalesType;
   const productSourceLabel = productSourceOptions.find((option) => option.value === productSource)?.label || "售卖中商品";
   const perStoreLimitLabel = rules.perStoreLimit ? `每店最多 ${rules.perStoreLimit} 个` : "每店不限";
+  const canReturnToResults = Boolean(remoteCandidates.length || scanDiagnostics || selectedCandidateIds.size);
   const enabledRuleCount = [
     rules.totalSalesEnabled,
     rules.periodSalesEnabled,
@@ -1884,8 +1892,6 @@ export function SlowMovingCleanupPage() {
             <PackageSearch className="size-[18px] text-brand-navy" strokeWidth={2.2} />
             <strong className="text-[15px] font-semibold text-[#101828]">{analysisStarted ? "清理滞销结果" : "清理滞销设置"}</strong>
             <span className="rounded-md border border-[#dbe5f2] bg-white px-2 py-1 text-[12px] font-medium text-[#667085]">已选 {selectedIds.size} 家</span>
-            <span className="rounded-md border border-[#dbe5f2] bg-white px-2 py-1 text-[12px] font-medium text-[#667085]">{trafficPeriodLabel}</span>
-            <span className="rounded-md border border-[#dbe5f2] bg-white px-2 py-1 text-[12px] font-medium text-[#667085]">{perStoreLimitLabel}</span>
             {previewMode ? <span className="rounded-md border border-[#ffdca8] bg-[#fff7e8] px-2 py-1 text-[12px] font-semibold text-[#b54708]">设计预览</span> : null}
             {cleanupState === "loading" ? (
               <span className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#667085]">
@@ -1921,6 +1927,12 @@ export function SlowMovingCleanupPage() {
             />
             {analysisStarted ? (
               <>
+                {scanExpired ? (
+                  <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#ffd1d1] bg-[#fff1f0] px-2.5 text-[12px] font-semibold text-[#b42318] disabled:cursor-not-allowed disabled:opacity-50" type="button" title="重新读取当前店铺的滞销候选" disabled={cleanupState === "loading"} onClick={() => void scanGoods()}>
+                    <RefreshCw className="size-[14px]" strokeWidth={2} />
+                    重新扫描
+                  </button>
+                ) : null}
                 <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" onClick={openSettings}>
                   <SlidersHorizontal className="size-[14px]" strokeWidth={2} />
                   修改规则
@@ -1936,6 +1948,12 @@ export function SlowMovingCleanupPage() {
               </>
             ) : (
               <>
+                {canReturnToResults ? (
+                  <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" onClick={returnToResults}>
+                    <ArrowLeft className="size-[14px]" strokeWidth={2} />
+                    返回扫描结果
+                  </button>
+                ) : null}
                 <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" onClick={resetRules}>
                   <RefreshCw className="size-[14px]" strokeWidth={2} />
                   恢复默认
@@ -1953,7 +1971,6 @@ export function SlowMovingCleanupPage() {
                 <strong className="text-[14px] font-semibold text-[#101828]">清理设置</strong>
                 <span className="text-[12px] text-[#667085]">先设置规则，再扫描滞销候选；扫描不会下架或删除商品</span>
               </div>
-              <span className="text-[12px] font-medium text-[#667085]">数据来源：电商罗盘 + 平台商品列表</span>
             </div>
 
             <div className="min-h-0 overflow-auto px-5 py-4">
@@ -1971,7 +1988,7 @@ export function SlowMovingCleanupPage() {
                     <div className="text-[18px] font-bold leading-6 text-[#b54708]">{timeRuleCount}</div>
                     <div>时间条件</div>
                   </div>
-                  <div className="col-span-2 truncate border-t border-[#edf1f6] pt-2">{selectedIds.size} 家店铺 · {productSourceLabel} · {trafficPeriodLabel}</div>
+                  <div className="col-span-2 truncate border-t border-[#edf1f6] pt-2">{selectedIds.size} 家店铺 · 识别方式：{productSourceLabel} · 罗盘周期：{trafficPeriodLabel} · 每店上限：{perStoreLimitLabel}</div>
                 </div>
               </div>
 
@@ -2033,7 +2050,7 @@ export function SlowMovingCleanupPage() {
 
             <div className="flex items-center justify-between border-t border-[#edf1f6] px-5">
               <span className="truncate text-[12px] text-[#667085]">
-                当前筛选：{selectedIds.size} 家店铺 · {noSalesTypeLabel} · {trafficPeriodLabel} · {perStoreLimitLabel}
+                当前配置：{selectedIds.size} 家店铺 · {noSalesTypeLabel} · 罗盘周期：{trafficPeriodLabel} · 每店上限：{perStoreLimitLabel}
               </span>
               <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-4 text-[13px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" title={!selectedIds.size ? "请先勾选店铺" : importedIdsMissing ? "商品 ID 导入模式需要先导入文件" : cleanupState === "loading" ? "正在扫描" : "只扫描候选，不会下架或删除商品"} disabled={!selectedIds.size || importedIdsMissing || cleanupState === "loading"} onClick={() => void scanGoods()}>
                 {cleanupState === "loading" ? <Loader2 className="size-[15px] animate-spin" strokeWidth={2} /> : <PackageSearch className="size-[15px]" strokeWidth={2} />}
