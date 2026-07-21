@@ -5,6 +5,7 @@ const root = path.join(__dirname, "..");
 const preloadPath = path.join(root, "src", "preload", "index.js");
 const ipcRoot = path.join(root, "src", "main", "ipc");
 const mainPath = path.join(root, "src", "main", "index.js");
+const configPath = path.join(root, "src", "main", "config.js");
 const { chihuNativeMethods, expectedClientMethods } = require("./client-contract-baseline");
 
 function read(filePath) {
@@ -24,6 +25,7 @@ function collectJs(dir) {
 
 const preload = read(preloadPath);
 const mainAndIpc = [mainPath, ...collectJs(ipcRoot)].map(read).join("\n");
+const config = read(configPath);
 
 const failures = [];
 for (const [method, channel] of expectedClientMethods) {
@@ -37,6 +39,10 @@ for (const [method, channel] of expectedClientMethods) {
 
 if (!preload.includes('contextBridge.exposeInMainWorld("chihuNative"')) {
   failures.push("preload missing window.chihuNative exposure");
+}
+
+if (!config.includes('/remote-web/current/new-remote-web/index.html')) {
+  failures.push("stable remote web entry must track the signed current release");
 }
 
 for (const [method, channel] of chihuNativeMethods) {

@@ -32,7 +32,7 @@ const APP_WINDOW = {
   resizable: process.env.CHIHU_WINDOW_RESIZABLE === "0" ? false : true
 };
 
-const DEFAULT_REMOTE_WEB_URL = "http://chihu.facaishe.cn/remote-web/releases/2026.07.20.freemium-v2/new-remote-web/index.html";
+const DEFAULT_REMOTE_WEB_URL = "http://chihu.facaishe.cn/remote-web/current/new-remote-web/index.html";
 const BETA_REMOTE_WEB_URL = "http://chihu.facaishe.cn/remote-web/beta/releases/2026.07.20.freemium-v2/new-remote-web/index.html";
 const DEFAULT_UPDATE_CHANNEL = process.env.CHIHU_UPDATE_CHANNEL || (DEFAULT_RELEASE_CHANNEL === "beta" ? "beta" : "latest");
 
