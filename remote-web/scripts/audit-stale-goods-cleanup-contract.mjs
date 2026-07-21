@@ -11,6 +11,7 @@ const deployedConfig = JSON.parse(read("remote-web/new-remote-web/config/doudian
 const publicPilotConfig = JSON.parse(read("remote-web/client-shell/public/config/doudian-adapter.marketing-pilot.json"));
 const deployedPilotConfig = JSON.parse(read("remote-web/new-remote-web/config/doudian-adapter.marketing-pilot.json"));
 const staleSource = read("remote-web/client-shell/src/domain/doudian/staleGoods.ts");
+const mutationResponseSource = read("remote-web/client-shell/src/domain/doudian/staleGoodsMutationResponse.ts");
 const pageSource = read("remote-web/client-shell/src/components/SlowMovingCleanupPage.tsx");
 const taskRunnerSource = read("remote-web/client-shell/src/domain/doudian/taskRunner.ts");
 const bridgeSource = read("remote-web/client-shell/src/bridge/client.ts");
@@ -40,6 +41,12 @@ for (const [label, config] of [["default", publicConfig], ["marketing-pilot", pu
     assert.equal(candidatePlans[key].retryOnBusinessFailure, false, `${label} ${key} must not retry business failures`);
     assert.equal(candidatePlans[key].prepareRetryAttempts, 0, `${label} ${key} must not retry preparation`);
     assert.deepEqual(candidatePlans[key].successCodes, [0, "0"], `${label} ${key} must require the platform success code`);
+    assert.equal(candidatePlans[key].allowMissingCode, false, `${label} ${key} must reject responses without a business code`);
+    assert.equal(
+      candidatePlans[key].responseContract,
+      key === "staleGoodsCompleteDelete" ? "top-level-code" : "per-product-code",
+      `${label} ${key} must use its verified platform response contract`
+    );
     assert.equal(candidatePlans[key].dryRunOnly, undefined, `${label} ${key} must not expose a dry-run switch`);
     assert.equal(candidatePlans[key].headers["Content-Type"], "application/x-www-form-urlencoded;charset=UTF-8");
     assert.equal(candidatePlans[key].body, "{formBody}");
@@ -84,6 +91,14 @@ assert.match(staleSource, /feature:\s*"stale-goods-cleanup"/);
 assert.match(staleSource, /idNameCode: source === "importedIds"/);
 assert.match(staleSource, /execution\.ok && execution\.status === "submitted"/);
 assert.match(staleSource, /execution\.status !== "submitted"/);
+assert.match(staleSource, /validateStaleGoodsMutationResponse/);
+assert.match(mutationResponseSource, /platform response missing this product result/);
+assert.match(mutationResponseSource, /mutationItemProductId/);
+assert.match(mutationResponseSource, /topLevelCode === "0"/);
+assert.match(mutationResponseSource, /code === "0"/);
+assert.match(staleSource, /itemResult\?\.ok === true/);
+assert.match(staleSource, /event:\s*"execute-store"/);
+assert.match(staleSource, /reportDoudianDiagnostic\([\s\S]*?, true\)/);
 assert.doesNotMatch(staleSource, /const complete = responseOk && rows\.length > 0/);
 assert.match(taskRunnerSource, /task\.taskType === "staleGoodsScan" \|\| task\.taskType === "staleGoodsExecute"/);
 assert.match(taskRunnerSource, /candidatesDeferred/);

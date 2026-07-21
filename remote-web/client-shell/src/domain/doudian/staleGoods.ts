@@ -16,6 +16,8 @@ import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGr
 import { requireChihuNative } from "../../native/client";
 import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
 import { dispatchDoudianProgress } from "./progress";
+import { reportDoudianDiagnostic } from "./diagnosticLog";
+import { validateStaleGoodsMutationResponse } from "./staleGoodsMutationResponse";
 import * as XLSX from "xlsx";
 
 interface StaleGoodsArgs {
@@ -783,42 +785,105 @@ async function executeStage(payload: DoudianAdapterPayload, store: DoudianStoreS
     formBody: formBody(productIds)
   };
   const response = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context: safeRequestContext });
-  const ok = requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter));
-  const message = ok
+  const validation = validateStaleGoodsMutationResponse(response, {
+    planKey,
+    responseContract: text(objectRecord(payload.adapter.requestPlans?.[planKey]).responseContract),
+    productIds
+  });
+  const message = validation.ok
     ? policyMessage(payload.adapter, "staleGoodsCleanup.messages.executedStore", "Stale goods cleanup executed", { count: productIds.length })
-    : response.error || policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeFailed", "Stale goods cleanup failed");
+    : validation.message || response.error || policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeFailed", "Stale goods cleanup failed");
+  const itemResults = new Map(validation.items.map((item) => [item.productId, item]));
   const executions: DoudianStaleGoodsExecution[] = [
     ...rejectedExecutions,
-    ...safeCandidates.map((item) => ({
-      id: item.id,
-      sourceRunId: item.sourceRunId,
-      mutationKey: item.mutationKey,
-      mutationStatus: ok ? "acknowledged" : "failed",
-      liveLifecycleStatus: item.liveLifecycleStatus,
-      shopId: store.shopId,
-      shopName: store.shopName,
-      productId: item.productId,
-      title: item.title || "",
-      action,
-      status: ok ? "submitted" : "failed",
-      ok,
-      message,
-      planKey,
-      stage
-    }))
+    ...safeCandidates.map((item) => {
+      const itemResult = itemResults.get(item.productId);
+      const itemOk = itemResult?.ok === true;
+      return {
+        id: item.id,
+        sourceRunId: item.sourceRunId,
+        mutationKey: item.mutationKey,
+        mutationStatus: itemOk ? "acknowledged" : "failed",
+        liveLifecycleStatus: item.liveLifecycleStatus,
+        shopId: store.shopId,
+        shopName: store.shopName,
+        productId: item.productId,
+        title: item.title || "",
+        action,
+        status: itemOk ? "submitted" : "failed",
+        ok: itemOk,
+        message: itemResult?.message || message,
+        planKey,
+        stage
+      } as DoudianStaleGoodsExecution;
+    })
   ];
   await recordExecutionMutationResults({ store, executions, defaultAction: stage === "recycle" ? "recycle" : action }).catch(() => undefined);
+  await reportDoudianDiagnostic({
+    category: "doudian-stale-goods",
+    event: "execute-store",
+    runId,
+    shopId: store.shopId,
+    shopName: store.shopName,
+    partition: store.partition,
+    action,
+    stage,
+    planKey,
+    productIds,
+    request: {
+      method: text(objectRecord(payload.adapter.requestPlans?.[planKey]).method || "POST").toUpperCase(),
+      endpointKey: text(objectRecord(payload.adapter.requestPlans?.[planKey]).endpointKey || planKey),
+      productCount: productIds.length,
+      formBodyLength: String(safeRequestContext.formBody || "").length,
+      formBodyHash: String(safeRequestContext.formBody || "") ? fingerprint(String(safeRequestContext.formBody || "")) : ""
+    },
+    response: {
+      status: response.status,
+      transportOk: response.ok,
+      source: response.source,
+      businessCode: validation.topLevelCode,
+      businessMessage: validation.topLevelMessage,
+      itemShape: validation.responseItemShape,
+      itemCount: validation.responseItemCount,
+      successCount: validation.items.filter((item) => item.ok).length,
+      failureCount: validation.failures.length,
+      failures: validation.failures.slice(0, 100)
+    },
+    executions: executions.map((execution) => ({
+      productId: execution.productId,
+      status: execution.status,
+      ok: execution.ok,
+      message: execution.message
+    }))
+  }, true);
   return {
     executions,
     detail: {
       shopId: store.shopId,
       shopName: store.shopName,
-      status: ok ? "ok" : "failed",
-      ok,
+      status: validation.ok ? "ok" : executions.some((execution) => execution.ok && execution.status === "submitted") ? "partial" : "failed",
+      ok: validation.ok,
       message,
-      reason: ok ? "" : "stale-goods-execute-request-failed",
-      category: ok ? "" : "api",
-      diagnostic: { guard, mutationSafety: safety.audit, response: { status: response.status, ok: response.ok, source: response.source }, productCount: productIds.length, requestContext: safeRequestContext },
+      reason: validation.ok ? "" : "stale-goods-execute-response-rejected",
+      category: validation.ok ? "" : "api",
+      diagnostic: {
+        guard,
+        mutationSafety: safety.audit,
+        response: {
+          status: response.status,
+          ok: response.ok,
+          source: response.source,
+          businessCode: validation.topLevelCode,
+          businessMessage: validation.topLevelMessage,
+          itemShape: validation.responseItemShape,
+          itemCount: validation.responseItemCount,
+          successCount: validation.items.filter((item) => item.ok).length,
+          failureCount: validation.failures.length,
+          failures: validation.failures.slice(0, 100)
+        },
+        productCount: productIds.length,
+        requestContext: { ...safeRequestContext, formBody: undefined }
+      },
       index,
       total
     } as DoudianRunDetail

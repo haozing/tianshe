@@ -4038,6 +4038,7 @@
       "endpointKey": "staleGoodsBatchOffline",
       "method": "POST",
       "mutation": true,
+      "responseContract": "per-product-code",
       "sign": true,
       "signStrategy": "mstoken-myargs",
       "localSigner": true,
@@ -4064,7 +4065,7 @@
       "maxAttempts": 1,
       "retryOnBusinessFailure": false,
       "prepareRetryAttempts": 0,
-      "allowMissingCode": true,
+      "allowMissingCode": false,
       "successCodes": [
         0,
         "0"
@@ -4075,6 +4076,7 @@
       "endpointKey": "staleGoodsBatchDelete",
       "method": "POST",
       "mutation": true,
+      "responseContract": "per-product-code",
       "sign": true,
       "signStrategy": "mstoken-myargs",
       "localSigner": true,
@@ -4101,7 +4103,7 @@
       "maxAttempts": 1,
       "retryOnBusinessFailure": false,
       "prepareRetryAttempts": 0,
-      "allowMissingCode": true,
+      "allowMissingCode": false,
       "successCodes": [
         0,
         "0"
@@ -4112,6 +4114,7 @@
       "endpointKey": "staleGoodsCompleteDelete",
       "method": "POST",
       "mutation": true,
+      "responseContract": "top-level-code",
       "sign": true,
       "signStrategy": "mstoken-myargs",
       "localSigner": true,
@@ -4138,7 +4141,7 @@
       "maxAttempts": 1,
       "retryOnBusinessFailure": false,
       "prepareRetryAttempts": 0,
-      "allowMissingCode": true,
+      "allowMissingCode": false,
       "successCodes": [
         0,
         "0"
