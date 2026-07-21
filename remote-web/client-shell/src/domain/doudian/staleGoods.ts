@@ -626,7 +626,7 @@ async function loadExecuteCandidates(
   }
   const maxScanAgeMs = policyNumber(payload.adapter, "staleGoodsCleanup.maxScanAgeMs", 900000, 60000, 86400000);
   const scanCreatedAt = Date.parse(run.createdAt || "");
-  if (!Number.isFinite(scanCreatedAt) || Date.now() - scanCreatedAt > maxScanAgeMs) throw new Error("stale goods source scan snapshot expired");
+  if (!Number.isFinite(scanCreatedAt) || Date.now() - scanCreatedAt > maxScanAgeMs) throw new Error("扫描结果已过期，请重新扫描后再执行清理");
   const cleanupRuleVersion = policyText(payload.adapter, "staleGoodsCleanup.ruleVersion", "stale-goods-rule");
   const fieldSchemaVersion = policyText(payload.adapter, "staleGoodsCleanup.fieldSchemaVersion", "stale-goods-fields");
   const currentRequestPlanHash = requestPlanHash(payload.adapter, requestPlanKeys(payload.adapter));

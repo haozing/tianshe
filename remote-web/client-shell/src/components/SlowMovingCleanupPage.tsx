@@ -386,6 +386,8 @@ const sampleTemplates = [
   }
 ];
 
+const DEFAULT_STALE_SCAN_MAX_AGE_MS = 15 * 60 * 1000;
+
 function hasNativeStoreBridge() {
   return Boolean(window.chihuNative && (window.nativeData || window.chihuNative.nativeData));
 }
@@ -1260,6 +1262,7 @@ export function SlowMovingCleanupPage() {
   const [cleanupState, setCleanupState] = useState<CleanupState>("idle");
   const [cleanupMessage, setCleanupMessage] = useState("");
   const [lastScanAt, setLastScanAt] = useState<Date>(new Date());
+  const [scanMaxAgeMs, setScanMaxAgeMs] = useState(DEFAULT_STALE_SCAN_MAX_AGE_MS);
   const [adapterVersion, setAdapterVersion] = useState("fallback");
   const [compassFileName, setCompassFileName] = useState("");
   const [compassRows, setCompassRows] = useState<Array<Record<string, unknown>>>([]);
@@ -1303,6 +1306,11 @@ export function SlowMovingCleanupPage() {
     void refreshStores();
     void loadDoudianAdapterPayload().then((payload) => {
       setAdapterVersion(payload.adapter.version || "fallback");
+      const staleGoodsPolicy = objectFromUnknown(payload.adapter.policies?.staleGoodsCleanup);
+      const configuredMaxAge = Number(staleGoodsPolicy.maxScanAgeMs);
+      if (Number.isFinite(configuredMaxAge) && configuredMaxAge >= 60_000) {
+        setScanMaxAgeMs(Math.min(configuredMaxAge, 86_400_000));
+      }
     }).catch(() => {
       setAdapterVersion("fallback");
     });
@@ -1401,6 +1409,8 @@ export function SlowMovingCleanupPage() {
   const defaultPlanAction: CandidateAction = summary.offline ? "offline" : matchedCandidates.some((row) => row.action === "recycle") ? "recycle" : "delete";
   const planRows = planOpen ? selectedCandidates : [];
   const hasCompassCoverage = Boolean(scanDiagnostics && (scanDiagnostics.compassSourceCount > 0 || scanDiagnostics.implicitZeroTrafficCount > 0 || scanDiagnostics.sourceHealth.some((item) => String(item.key || "").toLowerCase().includes("compass"))));
+  const scanAgeMs = Date.now() - lastScanAt.getTime();
+  const scanExpired = !previewMode && analysisStarted && Number.isFinite(scanAgeMs) && scanAgeMs > scanMaxAgeMs;
 
   const metrics: MetricItem[] = [
     { label: "滞销候选", value: formatNumber(matchedCandidates.length), detail: `${selectedStores.length} 家店铺命中`, tone: "blue" },
@@ -1501,6 +1511,7 @@ export function SlowMovingCleanupPage() {
         setScanDiagnostics(nextDiagnostics);
         setCleanupState("ready");
         setCleanupMessage(scanDiagnosticMessage(nextDiagnostics) || result.message || "滞销候选已计算完成");
+        setLastScanAt(new Date());
         setSelectedCandidateIds(new Set(nextMatchedCandidates.filter((row) => row.action !== "optimize").map((row) => row.id)));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -1517,6 +1528,7 @@ export function SlowMovingCleanupPage() {
     window.setTimeout(() => {
       setCleanupState("ready");
       setCleanupMessage(previewMode ? "当前为设计预览，真实平台清理接口待接入" : "滞销候选已计算完成");
+      setLastScanAt(new Date());
       setScanDiagnostics(null);
       setSelectedCandidateIds(new Set(matchedCandidates.filter((row) => row.action !== "optimize").map((row) => row.id)));
     }, 260);
@@ -1631,6 +1643,13 @@ export function SlowMovingCleanupPage() {
   }
 
   function buildPlan(action: CandidateAction) {
+    const scanAgeMs = Date.now() - lastScanAt.getTime();
+    if (!previewMode && Number.isFinite(scanAgeMs) && scanAgeMs > scanMaxAgeMs) {
+      setPlanOpen(false);
+      setCleanupState("error");
+      setCleanupMessage("扫描结果已过期，请重新扫描后再执行清理");
+      return;
+    }
     const currentSelection = selectedCandidates.length
       ? selectedCandidates
       : matchedCandidates.filter((row) => row.action !== "optimize");
@@ -1651,6 +1670,13 @@ export function SlowMovingCleanupPage() {
 
   async function confirmExecution() {
     const normalizedConfirmText = confirmInput.trim();
+    const scanAgeMs = Date.now() - lastScanAt.getTime();
+    if (!previewMode && Number.isFinite(scanAgeMs) && scanAgeMs > scanMaxAgeMs) {
+      setPlanOpen(false);
+      setCleanupState("error");
+      setCleanupMessage("扫描结果已过期，请重新扫描后再执行清理");
+      return;
+    }
     if (!previewMode && normalizedConfirmText === "确认清理") {
       const executable = selectedExecutable;
       if (!executable.length) {
@@ -1872,6 +1898,12 @@ export function SlowMovingCleanupPage() {
                 <span className="truncate">{cleanupMessage}</span>
               </span>
             ) : null}
+            {scanExpired ? (
+              <span className="inline-flex h-7 items-center gap-1 rounded-md border border-[#ffd1d1] bg-[#fff1f0] px-2 text-[12px] font-semibold text-[#b42318]" title={`扫描结果已超过 ${Math.round(scanMaxAgeMs / 60000)} 分钟有效期`}>
+                <AlertTriangle className="size-[13px] shrink-0" strokeWidth={2} />
+                扫描结果已过期，请重新扫描
+              </span>
+            ) : null}
             {activeOperationId ? (
               <button className="inline-flex h-7 items-center gap-1 rounded-md border border-[#ffd1d1] bg-[#fff1f0] px-2 text-[12px] font-semibold text-[#b42318]" type="button" onClick={() => void cancelActiveOperation()}>
                 <XCircle className="size-[13px]" strokeWidth={2} />
@@ -1897,7 +1929,7 @@ export function SlowMovingCleanupPage() {
                   <Download className="size-[14px]" strokeWidth={2} />
                   导出清单
                 </button>
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" title="选择清理动作；下一步确认后才会提交平台请求" disabled={!matchedCandidates.length} onClick={() => buildPlan(defaultPlanAction)}>
+                <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" title={scanExpired ? "扫描结果已过期，请重新扫描后再执行清理" : "选择清理动作；下一步确认后才会提交平台请求"} disabled={!matchedCandidates.length || scanExpired} onClick={() => buildPlan(defaultPlanAction)}>
                   <Workflow className="size-[14px]" strokeWidth={2} />
                   执行清理
                 </button>
@@ -2195,7 +2227,7 @@ export function SlowMovingCleanupPage() {
                 type="button"
                 title={planRows.length ? `将当前计划的 ${planRows.length} 个商品${actionLabels[action]}` : "请先选择要清理的商品"}
                 aria-label={actionLabels[action]}
-                disabled={!matchedCandidates.length}
+                disabled={!matchedCandidates.length || scanExpired}
                 onClick={() => buildPlan(action)}
               >
                 {action === "delete" ? <Trash2 className="size-[14px]" strokeWidth={2} /> : <Archive className="size-[14px]" strokeWidth={2} />}
@@ -2212,7 +2244,7 @@ export function SlowMovingCleanupPage() {
               value={confirmInput}
               onChange={(event) => setConfirmInput(event.target.value)}
             />
-            <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white disabled:opacity-50" type="button" disabled={executingPlan || !planRows.length || confirmInput.trim() !== "确认清理"} onClick={() => void confirmExecution()}>
+            <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white disabled:opacity-50" type="button" disabled={executingPlan || scanExpired || !planRows.length || confirmInput.trim() !== "确认清理"} onClick={() => void confirmExecution()}>
               <Check className="size-[14px]" strokeWidth={2.2} />
               确认并执行
             </button>
