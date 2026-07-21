@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.21.stale-goods-scoped-lookup-v12",
+  "version": "2026.07.21.stale-goods-product-id-lookup-v13",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "aeb6a71-dirty",
-    "buildTime": "2026-07-21T15:32:17.736Z"
+    "gitCommit": "00c5ebc-dirty",
+    "buildTime": "2026-07-21T15:42:27.388Z"
   }
 }

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026.07.21.stale-goods-scoped-lookup-v12",
-  "buildTime": "2026-07-21T15:32:17.736Z",
+  "releaseId": "2026.07.21.stale-goods-product-id-lookup-v13",
+  "buildTime": "2026-07-21T15:42:27.388Z",
   "entry": {
     "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
   },
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "91c21767363f9989da56933b8c7e75368183d917dd5894a78a59f534fd66d309"
+      "sha256": "98186d5de7e958bceef3f3ad52ae24e950494824594e4d3d899fbb8fa552c5be"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,7 +36,7 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "f7844e210144e34702230529fc37325e2ef31f2bd74b13d32586444850d92a1a"
+      "sha256": "9dd379f7049654d148b170b3834ff0b6006dc250fb62b3716c2b78c4ac9e9eec"
     },
     {
       "path": "new-remote-web/styles.css",
@@ -71,7 +71,7 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "8d22af59714570bc82155007f902532e461266df15517b5acb373f3decd6bcea"
+      "sha256": "7795650d11a383add843eb4b2d56b7bacf3f310081731ad83b62bf1b260b22d8"
     },
     {
       "path": "new-remote-web/config/chihu-config.marketing-pilot.json",
@@ -85,7 +85,7 @@
       "type": "doudian-adapter",
       "cache": "no-cache",
       "required": true,
-      "sha256": "8337b2452e02feba05b0103e6e114e6da3d148b2afb70c695ac73a529d687c82"
+      "sha256": "9367ffdfb02a5e545a9e67333a87f0da1d8c1386f6b554cf720c0838925d262d"
     },
     {
       "path": "new-remote-web/config/doudian-adapter.marketing-pilot.json",
@@ -141,7 +141,7 @@
     "schemaVersion": 1,
     "algorithm": "ed25519",
     "keyId": "chihu-remote-web-ed25519-2026-07",
-    "payloadSha256": "4020e5c100eef3f0349c0a5e8b3c8fc2ed47c7a3aa820b47c8f27ab23c4e3aaa",
-    "value": "mBi89u+szaEBMe07HvhgIp5R6XMLvaVJty/iUoDiEMBk3VpuIGXp3P5I69GXd24+bYiHZLNkQYmMHxzp9LbCAA=="
+    "payloadSha256": "736fb62b309bc37a55833df8d491e40524e1dc850b76ce300c7819a1c7c1d82c",
+    "value": "3JfDSZF/mKvBqTc6+EKfphC9IiKopivYqoHgy6luVJwcq2tCvWiyHx28egl5uUGRX+BN25drJmmrfhRksgi+Bw=="
   }
 }
