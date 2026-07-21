@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.21.violations-v3-hotfix-v1-marketing-write-v1",
+  "version": "2026.07.21.violations-v3-hotfix-v2-marketing-write-v1",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "7e7da37",
-    "buildTime": "2026-07-21T03:58:48.868Z"
+    "gitCommit": "668888c-dirty",
+    "buildTime": "2026-07-21T09:56:57.152Z"
   }
 }

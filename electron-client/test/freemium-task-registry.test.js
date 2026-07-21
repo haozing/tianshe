@@ -62,7 +62,7 @@ test("task params use a per-task top-level schema", () => {
 test("each task receives only its audited request plans", () => {
   assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.fetchDoudianStores, adapter).sort(), ["currentShop", "shopList"]);
   assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.bulkDeleteExecute, adapter).sort(), ["bulkDeleteBatchDelete", "bulkDeleteCompleteDelete", "bulkDeleteProductList"]);
-  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.violationsData, adapter).sort(), ["violationPenaltyTicketList", "violationProductLookup", "violationRiskTicketList"]);
+  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.violationsData, adapter).sort(), ["violationPenaltyTicketList", "violationRiskTicketList"]);
   const businessPlans = allowedPlanKeys(TASK_DEFINITIONS.businessData, adapter);
   assert.equal(businessPlans.includes("businessHomepage"), true);
   assert.equal(businessPlans.some((key) => key.startsWith("marketing") || key.startsWith("opportunity")), false);
@@ -181,6 +181,13 @@ test("runner data scopes are task-specific and marketing records are operation-o
   assert.equal(runnerDataAllowed(fundsContext, "native:data:records:put", { storeName: "funds_latest", record: { id: "funds-current::shop-1" } }), true);
   assert.equal(runnerDataAllowed(fundsContext, "native:data:records:get", { storeName: "runtime_meta", id: "funds-cache-current-v1" }), false);
   assert.equal(runnerDataAllowed(fundsContext, "native:data:records:put", { storeName: "runtime_meta", record: { id: "funds-cache-current-v1" } }), false);
+
+  const violationsContext = {
+    taskType: "violationsData",
+    allowedStoreRefs: [],
+    allowedDataScopes: materializeDataScopes(TASK_DEFINITIONS.violationsData.allowedDataScopes, "violations-1")
+  };
+  assert.equal(runnerDataAllowed(violationsContext, "native:data:catalog:getProductsByIds", { shopId: "shop-1", productIds: ["1"] }), false);
 
   for (const definition of Object.values(TASK_DEFINITIONS)) {
     assert.equal(definition.allowedDataScopes.some((scope) => scope.commands.includes("native:data:maintenance:*")), false);

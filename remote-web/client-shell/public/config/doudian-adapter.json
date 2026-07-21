@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "contractVersion": "doudian-adapter.v1",
   "platform": "doudian",
-  "version": "2026.07.21.remote-adapter-funds-preflight-violations-v3-v1",
+  "version": "2026.07.21.remote-adapter-funds-preflight-violations-v3-v2",
   "source": "remote-web",
   "capabilities": {
     "actions": [
@@ -67,7 +67,6 @@
       "fundShopDepositPage",
       "violationRiskTicketList",
       "violationPenaltyTicketList",
-      "violationProductLookup",
       "staleGoodsProductList",
       "staleGoodsRecommendAdmit",
       "staleGoodsCompassDownload",
@@ -433,7 +432,6 @@
     "businessCreditScoreLevel": "/ecology/front/shopXzg/score/level",
     "businessOnSaleProducts": "/product_diagnose/tproduct/get_diagnose_recommend_product_pool",
     "businessOfflineProducts": "/product/tproduct/list",
-    "violationProductLookup": "/product/tproduct/list",
     "fundAccountCenter": "/ffa/fund-control/account-center",
     "fundPledgeCash": "/shopuser/govern/bff/api/tpledgecash/index",
     "fundPledgePayable": "/governance/shop/tpledgecash/payable/info_v2",
@@ -566,7 +564,6 @@
       "/pc/api/home/homepage",
       "/governance/shop/experiencescore/getOverviewByVersion",
       "/governance/shop/penalty/get_warnticket_list",
-      "/governance/shop/penalty/get_penalty_list",
       "/marketing/smart_activity/v1/get_participant_activity",
       "/ecology/front/shopXzg/score"
     ]
@@ -2802,31 +2799,6 @@
       "retryDelayMs": 1200,
       "retryBackoff": "linear"
     },
-    "violationProductLookup": {
-      "endpointKey": "violationProductLookup",
-      "method": "GET",
-      "domain": "violationsData",
-      "sign": false,
-      "includeEmptySignature": false,
-      "optional": true,
-      "origin": "https://fxg.jinritemai.com",
-      "referer": "https://fxg.jinritemai.com/ffa/g/product/list",
-      "headers": {
-        "Accept": "application/json, text/plain, */*"
-      },
-      "query": {
-        "page": "0",
-        "pageSize": "20",
-        "keyword": "{productId}",
-        "search_type": "product_id",
-        "from_mng": "1",
-        "need_auto_rectify_info": "true"
-      },
-      "retryOnHttpError": false,
-      "maxAttempts": 1,
-      "retryDelayMs": 1200,
-      "retryBackoff": "linear"
-    },
     "fundAccountCenter": {
       "endpointKey": "fundAccountCenter",
       "method": "GET",
@@ -5046,9 +5018,7 @@
         "version": "2026.07.07.violations-product-association-read-plan-v1",
         "enabled": false,
         "status": "pending-real-login-sampling",
-        "requestPlans": [
-          "violationProductLookup"
-        ],
+        "requestPlans": [],
         "concurrency": 2,
         "defaultAssociationStatus": "not_checked",
         "listPaths": [

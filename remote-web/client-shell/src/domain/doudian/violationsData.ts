@@ -600,7 +600,7 @@ function extractRecords(store: DoudianStoreSummary, responses: Record<string, Re
       createdAt,
       penaltyAmount: amount(readViolationField(item, adapter, "penaltyAmount"), fieldScale(adapter, "penaltyAmount")),
       failureReason: text(readViolationField(item, adapter, "failureReason")),
-      sourcePlan: planKey || String(requestContext.sourcePlan || "violationPenaltyList"),
+      sourcePlan: planKey || String(requestContext.sourcePlan || ""),
       source: text(readViolationField(item, adapter, "source")) || (ticketType === "risk" ? "违规预警列表" : "违规处罚列表")
     };
   });
@@ -1027,7 +1027,7 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
     shopPartition: store.partition,
     shopId: store.shopId,
     shopName: store.shopName,
-    sourcePlan: planKeys[0] || "violationPenaltyList",
+    sourcePlan: planKeys[0] || "",
     page: String(pageStart),
     pageSize: String(pageSize),
     page_size: String(pageSize)

@@ -176,7 +176,7 @@ export interface DoudianAdapterPayload {
   schemaVersion: 1;
   kind: "chihu-doudian-adapter";
   loadedAt: string;
-  source?: "remote" | "last-known-good";
+  source?: "remote";
   lastGoodAt?: string;
   lastFailureReason?: string;
   adapter: DoudianAdapterConfig;
@@ -185,7 +185,7 @@ export interface DoudianAdapterPayload {
 
 export interface DoudianAdapterStatus {
   ok: boolean;
-  source: "none" | "remote" | "last-known-good";
+  source: "none" | "remote";
   contractVersion?: string;
   adapterVersion: string;
   scriptsVersion: string;

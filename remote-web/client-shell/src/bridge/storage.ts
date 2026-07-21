@@ -4,7 +4,6 @@ export const STORAGE_KEY_META = "chihu20_meta";
 export const STORAGE_KEY_PREFERENCES = "chihu20_preferences";
 export const STORAGE_KEY_CONFIG_CACHE = "chihu20_config_cache";
 export const STORAGE_KEY_DIAGNOSTICS = "chihu20_diagnostics";
-export const STORAGE_KEY_DOUDIAN_ADAPTER_LKG = "chihu20_doudian_adapter_lkg";
 export const STORAGE_KEY_DOUDIAN_ADAPTER_STATUS = "chihu20_doudian_adapter_status";
 export const STORAGE_KEY_BUSINESS_DATA_COLUMNS = "chihu20_business_data_columns";
 export const STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER = "chihu20_business_data_column_order";
@@ -26,7 +25,6 @@ export const STORAGE_KEYS = [
   STORAGE_KEY_PREFERENCES,
   STORAGE_KEY_CONFIG_CACHE,
   STORAGE_KEY_DIAGNOSTICS,
-  STORAGE_KEY_DOUDIAN_ADAPTER_LKG,
   STORAGE_KEY_DOUDIAN_ADAPTER_STATUS,
   STORAGE_KEY_BUSINESS_DATA_COLUMNS,
   STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER,
@@ -49,7 +47,6 @@ export const STORAGE_HEALTH_KEYS = [
   STORAGE_KEY_PREFERENCES,
   STORAGE_KEY_CONFIG_CACHE,
   STORAGE_KEY_DIAGNOSTICS,
-  STORAGE_KEY_DOUDIAN_ADAPTER_LKG,
   STORAGE_KEY_DOUDIAN_ADAPTER_STATUS,
   STORAGE_KEY_WORKSPACE
 ] as const;
@@ -192,12 +189,6 @@ export function initStorage() {
   });
   storageSet(STORAGE_KEY_PREFERENCES, getPreferences());
   storageSet(STORAGE_KEY_DIAGNOSTICS, storageGet(STORAGE_KEY_DIAGNOSTICS, []));
-  storageSet(STORAGE_KEY_DOUDIAN_ADAPTER_LKG, storageGet(STORAGE_KEY_DOUDIAN_ADAPTER_LKG, {
-    schemaVersion: 1,
-    savedAt: "",
-    adapter: null,
-    scriptsVersion: ""
-  }));
   storageSet(STORAGE_KEY_DOUDIAN_ADAPTER_STATUS, storageGet(STORAGE_KEY_DOUDIAN_ADAPTER_STATUS, {
     ok: false,
     source: "none",

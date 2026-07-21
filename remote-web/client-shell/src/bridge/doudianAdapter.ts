@@ -2,7 +2,6 @@ import type { DoudianAdapterConfig, DoudianAdapterPayload, MarketingFeature } fr
 import { isValidMarketingContractConfig, isValidMarketingMutationActionConfig } from "./marketingContract";
 import { buildDoudianScripts } from "./doudianScripts";
 import {
-  STORAGE_KEY_DOUDIAN_ADAPTER_LKG,
   STORAGE_KEY_DOUDIAN_ADAPTER_STATUS,
   storageGet,
   storageSet
@@ -13,17 +12,10 @@ export const DOUDIAN_ADAPTER_URL = "./config/doudian-adapter.marketing-pilot.jso
 let doudianAdapterPromise: Promise<DoudianAdapterPayload> | null = null;
 let doudianAdapterPromiseUrl = "";
 
-type AdapterSource = "remote" | "last-known-good";
+type AdapterSource = "remote";
 
 interface LoadDoudianAdapterOptions {
   force?: boolean;
-}
-
-interface StoredAdapterPayload {
-  schemaVersion: 1;
-  savedAt: string;
-  adapter: DoudianAdapterConfig;
-  scriptsVersion: string;
 }
 
 const emptyAdapterStatus = {
@@ -203,6 +195,7 @@ const BUSINESS_CONTRACT_FIELDS = new Set([
   "directDiscountActive", "newUserBonusActive", "reputationScore", "logisticsScore", "disputeDeduction",
   "productScore", "serviceScore"
 ]);
+const VIOLATION_REQUEST_PLANS = ["violationRiskTicketList", "violationPenaltyTicketList"] as const;
 
 function isValidBusinessContract(config: DoudianAdapterConfig) {
   const responseMappings = config.responseMappings as unknown as Record<string, unknown>;
@@ -310,18 +303,32 @@ function isValidViolationsContract(config: DoudianAdapterConfig) {
   if (!mappings || !violationsPolicy) return false;
 
   if (!isStringArray(mappings.listPaths) || !isOptionalStringList(mappings.totalPaths)) return false;
+  const listPathsByPlan = isPlainObject(mappings.listPathsByPlan) ? mappings.listPathsByPlan : null;
+  const totalPathsByPlan = isPlainObject(mappings.totalPathsByPlan) ? mappings.totalPathsByPlan : null;
+  if (!listPathsByPlan || !totalPathsByPlan) return false;
+  if (VIOLATION_REQUEST_PLANS.some((key) => !isStringArray(listPathsByPlan[key]) || !isStringArray(totalPathsByPlan[key]))) return false;
   const fields = isPlainObject(mappings.fields) ? mappings.fields : null;
   if (!fields) return false;
   const requiredFields = ["id", "objectType", "objectId", "productId", "violationAt", "processStatus", "penaltyStatus", "appealStatus", "rectificationStatus", "dueAt"];
   if (requiredFields.some((key) => !isPlainObject(fields[key]) || !isStringArray(fields[key].paths))) return false;
-  if (Object.values(fields).some((value) => !isPlainObject(value) || !isStringArray(value.paths))) return false;
+  for (const [key, value] of Object.entries(fields)) {
+    if (!isPlainObject(value)) return false;
+    if (key === "executionTypes") {
+      if (!isStringArray(value.arrayPaths) || !isStringArray(value.itemPaths)) return false;
+    } else if (!isStringArray(value.paths)) {
+      return false;
+    }
+  }
 
   const requestPlans = violationsPolicy.requestPlans;
   const requiredPlans = violationsPolicy.requiredPlans;
   const optionalPlans = violationsPolicy.optionalPlans;
   const criticalPlans = violationsPolicy.criticalPlans;
   if (![requestPlans, requiredPlans, optionalPlans, criticalPlans].every(isOptionalStringList)) return false;
-  if (!(requestPlans as string[]).length || !(requiredPlans as string[]).length) return false;
+  if ((requestPlans as string[]).length !== VIOLATION_REQUEST_PLANS.length) return false;
+  if (VIOLATION_REQUEST_PLANS.some((key) => !(requestPlans as string[]).includes(key))) return false;
+  if ((requiredPlans as string[]).length || (optionalPlans as string[]).length) return false;
+  if ((criticalPlans as string[]).length !== VIOLATION_REQUEST_PLANS.length || VIOLATION_REQUEST_PLANS.some((key) => !(criticalPlans as string[]).includes(key))) return false;
   const planSet = new Set(requestPlans as string[]);
   if ([...(requiredPlans as string[]), ...(optionalPlans as string[]), ...(criticalPlans as string[])].some((key) => !planSet.has(key))) return false;
   if ([...planSet].some((key) => !isPlainObject(config.requestPlans?.[key]))) return false;
@@ -342,12 +349,10 @@ function isValidViolationsContract(config: DoudianAdapterConfig) {
   if (new Set(columnKeys).size !== columnKeys.length) return false;
 
   const association = isPlainObject(violationsPolicy.productAssociation) ? violationsPolicy.productAssociation : null;
-  if (!association || typeof association.enabled !== "boolean" || !isOptionalStringList(association.requestPlans)) return false;
-  if (association.enabled && !(association.requestPlans as string[]).length) return false;
-  if ((association.requestPlans as string[]).some((key) => !isPlainObject(config.requestPlans?.[key]))) return false;
+  if (!association || association.enabled !== false || !isOptionalStringList(association.requestPlans) || (association.requestPlans as string[]).length) return false;
   const actions = isPlainObject(violationsPolicy.violationActions) ? violationsPolicy.violationActions : null;
-  if (!actions || typeof actions.enabled !== "boolean" || !isOptionalStringList(actions.requestPlans) || !isOptionalStringList(actions.allowedActions)) return false;
-  if (actions.enabled && (!(actions.requestPlans as string[]).length || !(actions.allowedActions as string[]).length)) return false;
+  if (!actions || actions.enabled !== false || !isOptionalStringList(actions.requestPlans) || !isOptionalStringList(actions.allowedActions)) return false;
+  if ((actions.requestPlans as string[]).length || (actions.allowedActions as string[]).length) return false;
   return true;
 }
 
@@ -431,26 +436,6 @@ function saveAdapterFailure(reason: string) {
   });
 }
 
-function saveLastKnownGood(payload: DoudianAdapterPayload) {
-  storageSet<StoredAdapterPayload>(STORAGE_KEY_DOUDIAN_ADAPTER_LKG, {
-    schemaVersion: 1,
-    savedAt: payload.loadedAt,
-    adapter: payload.adapter,
-    scriptsVersion: payload.scripts?.version || ""
-  });
-}
-
-function loadLastKnownGoodAdapter(reason: string): DoudianAdapterPayload | null {
-  const stored = storageGet<StoredAdapterPayload | null>(STORAGE_KEY_DOUDIAN_ADAPTER_LKG, null);
-  if (!stored || stored.schemaVersion !== 1 || !isDoudianAdapterConfig(stored.adapter)) return null;
-  const payload = adapterPayload(stored.adapter, "last-known-good", {
-    lastGoodAt: stored.savedAt,
-    lastFailureReason: reason
-  });
-  saveAdapterStatus(payload, reason);
-  return payload;
-}
-
 export function getDoudianAdapterStatus() {
   return storageGet(STORAGE_KEY_DOUDIAN_ADAPTER_STATUS, emptyAdapterStatus);
 }
@@ -474,15 +459,12 @@ export async function loadDoudianAdapterPayload(options: LoadDoudianAdapterOptio
         const json = await response.json();
         if (!isDoudianAdapterConfig(json)) throw new Error("doudian adapter schema invalid");
         const payload = adapterPayload(json, "remote");
-        saveLastKnownGood(payload);
         saveAdapterStatus(payload);
         return payload;
       })
       .catch((error) => {
         const reason = failureMessage(error);
         saveAdapterFailure(reason);
-        const fallback = loadLastKnownGoodAdapter(reason);
-        if (fallback) return fallback;
         throw error;
       });
   }

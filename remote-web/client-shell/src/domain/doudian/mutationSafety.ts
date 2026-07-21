@@ -191,7 +191,6 @@ function liveLookupPlanKey(adapter: DoudianAdapterConfig, feature: string) {
   if (feature === "bulk-delete" && adapter.requestPlans?.bulkDeleteProductList) return "bulkDeleteProductList";
   if (feature === "stale-goods-cleanup" && adapter.requestPlans?.staleGoodsProductList) return "staleGoodsProductList";
   if (feature === "opportunity-submit" && adapter.requestPlans?.opportunityProductList) return "opportunityProductList";
-  if (adapter.requestPlans?.violationProductLookup) return "violationProductLookup";
   if (adapter.requestPlans?.bulkDeleteProductList) return "bulkDeleteProductList";
   return "";
 }
