@@ -61,6 +61,7 @@ assert.match(staleSource, /stale-goods-metrics-partial/);
 assert.match(staleSource, /maxScanAgeMs/);
 assert.doesNotMatch(staleSource, /candidate\.action !== action/);
 assert.match(staleSource, /group\.candidates\.push\(\{ \.\.\.candidate, sourceRunId, action \}\)/);
+assert.match(staleSource, /snapshotIds\.size > 0 \? !snapshotIds\.has\(candidate\.id\) : candidate\.sourceRunId !== sourceRunId/);
 assert.match(staleSource, /saveScanCheckpoint/);
 assert.match(staleSource, /partialOk/);
 assert.match(staleSource, /emptyOk/);

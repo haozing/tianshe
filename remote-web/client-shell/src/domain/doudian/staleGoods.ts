@@ -644,7 +644,7 @@ async function loadExecuteCandidates(
   const successfulShopIds = new Set((run.details || []).filter((detail) => detail.ok === true).map((detail) => detail.shopId));
   const invalid = selected.filter((candidate) =>
     candidate.sourceRunId !== sourceRunId ||
-    !snapshotIds.has(candidate.id) ||
+    (snapshotIds.size > 0 ? !snapshotIds.has(candidate.id) : candidate.sourceRunId !== sourceRunId) ||
     !successfulShopIds.has(candidate.shopId) ||
     !candidate.shopId ||
     !candidate.productId ||
