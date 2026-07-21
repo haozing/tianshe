@@ -1891,10 +1891,11 @@ export function SlowMovingCleanupPage() {
                   <RefreshCw className="size-[14px]" strokeWidth={2} />
                   恢复默认
                 </button>
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!selectedIds.size || importedIdsMissing || cleanupState === "loading"} onClick={() => void scanGoods()}>
+                {false && <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!selectedIds.size || importedIdsMissing || cleanupState === "loading"} onClick={() => void scanGoods()}>
                   {cleanupState === "loading" ? <Loader2 className="size-[14px] animate-spin" strokeWidth={2} /> : <PackageSearch className="size-[14px]" strokeWidth={2} />}
                   开始分析
                 </button>
+                }
               </>
             )}
           </div>
