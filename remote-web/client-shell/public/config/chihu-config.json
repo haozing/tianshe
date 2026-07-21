@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.21.stale-goods-product-id-lookup-v13",
+  "version": "2026.07.21.stale-goods-pilot-contract-v14",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "00c5ebc-dirty",
-    "buildTime": "2026-07-21T15:42:27.388Z"
+    "gitCommit": "e10548b-dirty",
+    "buildTime": "2026-07-21T15:54:57.947Z"
   }
 }

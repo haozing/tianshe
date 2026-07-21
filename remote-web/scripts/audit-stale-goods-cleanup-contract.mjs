@@ -8,35 +8,42 @@ const repoRoot = dirname(remoteWebRoot);
 const read = (path) => readFileSync(join(repoRoot, path), "utf8");
 const publicConfig = JSON.parse(read("remote-web/client-shell/public/config/doudian-adapter.json"));
 const deployedConfig = JSON.parse(read("remote-web/new-remote-web/config/doudian-adapter.json"));
+const publicPilotConfig = JSON.parse(read("remote-web/client-shell/public/config/doudian-adapter.marketing-pilot.json"));
+const deployedPilotConfig = JSON.parse(read("remote-web/new-remote-web/config/doudian-adapter.marketing-pilot.json"));
 const staleSource = read("remote-web/client-shell/src/domain/doudian/staleGoods.ts");
 const pageSource = read("remote-web/client-shell/src/components/SlowMovingCleanupPage.tsx");
 const taskRunnerSource = read("remote-web/client-shell/src/domain/doudian/taskRunner.ts");
 const bridgeSource = read("remote-web/client-shell/src/bridge/client.ts");
 
 assert.deepEqual(deployedConfig, publicConfig, "deployed adapter must match the source adapter");
+assert.deepEqual(deployedPilotConfig, publicPilotConfig, "deployed marketing pilot adapter must match the source adapter");
 
 const plans = publicConfig.requestPlans;
 const policy = publicConfig.policies.staleGoodsCleanup;
 const mappings = publicConfig.responseMappings.staleGoodsCleanup;
 const writePlanKeys = ["staleGoodsBatchOffline", "staleGoodsBatchDelete", "staleGoodsCompleteDelete"];
-for (const key of writePlanKeys) {
-  assert.equal(plans[key].mutation, true, `${key} must be a live mutation plan`);
-  assert.equal(plans[key].sign, true, `${key} must sign the live request`);
-  assert.equal(plans[key].signStrategy, "mstoken-myargs", `${key} must use the verified mstoken signer`);
-  assert.equal(plans[key].localSignerOnly, true, `${key} must use the local verified signer`);
-  assert.equal(plans[key].signQuery, "appid=1", `${key} must sign with appid=1`);
-  assert.equal(plans[key].signBody, "{formBody}", `${key} must sign the submitted form body`);
-  assert.equal(plans[key].signUseMsToken, true, `${key} must include msToken in signing`);
-  assert.equal(plans[key].signRequireMsToken, false, `${key} must tolerate an absent msToken`);
-  assert.equal(plans[key].signIncludeEmptyMsToken, true, `${key} must preserve empty msToken signing`);
-  assert.equal(plans[key].maxAttempts, 1, `${key} must never retry`);
-  assert.equal(plans[key].retryOnHttpError, false, `${key} must not retry HTTP errors`);
-  assert.equal(plans[key].retryOnBusinessFailure, false, `${key} must not retry business failures`);
-  assert.equal(plans[key].prepareRetryAttempts, 0, `${key} must not retry preparation`);
-  assert.deepEqual(plans[key].successCodes, [0, "0"], `${key} must require the platform success code`);
-  assert.equal(plans[key].dryRunOnly, undefined, `${key} must not expose a dry-run switch`);
-  assert.equal(plans[key].headers["Content-Type"], "application/x-www-form-urlencoded;charset=UTF-8");
-  assert.equal(plans[key].body, "{formBody}");
+for (const [label, config] of [["default", publicConfig], ["marketing-pilot", publicPilotConfig]]) {
+  const candidatePlans = config.requestPlans;
+  assert.equal(candidatePlans.staleGoodsProductList.query.id_name_code, "{idNameCode}", `${label} product lookup must support id_name_code`);
+  for (const key of writePlanKeys) {
+    assert.equal(candidatePlans[key].mutation, true, `${label} ${key} must be a live mutation plan`);
+    assert.equal(candidatePlans[key].sign, true, `${label} ${key} must sign the live request`);
+    assert.equal(candidatePlans[key].signStrategy, "mstoken-myargs", `${label} ${key} must use the verified mstoken signer`);
+    assert.equal(candidatePlans[key].localSignerOnly, true, `${label} ${key} must use the local verified signer`);
+    assert.equal(candidatePlans[key].signQuery, "appid=1", `${label} ${key} must sign with appid=1`);
+    assert.equal(candidatePlans[key].signBody, "{formBody}", `${label} ${key} must sign the submitted form body`);
+    assert.equal(candidatePlans[key].signUseMsToken, true, `${label} ${key} must include msToken in signing`);
+    assert.equal(candidatePlans[key].signRequireMsToken, false, `${label} ${key} must tolerate an absent msToken`);
+    assert.equal(candidatePlans[key].signIncludeEmptyMsToken, true, `${label} ${key} must preserve empty msToken signing`);
+    assert.equal(candidatePlans[key].maxAttempts, 1, `${label} ${key} must never retry`);
+    assert.equal(candidatePlans[key].retryOnHttpError, false, `${label} ${key} must not retry HTTP errors`);
+    assert.equal(candidatePlans[key].retryOnBusinessFailure, false, `${label} ${key} must not retry business failures`);
+    assert.equal(candidatePlans[key].prepareRetryAttempts, 0, `${label} ${key} must not retry preparation`);
+    assert.deepEqual(candidatePlans[key].successCodes, [0, "0"], `${label} ${key} must require the platform success code`);
+    assert.equal(candidatePlans[key].dryRunOnly, undefined, `${label} ${key} must not expose a dry-run switch`);
+    assert.equal(candidatePlans[key].headers["Content-Type"], "application/x-www-form-urlencoded;charset=UTF-8");
+    assert.equal(candidatePlans[key].body, "{formBody}");
+  }
 }
 assert.match(plans.staleGoodsCompleteDelete.referer, /\/ffa\/g\/recycle$/);
 assert.equal(policy.executeBatchSize, 100);
