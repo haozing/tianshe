@@ -1,10 +1,31 @@
 {
   "schemaVersion": 1,
   "productName": "赤狐管家",
-  "currentVersion": "2.2.1-opportunity-validation",
-  "updatedAt": "2026-07-21T10:03:21+08:00",
-  "summary": "商机提报新增官方词与官方商品范围校验，并完善输入覆盖、请求恢复和失败关闭策略。",
+  "currentVersion": "2.2.1-funds-hotfix",
+  "updatedAt": "2026-07-21T11:57:34+08:00",
+  "summary": "修复资金任务启动时的数据范围错误，并按已验证资金接口顺序执行登录预检。",
   "releases": [
+    {
+      "version": "2.2.1-funds-hotfix",
+      "date": "2026-07-21",
+      "sections": [
+        {
+          "title": "修复",
+          "items": [
+            "修复资金任务启动时访问冗余迁移标记被主进程拒绝、所选店铺全部显示不可用的问题。",
+            "资金账户列表现在先行校验登录状态，校验失败时停止该店后续资金请求。",
+            "全局任务异常不再伪装成逐店资金接口失败。"
+          ]
+        },
+        {
+          "title": "安全",
+          "items": [
+            "资金 runner 继续保持最小数据权限，不开放 runtime_meta 元数据存储。",
+            "货款与保证金三个关键来源仍需全部成功，异常结果不会覆盖最近有效缓存。"
+          ]
+        }
+      ]
+    },
     {
       "version": "2.2.1-opportunity-validation",
       "date": "2026-07-21",

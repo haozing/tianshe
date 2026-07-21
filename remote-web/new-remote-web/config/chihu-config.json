@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.21.opportunity-validation-v1",
+  "version": "2026.07.21.funds-task-hotfix-v1",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "0b999e2",
-    "buildTime": "2026-07-21T02:05:21.295Z"
+    "gitCommit": "7e7da37",
+    "buildTime": "2026-07-21T03:58:48.868Z"
   }
 }

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "contractVersion": "doudian-adapter.v1",
   "platform": "doudian",
-  "version": "2026.07.18.remote-adapter-opportunity-favorites-v8",
+  "version": "2026.07.21.remote-adapter-funds-preflight-v1",
   "source": "remote-web",
   "capabilities": {
     "actions": [
@@ -4369,7 +4369,7 @@
       }
     },
     "fundsData": {
-      "contractVersion": "2026.07.15.funds-current-v1",
+      "contractVersion": "2026.07.21.funds-current-v2-preflight",
       "concurrency": 2,
       "requestPlans": [
         "fundAccountList",
@@ -4381,9 +4381,14 @@
         "fundAccountCenter",
         "fundShopDepositPage"
       ],
+      "preflightPlans": [
+        "fundAccountList"
+      ],
       "requestPlanGroups": [
         [
-          "fundAccountList",
+          "fundAccountList"
+        ],
+        [
           "fundPledgeCash",
           "fundPledgePayable"
         ],
