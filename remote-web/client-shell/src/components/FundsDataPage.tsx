@@ -860,14 +860,16 @@ export function FundsDataPage() {
       setLastSyncAt(new Date());
     } catch (error) {
       if (generation !== requestGeneration.current) return;
+      const errorMessage = error instanceof Error ? error.message : String(error);
       const storeById = new Map(stores.map((store) => [store.id, store]));
       commitFundsRows(fundsRowsRef.current.map((row) => staleFundsRow(
         row,
         storeById.get(row.shopId) || { id: row.shopId, name: row.shopName, group: row.group, status: row.status },
-        error instanceof Error ? error.message : String(error)
+        errorMessage
       )));
+      setFundsDetails([]);
       setFundsState("error");
-      setFundsMessage(error instanceof Error ? error.message : String(error));
+      setFundsMessage(`资金任务执行失败：${errorMessage}`);
     } finally {
       if (generation === requestGeneration.current) {
         setSyncing(false);
@@ -1059,10 +1061,13 @@ export function FundsDataPage() {
   const onlineSelectedCount = selectedRows.filter((row) => row.status === "online").length;
   const failedDetailCount = fundsDetails.filter((detail) => detail.ok === false).length;
   const staleStoreCount = selectedRows.filter((row) => fundsMetricKeys.some((key) => row.metricStates[key] === "stale")).length;
-  const unavailableStoreCount = selectedRows.filter((row) => fundsMetricKeys.some((key) => row.metricStates[key] === "unavailable")).length;
+  const globalFundsFailure = fundsState === "error" && fundsDetails.length === 0 && Boolean(fundsMessage);
+  const unavailableStoreCount = globalFundsFailure
+    ? 0
+    : selectedRows.filter((row) => fundsMetricKeys.some((key) => row.metricStates[key] === "unavailable")).length;
   const metricLabelByKey = new Map<FundsMetricKey, string>(tableColumns.map((column) => [column.key, column.label]));
   schemaColumns.forEach((column) => metricLabelByKey.set(column.key, column.label));
-  const unavailableMetricDetails = fundsMetricKeys.map((key) => ({
+  const unavailableMetricDetails = (globalFundsFailure ? [] : fundsMetricKeys).map((key) => ({
     key,
     label: metricLabelByKey.get(key) || key,
     storeCount: selectedRows.filter((row) => row.metricStates[key] === "unavailable").length

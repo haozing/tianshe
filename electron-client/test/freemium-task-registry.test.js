@@ -170,6 +170,17 @@ test("runner data scopes are task-specific and marketing records are operation-o
   const businessScopes = TASK_DEFINITIONS.businessData.allowedDataScopes;
   assert.equal(businessScopes.some((scope) => scope.storeName === "funds_latest" && scope.actions.includes("write")), false);
   assert.equal(businessScopes.some((scope) => scope.storeName?.startsWith("opportunity_")), false);
+
+  const fundsContext = {
+    taskType: "fundsData",
+    allowedStoreRefs: [],
+    allowedDataScopes: materializeDataScopes(TASK_DEFINITIONS.fundsData.allowedDataScopes, "funds-1")
+  };
+  assert.equal(runnerDataAllowed(fundsContext, "native:data:records:get", { storeName: "funds_latest", id: "funds-current::shop-1" }), true);
+  assert.equal(runnerDataAllowed(fundsContext, "native:data:records:put", { storeName: "funds_latest", record: { id: "funds-current::shop-1" } }), true);
+  assert.equal(runnerDataAllowed(fundsContext, "native:data:records:get", { storeName: "runtime_meta", id: "funds-cache-current-v1" }), false);
+  assert.equal(runnerDataAllowed(fundsContext, "native:data:records:put", { storeName: "runtime_meta", record: { id: "funds-cache-current-v1" } }), false);
+
   for (const definition of Object.values(TASK_DEFINITIONS)) {
     assert.equal(definition.allowedDataScopes.some((scope) => scope.commands.includes("native:data:maintenance:*")), false);
   }

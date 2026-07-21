@@ -9,10 +9,8 @@ import type {
 import {
   repositoryDelete,
   repositoryDeleteMany,
-  repositoryGet,
   repositoryGetAll,
   repositoryGetMany,
-  repositoryPut,
   repositoryPutMany
 } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
@@ -127,8 +125,6 @@ interface FundsInterfaceStat {
 }
 
 const FUNDS_CURRENT_ID_PREFIX = "funds-current::";
-const FUNDS_CACHE_MIGRATION_ID = "funds-cache-current-v1";
-let fundsCacheMigrationPromise: Promise<void> | null = null;
 let fundsCacheCleanupKey = "";
 let fundsCacheCleanupPromise: Promise<void> | null = null;
 
@@ -717,6 +713,7 @@ function requestPlanHash(adapter: DoudianAdapterConfig, planKeys: string[], scri
     policies: {
       contractVersion: policyText(adapter, "fundsData.contractVersion", ""),
       requestPlans: policyArray(adapter, "fundsData.requestPlans"),
+      preflightPlans: policyArray(adapter, "fundsData.preflightPlans"),
       requestPlanGroups: policyArrayRaw(adapter, "fundsData.requestPlanGroups"),
       requestPlanGroupConcurrency: policyNumber(adapter, "fundsData.requestPlanGroupConcurrency", 1),
       requestPlanGroupDelayMs: policyNumber(adapter, "fundsData.requestPlanGroupDelayMs", 0),
@@ -734,23 +731,6 @@ function requestPlanHash(adapter: DoudianAdapterConfig, planKeys: string[], scri
 
 function latestId(shopId: string) {
   return `${FUNDS_CURRENT_ID_PREFIX}${shopId}`;
-}
-
-async function migrateLegacyFundsCache() {
-  if (fundsCacheMigrationPromise) return fundsCacheMigrationPromise;
-  fundsCacheMigrationPromise = (async () => {
-    const marker = await repositoryGet<{ id: string }>("runtime_meta", FUNDS_CACHE_MIGRATION_ID);
-    if (marker) return;
-    const records = await repositoryGetAll<FundsLatestRecord>("funds_latest");
-    const legacyIds = records.map((record) => record.id).filter((id) => !id.startsWith(FUNDS_CURRENT_ID_PREFIX));
-    await repositoryDeleteMany("funds_latest", legacyIds);
-    await repositoryPut("runtime_meta", {
-      id: FUNDS_CACHE_MIGRATION_ID,
-      migratedAt: nowIso(),
-      deletedLegacyRecords: legacyIds.length
-    });
-  })();
-  return fundsCacheMigrationPromise;
 }
 
 async function cleanupFundsCache(stores: DoudianStoreSummary[], contract: {
@@ -816,6 +796,8 @@ async function collectFundsDataForStore(payload: DoudianAdapterPayload, store: D
   const responses: Record<string, RequestPlanResult> = {};
   const context = { ...dateContext, shopId: store.shopId, shopName: store.shopName };
   const groups = requestPlanGroups(payload.adapter, planKeys);
+  const preflightPlans = policyArray(payload.adapter, "fundsData.preflightPlans")
+    .filter((planKey) => planKeys.includes(planKey));
   const groupConcurrency = Math.max(1, Math.min(6, Math.floor(policyNumber(payload.adapter, "fundsData.requestPlanGroupConcurrency", 3))));
   const groupDelayMs = Math.max(0, Math.floor(policyNumber(payload.adapter, "fundsData.requestPlanGroupDelayMs", 0)));
   for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
@@ -834,6 +816,13 @@ async function collectFundsDataForStore(payload: DoudianAdapterPayload, store: D
       if (result.status === "rejected") throw result.reason;
       responses[result.value.planKey] = result.value.response;
     }
+    const preflightComplete = preflightPlans.length > 0 && preflightPlans.every((planKey) => (
+      Object.prototype.hasOwnProperty.call(responses, planKey)
+    ));
+    const preflightFailed = preflightComplete && preflightPlans.some((planKey) => (
+      !requestPlanResponseOk(responses[planKey], payload.adapter, planKey, fundsDataMappings(payload.adapter))
+    ));
+    if (preflightFailed) break;
     if (groupIndex < groups.length - 1) await wait(groupDelayMs);
   }
 
@@ -953,7 +942,6 @@ async function saveFundsLatestRows(args: {
 export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianFundsDataResult> {
   const startedAt = Date.now();
   const payload = adapterPayload(args);
-  await migrateLegacyFundsCache();
   const ledger = await listStoreLedger();
   const stores = ledger.stores || [];
   const targets = targetStores(stores, args.shopIds || []);
@@ -1144,7 +1132,6 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
 
 export async function fetchFundsDataLatest(args: FundsDataArgs = {}): Promise<DoudianFundsDataResult> {
   const payload = adapterPayload(args);
-  await migrateLegacyFundsCache();
   const ledger = await listStoreLedger();
   const stores = ledger.stores || [];
   const targets = targetStores(stores, args.shopIds || []);
