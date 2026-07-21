@@ -614,8 +614,7 @@ function candidateRuleInputsComplete(candidate: DoudianStaleGoodsCandidate, rule
 async function loadExecuteCandidates(
   payload: DoudianAdapterPayload,
   sourceRunId: string,
-  candidateIds: string[],
-  action: string
+  candidateIds: string[]
 ) {
   if (!sourceRunId) throw new Error("stale goods execute requires sourceRunId");
   const run = await repositoryGet<ScanRunRecord>("stale_scan_runs", sourceRunId);
@@ -649,7 +648,6 @@ async function loadExecuteCandidates(
     !successfulShopIds.has(candidate.shopId) ||
     !candidate.shopId ||
     !candidate.productId ||
-    candidate.action !== action ||
     !candidateRuleInputsComplete(candidate, run.rules)
   );
   if (invalid.length) throw new Error(`stale goods candidates are not from source run: ${invalid.slice(0, 3).map((item) => item.id).join(",")}`);
@@ -1474,7 +1472,7 @@ async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: Stal
   const planKey = actionPlanKey(payload.adapter, action);
   const guard = executePlanGuard(payload.adapter, action, planKey);
   if (!guard.ok) throw new Error(`stale goods execute plan is not allowed: ${action}`);
-  const selected = await loadExecuteCandidates(payload, sourceRunId, args.candidateIds || [], action);
+  const selected = await loadExecuteCandidates(payload, sourceRunId, args.candidateIds || []);
 
   const ledger = await listStoreLedger();
   const stores = ledger.stores || [];
