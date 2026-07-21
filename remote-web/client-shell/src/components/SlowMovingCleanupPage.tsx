@@ -218,10 +218,17 @@ const riskCopy: Record<RiskLevel, { label: string; className: string }> = {
 };
 
 const actionCopy: Record<CandidateAction, { label: string; icon: typeof Archive; className: string }> = {
-  offline: { label: "建议下架", icon: Archive, className: "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" },
-  recycle: { label: "进回收站", icon: XCircle, className: "border-[#dbe5f2] bg-white text-[#667085]" },
-  delete: { label: "彻底删除", icon: Trash2, className: "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" },
+  offline: { label: "下架（保留商品）", icon: Archive, className: "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" },
+  recycle: { label: "移入回收站（可恢复）", icon: XCircle, className: "border-[#dbe5f2] bg-white text-[#667085]" },
+  delete: { label: "彻底删除（不可恢复）", icon: Trash2, className: "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" },
   optimize: { label: "先优化", icon: SlidersHorizontal, className: "border-[#bdd2ef] bg-[#f0f6ff] text-brand-navy" }
+};
+
+const actionLabels: Record<CandidateAction, string> = {
+  offline: "\u4e0b\u67b6\uff08\u4fdd\u7559\u5546\u54c1\uff09",
+  recycle: "\u79fb\u5165\u56de\u6536\u7ad9\uff08\u53ef\u6062\u590d\uff09",
+  delete: "\u5f7b\u5e95\u5220\u9664\uff08\u4e0d\u53ef\u6062\u590d\uff09",
+  optimize: "\u5148\u4f18\u5316"
 };
 
 const trafficPeriodOptions: Array<{ key: TrafficPeriod; label: string }> = [
@@ -242,12 +249,12 @@ const productSourceOptions: Array<{ value: ProductSource; label: string }> = [
   { value: "importedIds", label: "商品ID导入" }
 ];
 
-const actionFilterOptions: Array<{ value: ActionFilter; label: string }> = [
-  { value: "all", label: "全部动作" },
-  { value: "offline", label: "建议下架" },
-  { value: "recycle", label: "进回收站" },
-  { value: "delete", label: "彻底删除" },
-  { value: "optimize", label: "先优化" }
+const clearActionFilterOptions: Array<{ value: ActionFilter; label: string }> = [
+  { value: "all", label: "\u5168\u90e8\u6e05\u7406\u52a8\u4f5c" },
+  { value: "offline", label: actionLabels.offline },
+  { value: "recycle", label: actionLabels.recycle },
+  { value: "delete", label: actionLabels.delete },
+  { value: "optimize", label: actionLabels.optimize }
 ];
 
 const riskFilterOptions: Array<{ value: RiskFilter; label: string }> = [
@@ -1081,7 +1088,7 @@ function ActionTag({ action }: { action: CandidateAction }) {
   return (
     <span className={cn("inline-flex h-6 items-center gap-1 rounded-md border px-2 text-[12px] font-semibold", copy.className)}>
       <Icon className="size-[12px]" strokeWidth={2.2} />
-      {copy.label}
+      {actionLabels[action]}
     </span>
   );
 }
@@ -1150,7 +1157,7 @@ function exportCandidates(rows: CandidateRow[], selectedIds: Set<string>, adapte
     row.titleQualityScore,
     riskCopy[row.risk].label,
     row.riskScore,
-    actionCopy[row.action].label,
+    actionLabels[row.action],
     row.reasons.join(" / "),
     row.source,
     diagnostics?.productCount || "",
@@ -1398,7 +1405,7 @@ export function SlowMovingCleanupPage() {
   const metrics: MetricItem[] = [
     { label: "滞销候选", value: formatNumber(matchedCandidates.length), detail: `${selectedStores.length} 家店铺命中`, tone: "blue" },
     { label: "高风险清理", value: formatNumber(summary.highRisk), detail: "建议优先处理", tone: "danger" },
-    { label: "建议下架", value: formatNumber(summary.offline), detail: "保留后续优化空间", tone: "warning" },
+    { label: "可下架商品", value: formatNumber(summary.offline), detail: "执行前仍需选择动作并确认", tone: "warning" },
     { label: "建议优化", value: formatNumber(summary.optimize), detail: "质量修复后观察", tone: "green" },
     { label: "有曝无转", value: formatNumber(summary.trafficWaste), detail: "罗盘流量口径", tone: "danger" },
     { label: "低质命中", value: formatNumber(summary.qualityIssue), detail: "评价/信息/主图/标题", tone: "warning" },
@@ -1628,13 +1635,14 @@ export function SlowMovingCleanupPage() {
     setPlanOpen(true);
     setConfirmInput("");
     setCleanupState("ready");
-    setCleanupMessage(`${actionCopy[action].label}计划已生成，需二次确认后才能执行`);
+    setCleanupMessage(`${actionLabels[action]}计划已生成，需二次确认后才能执行`);
     const next = new Set(matchedCandidates.filter((row) => row.action === action).map((row) => row.id));
     setSelectedCandidateIds(next);
   }
 
   async function confirmExecution() {
-    if (!previewMode && confirmInput === "确认清理") {
+    const normalizedConfirmText = confirmInput.trim();
+    if (!previewMode && normalizedConfirmText === "确认清理") {
       const executable = selectedExecutable;
       if (!executable.length) {
         setCleanupState("error");
@@ -1651,7 +1659,7 @@ export function SlowMovingCleanupPage() {
           mode: "execute",
           action: planAction,
           candidateIds: executable.map((row) => row.id),
-          confirmText: confirmInput,
+          confirmText: normalizedConfirmText,
           sourceRunId: executable.find((row) => row.sourceRunId)?.sourceRunId,
           operationId,
           forceAdapter: true
@@ -1670,7 +1678,7 @@ export function SlowMovingCleanupPage() {
       }
       return;
     }
-    if (confirmInput !== "确认清理") return;
+    if (normalizedConfirmText !== "确认清理") return;
     setCleanupState(previewMode ? "error" : "ready");
     setCleanupMessage(previewMode ? "真实下架/删除桥接待接入，已保留执行计划供验收" : "执行任务已提交");
     if (!previewMode) setPlanOpen(false);
@@ -1880,9 +1888,9 @@ export function SlowMovingCleanupPage() {
                   <Download className="size-[14px]" strokeWidth={2} />
                   导出清单
                 </button>
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!matchedCandidates.some((row) => row.action !== "optimize")} onClick={() => buildPlan(defaultPlanAction)}>
+                <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" title="选择清理动作；下一步确认后才会提交平台请求" disabled={!matchedCandidates.some((row) => row.action !== "optimize")} onClick={() => buildPlan(defaultPlanAction)}>
                   <Workflow className="size-[14px]" strokeWidth={2} />
-                  生成执行计划
+                  创建清理计划
                 </button>
               </>
             ) : (
@@ -1891,11 +1899,6 @@ export function SlowMovingCleanupPage() {
                   <RefreshCw className="size-[14px]" strokeWidth={2} />
                   恢复默认
                 </button>
-                {false && <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!selectedIds.size || importedIdsMissing || cleanupState === "loading"} onClick={() => void scanGoods()}>
-                  {cleanupState === "loading" ? <Loader2 className="size-[14px] animate-spin" strokeWidth={2} /> : <PackageSearch className="size-[14px]" strokeWidth={2} />}
-                  开始分析
-                </button>
-                }
               </>
             )}
           </div>
@@ -1907,7 +1910,7 @@ export function SlowMovingCleanupPage() {
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="size-[16px] text-brand-navy" strokeWidth={2.2} />
                 <strong className="text-[14px] font-semibold text-[#101828]">清理设置</strong>
-                <span className="text-[12px] text-[#667085]">先设置规则，再开始滞销商品分析</span>
+                <span className="text-[12px] text-[#667085]">先设置规则，再扫描滞销候选；扫描不会下架或删除商品</span>
               </div>
               <span className="text-[12px] font-medium text-[#667085]">数据来源：电商罗盘 + 平台商品列表</span>
             </div>
@@ -1916,7 +1919,7 @@ export function SlowMovingCleanupPage() {
               <div className="mb-4 grid grid-cols-[minmax(0,1fr)_220px] gap-3 max-[1100px]:grid-cols-1">
                 <div className="flex items-start gap-2 rounded-md border border-[#dbe5f2] bg-[#fbfcff] px-3 py-2.5 text-[13px] leading-6 text-[#344054]">
                   <AlertTriangle className="mt-1 size-[15px] shrink-0 text-[#b54708]" strokeWidth={2} />
-                  <span>开始分析前，请在左侧勾选需要参与分析的店铺。系统会按已勾选店铺读取平台商品列表，并合并本地导入的罗盘指标。</span>
+                  <span>扫描只读取已勾选店铺的商品和经营指标，用于生成候选清单，不会修改平台商品。</span>
                 </div>
                 <div className="grid grid-cols-2 gap-2 rounded-md border border-[#e6ebf3] bg-white px-3 py-2.5 text-[12px] text-[#667085]">
                   <div>
@@ -1991,9 +1994,9 @@ export function SlowMovingCleanupPage() {
               <span className="truncate text-[12px] text-[#667085]">
                 当前筛选：{selectedIds.size} 家店铺 · {noSalesTypeLabel} · {trafficPeriodLabel} · {perStoreLimitLabel}
               </span>
-              <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-4 text-[13px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!selectedIds.size || importedIdsMissing || cleanupState === "loading"} onClick={() => void scanGoods()}>
+              <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-4 text-[13px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" title={!selectedIds.size ? "请先勾选店铺" : importedIdsMissing ? "商品 ID 导入模式需要先导入文件" : cleanupState === "loading" ? "正在扫描" : "只扫描候选，不会下架或删除商品"} disabled={!selectedIds.size || importedIdsMissing || cleanupState === "loading"} onClick={() => void scanGoods()}>
                 {cleanupState === "loading" ? <Loader2 className="size-[15px] animate-spin" strokeWidth={2} /> : <PackageSearch className="size-[15px]" strokeWidth={2} />}
-                开始滞销商品分析
+                扫描滞销候选
               </button>
             </div>
           </section>
@@ -2062,7 +2065,7 @@ export function SlowMovingCleanupPage() {
               ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <NativeSelect value={actionFilter} options={actionFilterOptions} onChange={setActionFilter} width={116} />
+              <NativeSelect value={actionFilter} options={clearActionFilterOptions} onChange={setActionFilter} width={148} />
               <NativeSelect value={riskFilter} options={riskFilterOptions} onChange={setRiskFilter} width={112} />
               <NativeSelect value={sortKey} options={sortOptions} onChange={setSortKey} width={116} />
               <button className={cn("inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]", columnPanelOpen ? "bg-brand-foxSoft text-brand-navy" : "")} type="button" onClick={() => setColumnPanelOpen((open) => !open)}>
@@ -2164,11 +2167,11 @@ export function SlowMovingCleanupPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <ShieldAlert className="size-[17px] text-[#b54708]" strokeWidth={2.2} />
-                <strong className="text-[14px] text-[#101828]">执行计划确认</strong>
+                <strong className="text-[14px] text-[#101828]">选择清理动作</strong>
                 {previewMode ? <CompactTag label="真实执行待接入" className="border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" /> : null}
               </div>
               <p className="m-0 mt-1 text-[12px] leading-5 text-[#667085]">
-                {`当前计划包含 ${planRows.length} 个商品。彻底删除不可恢复，执行前请先导出清单并复核店铺登录状态。`}
+                {`扫描已完成，当前选择 ${planRows.length} 个商品。选择动作后，输入“确认清理”才会真实提交；彻底删除不可恢复。`}
               </p>
             </div>
             <button className="grid size-7 shrink-0 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054]" type="button" aria-label="关闭执行计划" onClick={() => setPlanOpen(false)}>
@@ -2181,24 +2184,28 @@ export function SlowMovingCleanupPage() {
                 className={cn("inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-semibold", planAction === action ? "border-brand-fox bg-brand-foxSoft text-brand-navy" : "border-[#dbe5f2] bg-white text-[#344054]")}
                 key={action}
                 type="button"
+                title={matchedCandidates.some((row) => row.action === action) ? `选择${actionLabels[action]}` : "当前扫描没有此类候选商品"}
+                aria-label={actionLabels[action]}
                 disabled={!matchedCandidates.some((row) => row.action === action)}
                 onClick={() => buildPlan(action)}
               >
                 {action === "delete" ? <Trash2 className="size-[14px]" strokeWidth={2} /> : <Archive className="size-[14px]" strokeWidth={2} />}
-                {actionCopy[action].label}
+                {actionLabels[action]}
               </button>
             ))}
           </div>
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+            <span className="col-span-full text-[12px] text-[#667085]">执行前请输入“确认清理”；此输入是提交真实下架或删除请求的最后确认。</span>
             <input
               className="h-9 rounded-md border border-[#dbe5f2] bg-white px-3 text-[13px] text-[#1d2939] outline-none placeholder:text-[#98a2b3] focus:border-brand-fox"
-              placeholder="输入“确认清理”"
+              aria-label="执行前确认"
+              placeholder="输入确认清理后才能提交"
               value={confirmInput}
               onChange={(event) => setConfirmInput(event.target.value)}
             />
-            <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white disabled:opacity-50" type="button" disabled={executingPlan || !planRows.length || confirmInput !== "确认清理"} onClick={() => void confirmExecution()}>
+            <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white disabled:opacity-50" type="button" disabled={executingPlan || !planRows.length || confirmInput.trim() !== "确认清理"} onClick={() => void confirmExecution()}>
               <Check className="size-[14px]" strokeWidth={2.2} />
-              确认执行
+              确认并执行
             </button>
           </div>
         </div>
