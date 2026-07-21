@@ -21,6 +21,14 @@ const mappings = publicConfig.responseMappings.staleGoodsCleanup;
 const writePlanKeys = ["staleGoodsBatchOffline", "staleGoodsBatchDelete", "staleGoodsCompleteDelete"];
 for (const key of writePlanKeys) {
   assert.equal(plans[key].mutation, true, `${key} must be a live mutation plan`);
+  assert.equal(plans[key].sign, true, `${key} must sign the live request`);
+  assert.equal(plans[key].signStrategy, "mstoken-myargs", `${key} must use the verified mstoken signer`);
+  assert.equal(plans[key].localSignerOnly, true, `${key} must use the local verified signer`);
+  assert.equal(plans[key].signQuery, "appid=1", `${key} must sign with appid=1`);
+  assert.equal(plans[key].signBody, "{formBody}", `${key} must sign the submitted form body`);
+  assert.equal(plans[key].signUseMsToken, true, `${key} must include msToken in signing`);
+  assert.equal(plans[key].signRequireMsToken, false, `${key} must tolerate an absent msToken`);
+  assert.equal(plans[key].signIncludeEmptyMsToken, true, `${key} must preserve empty msToken signing`);
   assert.equal(plans[key].maxAttempts, 1, `${key} must never retry`);
   assert.equal(plans[key].retryOnHttpError, false, `${key} must not retry HTTP errors`);
   assert.equal(plans[key].retryOnBusinessFailure, false, `${key} must not retry business failures`);
