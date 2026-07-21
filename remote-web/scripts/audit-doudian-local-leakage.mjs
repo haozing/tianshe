@@ -46,7 +46,8 @@ const allowedFieldNamePatterns = [
   /\bshopuserInfo\b/i,
   /\bgetShopUserInfo\b/,
   /\brequestPlanSteps\b/,
-  /\bscriptKeys\b/
+  /\bscriptKeys\b/,
+  /\bplan\.signStrategy\b.*\bcookieDomains\.add\b/
 ];
 
 function rel(filePath) {

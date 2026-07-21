@@ -14,7 +14,7 @@ const {
 
 const adapter = require("../../remote-web/client-shell/public/config/doudian-adapter.marketing-pilot.json");
 const { paidDataRequest, runnerDataAllowed } = require("../src/main/license/data-access-policy");
-const { taskResultPersistence, terminalTaskStatus } = require("../src/main/tasks/task-result-policy");
+const { interruptedTaskStatus, taskResultPersistence, terminalTaskStatus } = require("../src/main/tasks/task-result-policy");
 const { httpTransportFingerprint, runnerPartitionAllowed, transportMatchesPlan, transportMatchesPlanTemplate } = require("../src/main/tasks/task-transport-policy");
 const { taskWindowCommandScript } = require("../src/main/tasks/task-window-commands");
 const { urlMatchesPrincipal } = require("../src/main/security/web-contents-principal");
@@ -62,6 +62,7 @@ test("task params use a per-task top-level schema", () => {
 test("each task receives only its audited request plans", () => {
   assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.fetchDoudianStores, adapter).sort(), ["currentShop", "shopList"]);
   assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.bulkDeleteExecute, adapter).sort(), ["bulkDeleteBatchDelete", "bulkDeleteCompleteDelete", "bulkDeleteProductList"]);
+  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.violationsData, adapter).sort(), ["violationPenaltyTicketList", "violationProductLookup", "violationRiskTicketList"]);
   const businessPlans = allowedPlanKeys(TASK_DEFINITIONS.businessData, adapter);
   assert.equal(businessPlans.includes("businessHomepage"), true);
   assert.equal(businessPlans.some((key) => key.startsWith("marketing") || key.startsWith("opportunity")), false);
@@ -210,6 +211,10 @@ test("main process derives and bounds runner terminal evidence", () => {
   assert.equal(terminalTaskStatus({ result: { ok: false, status: "unknown" }, mutation: true }), "reconciling");
   assert.equal(terminalTaskStatus({ result: { status: "cancelled" }, resultSummary: "cancelled", currentStatus: "cancelling" }), "cancelled");
   assert.equal(terminalTaskStatus({ result: { status: "cancelled" }, mutation: true, currentStatus: "cancelling" }), "reconciling");
+  assert.equal(interruptedTaskStatus({ currentStatus: "cancelling" }), "cancelled");
+  assert.equal(interruptedTaskStatus({ cancellationRequested: true }), "cancelled");
+  assert.equal(interruptedTaskStatus({ currentStatus: "running" }), "failed");
+  assert.equal(interruptedTaskStatus({ mutation: true, currentStatus: "cancelling" }), "reconciling");
   assert.deepEqual(taskResultPersistence(undefined), { bytes: 0, messageAllowed: true, persistResult: true });
   assert.equal(taskResultPersistence({ value: "x".repeat(4 * 1024 * 1024) }).persistResult, false);
 });

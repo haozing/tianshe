@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "contractVersion": "doudian-adapter.v1",
   "platform": "doudian",
-  "version": "2026.07.21.remote-adapter-funds-preflight-v1",
+  "version": "2026.07.21.remote-adapter-funds-preflight-violations-v3-v1",
   "source": "remote-web",
   "capabilities": {
     "actions": [
@@ -65,7 +65,8 @@
       "fundAccountList",
       "fundCompensateStatistics",
       "fundShopDepositPage",
-      "violationPenaltyList",
+      "violationRiskTicketList",
+      "violationPenaltyTicketList",
       "violationProductLookup",
       "staleGoodsProductList",
       "staleGoodsRecommendAdmit",
@@ -266,7 +267,8 @@
         {
           "action": "collectViolationsData",
           "requestPlans": [
-            "violationPenaltyList"
+            "violationRiskTicketList",
+            "violationPenaltyTicketList"
           ]
         },
         {
@@ -440,7 +442,7 @@
     "fundAccountList": "/settlement/account/getAccountList?_s=fe&req_source=dou_dian_pc",
     "fundCompensateStatistics": "/aftersale/compensate/statistics",
     "fundShopDepositPage": "/ffa/content/shop_deposit",
-    "violationPenaltyList": "/governance/shop/penalty/get_penalty_list",
+    "violationTicketListV3": "/governance/shop/penalty/v3/get_ticket_list",
     "staleGoodsProductList": "/product/tproduct/list",
     "staleGoodsRecommendAdmit": "/api/commop/recommend_admit/item/page",
     "staleGoodsCompassDownload": "https://compass.jinritemai.com/compass_api/download_center/shop/download_file_sync",
@@ -1700,25 +1702,45 @@
         "200"
       ],
       "listPaths": [
-        "violationPenaltyList.data.data.tickets",
-        "violationPenaltyList.data.tickets",
-        "violationPenaltyList.tickets",
-        "violationPenaltyList.data.data.list",
-        "violationPenaltyList.data.data.records",
-        "violationPenaltyList.data.data.items",
-        "violationPenaltyList.data.data.penalty_list",
-        "violationPenaltyList.data.list",
-        "violationPenaltyList.data.records",
-        "violationPenaltyList.data.items",
-        "violationPenaltyList.list",
-        "violationPenaltyList.records",
-        "violationPenaltyList.items"
+        "violationRiskTicketList.data.data.tickets",
+        "violationRiskTicketList.data.tickets",
+        "violationRiskTicketList.tickets",
+        "violationPenaltyTicketList.data.data.tickets",
+        "violationPenaltyTicketList.data.tickets",
+        "violationPenaltyTicketList.tickets"
       ],
+      "listPathsByPlan": {
+        "violationRiskTicketList": [
+          "violationRiskTicketList.data.data.tickets",
+          "violationRiskTicketList.data.tickets",
+          "violationRiskTicketList.tickets"
+        ],
+        "violationPenaltyTicketList": [
+          "violationPenaltyTicketList.data.data.tickets",
+          "violationPenaltyTicketList.data.tickets",
+          "violationPenaltyTicketList.tickets"
+        ]
+      },
       "totalPaths": [
-        "violationPenaltyList.data.data.total",
-        "violationPenaltyList.data.total",
-        "violationPenaltyList.total"
+        "violationRiskTicketList.data.data.total",
+        "violationRiskTicketList.data.total",
+        "violationRiskTicketList.total",
+        "violationPenaltyTicketList.data.data.total",
+        "violationPenaltyTicketList.data.total",
+        "violationPenaltyTicketList.total"
       ],
+      "totalPathsByPlan": {
+        "violationRiskTicketList": [
+          "violationRiskTicketList.data.data.total",
+          "violationRiskTicketList.data.total",
+          "violationRiskTicketList.total"
+        ],
+        "violationPenaltyTicketList": [
+          "violationPenaltyTicketList.data.data.total",
+          "violationPenaltyTicketList.data.total",
+          "violationPenaltyTicketList.total"
+        ]
+      },
       "fieldScales": {
         "penaltyAmount": 100
       },
@@ -1738,6 +1760,7 @@
         },
         "objectType": {
           "paths": [
+            "info.object.object_type",
             "object_id_type",
             "objectIdType",
             "object_type_name",
@@ -1752,6 +1775,7 @@
         },
         "objectName": {
           "paths": [
+            "info.object.object_name",
             "product_info.title",
             "productInfo.title",
             "product_info.name",
@@ -1770,6 +1794,7 @@
         },
         "objectId": {
           "paths": [
+            "info.object.object_id",
             "object_id",
             "objectId",
             "target_id",
@@ -1792,6 +1817,7 @@
         },
         "reason": {
           "paths": [
+            "violation_reason",
             "show_violation_reason",
             "showViolationReason",
             "violation_name",
@@ -1824,6 +1850,7 @@
         },
         "violationAt": {
           "paths": [
+            "info.violation_time",
             "violation_time",
             "violationTime",
             "violation_at",
@@ -1848,6 +1875,31 @@
             "statusName",
             "handle_status",
             "handleStatus"
+          ]
+        },
+        "ticketType": {
+          "paths": [
+            "standard_ticket_type",
+            "standardTicketType"
+          ]
+        },
+        "processStatusCode": {
+          "paths": [
+            "ticket_status",
+            "ticketStatus"
+          ]
+        },
+        "severityCode": {
+          "paths": [
+            "circumstances_level",
+            "circumstancesLevel"
+          ]
+        },
+        "violationDetail": {
+          "paths": [
+            "info.violation_detail",
+            "violation_detail",
+            "violationDetail"
           ]
         },
         "penaltyStatus": {
@@ -1903,6 +1955,17 @@
             "disposeSuggest",
             "rectification_suggestion",
             "rectificationSuggestion"
+          ]
+        },
+        "executionTypes": {
+          "arrayPaths": [
+            "execute_plans",
+            "executePlans"
+          ],
+          "itemPaths": [
+            "title.name",
+            "name",
+            "title"
           ]
         },
         "dueAt": {
@@ -2988,39 +3051,30 @@
       "diagnosticOnly": true,
       "successPaths": []
     },
-    "violationPenaltyList": {
-      "endpointKey": "violationPenaltyList",
+    "violationRiskTicketList": {
+      "endpointKey": "violationTicketListV3",
       "method": "POST",
-      "sign": true,
-      "signStrategy": "mstoken-myargs",
-      "localSigner": true,
-      "localSignerOnly": true,
-      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "sign": false,
       "debugPlan": true,
-      "signatureParam": false,
       "includeEmptySignature": false,
       "requestMode": "platform",
       "responseType": "losslessJson",
       "origin": "https://fxg.jinritemai.com",
-      "referer": "https://fxg.jinritemai.com/ffa/mshop/violation",
-      "signerUrl": "https://fxg.jinritemai.com/ffa/mshop/violation",
-      "signDomain": ".jinritemai.com",
-      "signQuery": "appid=1",
-      "signBody": "",
-      "signWindowTokenFallback": false,
+      "referer": "https://fxg.jinritemai.com",
       "headers": {
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json"
       },
       "body": {
         "condition": {
-          "quick_condition": "all"
+          "penalty_type": "all",
+          "quick_select": "all"
         },
         "sort": {
           "sort_type": 1,
-          "sort_params": "create_time"
+          "sort_params": "ticket_create_time_range"
         },
-        "page_tab": "penalty_ticket_v2",
+        "standard_ticket_type": "risk",
         "page": "{page}",
         "page_size": "{pageSize}"
       },
@@ -3028,9 +3082,8 @@
       "maxAttempts": 2,
       "retryDelayMs": 1000,
       "retryBackoff": "linear",
-      "pageFetchOnSignFailure": false,
       "pageFetchTimeoutMs": 18000,
-      "calibrationStatus": "xzb-post-myargs-local-mstoken-refresh",
+      "calibrationStatus": "xzb-20260717-v3-ticket-list",
       "allowMissingCode": true,
       "successPaths": [
         "data.data.tickets",
@@ -3041,6 +3094,52 @@
         "data.list",
         "data.data.list",
         "data.data.records"
+      ],
+      "failureMessages": [
+        "未登录",
+        "请登录"
+      ]
+    },
+    "violationPenaltyTicketList": {
+      "endpointKey": "violationTicketListV3",
+      "method": "POST",
+      "sign": false,
+      "debugPlan": true,
+      "includeEmptySignature": false,
+      "requestMode": "platform",
+      "responseType": "losslessJson",
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "condition": {
+          "penalty_type": "all",
+          "quick_select": "all"
+        },
+        "sort": {
+          "sort_type": 1,
+          "sort_params": "ticket_create_time_range"
+        },
+        "standard_ticket_type": "penalty",
+        "page": "{page}",
+        "page_size": "{pageSize}"
+      },
+      "retryOnHttpError": true,
+      "maxAttempts": 2,
+      "retryDelayMs": 1000,
+      "retryBackoff": "linear",
+      "pageFetchTimeoutMs": 18000,
+      "calibrationStatus": "xzb-20260717-v3-ticket-list",
+      "allowMissingCode": true,
+      "successPaths": [
+        "data.data.tickets",
+        "data.tickets",
+        "tickets",
+        "data",
+        "data.data"
       ],
       "failureMessages": [
         "未登录",
@@ -4889,15 +4988,59 @@
       "filterMode": "local-after-complete-fetch",
       "dateField": "violationAt",
       "requestPlans": [
-        "violationPenaltyList"
+        "violationRiskTicketList",
+        "violationPenaltyTicketList"
       ],
-      "requiredPlans": [
-        "violationPenaltyList"
-      ],
+      "requiredPlans": [],
       "criticalPlans": [
-        "violationPenaltyList"
+        "violationRiskTicketList",
+        "violationPenaltyTicketList"
       ],
       "optionalPlans": [],
+      "processStatus": {
+        "labels": {
+          "risk": {
+            "100": "待整改",
+            "200": "整改审核中",
+            "300": "处罚已免除",
+            "400": "整改失败",
+            "500": "其他状态"
+          },
+          "penalty": {
+            "0": "申诉成功",
+            "1": "申诉中",
+            "2": "驳回待补充",
+            "3": "申诉驳回",
+            "4": "申诉改判",
+            "5": "待处罚",
+            "6": "已处罚",
+            "7": "人工改判",
+            "8": "处罚已解除",
+            "10": "已撤销"
+          }
+        },
+        "buckets": {
+          "risk": {
+            "100": "rectifying",
+            "200": "rectifying",
+            "300": "done",
+            "400": "failed",
+            "500": "unknown"
+          },
+          "penalty": {
+            "0": "done",
+            "1": "appealing",
+            "2": "pending",
+            "3": "done",
+            "4": "done",
+            "5": "pending",
+            "6": "done",
+            "7": "done",
+            "8": "done",
+            "10": "done"
+          }
+        }
+      },
       "productAssociationVersion": "2026.07.07.violations-product-association-read-plan-v1",
       "productAssociation": {
         "version": "2026.07.07.violations-product-association-read-plan-v1",
@@ -4951,7 +5094,7 @@
         }
       },
       "messages": {
-        "syncing": "正在同步违规处罚列表",
+        "syncing": "正在同步违规预警与处罚列表",
         "synced": "违规列表已同步",
         "failed": "获取违规列表error",
         "partial": "已同步 {successCount} 家，{failureCount} 家失败",
@@ -4985,7 +5128,7 @@
         }
       },
       "fieldSchema": {
-        "version": "2026.07.16.violations-data-fields-v4-coverage",
+        "version": "2026.07.21.violations-data-fields-v5-v3-ticket-list",
         "unavailableMetrics": [
           "dueSoonCount",
           "overdueCount",

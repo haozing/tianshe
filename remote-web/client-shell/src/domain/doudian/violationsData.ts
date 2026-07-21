@@ -448,18 +448,25 @@ function payloadFromResponses(responses: Record<string, RequestPlanResult>) {
   return payload;
 }
 
-function listPaths(adapter: DoudianAdapterConfig) {
-  const paths = violationsDataMappings(adapter).listPaths;
+function mappedPlanPaths(adapter: DoudianAdapterConfig, kind: "listPaths" | "totalPaths", planKey = "") {
+  const mappings = violationsDataMappings(adapter);
+  const byPlan = objectRecord(mappings[`${kind}ByPlan`]);
+  const planPaths = planKey ? byPlan[planKey] : undefined;
+  if (Array.isArray(planPaths)) return planPaths.map((item) => text(item)).filter(Boolean);
+  const paths = mappings[kind];
   return Array.isArray(paths) ? paths.map((item) => text(item)).filter(Boolean) : [];
 }
 
-function totalPaths(adapter: DoudianAdapterConfig) {
-  const paths = violationsDataMappings(adapter).totalPaths;
-  return Array.isArray(paths) ? paths.map((item) => text(item)).filter(Boolean) : [];
+function listPaths(adapter: DoudianAdapterConfig, planKey = "") {
+  return mappedPlanPaths(adapter, "listPaths", planKey);
 }
 
-function readTotal(payload: unknown, adapter: DoudianAdapterConfig): number | undefined {
-  const total = coerceNumber(firstPathValue(payload, totalPaths(adapter)));
+function totalPaths(adapter: DoudianAdapterConfig, planKey = "") {
+  return mappedPlanPaths(adapter, "totalPaths", planKey);
+}
+
+function readTotal(payload: unknown, adapter: DoudianAdapterConfig, planKey = ""): number | undefined {
+  const total = coerceNumber(firstPathValue(payload, totalPaths(adapter, planKey)));
   return total !== undefined && total >= 0 ? total : undefined;
 }
 
@@ -485,8 +492,8 @@ function paginationCoverage(args: {
 }
 
 function mergePagePayloads(planKey: string, responses: RequestPlanResult[], adapter: DoudianAdapterConfig) {
-  const list = responses.flatMap((response) => firstArray({ [planKey]: response.data }, listPaths(adapter)));
-  const totals = responses.map((response) => readTotal({ [planKey]: response.data }, adapter)).filter((value): value is number => value !== undefined);
+  const list = responses.flatMap((response) => firstArray({ [planKey]: response.data }, listPaths(adapter, planKey)));
+  const totals = responses.map((response) => readTotal({ [planKey]: response.data }, adapter, planKey)).filter((value): value is number => value !== undefined);
   const total = totals.length ? Math.max(...totals) : undefined;
   const first = responses[0];
   if (!first) return { ok: false, status: 0, data: null, error: "missing response", source: planKey };
@@ -506,10 +513,49 @@ function mergePagePayloads(planKey: string, responses: RequestPlanResult[], adap
   };
 }
 
+function readViolationListField(record: unknown, adapter: DoudianAdapterConfig, field: string) {
+  const config = violationFieldConfig(adapter, field);
+  const arrayPaths = Array.isArray(config.arrayPaths) ? config.arrayPaths.map((item) => text(item)).filter(Boolean) : [];
+  const itemPaths = Array.isArray(config.itemPaths) ? config.itemPaths.map((item) => text(item)).filter(Boolean) : [];
+  for (const path of arrayPaths) {
+    const list = getPathValue(record, path);
+    if (!Array.isArray(list)) continue;
+    return list.map((item) => text(itemPaths.length ? firstPathValue(item, itemPaths) : item)).filter(Boolean);
+  }
+  return [];
+}
+
+function normalizeTicketType(value: unknown, planKey = "") {
+  const next = text(value).toLowerCase();
+  if (next === "risk" || /risk/i.test(planKey)) return "risk";
+  return "penalty";
+}
+
+function statusValueMap(adapter: DoudianAdapterConfig, kind: "labels" | "buckets", ticketType: string) {
+  return objectRecord(objectRecord(policy(adapter, `violationsData.processStatus.${kind}`, {}))[ticketType]);
+}
+
+function rawProcessStatusCode(record: unknown, adapter: DoudianAdapterConfig) {
+  return readViolationField(record, adapter, "processStatusCode") ?? readViolationField(record, adapter, "penaltyStatus");
+}
+
+function resolvedProcessStatusLabel(record: unknown, adapter: DoudianAdapterConfig, ticketType: string) {
+  const code = text(rawProcessStatusCode(record, adapter));
+  return text(statusValueMap(adapter, "labels", ticketType)[code]) || text(readViolationField(record, adapter, "processStatus"));
+}
+
+function resolveMappedProcessStatus(record: unknown, adapter: DoudianAdapterConfig, ticketType: string) {
+  const code = text(rawProcessStatusCode(record, adapter));
+  const mapped = text(statusValueMap(adapter, "buckets", ticketType)[code]);
+  if (mapped) return mapped;
+  return resolveProcessStatus(record, adapter);
+}
+
 function extractRecords(store: DoudianStoreSummary, responses: Record<string, RequestPlanResult>, requestContext: Record<string, unknown>, adapter: DoudianAdapterConfig): DoudianViolationRecord[] {
-  const payload = payloadFromResponses(responses);
-  const items = firstArray(payload, listPaths(adapter));
-  return items.map((item, index) => {
+  const sources = Object.entries(responses).flatMap(([planKey, response]) => (
+    firstArray({ [planKey]: response.data }, listPaths(adapter, planKey)).map((item) => ({ item, planKey }))
+  ));
+  const records = sources.map(({ item, planKey }, index) => {
     const candidateProductId = text(readViolationField(item, adapter, "productId"));
     const objectId = text(readViolationField(item, adapter, "objectId")) || candidateProductId;
     const rawObjectType = readViolationField(item, adapter, "objectType");
@@ -521,6 +567,10 @@ function extractRecords(store: DoudianStoreSummary, responses: Record<string, Re
     const createdAt = normalizeDateTime(readViolationField(item, adapter, "createdAt"));
     const id = text(readViolationField(item, adapter, "id")) || `${store.shopId || "shop"}-violation-${index + 1}`;
     const productStatus = normalizeProductStatus(readViolationField(item, adapter, "productStatus"), productId);
+    const ticketType = normalizeTicketType(readViolationField(item, adapter, "ticketType"), planKey);
+    const severityCode = readViolationField(item, adapter, "severityCode") ?? readViolationField(item, adapter, "severity");
+    const executionTypes = readViolationListField(item, adapter, "executionTypes");
+    const processStatusCode = rawProcessStatusCode(item, adapter);
     return {
       id,
       shopId: store.shopId,
@@ -530,21 +580,36 @@ function extractRecords(store: DoudianStoreSummary, responses: Record<string, Re
       objectId,
       objectTypeCode: text(rawObjectType),
       objectName: text(readViolationField(item, adapter, "objectName")) || reason || id,
+      ticketType,
+      ticketTypeLabel: ticketType === "risk" ? "预警" : "处罚",
       productId,
       reason: reason || "违规原因待确认",
-      severity: normalizeSeverity(readViolationField(item, adapter, "severity")),
-      processStatus: resolveProcessStatus(item, adapter),
+      violationDetail: text(readViolationField(item, adapter, "violationDetail")),
+      severity: normalizeSeverity(severityCode),
+      severityCode: text(severityCode),
+      severityLabel: normalizeSeverity(severityCode) === "high" ? "严重" : normalizeSeverity(severityCode) === "medium" ? "一般" : "轻微",
+      processStatus: resolveMappedProcessStatus(item, adapter, ticketType),
+      processStatusCode: text(processStatusCode),
+      processStatusLabel: resolvedProcessStatusLabel(item, adapter, ticketType),
       productStatus,
       associationStatus: associationStatus(productStatus, productId),
-      action: text(readViolationField(item, adapter, "action")) || "待人工确认",
+      action: text(readViolationField(item, adapter, "action")) || executionTypes.join(",") || "待人工确认",
+      executionTypes,
       dueAt,
       violationAt,
       createdAt,
       penaltyAmount: amount(readViolationField(item, adapter, "penaltyAmount"), fieldScale(adapter, "penaltyAmount")),
       failureReason: text(readViolationField(item, adapter, "failureReason")),
-      sourcePlan: String(requestContext.sourcePlan || "violationPenaltyList"),
-      source: text(readViolationField(item, adapter, "source")) || "违规处罚列表"
+      sourcePlan: planKey || String(requestContext.sourcePlan || "violationPenaltyList"),
+      source: text(readViolationField(item, adapter, "source")) || (ticketType === "risk" ? "违规预警列表" : "违规处罚列表")
     };
+  });
+  const seen = new Set<string>();
+  return records.filter((record) => {
+    const key = text(record.id);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
 }
 
@@ -582,6 +647,8 @@ function buildRow(store: DoudianStoreSummary, records: DoudianViolationRecord[],
 }) {
   const row = emptyRow(store);
   row.totalRecords = records.length;
+  row.riskRecords = records.filter((record) => record.ticketType === "risk").length;
+  row.penaltyRecords = records.filter((record) => record.ticketType !== "risk").length;
   row.pendingCount = records.filter((record) => record.processStatus === "pending").length;
   row.appealCount = records.filter((record) => record.processStatus === "appealing").length;
   row.rectificationCount = records.filter((record) => record.processStatus === "rectifying").length;
@@ -679,6 +746,8 @@ async function reportViolationsDataRow(args: {
       },
       metrics: {
         totalRecords: args.row.totalRecords,
+        riskRecords: Number(args.row.riskRecords || 0),
+        penaltyRecords: Number(args.row.penaltyRecords || 0),
         sourceTotal: args.row.sourceTotal ?? args.row.remoteTotal ?? args.row.fetchedRecords ?? 0,
         filteredTotal: args.row.filteredTotal ?? args.row.totalRecords,
         pendingCount: args.row.pendingCount,
@@ -981,8 +1050,8 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
         trackWindow: args.trackWindow
       });
       const pagePayload = payloadFromResponses({ [planKey]: response });
-      const pageListCount = firstArray(pagePayload, listPaths(payload.adapter)).length;
-      const pageTotal = readTotal(pagePayload, payload.adapter);
+       const pageListCount = firstArray(pagePayload, listPaths(payload.adapter, planKey)).length;
+       const pageTotal = readTotal(pagePayload, payload.adapter, planKey);
       return {
         page,
         response,
@@ -1035,7 +1104,7 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
       }
     }
     const fetchedPages = pageResponses.length;
-    const mergedRecordCount = pageResponses.flatMap((response) => firstArray({ [planKey]: response.data }, listPaths(payload.adapter))).length;
+    const mergedRecordCount = pageResponses.flatMap((response) => firstArray({ [planKey]: response.data }, listPaths(payload.adapter, planKey))).length;
     const { truncated, complete, coverageStatus } = paginationCoverage({ remoteTotal, mergedRecordCount, stoppedOnShortPage, requestFailed, fetchedPages, maxPages });
     if (pageResponses.length) {
       responses[planKey] = mergePagePayloads(planKey, pageResponses, payload.adapter);
@@ -1073,7 +1142,7 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
     complete: complete && !dateCoverageIncomplete,
     truncated,
     fetchedAt: nowIso(),
-    ...(remoteTotals.length ? { remoteTotal: Math.max(...remoteTotals) } : {}),
+    ...(remoteTotals.length ? { remoteTotal: remoteTotals.reduce((sum, value) => sum + value, 0) } : {}),
     fetchedRecords: rawRecords.length
   };
   const row = buildRow(store, records, dateContext, coverage);
@@ -1119,6 +1188,11 @@ async function collectForStore(payload: DoudianAdapterPayload, store: DoudianSto
       productAssociationResponses: associationResult.responses,
       pageSummary,
       coverage,
+      ticketTypeCounts: records.reduce((counts, record) => {
+        const key = record.ticketType === "risk" ? "risk" : "penalty";
+        counts[key] += 1;
+        return counts;
+      }, { risk: 0, penalty: 0 }),
       dateUnknownCount,
       dateMatchedCount: records.length,
       rowSummary: summary,
@@ -1609,13 +1683,13 @@ export async function runDoudianViolationsDataSelfCheck(options: { doudianAdapte
     const expectedStatuses = violationsResponseFixture.expectedStatuses;
     const statusNormalizationOk = fixtureStatuses.every((status, index) => status === expectedStatuses[index]);
     const fixtureRecords = extractRecords({ shopId, shopName, platform: "doudian", partition: "", status: "online" }, {
-      violationPenaltyList: {
+      violationPenaltyTicketList: {
         ok: true,
         status: 200,
         data: { code: 0, data: { tickets: violationsResponseFixture.tickets, total: violationsResponseFixture.tickets.length } },
-        source: "violationPenaltyList"
+        source: "violationPenaltyTicketList"
       }
-    }, { sourcePlan: "violationPenaltyList" }, payload.adapter);
+    }, { sourcePlan: "violationPenaltyTicketList" }, payload.adapter);
     const expectedObjectTypes = ["商品", "商品", "店铺", "商品", "商品"];
     const objectTypeNormalizationOk = fixtureRecords.every((record, index) => record.objectType === expectedObjectTypes[index]) &&
       fixtureRecords[2]?.objectId === "fixture-shop-id" &&

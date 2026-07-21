@@ -545,8 +545,9 @@ const checks = [
   {
     key: "remoteDomainConsumesRequestPlans",
     ok: [businessDataClient, fundsDataClient, violationsDataClient, staleGoodsClient, opportunityFavoritesClient, storeImportClient].every((source) => source.includes("runDoudianRequestPlan")) &&
-      requestPlanClient.includes("requireChihuNative().cookies.getHeader") &&
-      requestPlanClient.includes("requireChihuNative().http.request") &&
+      requestPlanClient.includes("requireChihuNative().tasks") &&
+      requestPlanClient.includes("taskBridge.authorizePlan") &&
+      requestPlanClient.includes("native.http.request") &&
       requestPlanClient.includes("signDoudianRequest"),
     source: rel(requestPlanClientPath)
   },
@@ -577,8 +578,20 @@ const checks = [
       requestPlanClient.includes(': "losslessJson"') &&
       requestPlanClient.includes("data = losslessJson.parse(result.text)") &&
       !requestPlanClient.includes("data = JSON.parse(text)") &&
-      adapter.requestPlans?.violationPenaltyList?.responseType === "losslessJson",
+      ["violationRiskTicketList", "violationPenaltyTicketList"].every((key) => adapter.requestPlans?.[key]?.responseType === "losslessJson"),
     source: rel(requestPlanClientPath)
+  },
+  {
+    key: "violationsUseVerifiedV3DualTicketContract",
+    ok: adapter.endpoints?.violationTicketListV3 === "/governance/shop/penalty/v3/get_ticket_list" &&
+      adapter.requestPlans?.violationRiskTicketList?.body?.standard_ticket_type === "risk" &&
+      adapter.requestPlans?.violationPenaltyTicketList?.body?.standard_ticket_type === "penalty" &&
+      adapter.requestPlans?.violationRiskTicketList?.body?.sort?.sort_params === "ticket_create_time_range" &&
+      adapter.requestPlans?.violationPenaltyTicketList?.body?.condition?.quick_select === "all" &&
+      adapter.policies?.violationsData?.requestPlans?.join(",") === "violationRiskTicketList,violationPenaltyTicketList" &&
+      violationsDataClient.includes("mappedPlanPaths") &&
+      violationsDataClient.includes("ticketTypeCounts"),
+    source: rel(violationsDataClientPath)
   },
   {
     key: "violationsObjectTypeControlsProductId",
@@ -604,8 +617,7 @@ const checks = [
   },
   {
     key: "remoteTaskAndProgressChannels",
-    ok: taskClient.includes("BroadcastChannel") &&
-      progressClient.includes("chihu-doudian-task") &&
+    ok: taskClient.includes("native.tasks.onEvent") &&
       progressClient.includes("chihu-doudian-progress") &&
       taskClient.includes("cancelDoudianTask"),
     source: rel(taskClientPath)

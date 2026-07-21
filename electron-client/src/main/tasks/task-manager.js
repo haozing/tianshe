@@ -22,7 +22,7 @@ const {
   taskMutation,
   validateTaskParams
 } = require("./task-registry");
-const { taskResultPersistence, terminalTaskStatus } = require("./task-result-policy");
+const { interruptedTaskStatus, taskResultPersistence, terminalTaskStatus } = require("./task-result-policy");
 const { httpTransportFingerprint, runnerPartitionAllowed, transportMatchesPlan, transportMatchesPlanTemplate } = require("./task-transport-policy");
 const { taskWindowCommandScript } = require("./task-window-commands");
 
@@ -223,15 +223,18 @@ async function closeRunnerContext(context, reason, options = {}) {
   clearTimeout(context.lifetimeTimer);
   clearInterval(context.heartbeatTimer);
   if (!options.terminal) {
-    const status = context.mutation ? "reconciling" : "failed";
+    const status = interruptedTaskStatus({ mutation: context.mutation, cancellationRequested: context.cancellationRequested === true });
+    const cancelled = status === "cancelled";
     await writeOperationEvidence(context, status, {
-      resultSummary: context.mutation ? "runner lost; reconciliation required" : "runner interrupted",
-      error: reason
+      resultSummary: cancelled ? "cancelled" : context.mutation ? "runner lost; reconciliation required" : "runner interrupted",
+      ...(cancelled ? {} : { error: reason })
     }).catch(() => undefined);
     sendOwnerEvent(context, {
-      type: context.mutation ? "task:error" : "task:error",
+      type: cancelled ? "task:result" : "task:error",
       operationId: context.operationId,
-      error: context.mutation ? "runner lost; reconciliation required" : reason
+      ...(cancelled
+        ? { resultSummary: "cancelled", result: { ok: false, status: "cancelled", message: "已取消任务" } }
+        : { error: context.mutation ? "runner lost; reconciliation required" : reason })
     });
   }
   const win = BrowserWindow.fromWebContents(context.runnerWebContents);
@@ -336,6 +339,7 @@ async function startRunner(event, request = {}) {
     httpGrants: new Map(),
     createdAt: new Date().toISOString(),
     lastHeartbeatAt: Date.now(),
+    cancellationRequested: false,
     closed: false
   };
   operationContexts.set(operationId, context);
@@ -409,13 +413,14 @@ async function cancelRunner(event, request = {}) {
   requireWebContentsPrincipal(event, ["main"]);
   const context = operationContexts.get(String(request.operationId || ""));
   if (!context || context.ownerWebContentsId !== event.sender.id) return { ok: false, code: "TASK_OPERATION_DENIED", message: "找不到属于当前页面的任务" };
+  context.cancellationRequested = true;
   if (context.runnerWebContents && !context.runnerWebContents.isDestroyed()) {
     await writeOperationEvidence(context, "cancelling", { resultSummary: "cancellation requested" }).catch(() => undefined);
     context.runnerWebContents.send("chihu:tasks:command", { type: "task:cancel", operationId: context.operationId });
-    return { ok: true, operationId: context.operationId, status: "cancelling" };
+    return { ok: true, operationId: context.operationId, status: "cancelling", runnerAlive: true };
   }
   await closeRunnerContext(context, "runner unavailable during cancellation");
-  return { ok: true, operationId: context.operationId, status: context.mutation ? "reconciling" : "interrupted" };
+  return { ok: true, operationId: context.operationId, status: context.mutation ? "reconciling" : "cancelled", runnerAlive: false };
 }
 
 async function recoverRunner(event, request = {}) {
@@ -506,11 +511,12 @@ async function interruptPersistedTask(event, request = {}) {
   if (["succeeded", "partial", "failed", "cancelled"].includes(String(record.status))) return { ...record, runnerAlive: false };
   const mutation = record?.taskEvidence?.mutation === true || record?.metadata?.mutation === true;
   const now = new Date().toISOString();
+  const nextStatus = interruptedTaskStatus({ mutation, currentStatus: String(record.status || "running") });
   const next = {
     ...record,
-    status: mutation ? "reconciling" : "failed",
-    resultSummary: mutation ? "runner missing; reconciliation required" : "read task interrupted; start a new query",
-    error: String(request.reason || "runner missing after application restart").slice(0, 4000),
+    status: nextStatus,
+    resultSummary: nextStatus === "cancelled" ? "cancelled" : mutation ? "runner missing; reconciliation required" : "read task interrupted; start a new query",
+    ...(nextStatus === "cancelled" ? {} : { error: String(request.reason || "runner missing after application restart").slice(0, 4000) }),
     updatedAt: now
   };
   await service().request("records.put", { storeName: "operations", record: next }, { priority: "write" });

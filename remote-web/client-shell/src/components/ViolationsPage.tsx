@@ -36,6 +36,7 @@ type MetricTone = "default" | "blue" | "green" | "warning" | "danger";
 type ColumnFormat = "number" | "money" | "text" | "date";
 type SeverityFilter = "all" | "high" | "medium" | "low";
 type ProcessFilter = "all" | "pending" | "appealing" | "rectifying" | "done" | "failed" | "unknown";
+type TicketTypeFilter = "all" | "risk" | "penalty";
 type SortKey = string;
 
 const violationMetricKeys = [
@@ -70,19 +71,27 @@ interface ViolationRecord {
   objectType: string;
   objectId: string;
   objectName: string;
+  ticketType?: "risk" | "penalty" | string;
+  ticketTypeLabel?: string;
   productId: string;
   reason: string;
+  violationDetail?: string;
   severity: "high" | "medium" | "low";
+  severityCode?: string;
+  severityLabel?: string;
   processStatus: "pending" | "appealing" | "rectifying" | "done" | "failed" | "unknown";
+  processStatusCode?: string;
+  processStatusLabel?: string;
   productStatus: "在售" | "已下架" | "回收站" | "未关联" | "未查询" | "无需关联";
   associationStatus?: string;
   action: string;
+  executionTypes?: string[];
   dueAt: string;
   violationAt?: string;
   createdAt?: string;
   penaltyAmount: number;
   failureReason: string;
-  source: "违规处罚列表" | "商品库关联" | "处理结果";
+  source: "违规预警列表" | "违规处罚列表" | "商品库关联" | "处理结果";
 }
 
 type ViolationRow = {
@@ -199,6 +208,11 @@ const processFilterOptions: Array<{ value: ProcessFilter; label: string }> = [
   { value: "done", label: "已处理" },
   { value: "failed", label: "处理失败" },
   { value: "unknown", label: "状态未知" }
+];
+const ticketTypeFilterOptions: Array<{ value: TicketTypeFilter; label: string }> = [
+  { value: "all", label: "全部类型" },
+  { value: "risk", label: "预警" },
+  { value: "penalty", label: "处罚" }
 ];
 
 const productMetricKeys = new Set<ViolationMetricKey>(["productLinkedCount", "productMissingCount", "offlineProductCount"]);
@@ -493,14 +507,6 @@ function isOverdue(value: string) {
   return Number.isFinite(hours) && hours < 0;
 }
 
-function dueText(value: string) {
-  const hours = hoursUntil(value);
-  if (!Number.isFinite(hours)) return "待确认";
-  if (hours < 0) return `已超时 ${Math.ceil(Math.abs(hours))}h`;
-  if (hours < 24) return `剩余 ${Math.ceil(hours)}h`;
-  return `剩余 ${Math.ceil(hours / 24)}天`;
-}
-
 function datePresetKey(preset: DatePreset) {
   if (preset === "今天") return "today";
   if (preset === "近7天") return "7d";
@@ -612,13 +618,21 @@ function recordFromRemote(record: DoudianViolationRecord, store?: StoreOption): 
     objectType: normalizeObjectType(record.objectType),
     objectId: String(record.objectId || record.productId || ""),
     objectName: String(record.objectName || "-"),
+    ticketType: String(record.ticketType || "penalty"),
+    ticketTypeLabel: String(record.ticketTypeLabel || (record.ticketType === "risk" ? "预警" : "处罚")),
     productId: String(record.productId || ""),
     reason: String(record.reason || "违规原因待确认"),
+    violationDetail: String(record.violationDetail || ""),
     severity: normalizeSeverity(record.severity),
+    severityCode: String(record.severityCode ?? ""),
+    severityLabel: String(record.severityLabel || ""),
     processStatus: normalizeProcessStatus(record.processStatus),
+    processStatusCode: String(record.processStatusCode ?? ""),
+    processStatusLabel: String(record.processStatusLabel || ""),
     productStatus: normalizeProductStatus(record.productStatus),
     associationStatus: String(record.associationStatus || ""),
     action: String(record.action || "待人工确认"),
+    executionTypes: Array.isArray(record.executionTypes) ? record.executionTypes.map(String) : [],
     dueAt: String(record.dueAt || ""),
     violationAt: String(record.violationAt || ""),
     createdAt: String(record.createdAt || ""),
@@ -751,21 +765,24 @@ function exportRows(
     meta.productLinkageVersion,
     ...exportColumns.map((column) => meta.unavailableMetrics.has(column.key) ? "暂不可用" : formatColumnValue(row[column.key], column.format))
   ]);
-  const detailHeader = ["违规ID", "店铺名称", "处罚对象", "处罚对象ID", "商品ID", "违规原因", "违规时间", "创建时间", "风险等级", "处理状态", ...(meta.productAssociation ? ["商品状态", "关联状态"] : []), "建议动作", "处理时限", "处罚金额", "失败原因", "adapterVersion", "fieldSchemaVersion", "requestPlanHash", "productLinkageVersion"];
+  const detailHeader = ["违规ID", "店铺名称", "违规类型", "处罚对象", "处罚对象ID", "商品ID", "违规原因", "详细违规点", "违规时间", "创建时间", "风险等级", "风险代码", "处罚状态", "状态代码", ...(meta.productAssociation ? ["商品状态", "关联状态"] : []), "处罚方式", "处罚金额", "失败原因", "adapterVersion", "fieldSchemaVersion", "requestPlanHash", "productLinkageVersion"];
   const detailBody = records.map((record) => [
     record.id,
     record.shopName,
+    record.ticketTypeLabel || (record.ticketType === "risk" ? "预警" : "处罚"),
     `${record.objectType} / ${record.objectName}`,
     record.objectId || "-",
     record.productId || "-",
     record.reason,
+    record.violationDetail || "",
     record.violationAt || "",
     record.createdAt || "",
-    severityCopy[record.severity].label,
-    processCopy[record.processStatus].label,
+    record.severityLabel || severityCopy[record.severity].label,
+    record.severityCode || "",
+    record.processStatusLabel || processCopy[record.processStatus].label,
+    record.processStatusCode || "",
     ...(meta.productAssociation ? [record.productStatus, record.associationStatus || ""] : []),
     record.action,
-    meta.unavailableMetrics.has("dueSoonCount") ? "暂不可用" : record.dueAt,
     meta.unavailableMetrics.has("penaltyAmount") ? "暂不可用" : formatMoney(record.penaltyAmount),
     record.failureReason,
     meta.adapterVersion,
@@ -802,6 +819,7 @@ export function ViolationsPage() {
   const [datePreset, setDatePreset] = useState<typeof datePresets[number]>("全部");
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
   const [processFilter, setProcessFilter] = useState<ProcessFilter>("all");
+  const [ticketTypeFilter, setTicketTypeFilter] = useState<TicketTypeFilter>("all");
   const [sortKey, setSortKey] = useState<SortKey>("待处理优先");
   const [loadState, setLoadState] = useState<LoadState>(() => previewMode ? "ready" : "loading");
   const [loadMessage, setLoadMessage] = useState("");
@@ -851,7 +869,8 @@ export function ViolationsPage() {
       selectedCount: selectedIds.size,
       datePreset,
       severityFilter,
-      processFilter
+      processFilter,
+      ticketTypeFilter
     }).catch(() => undefined);
     setStoreRows(nextRows);
     setRecords(nextRecords);
@@ -1057,11 +1076,12 @@ export function ViolationsPage() {
     const selected = new Set(selectedIds);
     return records.filter((record) => {
       if (!selected.has(record.shopId)) return false;
+      if (ticketTypeFilter !== "all" && record.ticketType !== ticketTypeFilter) return false;
       if (severityFilter !== "all" && record.severity !== severityFilter) return false;
       if (processFilter !== "all" && record.processStatus !== processFilter) return false;
       return true;
     });
-  }, [processFilter, records, selectedIds, severityFilter]);
+  }, [processFilter, records, selectedIds, severityFilter, ticketTypeFilter]);
 
   const unavailableMetrics = useMemo(() => new Set(
     (Array.isArray(fieldSchema.unavailableMetrics) ? fieldSchema.unavailableMetrics : [])
@@ -1121,13 +1141,15 @@ export function ViolationsPage() {
   }, [detailPageCount]);
   useEffect(() => {
     setDetailPage(1);
-  }, [datePreset, processFilter, selectedIds, severityFilter, sortKey]);
+  }, [datePreset, processFilter, selectedIds, severityFilter, sortKey, ticketTypeFilter]);
   const tableMinWidth = Math.max(980, 260 + visibleColumns.length * 112);
   const shopColumnWidth = 260;
   const riskStoreCount = rows.filter((row) => row.pendingCount || row.highRiskCount || row.overdueCount || row.failedCount).length;
   const selectedDateRangeEmpty = rows.length > 0 && dateFilteredRecordTotal === 0;
+  const riskRecordCount = filteredRecords.filter((record) => record.ticketType === "risk").length;
+  const penaltyRecordCount = filteredRecords.length - riskRecordCount;
   const showOperationColumn = capabilities.platformNavigation;
-  const detailColSpan = 8 + Number(capabilities.productAssociation) + Number(showOperationColumn);
+  const detailColSpan = 9 + Number(capabilities.productAssociation) + Number(showOperationColumn);
   const summarySchema = useMemo(() => normalizeRemoteSummary(fieldSchema).filter((item) => capabilities.productAssociation || !productMetricKeys.has(item.key as ViolationMetricKey)), [capabilities.productAssociation, fieldSchema]);
   const metrics: MetricItem[] = summarySchema.map((item) => {
     const key = item.key as ViolationMetricKey;
@@ -1292,6 +1314,7 @@ export function ViolationsPage() {
                 </button>
               ))}
             </div>
+            <NativeSelect value={ticketTypeFilter} options={ticketTypeFilterOptions} onChange={setTicketTypeFilter} width={102} />
             <NativeSelect value={severityFilter} options={severityFilterOptions} onChange={setSeverityFilter} width={102} />
             <NativeSelect value={processFilter} options={processFilterOptions} onChange={setProcessFilter} width={112} />
             <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] disabled:opacity-50" type="button" disabled={syncing || !selectedIds.size} onClick={() => void refreshViolations()}>
@@ -1330,6 +1353,10 @@ export function ViolationsPage() {
                 <span className={cn("inline-flex h-6 max-w-[440px] items-center gap-1 rounded-md border px-2 text-[12px] font-semibold", violationState === "error" || failedStoreCount || totals.failedCount || totals.overdueCount ? "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" : "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]")} title={warningDetail}>
                   <AlertTriangle className="size-[13px] shrink-0" strokeWidth={2} />
                   <span className="truncate">{warningTitle}</span>
+                </span>
+              ) : violationState === "ready" ? (
+                <span className="inline-flex h-6 items-center rounded-md border border-[#bff0cf] bg-[#eafaf0] px-2 text-[12px] font-semibold text-[#087443]">
+                  预警 {formatNumber(riskRecordCount)} · 处罚 {formatNumber(penaltyRecordCount)}
                 </span>
               ) : null}
             </div>
@@ -1425,38 +1452,45 @@ export function ViolationsPage() {
               </div>
               <table className="w-full border-separate border-spacing-0 text-left text-[12px]">
                 <thead className="bg-[#fbfcff] text-[#344054] shadow-[inset_0_-1px_0_#e6ebf3]">
-                  <tr className="h-10">
-                    <th className="px-3 font-semibold">店铺 / 违规ID</th>
-                    <th className="px-3 font-semibold">处罚对象</th>
-                    <th className="px-3 font-semibold">违规原因</th>
-                    <th className="px-3 font-semibold">风险</th>
-                    <th className="px-3 font-semibold">处理状态</th>
-                    {capabilities.productAssociation ? <th className="px-3 font-semibold">商品状态</th> : null}
-                    <th className="px-3 font-semibold">处理时限</th>
-                    <th className="px-3 font-semibold">建议动作</th>
-                    <th className="px-3 font-semibold">失败原因</th>
+                   <tr className="h-10">
+                     <th className="px-3 font-semibold">店铺 / 违规ID</th>
+                     <th className="px-3 font-semibold">类型</th>
+                     <th className="px-3 font-semibold">处罚对象</th>
+                     <th className="px-3 font-semibold">违规原因</th>
+                     <th className="px-3 font-semibold">风险</th>
+                     <th className="px-3 font-semibold">处罚状态</th>
+                     {capabilities.productAssociation ? <th className="px-3 font-semibold">商品状态</th> : null}
+                     <th className="px-3 font-semibold">违规时间</th>
+                     <th className="px-3 font-semibold">处罚方式</th>
+                     <th className="px-3 font-semibold">失败原因</th>
                     {showOperationColumn ? <th className="px-3 font-semibold">操作</th> : null}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#edf1f6]">
                   {pagedRecords.map((record) => (
                     <tr className="group h-[54px] hover:bg-[#f8fbff]" key={record.id}>
-                      <td className="px-3">
-                        <div className="font-semibold text-[#1d2939]">{record.shopName}</div>
-                        <div className="font-mono text-[11px] text-[#667085]">{record.id}</div>
-                      </td>
+                       <td className="px-3">
+                         <div className="font-semibold text-[#1d2939]">{record.shopName}</div>
+                         <div className="font-mono text-[11px] text-[#667085]">{record.id}</div>
+                       </td>
+                       <td className="px-3">
+                         <CompactTag
+                           label={record.ticketTypeLabel || (record.ticketType === "risk" ? "预警" : "处罚")}
+                           className={record.ticketType === "risk" ? "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" : "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]"}
+                         />
+                       </td>
                       <td className="px-3">
                         <div className="max-w-[180px] truncate font-semibold text-[#1d2939]" title={record.objectName}>{record.objectType}：{record.objectName}</div>
                         <div className="font-mono text-[11px] text-[#667085]">{record.objectId || record.productId || "-"}</div>
                       </td>
-                      <td className="max-w-[180px] truncate px-3 font-medium text-[#344054]" title={record.reason}>{record.reason}</td>
-                      <td className="px-3"><CompactTag label={severityCopy[record.severity].label} className={severityCopy[record.severity].className} /></td>
-                      <td className="px-3"><CompactTag label={processCopy[record.processStatus].label} className={processCopy[record.processStatus].className} /></td>
-                      {capabilities.productAssociation ? <td className={cn("whitespace-nowrap px-3 font-semibold", productStatusClass[record.productStatus])}>{record.productStatus}</td> : null}
-                      <td className={cn("whitespace-nowrap px-3 font-semibold", record.processStatus !== "done" && isOverdue(record.dueAt) ? "text-[#b42318]" : record.processStatus !== "done" && isDueSoon(record.dueAt) ? "text-[#b54708]" : "text-[#344054]")}>
-                        <div>{record.processStatus === "done" ? "已完成" : dueText(record.dueAt)}</div>
-                        <div className="font-mono text-[11px] text-[#98a2b3]">{record.dueAt}</div>
-                      </td>
+                       <td className="max-w-[220px] px-3 font-medium text-[#344054]" title={[record.reason, record.violationDetail].filter(Boolean).join("\n")}>
+                         <div className="truncate">{record.reason}</div>
+                         {record.violationDetail ? <div className="truncate text-[11px] font-normal text-[#98a2b3]">{record.violationDetail}</div> : null}
+                       </td>
+                       <td className="px-3"><CompactTag label={record.severityLabel || severityCopy[record.severity].label} className={severityCopy[record.severity].className} /></td>
+                       <td className="px-3"><CompactTag label={record.processStatusLabel || processCopy[record.processStatus].label} className={processCopy[record.processStatus].className} /></td>
+                       {capabilities.productAssociation ? <td className={cn("whitespace-nowrap px-3 font-semibold", productStatusClass[record.productStatus])}>{record.productStatus}</td> : null}
+                       <td className="whitespace-nowrap px-3 font-mono text-[11px] text-[#344054]">{record.violationAt || "-"}</td>
                       <td className="max-w-[220px] truncate px-3 text-[#344054]" title={record.action}>{record.action}</td>
                       <td className={cn("max-w-[180px] truncate px-3", record.failureReason ? "font-semibold text-[#b42318]" : "text-[#98a2b3]")} title={record.failureReason}>{record.failureReason || "-"}</td>
                       {showOperationColumn ? <td className="px-3">

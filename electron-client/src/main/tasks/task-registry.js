@@ -86,6 +86,7 @@ const BUSINESS_PLANS = [
   "businessOfflineProducts"
 ];
 const FUNDS_PLANS = ["fundAccountList", "fundPledgeCash", "fundPledgePayable", "fundShopAwardOverview", "fundCompensateStatistics", "fundBillQuery", "fundAccountCenter", "fundShopDepositPage"];
+const VIOLATION_PLANS = ["violationPenaltyList", "violationRiskTicketList", "violationPenaltyTicketList", "violationProductLookup"];
 const STALE_SCAN_PLANS = ["staleGoodsProductList", "staleGoodsRecommendAdmit", "staleGoodsCompassDownload"];
 const STALE_EXECUTE_PLANS = [...STALE_SCAN_PLANS, "staleGoodsBatchOffline", "staleGoodsBatchDelete", "staleGoodsCompleteDelete"];
 const BULK_DELETE_PLANS = ["bulkDeleteProductList", "bulkDeleteBatchDelete", "bulkDeleteCompleteDelete"];
@@ -151,7 +152,7 @@ const TASK_DEFINITIONS = Object.freeze({
   syncProductCatalog: definition("free", false, ["bulkDeleteProductList"], [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...CATALOG_JOB_SCOPES]),
   businessData: definition("free", false, BUSINESS_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["business_latest"])]),
   fundsData: definition("free", false, FUNDS_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["funds_latest"])]),
-  violationsData: definition("free", false, ["violationPenaltyList", "violationProductLookup"], [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["violations_latest"]), commandScope(["native:data:catalog:getProductsByIds"], ["read"])]),
+  violationsData: definition("free", false, VIOLATION_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["violations_latest"]), commandScope(["native:data:catalog:getProductsByIds"], ["read"])]),
   staleGoodsScan: definition("free", false, STALE_SCAN_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["stale_scan_runs", "stale_candidates", "stale_execute_runs"], ["read", "write", "delete"]), ...CATALOG_IDENTITY_SCOPES]),
   staleGoodsExecute: definition("free", true, STALE_EXECUTE_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["stale_scan_runs", "stale_candidates", "stale_execute_runs"], ["read", "write", "delete"]), ...CATALOG_IDENTITY_SCOPES]),
   bulkDeleteScan: definition("free", false, ["bulkDeleteProductList"], [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["bulk_delete_scan_runs_v1", "bulk_delete_candidates_v1", "bulk_delete_execute_runs_v1", "bulk_delete_operation_events_v1"], ["read", "write", "delete"]), ...CATALOG_IDENTITY_SCOPES]),

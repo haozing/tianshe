@@ -25,6 +25,12 @@ function terminalTaskStatus({ result, resultSummary = "", mutation = false, curr
   return "succeeded";
 }
 
+function interruptedTaskStatus({ mutation = false, currentStatus = "running", cancellationRequested = false }) {
+  if (mutation) return "reconciling";
+  if (cancellationRequested || currentStatus === "cancelling") return "cancelled";
+  return "failed";
+}
+
 function taskResultPersistence(result) {
   const bytes = jsonBytes(result);
   return {
@@ -38,5 +44,6 @@ module.exports = {
   MAX_PERSISTED_TASK_RESULT_BYTES,
   MAX_TASK_RESULT_MESSAGE_BYTES,
   taskResultPersistence,
+  interruptedTaskStatus,
   terminalTaskStatus
 };

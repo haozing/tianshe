@@ -350,8 +350,8 @@ export async function startDoudianTask(task: DoudianTaskRequest): Promise<Doudia
 async function requestRunnerCancellation(operationId: string) {
   const native = getChihuNative();
   if (!native?.tasks?.cancelRunner) return { acknowledged: false, winId: undefined, alive: false };
-  const result = await native.tasks.cancelRunner({ operationId }).catch(() => null) as { ok?: boolean } | null;
-  return { acknowledged: result?.ok === true, winId: undefined, alive: result?.ok === true };
+  const result = await native.tasks.cancelRunner({ operationId }).catch(() => null) as { ok?: boolean; status?: string; runnerAlive?: boolean } | null;
+  return { acknowledged: result?.ok === true, winId: undefined, alive: result?.runnerAlive === true || result?.status === "cancelling" };
 }
 
 export async function cancelDoudianTask(operationId: string) {
