@@ -3148,8 +3148,9 @@
         "tab": "{tab}",
         "business_type": "4",
         "not_for_sale_search_type": "1",
-        "supply_status": "",
-        "keyword": "{keyword}"
+                  "supply_status": "",
+                  "id_name_code": "{idNameCode}",
+                  "keyword": "{keyword}"
       },
       "retryOnHttpError": true,
       "retryOnBusinessFailure": true,

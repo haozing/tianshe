@@ -198,7 +198,8 @@ function liveLookupPlanKey(adapter: DoudianAdapterConfig, feature: string) {
 function liveLookupContext(productId: string) {
   return {
     productId,
-    keyword: productId,
+    idNameCode: productId,
+    keyword: "",
     page: "0",
     pageSize: "20",
     productStatus: "",

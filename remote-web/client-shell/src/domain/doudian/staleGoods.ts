@@ -995,7 +995,8 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
       const response = await runPlan(payload, store, planKey, {
         page: String(page),
         pageSize: String(pageSize),
-        keyword: source === "importedIds" ? idBatch.join(",") : "",
+        idNameCode: source === "importedIds" ? idBatch.join(",") : "",
+        keyword: "",
         ...baseContext
       });
       const responseKey = `${planKey}:batch:${batchIndex}:page:${page}`;
@@ -1534,8 +1535,8 @@ async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: Stal
       message: `${index + 1}/${groups.length} stores completed`
     });
   }
-  const successCount = executions.filter((execution) => execution.ok).length;
-  const failureCount = executions.filter((execution) => !execution.ok).length;
+  const successCount = executions.filter((execution) => execution.ok && execution.status === "submitted").length;
+  const failureCount = executions.filter((execution) => !execution.ok || execution.status !== "submitted").length;
   const successfulStoreCount = details.filter((detail) => detail.ok).length;
   const failedStoreCount = details.filter((detail) => !detail.ok).length;
   const summary = executeSummary(executions);
