@@ -1392,7 +1392,7 @@ export function SlowMovingCleanupPage() {
     });
   }, [actionFilter, matchedCandidates, riskFilter, sortKey]);
   const selectedCandidates = useMemo(() => matchedCandidates.filter((row) => selectedCandidateIds.has(row.id)), [matchedCandidates, selectedCandidateIds]);
-  const selectedExecutable = selectedCandidates.filter((row) => row.action !== "optimize");
+  const selectedExecutable = selectedCandidates;
   const allVisibleCandidatesSelected = filteredCandidates.length > 0 && filteredCandidates.every((row) => selectedCandidateIds.has(row.id));
   const someVisibleCandidatesSelected = filteredCandidates.some((row) => selectedCandidateIds.has(row.id)) && !allVisibleCandidatesSelected;
   const visibleColumns = cleanupColumns.filter((column) => visibleColumnKeys.has(column.key));
@@ -1631,12 +1631,21 @@ export function SlowMovingCleanupPage() {
   }
 
   function buildPlan(action: CandidateAction) {
+    const currentSelection = selectedCandidates.length
+      ? selectedCandidates
+      : matchedCandidates.filter((row) => row.action !== "optimize");
+    if (!currentSelection.length) {
+      setCleanupState("error");
+      setCleanupMessage("请先选择要清理的商品");
+      setPlanOpen(true);
+      return;
+    }
     setPlanAction(action);
     setPlanOpen(true);
     setConfirmInput("");
     setCleanupState("ready");
     setCleanupMessage(`${actionLabels[action]}计划已生成，需二次确认后才能执行`);
-    const next = new Set(matchedCandidates.filter((row) => row.action === action).map((row) => row.id));
+    const next = new Set(currentSelection.map((row) => row.id));
     setSelectedCandidateIds(next);
   }
 
@@ -1888,7 +1897,7 @@ export function SlowMovingCleanupPage() {
                   <Download className="size-[14px]" strokeWidth={2} />
                   导出清单
                 </button>
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" title="选择清理动作；下一步确认后才会提交平台请求" disabled={!matchedCandidates.some((row) => row.action !== "optimize")} onClick={() => buildPlan(defaultPlanAction)}>
+                <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" title="选择清理动作；下一步确认后才会提交平台请求" disabled={!matchedCandidates.length} onClick={() => buildPlan(defaultPlanAction)}>
                   <Workflow className="size-[14px]" strokeWidth={2} />
                   创建清理计划
                 </button>
@@ -2184,9 +2193,9 @@ export function SlowMovingCleanupPage() {
                 className={cn("inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-semibold", planAction === action ? "border-brand-fox bg-brand-foxSoft text-brand-navy" : "border-[#dbe5f2] bg-white text-[#344054]")}
                 key={action}
                 type="button"
-                title={matchedCandidates.some((row) => row.action === action) ? `选择${actionLabels[action]}` : "当前扫描没有此类候选商品"}
+                title={planRows.length ? `将当前计划的 ${planRows.length} 个商品${actionLabels[action]}` : "请先选择要清理的商品"}
                 aria-label={actionLabels[action]}
-                disabled={!matchedCandidates.some((row) => row.action === action)}
+                disabled={!matchedCandidates.length}
                 onClick={() => buildPlan(action)}
               >
                 {action === "delete" ? <Trash2 className="size-[14px]" strokeWidth={2} /> : <Archive className="size-[14px]" strokeWidth={2} />}
