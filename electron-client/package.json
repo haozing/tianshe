@@ -1,7 +1,7 @@
 {
   "name": "chihu-electron-client",
   "private": true,
-  "version": "2.2.3",
+  "version": "2.2.4",
   "description": "Readable Electron client source for CHIHU remote web migration",
   "author": "赤狐管家",
   "chihuLicense": {

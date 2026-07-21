@@ -25,7 +25,7 @@ import { addDoudianProgressListener } from "../domain/doudian";
 import { toggleStoreIds } from "../domain/doudian/storeSelection";
 import { STORAGE_KEY_STALE_GOODS_COLUMNS, storageGet, storageSet } from "../bridge/storage";
 import { cn } from "../lib/utils";
-import type { DoudianAdapterConfig, DoudianStaleGoodsCandidate, DoudianStaleGoodsRules, DoudianStoreStatus, DoudianStoreSummary } from "../types";
+import type { DoudianStaleGoodsCandidate, DoudianStaleGoodsRules, DoudianStoreStatus, DoudianStoreSummary } from "../types";
 import { GroupedStoreSelectionList } from "./GroupedStoreSelectionList";
 
 type LoadState = "loading" | "ready" | "error";
@@ -726,28 +726,6 @@ function objectFromUnknown(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-const defaultDryRunActions: Record<CandidateAction, boolean> = {
-  offline: true,
-  recycle: true,
-  delete: true,
-  optimize: true
-};
-
-function staleGoodsExecutionDryRunActions(adapter: DoudianAdapterConfig): Record<CandidateAction, boolean> {
-  const stalePolicy = objectFromUnknown(objectFromUnknown(adapter.policies).staleGoodsCleanup);
-  const executePlans = objectFromUnknown(stalePolicy.executePlans);
-  const isDryRunPlan = (action: string) => {
-    const planKey = String(executePlans[action] || "").trim();
-    return !planKey || objectFromUnknown(adapter.requestPlans?.[planKey]).dryRunOnly !== false;
-  };
-  return {
-    offline: isDryRunPlan("offline"),
-    recycle: isDryRunPlan("recycle"),
-    delete: isDryRunPlan("delete") || isDryRunPlan("completeDelete"),
-    optimize: true
-  };
-}
-
 function normalizeScanDiagnostics(result?: {
   scanSummary?: Record<string, number>;
   sourceHealth?: Array<Record<string, unknown>>;
@@ -1146,7 +1124,7 @@ function exportCandidates(rows: CandidateRow[], selectedIds: Set<string>, adapte
     "失败店铺",
     "来源失败",
     "适配器版本",
-    "演练/预览模式"
+    "设计预览"
   ];
   const body = exportRows.map((row) => [
     row.candidateId || "",
@@ -1276,7 +1254,6 @@ export function SlowMovingCleanupPage() {
   const [cleanupMessage, setCleanupMessage] = useState("");
   const [lastScanAt, setLastScanAt] = useState<Date>(new Date());
   const [adapterVersion, setAdapterVersion] = useState("fallback");
-  const [executionDryRunActions, setExecutionDryRunActions] = useState<Record<CandidateAction, boolean>>(defaultDryRunActions);
   const [compassFileName, setCompassFileName] = useState("");
   const [compassRows, setCompassRows] = useState<Array<Record<string, unknown>>>([]);
   const [compassPeriod, setCompassPeriod] = useState<TrafficPeriod | undefined>();
@@ -1319,10 +1296,8 @@ export function SlowMovingCleanupPage() {
     void refreshStores();
     void loadDoudianAdapterPayload().then((payload) => {
       setAdapterVersion(payload.adapter.version || "fallback");
-      setExecutionDryRunActions(staleGoodsExecutionDryRunActions(payload.adapter));
     }).catch(() => {
       setAdapterVersion("fallback");
-      setExecutionDryRunActions(defaultDryRunActions);
     });
   }, []);
 
@@ -1418,8 +1393,6 @@ export function SlowMovingCleanupPage() {
   const summary = aggregateCandidates(matchedCandidates);
   const defaultPlanAction: CandidateAction = summary.offline ? "offline" : matchedCandidates.some((row) => row.action === "recycle") ? "recycle" : "delete";
   const planRows = planOpen ? selectedCandidates : [];
-  const planDryRun = executionDryRunActions[planAction] !== false;
-  const allExecutionDryRun = (["offline", "recycle", "delete"] as CandidateAction[]).every((action) => executionDryRunActions[action] !== false);
   const hasCompassCoverage = Boolean(scanDiagnostics && (scanDiagnostics.compassSourceCount > 0 || scanDiagnostics.implicitZeroTrafficCount > 0 || scanDiagnostics.sourceHealth.some((item) => String(item.key || "").toLowerCase().includes("compass"))));
 
   const metrics: MetricItem[] = [
@@ -1655,9 +1628,7 @@ export function SlowMovingCleanupPage() {
     setPlanOpen(true);
     setConfirmInput("");
     setCleanupState("ready");
-    setCleanupMessage(executionDryRunActions[action] !== false
-      ? `${actionCopy[action].label}演练计划已生成，本次不会向平台提交`
-      : `${actionCopy[action].label}计划已生成，需二次确认后才能执行`);
+    setCleanupMessage(`${actionCopy[action].label}计划已生成，需二次确认后才能执行`);
     const next = new Set(matchedCandidates.filter((row) => row.action === action).map((row) => row.id));
     setSelectedCandidateIds(next);
   }
@@ -1687,8 +1658,7 @@ export function SlowMovingCleanupPage() {
         });
         if (!result.ok && result.status !== "partial") throw new Error(result.message || "滞销商品清理执行失败");
         setCleanupState(result.ok ? "ready" : "error");
-        const dryRunCount = (result.executions || []).filter((item) => item.status === "dry_run").length;
-        setCleanupMessage(dryRunCount ? `已生成本地演练计划，未向平台提交 ${dryRunCount} 个商品` : result.message || "清理任务已提交");
+        setCleanupMessage(result.message || "清理任务已提交");
         setPlanOpen(false);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -1874,7 +1844,6 @@ export function SlowMovingCleanupPage() {
             <span className="rounded-md border border-[#dbe5f2] bg-white px-2 py-1 text-[12px] font-medium text-[#667085]">{trafficPeriodLabel}</span>
             <span className="rounded-md border border-[#dbe5f2] bg-white px-2 py-1 text-[12px] font-medium text-[#667085]">{perStoreLimitLabel}</span>
             {previewMode ? <span className="rounded-md border border-[#ffdca8] bg-[#fff7e8] px-2 py-1 text-[12px] font-semibold text-[#b54708]">设计预览</span> : null}
-            {!previewMode && allExecutionDryRun ? <span className="rounded-md border border-[#ffdca8] bg-[#fff7e8] px-2 py-1 text-[12px] font-semibold text-[#b54708]">演练模式</span> : null}
             {cleanupState === "loading" ? (
               <span className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#667085]">
                 <Loader2 className="size-[13px] animate-spin" strokeWidth={2} />
@@ -1907,13 +1876,13 @@ export function SlowMovingCleanupPage() {
                   <SlidersHorizontal className="size-[14px]" strokeWidth={2} />
                   修改规则
                 </button>
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" disabled={!matchedCandidates.length && !scanDiagnostics} onClick={() => exportCandidates(matchedCandidates, selectedCandidateIds, adapterVersion, previewMode || allExecutionDryRun, scanDiagnostics)}>
+                <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" disabled={!matchedCandidates.length && !scanDiagnostics} onClick={() => exportCandidates(matchedCandidates, selectedCandidateIds, adapterVersion, previewMode, scanDiagnostics)}>
                   <Download className="size-[14px]" strokeWidth={2} />
                   导出清单
                 </button>
                 <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" disabled={!matchedCandidates.some((row) => row.action !== "optimize")} onClick={() => buildPlan(defaultPlanAction)}>
                   <Workflow className="size-[14px]" strokeWidth={2} />
-                  {executionDryRunActions[defaultPlanAction] !== false ? "生成演练" : "生成计划"}
+                  生成执行计划
                 </button>
               </>
             ) : (
@@ -2195,12 +2164,10 @@ export function SlowMovingCleanupPage() {
               <div className="flex items-center gap-2">
                 <ShieldAlert className="size-[17px] text-[#b54708]" strokeWidth={2.2} />
                 <strong className="text-[14px] text-[#101828]">执行计划确认</strong>
-                {previewMode ? <CompactTag label="真实执行待接入" className="border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" /> : planDryRun ? <CompactTag label="仅本地演练" className="border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" /> : null}
+                {previewMode ? <CompactTag label="真实执行待接入" className="border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" /> : null}
               </div>
               <p className="m-0 mt-1 text-[12px] leading-5 text-[#667085]">
-                {planDryRun
-                  ? `当前演练包含 ${planRows.length} 个商品，不会向平台提交下架或删除请求。`
-                  : `当前计划包含 ${planRows.length} 个商品。彻底删除不可恢复，执行前请先导出清单并复核店铺登录状态。`}
+                {`当前计划包含 ${planRows.length} 个商品。彻底删除不可恢复，执行前请先导出清单并复核店铺登录状态。`}
               </p>
             </div>
             <button className="grid size-7 shrink-0 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054]" type="button" aria-label="关闭执行计划" onClick={() => setPlanOpen(false)}>
@@ -2230,7 +2197,7 @@ export function SlowMovingCleanupPage() {
             />
             <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white disabled:opacity-50" type="button" disabled={executingPlan || !planRows.length || confirmInput !== "确认清理"} onClick={() => void confirmExecution()}>
               <Check className="size-[14px]" strokeWidth={2.2} />
-              {planDryRun ? "确认演练" : "确认执行"}
+              确认执行
             </button>
           </div>
         </div>

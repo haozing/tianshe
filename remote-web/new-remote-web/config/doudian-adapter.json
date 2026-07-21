@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "contractVersion": "doudian-adapter.v1",
   "platform": "doudian",
-  "version": "2026.07.21.remote-adapter-funds-preflight-violations-v3-v2",
+  "version": "2026.07.21.remote-adapter-stale-goods-real-execution-v1",
   "source": "remote-web",
   "capabilities": {
     "actions": [
@@ -3238,7 +3238,7 @@
     "staleGoodsBatchOffline": {
       "endpointKey": "staleGoodsBatchOffline",
       "method": "POST",
-      "dryRunOnly": true,
+      "mutation": true,
       "sign": false,
       "includeEmptySignature": false,
       "origin": "https://fxg.jinritemai.com",
@@ -3248,17 +3248,18 @@
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
       },
       "body": "{formBody}",
-      "retryOnHttpError": true,
-      "maxAttempts": 2,
-      "retryDelayMs": 1200,
-      "retryBackoff": "linear",
+      "retryOnHttpError": false,
+      "maxAttempts": 1,
+      "retryOnBusinessFailure": false,
+      "prepareRetryAttempts": 0,
       "allowMissingCode": true,
+      "successCodes": [0, "0"],
       "successPaths": []
     },
     "staleGoodsBatchDelete": {
       "endpointKey": "staleGoodsBatchDelete",
       "method": "POST",
-      "dryRunOnly": true,
+      "mutation": true,
       "sign": false,
       "includeEmptySignature": false,
       "origin": "https://fxg.jinritemai.com",
@@ -3268,17 +3269,18 @@
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
       },
       "body": "{formBody}",
-      "retryOnHttpError": true,
-      "maxAttempts": 2,
-      "retryDelayMs": 1200,
-      "retryBackoff": "linear",
+      "retryOnHttpError": false,
+      "maxAttempts": 1,
+      "retryOnBusinessFailure": false,
+      "prepareRetryAttempts": 0,
       "allowMissingCode": true,
+      "successCodes": [0, "0"],
       "successPaths": []
     },
     "staleGoodsCompleteDelete": {
       "endpointKey": "staleGoodsCompleteDelete",
       "method": "POST",
-      "dryRunOnly": true,
+      "mutation": true,
       "sign": false,
       "includeEmptySignature": false,
       "origin": "https://fxg.jinritemai.com",
@@ -3288,11 +3290,12 @@
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
       },
       "body": "{formBody}",
-      "retryOnHttpError": true,
-      "maxAttempts": 2,
-      "retryDelayMs": 1200,
-      "retryBackoff": "linear",
+      "retryOnHttpError": false,
+      "maxAttempts": 1,
+      "retryOnBusinessFailure": false,
+      "prepareRetryAttempts": 0,
       "allowMissingCode": true,
+      "successCodes": [0, "0"],
       "successPaths": []
     },
     "bulkDeleteProductList": {

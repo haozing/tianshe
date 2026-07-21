@@ -67,7 +67,6 @@ interface ExecuteRunRecord {
   action: string;
   confirmText: string;
   status: string;
-  dryRun: boolean;
   executions: DoudianStaleGoodsExecution[];
   details: DoudianRunDetail[];
   summary: Record<string, number>;
@@ -571,7 +570,6 @@ function executePlanGuard(adapter: DoudianAdapterConfig, action: string, planKey
   const allowedActions = configuredActions.length ? configuredActions : ["offline", "recycle", "delete"];
   return {
     ok: !!planKey && !!adapter.requestPlans?.[planKey] && allowedActions.includes(action),
-    dryRunOnly: plan.dryRunOnly !== false,
     action,
     planKey,
     method: text(plan.method || "GET").toUpperCase(),
@@ -617,14 +615,13 @@ async function loadExecuteCandidates(
   payload: DoudianAdapterPayload,
   sourceRunId: string,
   candidateIds: string[],
-  action: string,
-  dryRunOnly: boolean
+  action: string
 ) {
   if (!sourceRunId) throw new Error("stale goods execute requires sourceRunId");
   const run = await repositoryGet<ScanRunRecord>("stale_scan_runs", sourceRunId);
   if (!run) throw new Error("stale goods source scan run not found");
   if (!["ok", "partial"].includes(run.status)) throw new Error(`stale goods source scan is not executable: ${run.status}`);
-  if (run.status === "partial" && !dryRunOnly && policy(payload.adapter, "staleGoodsCleanup.allowPartialScanExecution", false) !== true) {
+  if (run.status === "partial" && policy(payload.adapter, "staleGoodsCleanup.allowPartialScanExecution", false) !== true) {
     throw new Error("stale goods partial scan cannot be used for live execution");
   }
   const maxScanAgeMs = policyNumber(payload.adapter, "staleGoodsCleanup.maxScanAgeMs", 900000, 60000, 86400000);
@@ -663,7 +660,6 @@ function executeSummary(executions: DoudianStaleGoodsExecution[]) {
   return {
     executionCount: executions.length,
     submittedCount: executions.filter((item) => item.status === "submitted").length,
-    dryRunCount: executions.filter((item) => item.status === "dry_run").length,
     failedCount: executions.filter((item) => item.ok === false).length,
     skippedCount: executions.filter((item) => item.status === "skipped").length,
     offlineCount: executions.filter((item) => item.action === "offline").length,
@@ -744,37 +740,6 @@ async function executeStage(payload: DoudianAdapterPayload, store: DoudianStoreS
         reason: "stale-goods-execute-plan-missing",
         category: "adapter",
         diagnostic: { guard, productCount: productIds.length },
-        index,
-        total
-      } as DoudianRunDetail
-    };
-  }
-  if (guard.dryRunOnly) {
-    const message = policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeDryRun", "Stale goods cleanup dry-run only; no platform write request was submitted", { count: productIds.length });
-    return {
-      executions: candidates.map((item) => ({
-        id: item.id,
-        sourceRunId: item.sourceRunId,
-        shopId: store.shopId,
-        shopName: store.shopName,
-        productId: item.productId,
-        title: item.title || "",
-        action,
-        status: "dry_run",
-        ok: true,
-        message,
-        planKey,
-        stage
-      })),
-      detail: {
-        shopId: store.shopId,
-        shopName: store.shopName,
-        status: "dry_run",
-        ok: true,
-        message,
-        reason: "stale-goods-execute-dry-run",
-        category: "adapter-policy",
-        diagnostic: { guard, requestContext },
         index,
         total
       } as DoudianRunDetail
@@ -897,46 +862,13 @@ async function executeStore(
       detail: { shopId: store.shopId, shopName: store.shopName, status: "failed", ok: false, message, reason: "stale-goods-complete-delete-plan-missing", category: "adapter", diagnostic: { planKey, completePlanKey }, index, total } as DoudianRunDetail
     };
   }
-  if (firstGuard.ok && (firstGuard.dryRunOnly || completeGuard?.dryRunOnly)) {
-    const message = policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeDryRun", "Stale goods cleanup dry-run only; no platform write request was submitted", { count: candidates.length });
-    const executions = candidates.map((candidate) => ({
-      id: candidate.id,
-      sourceRunId: candidate.sourceRunId,
-      shopId: store.shopId,
-      shopName: store.shopName,
-      productId: candidate.productId,
-      title: candidate.title,
-      action,
-      stage: action === "delete" ? "delete" : action,
-      status: "dry_run",
-      ok: true,
-      message,
-      planKey
-    } as DoudianStaleGoodsExecution));
-    return {
-      executions,
-      detail: {
-        shopId: store.shopId,
-        shopName: store.shopName,
-        status: "dry_run",
-        ok: true,
-        message,
-        reason: "stale-goods-execute-dry-run",
-        category: "adapter-policy",
-        diagnostic: { batchSize, batchCount: batches.length, firstGuard, completeGuard, twoStageDelete: action === "delete" },
-        index,
-        total
-      } as DoudianRunDetail
-    };
-  }
-
   const executions: DoudianStaleGoodsExecution[] = [];
   const diagnostics: Array<Record<string, unknown>> = [];
   for (const [batchIndex, batch] of batches.entries()) {
     const firstStageName = action === "offline" ? "offline" : "recycle";
     const first = await executeStage(payload, store, batch, action, planKey, firstStageName, batchIndex + 1, batches.length, runId);
     const diagnostic: Record<string, unknown> = { index: batchIndex + 1, total: batches.length, firstStage: first.detail.diagnostic };
-    if (action !== "delete" || first.executions.every((execution) => execution.status === "dry_run")) {
+    if (action !== "delete") {
       executions.push(...first.executions);
       if (action === "delete") diagnostic.completeDelete = { guard: completeGuard, plannedProductCount: batch.length };
       diagnostics.push(diagnostic);
@@ -954,23 +886,20 @@ async function executeStore(
     diagnostics.push(diagnostic);
   }
   const failedCount = executions.filter((execution) => !execution.ok).length;
-  const dryRun = executions.length > 0 && executions.every((execution) => execution.status === "dry_run");
-  const ok = executions.length === candidates.length && failedCount === 0 && executions.every((execution) => execution.status === "submitted" || execution.status === "dry_run");
+  const ok = executions.length === candidates.length && failedCount === 0 && executions.every((execution) => execution.status === "submitted");
   const message = ok
-    ? dryRun
-      ? policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeDryRun", "Stale goods cleanup dry-run only; no platform write request was submitted", { count: candidates.length })
-      : policyMessage(payload.adapter, "staleGoodsCleanup.messages.executedStore", "Stale goods cleanup executed", { count: candidates.length })
+    ? policyMessage(payload.adapter, "staleGoodsCleanup.messages.executedStore", "Stale goods cleanup executed", { count: candidates.length })
     : executions.find((execution) => !execution.ok)?.message || policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeFailed", "Stale goods cleanup failed");
   return {
     executions,
     detail: {
       shopId: store.shopId,
       shopName: store.shopName,
-      status: ok ? (dryRun ? "dry_run" : "ok") : executions.some((execution) => execution.ok) ? "partial" : "failed",
+      status: ok ? "ok" : executions.some((execution) => execution.ok) ? "partial" : "failed",
       ok,
       message,
-      reason: ok ? (dryRun ? "stale-goods-execute-dry-run" : "") : "stale-goods-execute-partial-or-failed",
-      category: ok ? (dryRun ? "adapter-policy" : "") : "api",
+      reason: ok ? "" : "stale-goods-execute-partial-or-failed",
+      category: ok ? "" : "api",
       diagnostic: { batchSize, batches: diagnostics },
       index,
       total
@@ -1545,7 +1474,7 @@ async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: Stal
   const planKey = actionPlanKey(payload.adapter, action);
   const guard = executePlanGuard(payload.adapter, action, planKey);
   if (!guard.ok) throw new Error(`stale goods execute plan is not allowed: ${action}`);
-  const selected = await loadExecuteCandidates(payload, sourceRunId, args.candidateIds || [], action, guard.dryRunOnly);
+  const selected = await loadExecuteCandidates(payload, sourceRunId, args.candidateIds || [], action);
 
   const ledger = await listStoreLedger();
   const stores = ledger.stores || [];
@@ -1615,13 +1544,10 @@ async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: Stal
   const cleanupRuleVersion = policyText(payload.adapter, "staleGoodsCleanup.ruleVersion", "stale-goods-rule");
   const fieldSchemaVersion = policyText(payload.adapter, "staleGoodsCleanup.fieldSchemaVersion", "stale-goods-fields");
   const requestHash = requestPlanHash(payload.adapter, requestPlanKeys(payload.adapter));
-  const dryRun = executions.length > 0 && executions.every((item) => item.status === "dry_run");
   const status = failureCount ? (successCount ? "partial" : "failed") : "ok";
   const message = failureCount
     ? policyMessage(payload.adapter, "staleGoodsCleanup.messages.executePartial", "Stale goods cleanup submitted with {failureCount} failures", { successCount, failureCount })
-    : dryRun
-      ? policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeDryRun", "Stale goods cleanup dry-run only; no platform write request was submitted", { count: executions.length })
-      : policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeDone", "Stale goods cleanup submitted for {count} products", { count: executions.length });
+    : policyMessage(payload.adapter, "staleGoodsCleanup.messages.executeDone", "Stale goods cleanup submitted for {count} products", { count: executions.length });
   const now = new Date().toISOString();
   await saveExecuteRun({
     id: runId,
@@ -1632,7 +1558,6 @@ async function fetchStaleGoodsExecute(payload: DoudianAdapterPayload, args: Stal
     action,
     confirmText: String(args.confirmText || ""),
     status,
-    dryRun,
     executions,
     details,
     summary: { ...summary, successfulStoreCount, failedStoreCount },
@@ -1953,75 +1878,30 @@ export async function runDoudianStaleGoodsScanSelfCheck(options: { doudianAdapte
 
 export async function runDoudianStaleGoodsExecuteSelfCheck(options: { doudianAdapter?: DoudianAdapterPayload } = {}) {
   const payload = adapterPayload({ doudianAdapter: options.doudianAdapter });
-  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const shopId = `stale-exec-self-check-${suffix}`;
-  const scanRunId = `stale-exec-self-check-scan-${suffix}`;
-  const executeRunIds: string[] = [];
-  try {
-    await upsertStoreLedger({ shopId, shopName: `Stale Execute Self Check ${suffix}`, platform: "doudian", partition: `persist:chihu-stale-exec-self-check-${suffix}`, status: "online", groupName: "Self Check", adapterVersion: payload.adapter.version });
-    const scan = await fetchStaleGoodsCleanup({
-      doudianAdapter: payload,
-      mode: "scan",
-      shopIds: [shopId],
-      operationId: scanRunId,
-      rules: { ...defaultRules(payload.adapter), totalSalesMax: 5, exposureMax: 800, clickMax: 30 },
-      mockProducts: [0, 1, 2].map((index) => ({
-        product_id: `exec-product-${index}-${suffix}`,
-        title: `Execute Self Check Product ${index}`,
-        create_time: "2026-01-01",
-        audit_time: "2026-01-02",
-        price: 1999,
-        stock: 120,
-        total_sales: index === 0 ? 3 : 1,
-        period_sales: 0,
-        exposure_count: 500,
-        click_count: 5,
-        info_quality_score: index === 2 ? 60 : 75,
-        main_image_score: index === 2 ? 60 : 75,
-        title_quality_score: index === 2 ? 60 : 75
-      }))
-    });
-    const candidates = scan.candidates || [];
-    const actions: Array<DoudianStaleGoodsAction> = ["offline", "recycle", "delete"];
-    const results: DoudianStaleGoodsCleanupResult[] = [];
-    for (const [index, action] of actions.entries()) {
-      const candidate = candidates[index];
-      if (!candidate) continue;
-      const runId = `stale-exec-self-check-run-${action}-${suffix}`;
-      executeRunIds.push(runId);
-      results.push(await fetchStaleGoodsCleanup({
-        doudianAdapter: payload,
-        mode: "execute",
-        shopIds: [shopId],
-        action,
-        candidateIds: [candidate.id],
-        sourceRunId: scanRunId,
-        confirmText: "\u786e\u8ba4\u6e05\u7406",
-        operationId: runId
-      }));
-    }
-    const restored = await restoreLatestStaleGoodsExecute();
-    const executeRuns = await repositoryGetAll<ExecuteRunRecord>("stale_execute_runs");
-    const relatedRuns = executeRuns.filter((run) => executeRunIds.includes(run.runId));
-    const dryRunOk = results.length === actions.length && results.every((result) => result.ok === true && result.executions?.every((item) => item.status === "dry_run"));
-    const sourceRunOk = results.every((result) => result.sourceRunId === scanRunId && result.executions?.every((item) => item.sourceRunId === scanRunId));
-    const actionOk = actions.every((action) => results.some((result) => result.executions?.some((item) => item.action === action)));
-    const persistedOk = relatedRuns.length === actions.length && relatedRuns.every((run) => run.sourceRunId === scanRunId && run.dryRun === true);
-    return {
-      ok: scan.ok === true && dryRunOk && sourceRunOk && actionOk && persistedOk && executeRunIds.includes(restored?.runId || ""),
-      dryRunOk,
-      sourceRunOk,
-      actionOk,
-      persistedOk,
-      restoreOk: executeRunIds.includes(restored?.runId || ""),
-      scanRunId,
-      executeRunIds
-    };
-  } finally {
-    await deleteStoreLedger([shopId]).catch(() => undefined);
-    await repositoryDelete("stale_scan_runs", scanRunId).catch(() => undefined);
-    await Promise.all(executeRunIds.map((runId) => repositoryDelete("stale_execute_runs", runId).catch(() => undefined)));
-    const candidates = await repositoryGetAll<DoudianStaleGoodsCandidate>("stale_candidates").catch(() => []);
-    await Promise.all(candidates.filter((candidate) => candidate.sourceRunId === scanRunId).map((candidate) => repositoryDelete("stale_candidates", candidate.id).catch(() => undefined)));
-  }
+  const policyConfig = objectRecord(policy(payload.adapter, "staleGoodsCleanup", {}));
+  const executePlans = objectRecord(policyConfig.executePlans);
+  const actions: Array<DoudianStaleGoodsAction> = ["offline", "recycle", "delete"];
+  const actionPlanOk = actions.every((action) => {
+    const planKey = text(executePlans[action]);
+    return !!planKey && !!payload.adapter.requestPlans?.[planKey];
+  });
+  const mutationPlanOk = actions.every((action) => {
+    const planKey = text(executePlans[action]);
+    const plan = objectRecord(payload.adapter.requestPlans?.[planKey]);
+    return plan.mutation === true && Number(plan.maxAttempts) === 1 && plan.retryOnHttpError === false && plan.retryOnBusinessFailure === false;
+  });
+  const formBodyOk = actions.every((action) => {
+    const planKey = text(executePlans[action]);
+    return objectRecord(payload.adapter.requestPlans?.[planKey]).body === "{formBody}";
+  });
+  const twoStageDeleteOk = text(executePlans.delete) === text(executePlans.recycle) && !!text(executePlans.completeDelete);
+  const liveExecutionOk = actionPlanOk && mutationPlanOk && formBodyOk && twoStageDeleteOk;
+  return {
+    ok: liveExecutionOk,
+    liveExecutionOk,
+    actionPlanOk,
+    mutationPlanOk,
+    formBodyOk,
+    twoStageDeleteOk
+  };
 }

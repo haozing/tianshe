@@ -20,7 +20,13 @@ const policy = publicConfig.policies.staleGoodsCleanup;
 const mappings = publicConfig.responseMappings.staleGoodsCleanup;
 const writePlanKeys = ["staleGoodsBatchOffline", "staleGoodsBatchDelete", "staleGoodsCompleteDelete"];
 for (const key of writePlanKeys) {
-  assert.equal(plans[key].dryRunOnly, true, `${key} must remain dry-run only`);
+  assert.equal(plans[key].mutation, true, `${key} must be a live mutation plan`);
+  assert.equal(plans[key].maxAttempts, 1, `${key} must never retry`);
+  assert.equal(plans[key].retryOnHttpError, false, `${key} must not retry HTTP errors`);
+  assert.equal(plans[key].retryOnBusinessFailure, false, `${key} must not retry business failures`);
+  assert.equal(plans[key].prepareRetryAttempts, 0, `${key} must not retry preparation`);
+  assert.deepEqual(plans[key].successCodes, [0, "0"], `${key} must require the platform success code`);
+  assert.equal(plans[key].dryRunOnly, undefined, `${key} must not expose a dry-run switch`);
   assert.equal(plans[key].headers["Content-Type"], "application/x-www-form-urlencoded;charset=UTF-8");
   assert.equal(plans[key].body, "{formBody}");
 }
@@ -61,6 +67,7 @@ assert.doesNotMatch(staleSource, /const complete = responseOk && rows\.length > 
 assert.match(taskRunnerSource, /task\.taskType === "staleGoodsScan" \|\| task\.taskType === "staleGoodsExecute"/);
 assert.match(taskRunnerSource, /candidatesDeferred/);
 assert.match(staleSource, /executions\.filter\(\(execution\) => !execution\.ok\)\.length/);
+assert.doesNotMatch(staleSource, /dryRunOnly|dry_run|executeDryRun|dryRun/);
 
 const bridgeStart = bridgeSource.indexOf("export async function fetchDoudianStaleGoodsCleanup");
 const bridgeEnd = bridgeSource.indexOf("export async function fetchDoudianBulkDeleteProducts", bridgeStart);
@@ -75,7 +82,7 @@ assert.doesNotMatch(pageSource, /selectedExecutable\.length\s*\?/);
 assert.doesNotMatch(pageSource, /next\.size\s*\?\s*next/);
 assert.match(pageSource, /!planRows\.length/);
 assert.match(pageSource, /row\.infoQualityScore > 0/);
-assert.match(pageSource, /仅本地演练/);
+assert.doesNotMatch(pageSource, /dryRun|dry_run|dryRunOnly/);
 assert.match(pageSource, /无罗盘明细商品按零流量处理/);
 assert.match(pageSource, /不可判定/);
 assert.match(pageSource, /店铺扫描诊断/);

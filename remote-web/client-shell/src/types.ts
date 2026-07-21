@@ -1340,13 +1340,11 @@ declare global {
       }>;
       staleGoodsExecuteSelfCheck: () => Promise<{
         ok: boolean;
-        dryRunOk: boolean;
-        sourceRunOk: boolean;
-        actionOk: boolean;
-        persistedOk: boolean;
-        restoreOk: boolean;
-        scanRunId: string;
-        executeRunIds: string[];
+        liveExecutionOk: boolean;
+        actionPlanOk: boolean;
+        mutationPlanOk: boolean;
+        formBodyOk: boolean;
+        twoStageDeleteOk: boolean;
       }>;
       bulkDeleteSelfCheck: () => Promise<{
         ok: boolean;

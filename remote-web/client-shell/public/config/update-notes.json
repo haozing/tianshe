@@ -1,10 +1,24 @@
 {
   "schemaVersion": 1,
   "productName": "赤狐管家",
-  "currentVersion": "2.2.3-violations-v3-clean",
-  "updatedAt": "2026-07-21T18:12:00+08:00",
-  "summary": "违规管理只保留官方 v3 预警与处罚双数据源，移除旧适配器回退和全部旧违规请求路径。",
+  "currentVersion": "2.2.4-stale-goods-real-execution",
+  "updatedAt": "2026-07-21T21:00:00+08:00",
+  "summary": "Slow-moving cleanup now performs live offline, recycle, and permanent delete operations with strict mutation safety.",
   "releases": [
+    {
+      "version": "2.2.4-stale-goods-real-execution",
+      "date": "2026-07-21",
+      "sections": [
+        {
+          "title": "Fixes",
+          "items": [
+            "Removed the slow-moving cleanup dry-run path; confirmed plans now submit real platform writes.",
+            "Configured form-encoded product_ids[] requests with one-shot mutation safety and no automatic retry.",
+            "Permanent deletion uses batchDelete followed by completeDelete and records each stage result."
+          ]
+        }
+      ]
+    },
     {
       "version": "2.2.3-violations-v3-clean",
       "date": "2026-07-21",

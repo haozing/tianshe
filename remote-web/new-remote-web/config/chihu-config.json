@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.21.violations-v3-clean-v1",
+  "version": "2026.07.21.stale-goods-real-execution-v1",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "87b6dc5-dirty",
-    "buildTime": "2026-07-21T10:19:44.470Z"
+    "gitCommit": "a2b8e0d",
+    "buildTime": "2026-07-21T13:13:54.273Z"
   }
 }
