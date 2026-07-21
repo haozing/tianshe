@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026.07.21.stale-goods-real-execution-v8",
-  "buildTime": "2026-07-21T14:47:01.404Z",
+  "releaseId": "2026.07.21.stale-goods-real-execution-v9",
+  "buildTime": "2026-07-21T14:54:02.679Z",
   "entry": {
     "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
   },
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "5ec0fe2fc66e53c9d3c19492e48c58b36610e5cedb24dfa94dd03640908b9288"
+      "sha256": "d1bd06885cce89b4ab639dd5107f57785bcba273f3ec530ecf97ddb92bdc5971"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,7 +36,7 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "89e091bf24c208bcfac172a41d76495d14c9b34cda44faa14f502b1e96f215fe"
+      "sha256": "99499ed104673234d0d3c5ada0f768897a83823bb2e7737cabcee58005ae783d"
     },
     {
       "path": "new-remote-web/styles.css",
@@ -71,7 +71,7 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "6b3c5e65f927e0ddf38f2b0d58a08c352081837105b531b8ce81ec0f358fb50a"
+      "sha256": "f03ac85cfccacbfed946593de5dd1256ebd19c8410eb71e10faf7ae82fdd01b6"
     },
     {
       "path": "new-remote-web/config/chihu-config.marketing-pilot.json",
@@ -141,7 +141,7 @@
     "schemaVersion": 1,
     "algorithm": "ed25519",
     "keyId": "chihu-remote-web-ed25519-2026-07",
-    "payloadSha256": "d65f4ccc16c0e47d5463d107ecc324c414a18cf352a00d28a8f66a8c72d256bf",
-    "value": "mOglAD83K5vxoJoS3JajbwZegwVcd8UW/74O7DlVWL/5sNbkQQu0mbRpH30UXsLAHmKzf3/vhS2GSBg66akQBw=="
+    "payloadSha256": "39c846c1820ef02db7244a3ad759cd28ef138583ded0ceba494d29246d5e5253",
+    "value": "IKuy6WUhAbbDVZ3P+CimeUDCUNDw5U43myZ3P/zwUozpMwQRhm69rc7yq8WamySkLwW2GQJOVZBjzT+bVAI9Aw=="
   }
 }

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.21.stale-goods-real-execution-v8",
+  "version": "2026.07.21.stale-goods-real-execution-v9",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "bccae7d-dirty",
-    "buildTime": "2026-07-21T14:47:01.404Z"
+    "gitCommit": "97d6bee-dirty",
+    "buildTime": "2026-07-21T14:54:02.679Z"
   }
 }
