@@ -1899,7 +1899,7 @@ export function SlowMovingCleanupPage() {
                 </button>
                 <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" title="选择清理动作；下一步确认后才会提交平台请求" disabled={!matchedCandidates.length} onClick={() => buildPlan(defaultPlanAction)}>
                   <Workflow className="size-[14px]" strokeWidth={2} />
-                  创建清理计划
+                  执行清理
                 </button>
               </>
             ) : (
