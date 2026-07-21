@@ -747,7 +747,7 @@ async function executeStage(payload: DoudianAdapterPayload, store: DoudianStoreS
     payload,
     store,
     candidates,
-    feature: "stale-goods",
+    feature: "stale-goods-cleanup",
     runId,
     sourceRunId: candidates.find((item) => item.sourceRunId)?.sourceRunId,
     operationId: runId,

@@ -73,6 +73,7 @@ assert.match(staleSource, /snapshotIds\.size > 0 \? !snapshotIds\.has\(candidate
 assert.match(staleSource, /saveScanCheckpoint/);
 assert.match(staleSource, /partialOk/);
 assert.match(staleSource, /emptyOk/);
+assert.match(staleSource, /feature:\s*"stale-goods-cleanup"/);
 assert.doesNotMatch(staleSource, /const complete = responseOk && rows\.length > 0/);
 assert.match(taskRunnerSource, /task\.taskType === "staleGoodsScan" \|\| task\.taskType === "staleGoodsExecute"/);
 assert.match(taskRunnerSource, /candidatesDeferred/);
