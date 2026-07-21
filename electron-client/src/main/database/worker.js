@@ -549,6 +549,9 @@ const NATIVE_RECORD_STORES = new Set([
   "opportunity_clue_cache_shards_v2",
   "opportunity_clue_word_cache_v2",
   "opportunity_clue_word_cache_shards_v2",
+  "opportunity_official_clue_words_cache_v1",
+  "opportunity_official_clue_goods_cache_v1",
+  "opportunity_official_clue_goods_cache_shards_v1",
   "opportunity_pipeline_candidates_v2",
   "opportunity_pipeline_submit_tasks_v2",
   "opportunity_pipeline_operation_events_v2",
@@ -845,7 +848,7 @@ function claimOpportunitySubmitTask(args = {}) {
       database.exec("COMMIT");
       return { claimed: false, reason: storeIdentity ? "store-tombstoned" : "store-missing", task: cancelledTask };
     }
-    const claimable = task.status === "queued" || (task.status === "running" && (!task.leaseExpiresAt || String(task.leaseExpiresAt) < now));
+    const claimable = task.status === "ready" || task.status === "queued" || (task.status === "running" && (!task.leaseExpiresAt || String(task.leaseExpiresAt) < now));
     if (!claimable) {
       database.exec("COMMIT");
       return { claimed: false, reason: "not-claimable", task };
@@ -924,6 +927,10 @@ function putOpportunitySubmitAttempts(args = {}) {
       const executeRunId = requestedExecuteRunId && database.prepare("SELECT 1 FROM opportunity_execute_runs_v2 WHERE run_id = ?").get(requestedExecuteRunId)
         ? requestedExecuteRunId
         : null;
+      const attemptStatus = normalizeOpportunityAttemptStatus(attempt.status);
+      const resolvedAt = ["prepared", "sending"].includes(attemptStatus)
+        ? null
+        : normalizeString(attempt.resolvedAt) || updatedAt;
       statement.run(
         attemptId,
         attemptKey,
@@ -937,14 +944,14 @@ function putOpportunitySubmitAttempts(args = {}) {
         normalizeString(attempt.relationKey) || "",
         normalizeString(attempt.clueKey) || "",
         normalizeString(attempt.clueCategoryKey) || "",
-        normalizeOpportunityAttemptStatus(attempt.status),
+        attemptStatus,
         attempt.countsAgainstDailyLimit === false ? 0 : 1,
         normalizeString(attempt.requestHash) || "",
         encodeJson(attempt),
         createdAt,
         updatedAt,
         normalizeString(attempt.sentAt) || createdAt,
-        normalizeString(attempt.resolvedAt) || updatedAt
+        resolvedAt
       );
     }
     database.exec("COMMIT");
@@ -1374,6 +1381,7 @@ function cancelStoreOpportunityState(database, identity, ts, reason = "store-led
   const affectedTaskIds = new Set();
   const deletedClueCacheIds = new Set();
   const deletedWordCacheIds = new Set();
+  const deletedOfficialGoodsCacheIds = new Set();
   const summary = {
     cancelledStoreRuns: 0,
     cancelledSubmitTasks: 0,
@@ -1406,7 +1414,7 @@ function cancelStoreOpportunityState(database, identity, ts, reason = "store-led
   for (const row of nativeRecordRows(database, "opportunity_pipeline_submit_tasks_v2")) {
     const record = formatNativeRecord(row);
     if (!nativeRecordMatchesIdentity(record, identity)) continue;
-    if (!new Set(["queued", "running"]).has(normalizeString(record.status))) continue;
+    if (!new Set(["preparing", "ready", "queued", "running"]).has(normalizeString(record.status))) continue;
     if (record.runId) affectedRunIds.add(normalizeString(record.runId));
     affectedTaskIds.add(normalizeString(record.id || row.record_id));
     updateNativeRecordPayload(database, row, {
@@ -1427,7 +1435,7 @@ function cancelStoreOpportunityState(database, identity, ts, reason = "store-led
       Array.from(affectedRunIds).some((runId) => normalizeString(record.storeRunId).startsWith(`${runId}-`) && normalizeString(record.shopId) === identity.shopId);
     if (!belongsToStore) continue;
     const currentStatus = normalizeString(record.submitStatus || record.status);
-    if (["submitted", "failed", "skipped", "cancelled", "quota_exhausted", "unknown"].includes(currentStatus)) continue;
+    if (["accepted", "submitted", "failed", "skipped", "cancelled", "quota_exhausted", "unknown"].includes(currentStatus)) continue;
     const unknown = currentStatus === "sending" || currentStatus === "submitting";
     updateNativeRecordPayload(database, row, {
       ...record,
@@ -1470,6 +1478,22 @@ function cancelStoreOpportunityState(database, identity, ts, reason = "store-led
   for (const row of nativeRecordRows(database, "opportunity_clue_word_cache_shards_v2")) {
     const record = formatNativeRecord(row);
     if (!deletedWordCacheIds.has(normalizeString(record.wordCacheKey))) continue;
+    summary.deletedCacheRecords += deleteNativeRecordRow(database, row);
+  }
+  for (const row of nativeRecordRows(database, "opportunity_official_clue_words_cache_v1")) {
+    const record = formatNativeRecord(row);
+    if (!nativeRecordMatchesIdentity(record, identity)) continue;
+    summary.deletedCacheRecords += deleteNativeRecordRow(database, row);
+  }
+  for (const row of nativeRecordRows(database, "opportunity_official_clue_goods_cache_v1")) {
+    const record = formatNativeRecord(row);
+    if (!nativeRecordMatchesIdentity(record, identity)) continue;
+    deletedOfficialGoodsCacheIds.add(normalizeString(record.id || row.record_id));
+    summary.deletedCacheRecords += deleteNativeRecordRow(database, row);
+  }
+  for (const row of nativeRecordRows(database, "opportunity_official_clue_goods_cache_shards_v1")) {
+    const record = formatNativeRecord(row);
+    if (!deletedOfficialGoodsCacheIds.has(normalizeString(record.cacheKey))) continue;
     summary.deletedCacheRecords += deleteNativeRecordRow(database, row);
   }
 

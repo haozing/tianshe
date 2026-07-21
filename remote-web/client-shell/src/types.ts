@@ -983,6 +983,20 @@ export interface MatchDiagnostics {
   droppedByTopKCount: number;
 }
 
+export interface PipelineInputCoverage {
+  productScanStatus: "complete" | "truncated" | "failed";
+  productFetchedCount: number;
+  productRemoteTotal?: number;
+  productRemoteTotalKnown: boolean;
+  productFetchedPages: number;
+  productNextPage?: number;
+  clueScanStatus: "complete" | "truncated" | "failed";
+  clueFetchedUniqueCount: number;
+  clueRemoteTotalByCategory: Record<string, number | null>;
+  clueTruncatedCategoryCount: number;
+  coverageVersion: string;
+}
+
 export interface DoudianOpportunityStoreCategoryLedger {
   id: string;
   tenantId: string;
@@ -1104,6 +1118,14 @@ export interface DoudianOpportunityPrematchCandidate {
   matchedWeightRatio?: number;
   strongMatchedTokens?: string[];
   genericMatchedTokens?: string[];
+  matchedEvidenceGroups?: string[][];
+  matchedEvidenceGroupCount?: number;
+  requiredEvidenceGroupCount?: number;
+  anchorWords?: string[];
+  missingAnchorWords?: string[];
+  localMatchVersion?: string;
+  anchorRuleVersion?: string;
+  anchorConfidence?: "high" | "medium" | "none";
   fullClueNameMatched?: boolean;
   matchDiagnostics?: MatchDiagnostics;
   minTokenHitRatio?: number;
@@ -1113,7 +1135,26 @@ export interface DoudianOpportunityPrematchCandidate {
   clueCacheKey?: string;
   wordCacheKey?: string;
   effectiveCategoryKey?: string;
-  submitStatus?: string;
+  matchStatus?: "local_candidate" | "dropped";
+  validationStatus?: "not_started" | "pending" | "verified" | "rejected" | "unknown" | "budget_exhausted";
+  submitStatus?: "not_queued" | "queued" | "sending" | "accepted" | "failed" | "unknown" | "skipped" | "cancelled" | "quota_exhausted" | "fallback" | "submitted" | "submitting" | string;
+  auditStatus?: "not_started" | "pending" | "approved" | "rejected" | "expired_unknown";
+  validationReason?: string;
+  validatedAt?: string;
+  validationPolicyVersion?: string;
+  officialWords?: string[];
+  officialWordsHash?: string;
+  officialWordsSemantics?: "alternative_terms" | "conjunctive_parts" | "unknown";
+  officialWordsCacheKey?: string;
+  officialGoodsCacheKey?: string;
+  officialGoodsComplete?: boolean;
+  officialGoodsMatched?: boolean;
+  officialGoodsContractMode?: "exhaustive" | "positive_only" | "unknown";
+  officialGoodsResponseHash?: string;
+  officialSuggestedTitleWords?: string[];
+  submitModule?: "query" | "search_page_query";
+  submitModuleDecisionVersion?: string;
+  submitAttemptId?: string;
   submitTaskId?: string;
   submitPriority?: "primary" | "fallback" | string;
   fallbackSubmit?: boolean;
@@ -1178,6 +1219,7 @@ export interface DoudianOpportunityReportResult extends DoudianStoreResult {
   filters?: DoudianOpportunityFilters;
   matchRules?: DoudianOpportunityMatchRules;
   requestPlanHash?: string;
+  inputCoverage?: PipelineInputCoverage;
   productRunId?: string;
   clueRunId?: string;
   matchRunId?: string;

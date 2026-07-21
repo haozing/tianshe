@@ -72,6 +72,7 @@ const storePhaseLabels: Record<string, string> = {
   tokenize: "商机分词",
   match: "匹配商机",
   "submit-queued": "待提报",
+  "official-validate": "官方校验",
   submitting: "提报中",
   finished: "完成"
 };
@@ -202,16 +203,26 @@ function detailDiagnosticText(detail: DoudianRunDetail | undefined, key: string)
 
 function submitStatusInfo(item: DoudianOpportunityPrematchCandidate) {
   const status = String(item.submitStatus || item.status || "");
-  if (item.submittedAt || status === "submitted") return { label: "已提报", className: "bg-[#eafaf0] text-[#087443]" };
+  if (item.auditStatus === "approved") return { label: "平台审核通过", className: "bg-[#eafaf0] text-[#087443]" };
+  if (item.auditStatus === "rejected") return { label: "平台审核驳回", className: "bg-[#fff1ef] text-[#b42318]" };
+  if (item.submittedAt || status === "accepted" || status === "submitted") return { label: "接口已受理", className: "bg-[#eafaf0] text-[#087443]" };
+  if (item.validationStatus === "budget_exhausted") return { label: "校验预算已耗尽", className: "bg-[#fff7e8] text-[#b54708]" };
+  if (item.validationStatus === "unknown") return { label: "校验结果未知", className: "bg-[#fff7e8] text-[#b54708]" };
+  if (item.validationStatus === "rejected" && ["title_anchor_missing", "official_words_not_matched"].includes(String(item.validationReason || ""))) return { label: "核心词不符", className: "bg-[#fff1ef] text-[#b42318]" };
+  if (item.validationStatus === "rejected" && item.validationReason === "official_goods_absent") return { label: "官方范围不包含", className: "bg-[#fff1ef] text-[#b42318]" };
+  if (item.validationStatus === "rejected") return { label: "官方校验拒绝", className: "bg-[#fff1ef] text-[#b42318]" };
+  if (item.validationStatus === "pending") return { label: "待官方校验", className: "bg-[#eef4ff] text-[#175cd3]" };
+  if (item.validationStatus === "verified" && status !== "queued") return { label: "官方校验通过", className: "bg-[#eafaf0] text-[#087443]" };
+  if (item.validationStatus === "not_started" && ["not_queued", "fallback"].includes(status)) return { label: "待官方校验", className: "bg-[#eef4ff] text-[#175cd3]" };
   if (status === "failed") return { label: "失败", className: "bg-[#fff1ef] text-[#b42318]" };
   if (status === "unknown") return { label: "结果待确认", className: "bg-[#fff7e8] text-[#b54708]" };
   if (status === "quota_exhausted") return { label: "今日额度已满", className: "bg-[#fff7e8] text-[#b54708]" };
   if (status === "sending" || status === "submitting") return { label: "提交中", className: "bg-[#eef4ff] text-[#175cd3]" };
   if (status === "skipped") return { label: "跳过", className: "bg-[#fff7e8] text-[#b54708]" };
-  if (status === "queued") return { label: "待提报", className: "bg-brand-foxSoft text-brand-fox" };
+  if (status === "queued") return { label: item.validationStatus === "verified" ? "官方校验通过" : "待官方校验", className: "bg-brand-foxSoft text-brand-fox" };
   if (status === "cancelled") return { label: "已取消", className: "bg-[#f2f4f7] text-[#667085]" };
   if (item.alternative || status === "alternative") return { label: "备选", className: "bg-[#eef4ff] text-[#175cd3]" };
-  if (item.eligible && status === "ready") return { label: "待提报", className: "bg-brand-foxSoft text-brand-fox" };
+  if (item.eligible && status === "ready") return { label: item.validationStatus === "verified" ? "官方校验通过" : "待官方校验", className: "bg-brand-foxSoft text-brand-fox" };
   return { label: status || "--", className: "bg-[#f2f4f7] text-[#667085]" };
 }
 
@@ -267,7 +278,9 @@ function pipelineSnapshotLog(details: DoudianRunDetail[], summary: Record<string
   const safetySkippedCount = Number(summary.safetySkippedCount || 0);
   const productCount = Number(summary.productCount || 0);
   const clueCount = Number(summary.clueCount || 0);
-  if (submittedCount || failedCount || safetySkippedCount) return `提报完成：平台成功 ${formatNumber(submittedCount)} · 失败 ${formatNumber(failedCount)} · 安全跳过 ${formatNumber(safetySkippedCount)}`;
+  if (submittedCount || failedCount || safetySkippedCount) return `提报完成：接口受理 ${formatNumber(submittedCount)} · 失败 ${formatNumber(failedCount)} · 安全跳过 ${formatNumber(safetySkippedCount)}`;
+  if (Number(summary.officialValidationObserveMode || 0)) return `官方校验观察完成：通过 ${formatNumber(summary.officialVerifiedCount)} · 未知 ${formatNumber(summary.validationUnknownCount)} · 未执行平台写入`;
+  if (Number(summary.officialValidationDisabledMode || 0)) return "官方校验已停用，未执行平台写入";
   if (productCount || clueCount) return `已同步：商品 ${formatNumber(productCount)} · 商机 ${formatNumber(clueCount)}`;
   return "等待一键提报";
 }
@@ -340,7 +353,7 @@ export function OpportunityProductPrematchPage() {
     const loadedCount = candidates.length;
     const listTruncated = summaryNumber("candidateListTruncated", 0) > 0 || totalCount > loadedCount;
     return {
-      eligibleCount: summaryNumber("plannedSubmitCandidateCount", summaryNumber("eligibleCandidateCount", eligibleCount)),
+      eligibleCount: summaryNumber("officialVerifiedCount", summaryNumber("plannedSubmitCandidateCount", summaryNumber("eligibleCandidateCount", eligibleCount))),
       submittedCount: summaryNumber("submittedCount", submittedCount),
       estimatedCost,
       totalCount,
@@ -350,17 +363,17 @@ export function OpportunityProductPrematchPage() {
   }, [candidates, resultSummary]);
   const productTotalCount = Number(resultSummary.productCount || products.length);
   const clueTotalCount = Number(resultSummary.clueCount || clues.length);
+  const productFetchedCount = Number(resultSummary.productFetchedCount || productTotalCount);
+  const productRemoteTotal = Number(resultSummary.productRemoteTotal || 0);
+  const productScanTruncatedCount = Number(resultSummary.productScanTruncatedCount || 0);
+  const clueFetchedUniqueCount = Number(resultSummary.clueFetchedUniqueCount || clueTotalCount);
+  const clueTruncatedCategoryCount = Number(resultSummary.clueTruncatedCategoryCount || 0);
+  const validationUnknownCount = Number(resultSummary.validationUnknownCount || 0);
+  const validationBudgetExhaustedCount = Number(resultSummary.validationBudgetExhaustedCount || 0);
+  const officialWordsCount = Number(resultSummary.officialWordsCount || 0);
+  const platformAuditPendingCount = Number(resultSummary.platformAuditPendingCount || 0);
   const processedStoreCount = Number(resultSummary.processedStoreCount || 0);
   const totalStoreCount = Number(resultSummary.totalStoreCount || selectedShopIds.size);
-  const failedSubmitCount = Number(resultSummary.failedCount || 0);
-  const safetySkippedCount = Number(resultSummary.safetySkippedCount || 0);
-  const quotaExhaustedCount = Number(resultSummary.quotaExhaustedCount || 0);
-  const estimatedSubmitDurationMs = Number(resultSummary.estimatedSubmitDurationMs || 0);
-  const totalDailySubmitTarget = defaultDailySubmitTarget * Math.max(1, totalStoreCount || selectedShopIds.size || 1);
-  const summaryQuotaGap = Number(resultSummary.quotaRemainingAfterPlan);
-  const submitTargetGap = Number.isFinite(summaryQuotaGap)
-    ? Math.max(0, summaryQuotaGap)
-    : Math.max(0, totalDailySubmitTarget - candidateSummary.eligibleCount);
   const autoSubmitPageCount = Math.max(1, Math.ceil(candidateSummary.totalCount / autoSubmitPageSize));
   const safeAutoSubmitPage = Math.min(autoSubmitPage, autoSubmitPageCount - 1);
   const autoSubmitItems = candidates;
@@ -416,7 +429,7 @@ export function OpportunityProductPrematchPage() {
         const estimatedStoreSubmitDurationMs = detailDiagnosticNumber(detail, "estimatedSubmitDurationMs");
         const status = String(detail?.status || "");
         const diagnosticPhase = detailDiagnosticText(detail, "phase");
-        const messagePhase = ["product-scan", "category-ledger", "clue-load", "tokenize", "match", "submit-queued", "submitting", "finished"].includes(String(detail?.message || ""))
+        const messagePhase = ["product-scan", "category-ledger", "clue-load", "tokenize", "match", "submit-queued", "official-validate", "submitting", "finished"].includes(String(detail?.message || ""))
           ? String(detail?.message || "")
           : "";
         return {
@@ -835,14 +848,18 @@ export function OpportunityProductPrematchPage() {
           </div>
           <div className="grid shrink-0 grid-cols-4 gap-2 max-[980px]:grid-cols-2 max-[560px]:grid-cols-1">
             <CompactMetric label="店铺进度" value={`${formatNumber(processedStoreCount || storeRunRows.length)} / ${formatNumber(totalStoreCount || selectedShopIds.size)}`} detail={`${selectedShopIds.size} 家已选`} tone="blue" />
-            <CompactMetric label="同步商品数" value={formatNumber(productTotalCount)} detail={`商机 ${formatNumber(clueTotalCount)}`} />
             <CompactMetric
-              label="可提报商品"
-              value={formatNumber(candidateSummary.eligibleCount)}
-              detail={estimatedSubmitDurationMs ? `节流预计 ${formatDuration(estimatedSubmitDurationMs)}` : submitTargetGap ? `距店铺目标差 ${formatNumber(submitTargetGap)}` : "已满足店铺目标"}
+              label="已扫描商品"
+              value={productRemoteTotal ? `${formatNumber(productFetchedCount)} / ${formatNumber(productRemoteTotal)}` : formatNumber(productFetchedCount)}
+              detail={productScanTruncatedCount ? `${formatNumber(productScanTruncatedCount)} 家扫描已截断` : productFetchedCount || productRemoteTotal ? "商品扫描完整" : "等待扫描"}
+            />
+            <CompactMetric
+              label="已加载商机"
+              value={formatNumber(clueFetchedUniqueCount)}
+              detail={clueTruncatedCategoryCount ? `${formatNumber(clueTruncatedCategoryCount)} 个类目已截断 · 官方词 ${formatNumber(officialWordsCount)}` : `官方词 ${formatNumber(officialWordsCount)} · 本地候选 ${formatNumber(candidateSummary.totalCount)}`}
               tone="green"
             />
-            <CompactMetric label="平台成功" value={formatNumber(candidateSummary.submittedCount)} detail={`失败 ${formatNumber(failedSubmitCount)} · 安全跳过 ${formatNumber(safetySkippedCount)} · 额度跳过 ${formatNumber(quotaExhaustedCount)}`} />
+            <CompactMetric label="接口已受理" value={formatNumber(candidateSummary.submittedCount)} detail={`待审核 ${formatNumber(platformAuditPendingCount)} · 官方通过 ${formatNumber(candidateSummary.eligibleCount)} · 未知 ${formatNumber(validationUnknownCount)} · 预算 ${formatNumber(validationBudgetExhaustedCount)}`} />
           </div>
         </div>
 
@@ -894,7 +911,7 @@ export function OpportunityProductPrematchPage() {
                   <span className="text-center">状态</span>
                   <span className="px-2 text-right">商品数</span>
                   <span className="px-2 text-right">商机数</span>
-                  <span className="px-2 text-right">成功提报</span>
+                  <span className="px-2 text-right">接口受理</span>
                   <span className="px-2 text-right">失败提报</span>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">

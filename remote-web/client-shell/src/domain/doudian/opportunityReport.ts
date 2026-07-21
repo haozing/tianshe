@@ -7,6 +7,7 @@ import type {
   DoudianOpportunityGoodsMatchType,
   DoudianOpportunityMatchRules,
   MatchDiagnostics,
+  PipelineInputCoverage,
   DoudianOpportunityCandidatePage,
   DoudianOpportunityPrematchCandidate,
   DoudianOpportunityPrematchMode,
@@ -40,17 +41,37 @@ import {
 } from "./opportunityExecutionPolicy";
 import {
   AhoTokenMatcher,
+  ANCHOR_RULE_VERSION,
   compareCandidatesByEvidence,
   createMatchDiagnostics,
   createTokenQualityMap,
+  deriveAnchorEvidence,
   flattenProductTopK,
+  groupEvidenceTerms,
   keepProductTopK,
+  LOCAL_MATCH_VERSION,
+  matchedEvidenceGroups,
   matchDiagnosticsSummary,
   mergeMatchDiagnostics,
   productCandidateKey,
   scoreAhoTokenMatch,
   type TokenQuality
 } from "./opportunity/matching";
+import {
+  evaluateInputScanCoverage,
+  officialEnforcementReady,
+  officialWriteAllowed,
+  parseOfficialBusinessStatus,
+  parseOfficialGoodsPage,
+  parseOfficialWordsPayload,
+  validateOfficialCandidate,
+  type OfficialClueGoodsResult,
+  type OfficialClueWordsResult,
+  type OfficialGoodsContractMode,
+  type OfficialValidationPolicy,
+  type OfficialWordsSemantics
+} from "./opportunity/officialValidation";
+import { isUnresolvedSubmitState, logicalSubmitAttemptId, recoverUnresolvedSubmitCandidate } from "./opportunity/submitRecovery.ts";
 
 const clueScanStore = "opportunity_clue_scan_runs_v1" as const;
 const clueCandidateStore = "opportunity_clue_candidates_v1" as const;
@@ -68,12 +89,16 @@ const clueCacheStore = "opportunity_clue_cache_v2" as const;
 const clueCacheShardStore = "opportunity_clue_cache_shards_v2" as const;
 const clueWordCacheStore = "opportunity_clue_word_cache_v2" as const;
 const clueWordCacheShardStore = "opportunity_clue_word_cache_shards_v2" as const;
+const officialClueWordsCacheStore = "opportunity_official_clue_words_cache_v1" as const;
+const officialClueGoodsCacheStore = "opportunity_official_clue_goods_cache_v1" as const;
+const officialClueGoodsCacheShardStore = "opportunity_official_clue_goods_cache_shards_v1" as const;
 const pipelineCandidateStore = "opportunity_pipeline_candidates_v2" as const;
 const pipelineSubmitTaskStore = "opportunity_pipeline_submit_tasks_v2" as const;
 const pipelineOperationEventStore = "opportunity_pipeline_operation_events_v2" as const;
 
 const defaultActiveKey = "11,MATCH_DEGREE";
-const submitBatchSizeFallback = 40;
+const submitBatchSizeFallback = 10;
+const inputCoverageVersion = "opportunity-input-coverage-v1";
 const latestPipelineCandidatePreviewLimit = 200;
 const productCategoryIdFallbackPaths = [
   "category_id",
@@ -126,6 +151,11 @@ interface OpportunityArgs {
   includeCandidates?: boolean;
   mockClues?: Array<Record<string, unknown>>;
   mockProducts?: Array<Record<string, unknown>>;
+  mockOfficialClueWords?: Record<string, string[]>;
+  mockOfficialProductsByClue?: Record<string, Array<Record<string, unknown>>>;
+  mockOfficialWordsContract?: Record<string, OfficialWordsSemantics>;
+  mockOfficialGoodsContract?: Record<string, OfficialGoodsContractMode>;
+  mockPlatformAuditByAttempt?: Record<string, "pending" | "approved" | "rejected">;
   isCancelled?: () => boolean;
 }
 
@@ -282,7 +312,8 @@ interface PipelineStoreRunRecord extends PipelineStoreIdentity {
   id: string;
   runId: string;
   status: string;
-  phase: "product-scan" | "category-ledger" | "clue-load" | "tokenize" | "match" | "submit-queued" | "submitting" | "finished";
+  phase: "product-scan" | "category-ledger" | "clue-load" | "tokenize" | "match" | "submit-queued" | "official-validate" | "submitting" | "finished";
+  inputCoverage?: PipelineInputCoverage;
   productCount: number;
   currentCategoryCount: number;
   effectiveCategoryCount: number;
@@ -319,6 +350,19 @@ interface PipelineStoreRunRecord extends PipelineStoreIdentity {
   quotaExhaustedCount?: number;
   cancelledCount?: number;
   unknownCount?: number;
+  localCandidateCount?: number;
+  validationPendingCount?: number;
+  officialVerifiedCount?: number;
+  officialRejectedCount?: number;
+  validationUnknownCount?: number;
+  validationBudgetExhaustedCount?: number;
+  officialWordsRequestCount?: number;
+  officialWordsCount?: number;
+  officialGoodsRequestCount?: number;
+  officialValidationCacheHitCount?: number;
+  officialValidationDurationMs?: number;
+  officialValidationCompleteRatio?: number;
+  distinctValidationGroupCount?: number;
   remoteRequestCount?: number;
   estimatedSubmitGroupCount?: number;
   estimatedSubmitDurationMs?: number;
@@ -356,11 +400,13 @@ interface PipelineSubmitTaskRecord extends PipelineStoreIdentity {
   id: string;
   runId: string;
   storeRunId: string;
-  status: "queued" | "running" | "ok" | "partial" | "failed" | "cancelled";
+  status: "preparing" | "ready" | "queued" | "running" | "ok" | "partial" | "failed" | "cancelled";
   concurrencyKey: string;
   ownerRunId?: string;
   candidateIds: string[];
   candidateCount: number;
+  candidateIdsHash?: string;
+  snapshotVersion?: string;
   primaryCandidateCount?: number;
   fallbackCandidateCount?: number;
   submittedCount: number;
@@ -370,6 +416,19 @@ interface PipelineSubmitTaskRecord extends PipelineStoreIdentity {
   quotaExhaustedCount?: number;
   cancelledCount?: number;
   unknownCount?: number;
+  validationStatus?: "not_started" | "pending" | "complete" | "partial" | "failed";
+  validationStartedAt?: string;
+  validationFinishedAt?: string;
+  officialWordsRequestCount?: number;
+  officialWordsCount?: number;
+  officialGoodsRequestCount?: number;
+  officialVerifiedCount?: number;
+  officialRejectedCount?: number;
+  validationUnknownCount?: number;
+  validationBudgetExhaustedCount?: number;
+  validationPolicyVersion?: string;
+  officialContractVersion?: string;
+  inputCoverageStatus?: "complete" | "partial_coverage" | "failed";
   remoteRequestCount?: number;
   startedAt?: string;
   leaseExpiresAt?: string;
@@ -402,6 +461,10 @@ interface ClueCacheRecord extends PipelineStoreIdentity {
   shardCount: number;
   rowCount: number;
   remoteTotal: number;
+  remoteTotalKnown?: boolean;
+  scanStatus?: "complete" | "truncated" | "failed";
+  fetchedPages?: number;
+  nextPage?: number;
   sourceHealth: Array<Record<string, unknown>>;
   sourceShopId: string;
   shopScoped: boolean;
@@ -528,6 +591,32 @@ function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+interface OfficialClueWordsCacheRecord extends PipelineStoreIdentity {
+  id: string;
+  result: OfficialClueWordsResult;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface OfficialClueGoodsCacheRecord extends PipelineStoreIdentity {
+  id: string;
+  result: Omit<OfficialClueGoodsResult, "productIds">;
+  shardCount: number;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface OfficialClueGoodsCacheShardRecord {
+  id: string;
+  cacheKey: string;
+  shardNo: number;
+  productIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface OpportunityMutationCounts {
   acknowledged: number;
   failed: number;
@@ -630,6 +719,63 @@ function firstArray(root: unknown, paths: string[]) {
     if (Array.isArray(value)) return value;
   }
   return [];
+}
+
+type OfficialValidationMode = "disabled" | "observe" | "enforce" | "legacy";
+
+function officialValidationMode(adapter: DoudianAdapterConfig): OfficialValidationMode {
+  const configured = policyText(adapter, "opportunityReport.officialValidationMode", "disabled").toLocaleLowerCase();
+  if (configured === "off" || configured === "disabled") return "disabled";
+  if (configured === "shadow" || configured === "observe") return "observe";
+  if (configured === "enforce") {
+    const baselineVerified = policyBoolean(adapter, "opportunityReport.officialValidationBaselineVerified", false);
+    const anchorMode = policyText(adapter, "opportunityReport.anchorEnforcementMode", "observe");
+    return officialEnforcementReady({
+      baselineVerified,
+      wordsSemantics: officialWordsSemantics(adapter),
+      goodsContractMode: officialGoodsContractMode(adapter),
+      anchorEnforcementMode: anchorMode === "enforce_high_confidence" ? "enforce_high_confidence" : "observe"
+    })
+      ? "enforce"
+      : "observe";
+  }
+  if (configured === "legacy") {
+    const explicitlyAllowed = policyBoolean(adapter, "opportunityReport.allowLegacyValidationMode", false);
+    const expiresAt = Date.parse(policyText(adapter, "opportunityReport.legacyValidationModeExpiresAt", ""));
+    return explicitlyAllowed && Number.isFinite(expiresAt) && expiresAt > Date.now() ? "legacy" : "disabled";
+  }
+  return "disabled";
+}
+
+function officialWordsSemantics(adapter: DoudianAdapterConfig): OfficialWordsSemantics {
+  const value = policyText(adapter, "opportunityReport.officialWordsSemantics", "unknown");
+  return value === "alternative_terms" || value === "conjunctive_parts" ? value : "unknown";
+}
+
+function officialGoodsContractMode(adapter: DoudianAdapterConfig): OfficialGoodsContractMode {
+  const value = policyText(adapter, "opportunityReport.officialGoodsContractMode", "unknown");
+  return value === "exhaustive" || value === "positive_only" ? value : "unknown";
+}
+
+function officialValidationPolicy(adapter: DoudianAdapterConfig): OfficialValidationPolicy {
+  const anchorMode = policyText(adapter, "opportunityReport.anchorEnforcementMode", "observe");
+  return {
+    version: policyText(adapter, "opportunityReport.officialValidationPolicyVersion", "official-validation-policy-v1"),
+    goodsContractMode: officialGoodsContractMode(adapter),
+    goodsMembershipSufficientForSubmit: policyBoolean(adapter, "opportunityReport.goodsMembershipSufficientForSubmit", false),
+    wordsRequiredForSubmit: policyBoolean(adapter, "opportunityReport.wordsRequiredForSubmit", true),
+    absenceIsHardRejection: policyBoolean(adapter, "opportunityReport.officialGoodsAbsenceIsHardRejection", false),
+    anchorEnforcementMode: anchorMode === "enforce_high_confidence" ? "enforce_high_confidence" : "observe"
+  };
+}
+
+function validatedAnchorWordsForClue(adapter: DoudianAdapterConfig, clue: DoudianOpportunityClueRow) {
+  const byClueId = objectRecord(policy(adapter, "opportunityReport.validatedAnchorWordsByClueId"));
+  const byClueName = objectRecord(policy(adapter, "opportunityReport.validatedAnchorWordsByClueName"));
+  return uniqueText([
+    ...arrayText(byClueId[clue.clueId]),
+    ...arrayText(byClueName[clue.name])
+  ]);
 }
 
 function coerceNumber(value: unknown): number | undefined {
@@ -1045,6 +1191,14 @@ function readTotal(payload: unknown, adapter: DoudianAdapterConfig, key: string)
   return coerceNumber(firstPathValue(payload, mappingArray(adapter, key))) || 0;
 }
 
+function readOptionalTotal(payload: unknown, adapter: DoudianAdapterConfig, key: string) {
+  for (const path of mappingArray(adapter, key)) {
+    const value = coerceNumber(path ? getPathValue(payload, path) : payload);
+    if (value !== undefined && value >= 0) return value;
+  }
+  return undefined;
+}
+
 function responseMessage(response: RequestPlanResult | undefined) {
   return text(firstPathValue(response?.data, [
     "base_resp.status_message",
@@ -1086,7 +1240,7 @@ function stableHash(value: unknown) {
 }
 
 function requestPlanHash(adapter: DoudianAdapterConfig) {
-  const planKeys = ["opportunityClueRealtimeList", "opportunityClueWords", "opportunitySubmitClue", "opportunityProductList"];
+  const planKeys = ["opportunityClueRealtimeList", "opportunityClueWords", "opportunityClueGoodsList", "opportunitySubmitClue", "opportunityProductList"];
   return stableHash({
     adapterVersion: adapter.version || "",
     fieldSchemaVersion: policyText(adapter, "opportunityReport.fieldSchemaVersion", ""),
@@ -1100,6 +1254,8 @@ function requestPlanHash(adapter: DoudianAdapterConfig) {
       clueTotalPaths: mappingArray(adapter, "clueTotalPaths"),
       productListPaths: mappingArray(adapter, "productListPaths"),
       productTotalPaths: mappingArray(adapter, "productTotalPaths"),
+      clueGoodsListPaths: mappingArray(adapter, "clueGoodsListPaths"),
+      clueGoodsTotalPaths: mappingArray(adapter, "clueGoodsTotalPaths"),
       fields: objectRecord(mappings(adapter).fields)
     },
     policies: {
@@ -1152,12 +1308,13 @@ function stableMatchRulesHash(args: OpportunityArgs) {
 
 function assertOpportunityPipelineContract(adapter: DoudianAdapterConfig) {
   const missing: string[] = [];
+  const validationMode = officialValidationMode(adapter);
   const requiredPlans = [
     "opportunityProductList",
-    "opportunityClueRealtimeList",
-    "opportunityClueWords",
-    "opportunitySubmitClue"
+    "opportunityClueRealtimeList"
   ];
+  if (validationMode === "observe" || validationMode === "enforce") requiredPlans.push("opportunityClueWords", "opportunityClueGoodsList");
+  if (validationMode === "enforce" || validationMode === "legacy") requiredPlans.push("opportunitySubmitClue");
   for (const planKey of requiredPlans) {
     const plan = objectRecord(adapter.requestPlans?.[planKey]);
     const endpointKey = text(plan.endpointKey || planKey);
@@ -1169,10 +1326,16 @@ function assertOpportunityPipelineContract(adapter: DoudianAdapterConfig) {
     ["productListPaths", ["opportunityProductList.data", "opportunityProductList.data.list", "opportunityProductList.list"]],
     ["productTotalPaths", ["opportunityProductList.data.total", "opportunityProductList.total"]]
   ];
+  if (validationMode === "observe" || validationMode === "enforce") {
+    requiredListMappings.push(
+      ["clueGoodsListPaths", ["opportunityClueGoodsList.data", "opportunityClueGoodsList.data.data", "opportunityClueGoodsList.data.list"]],
+      ["clueGoodsTotalPaths", ["opportunityClueGoodsList.data.total", "opportunityClueGoodsList.total"]]
+    );
+  }
   for (const [key, fallback] of requiredListMappings) {
     if (!mappingArray(adapter, key, fallback).length) missing.push(`responseMappings.opportunityReport.${key}`);
   }
-  if (!mappingArray(adapter, "clueWordPaths", ["data.data", "data", "data.words", "data.list", "words", "list"]).length) {
+  if ((validationMode === "observe" || validationMode === "enforce") && !mappingArray(adapter, "clueWordPaths", ["data.data", "data", "data.words", "data.list", "words", "list"]).length) {
     missing.push("responseMappings.opportunityReport.clueWordPaths");
   }
   const requiredFields: Array<[string, string[]]> = [
@@ -1338,9 +1501,17 @@ async function scanProductsForStore(
   const rawRows: Record<string, unknown>[] = [];
   const sourceHealth: Array<Record<string, unknown>> = [];
   let remoteTotal = 0;
+  let remoteTotalKnown = false;
+  let fetchedPages = 0;
+  let lastPageRowCount: number | undefined;
 
   if (args.mockProducts?.length) {
     rawRows.push(...args.mockProducts);
+    remoteTotal = args.mockProducts.length;
+    remoteTotalKnown = true;
+    fetchedPages = 1;
+    lastPageRowCount = args.mockProducts.length;
+    sourceHealth.push({ key: `${planKey}:mock`, status: 200, ok: true, count: args.mockProducts.length });
   } else {
     for (let page = pageStart; page < pageStart + maxPages; page += 1) {
       const context = productListContext(args.filters, page, pageSize, categoryLeafId);
@@ -1352,12 +1523,18 @@ async function scanProductsForStore(
         "opportunityProductList.data.list",
         "opportunityProductList.list"
       ])).map(objectRecord);
+      fetchedPages += 1;
+      lastPageRowCount = rows.length;
       rawRows.push(...rows);
-      remoteTotal = readTotal(wrapped, payload.adapter, "productTotalPaths") || remoteTotal;
+      const pageRemoteTotal = readOptionalTotal(wrapped, payload.adapter, "productTotalPaths");
+      if (pageRemoteTotal !== undefined) {
+        remoteTotal = pageRemoteTotal;
+        remoteTotalKnown = true;
+      }
       const ok = planOk(response, payload.adapter, planKey);
       sourceHealth.push({ key: responseKey, status: response.status, ok, count: rows.length });
       if (!ok || !rows.length) break;
-      if (remoteTotal && rawRows.length >= remoteTotal) break;
+      if (remoteTotalKnown && rawRows.length >= remoteTotal) break;
     }
   }
 
@@ -1375,7 +1552,21 @@ async function scanProductsForStore(
       diagnostic: categoryDiagnostic
     });
   }
-  const ok = args.mockProducts?.length ? true : sourceHealth.length > 0 && sourceHealth.every((item) => item.ok === true);
+  const requestFailed = !sourceHealth.length || sourceHealth.some((item) => item.ok !== true);
+  const schemaMismatch = rawRows.length > 0 && products.length !== rawRows.length;
+  const coverageResult = evaluateInputScanCoverage({
+    requestFailed,
+    schemaMismatch,
+    fetchedCount: products.length,
+    remoteTotal: remoteTotalKnown ? remoteTotal : undefined,
+    remoteTotalKnown,
+    fetchedPages,
+    maxPages,
+    pageSize,
+    lastPageRowCount
+  });
+  const productScanStatus = coverageResult.status;
+  const ok = productScanStatus !== "failed";
   const detail: DoudianRunDetail = {
     shopId: store.shopId,
     shopName: store.shopName,
@@ -1388,13 +1579,26 @@ async function scanProductsForStore(
     category: ok ? "" : "api",
     diagnostic: {
       remoteTotal,
+      remoteTotalKnown,
+      productScanStatus,
+      fetchedPages,
+      nextPage: productScanStatus === "truncated" ? pageStart + fetchedPages : undefined,
       productCount: products.length,
       sourceHealth
     },
     index,
     total
   };
-  return { products, detail, sourceHealth, remoteTotal };
+  return {
+    products,
+    detail,
+    sourceHealth,
+    remoteTotal,
+    remoteTotalKnown,
+    scanStatus: productScanStatus,
+    fetchedPages,
+    nextPage: productScanStatus === "truncated" ? pageStart + fetchedPages : undefined
+  };
 }
 
 function extractCurrentStoreCategories(products: DoudianOpportunityProductRow[]) {
@@ -1437,8 +1641,8 @@ function storeScopeId(identity: PipelineStoreIdentity) {
 }
 
 function pipelineCacheScope(adapter: DoudianAdapterConfig): "shop" | "global" {
-  const requested = policyText(adapter, "opportunityReport.pipelineCacheScope", "global").toLocaleLowerCase();
-  const globalEnabled = policyBoolean(adapter, "opportunityReport.enableGlobalPipelineCache", true);
+  const requested = policyText(adapter, "opportunityReport.pipelineCacheScope", "shop").toLocaleLowerCase();
+  const globalEnabled = policyBoolean(adapter, "opportunityReport.enableGlobalPipelineCache", false);
   return requested === "global" && globalEnabled ? "global" : "shop";
 }
 
@@ -1589,7 +1793,7 @@ function clueCacheKey(args: {
   categoryKey: string;
   filterHash: string;
 }) {
-  return stableHash(["clue-v2", args.cacheScope, args.scopeId, args.adapterVersion, args.requestPlanHash, args.categoryKey, args.filterHash].join("|"));
+  return stableHash(["clue-v3-coverage", args.cacheScope, args.scopeId, args.adapterVersion, args.requestPlanHash, args.categoryKey, args.filterHash].join("|"));
 }
 
 function wordCacheKey(clueCacheKeyValue: string, tokenizerVersion: string, stopwordVersion: string) {
@@ -1638,7 +1842,7 @@ const opportunityRetentionMetaId = "opportunity-retention-v1";
 
 function expiredHistoryRecords<T extends { id: string; createdAt?: string; updatedAt?: string; status?: string }>(records: T[], cutoffMs: number, maxRecords: number) {
   const terminal = records
-    .filter((item) => item.status !== "running" && item.status !== "queued")
+    .filter((item) => !["preparing", "ready", "running", "queued"].includes(item.status || ""))
     .sort((left, right) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")));
   return terminal.filter((item, index) => {
     const timestamp = Date.parse(String(item.updatedAt || item.createdAt || ""));
@@ -1664,14 +1868,17 @@ async function cleanupOpportunityData(adapter: DoudianAdapterConfig) {
   const retentionDays = policyNumber(adapter, "opportunityReport.historyRetentionDays", 30, 1, 3650);
   const maxRuns = policyNumber(adapter, "opportunityReport.maxHistoryRuns", 200, 10, 5000);
   const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-  const [pipelineRuns, clueRuns, productRuns, prematchRuns, executeRuns, clueCaches, wordCaches] = await Promise.all([
+  const [pipelineRuns, pipelineTasks, clueRuns, productRuns, prematchRuns, executeRuns, clueCaches, wordCaches, officialWordCaches, officialGoodsCaches] = await Promise.all([
     repositoryGetAll<PipelineRunRecord>(pipelineRunStore).catch(() => []),
+    repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []),
     repositoryGetAll<ClueScanRunRecord>(clueScanStore).catch(() => []),
     repositoryGetAll<ProductScanRunRecord>(productScanStore).catch(() => []),
     repositoryGetAll<PrematchRunRecord>(prematchRunStore).catch(() => []),
     repositoryGetAll<ExecuteRunRecord>(opportunityExecuteStore).catch(() => []),
     repositoryGetAll<ClueCacheRecord>(clueCacheStore).catch(() => []),
-    repositoryGetAll<ClueWordCacheRecord>(clueWordCacheStore).catch(() => [])
+    repositoryGetAll<ClueWordCacheRecord>(clueWordCacheStore).catch(() => []),
+    repositoryGetAll<OfficialClueWordsCacheRecord>(officialClueWordsCacheStore).catch(() => []),
+    repositoryGetAll<OfficialClueGoodsCacheRecord>(officialClueGoodsCacheStore).catch(() => [])
   ]);
 
   const stalePipelineRuns = expiredHistoryRecords(pipelineRuns, cutoffMs, maxRuns);
@@ -1686,6 +1893,24 @@ async function cleanupOpportunityData(adapter: DoudianAdapterConfig) {
     ]);
   }
   if (stalePipelineRuns.length) await repositoryDeleteMany(pipelineRunStore, stalePipelineRuns.map((run) => run.id));
+
+  const preparingTaskTtlMinutes = policyNumber(adapter, "opportunityReport.preparingTaskTtlMinutes", 60, 5, 1440);
+  const preparingCutoff = Date.now() - preparingTaskTtlMinutes * 60 * 1000;
+  const stalePreparingTasks = pipelineTasks.filter((task) => task.status === "preparing" && Date.parse(task.updatedAt || task.createdAt) < preparingCutoff);
+  for (const task of stalePreparingTasks) {
+    if (task.candidateIds.length) await repositoryDeleteMany(pipelineCandidateStore, task.candidateIds).catch(() => 0);
+  }
+  if (stalePreparingTasks.length) {
+    const failedAt = nowIso();
+    await repositoryPutMany(pipelineSubmitTaskStore, stalePreparingTasks.map((task) => ({
+      ...task,
+      status: "failed",
+      failedCount: Math.max(1, task.failedCount),
+      lastError: "preparing_snapshot_expired",
+      finishedAt: failedAt,
+      updatedAt: failedAt
+    } satisfies PipelineSubmitTaskRecord)), { concurrency: 2 });
+  }
 
   const legacyRunGroups: Array<[typeof clueScanStore | typeof productScanStore | typeof prematchRunStore | typeof opportunityExecuteStore, typeof clueCandidateStore | typeof productCandidateStore | typeof prematchCandidateStore | null, Array<{ id: string; runId: string; createdAt?: string; updatedAt?: string; status?: string }>]> = [
     [clueScanStore, clueCandidateStore, clueRuns],
@@ -1709,6 +1934,11 @@ async function cleanupOpportunityData(adapter: DoudianAdapterConfig) {
   for (const cache of staleWordCaches) await deleteStoreRecordsByPrefix(clueWordCacheShardStore, `${cache.id}-`);
   if (staleClueCaches.length) await repositoryDeleteMany(clueCacheStore, staleClueCaches.map((cache) => cache.id));
   if (staleWordCaches.length) await repositoryDeleteMany(clueWordCacheStore, staleWordCaches.map((cache) => cache.id));
+  const staleOfficialWordCaches = officialWordCaches.filter((cache) => cache.expiresAt <= now || Date.parse(cache.updatedAt || cache.createdAt) < cutoffMs);
+  const staleOfficialGoodsCaches = officialGoodsCaches.filter((cache) => cache.expiresAt <= now || Date.parse(cache.updatedAt || cache.createdAt) < cutoffMs);
+  for (const cache of staleOfficialGoodsCaches) await deleteStoreRecordsByPrefix(officialClueGoodsCacheShardStore, `${cache.id}-`);
+  if (staleOfficialWordCaches.length) await repositoryDeleteMany(officialClueWordsCacheStore, staleOfficialWordCaches.map((cache) => cache.id));
+  if (staleOfficialGoodsCaches.length) await repositoryDeleteMany(officialClueGoodsCacheStore, staleOfficialGoodsCaches.map((cache) => cache.id));
 
   await getNativeData()?.opportunityAttempts?.cleanup({
     failedRetentionDays: policyNumber(adapter, "opportunityReport.failedAttemptRetentionDays", 90, 1, 3650)
@@ -1790,8 +2020,10 @@ function sourceHealthFailed(sourceHealth: Array<Record<string, unknown>> = []) {
 
 async function loadClueWordsForCache(payload: DoudianAdapterPayload, store: DoudianStoreSummary, clue: DoudianOpportunityClueRow, dryRun = false) {
   const base = baseClueWords(clue);
-  const words = await queryClueWords(payload, store, clue, dryRun).catch(() => []);
-  return uniqueText([...base, ...words, ...(clue.recommendList || []), ...(clue.profitInfoList || [])]).filter((word) => word.length > 1);
+  void payload;
+  void store;
+  void dryRun;
+  return uniqueText([...base, ...(clue.recommendList || []), ...(clue.profitInfoList || [])]).filter((word) => word.length > 1);
 }
 
 async function fetchCluesForCategory(args: {
@@ -1810,9 +2042,15 @@ async function fetchCluesForCategory(args: {
   const rawRows: Record<string, unknown>[] = [];
   const sourceHealth: Array<Record<string, unknown>> = [];
   let remoteTotal = 0;
+  let remoteTotalKnown = false;
+  let fetchedPages = 0;
+  let lastPageRowCount: number | undefined;
   if (args.mockClues?.length) {
     rawRows.push(...args.mockClues);
     remoteTotal = args.mockClues.length;
+    remoteTotalKnown = true;
+    fetchedPages = 1;
+    lastPageRowCount = args.mockClues.length;
     sourceHealth.push({ key: `${planKey}:${args.category.categoryKey}:mock`, status: 200, ok: true, count: args.mockClues.length, categoryKey: args.category.categoryKey });
   } else {
     for (let page = 1; page <= maxPages; page += 1) {
@@ -1825,18 +2063,43 @@ async function fetchCluesForCategory(args: {
       "opportunityClueRealtimeList.data.data",
       "opportunityClueRealtimeList.list"
     ])).map(objectRecord);
+    fetchedPages += 1;
+    lastPageRowCount = rows.length;
     rawRows.push(...rows);
-    remoteTotal = readTotal(wrapped, args.payload.adapter, "clueTotalPaths") || remoteTotal;
+    const pageRemoteTotal = readOptionalTotal(wrapped, args.payload.adapter, "clueTotalPaths");
+    if (pageRemoteTotal !== undefined) {
+      remoteTotal = pageRemoteTotal;
+      remoteTotalKnown = true;
+    }
     const ok = planOk(response, args.payload.adapter, planKey);
     sourceHealth.push({ key: responseKey, status: response.status, ok, count: rows.length, categoryKey: args.category.categoryKey });
     if (!ok || !rows.length) break;
-    if (remoteTotal && rawRows.length >= remoteTotal) break;
+    if (remoteTotalKnown && rawRows.length >= remoteTotal) break;
     }
   }
   const rows = rawRows
     .map((row, rowIndex) => normalizeClue(args.store, row, args.payload.adapter, args.runId, rowIndex))
     .filter((row): row is DoudianOpportunityClueRow => Boolean(row));
-  return { rows: mergeClues(rows), sourceHealth, remoteTotal };
+  const coverage = evaluateInputScanCoverage({
+    requestFailed: !sourceHealth.length || sourceHealth.some((item) => item.ok !== true),
+    schemaMismatch: rawRows.length > 0 && rows.length !== rawRows.length,
+    fetchedCount: rows.length,
+    remoteTotal: remoteTotalKnown ? remoteTotal : undefined,
+    remoteTotalKnown,
+    fetchedPages,
+    maxPages,
+    pageSize,
+    lastPageRowCount
+  });
+  return {
+    rows: mergeClues(rows),
+    sourceHealth,
+    remoteTotal,
+    remoteTotalKnown,
+    scanStatus: coverage.status,
+    fetchedPages,
+    nextPage: coverage.status === "truncated" ? fetchedPages + 1 : undefined
+  };
 }
 
 async function loadCluesByCategoryWithCache(args: {
@@ -1853,7 +2116,7 @@ async function loadCluesByCategoryWithCache(args: {
   const cacheScope = pipelineCacheScope(args.payload.adapter);
   const scopeId = pipelineScopeId(cacheScope, args.identity);
   if (!categoryKey) {
-    return { cacheKey: "", cacheScope, scopeId, rows: [] as DoudianOpportunityClueRow[], sourceHealth: [], remoteTotal: 0, cacheHit: false, ok: true, skipReason: "missing-category-id" };
+    return { cacheKey: "", cacheScope, scopeId, rows: [] as DoudianOpportunityClueRow[], sourceHealth: [], remoteTotal: 0, remoteTotalKnown: false, scanStatus: "failed" as const, fetchedPages: 0, cacheHit: false, ok: true, skipReason: "missing-category-id" };
   }
   const filterHash = stableFilterHash(args.filters, args.payload.adapter);
   const planHash = requestPlanHash(args.payload.adapter);
@@ -1878,6 +2141,10 @@ async function loadCluesByCategoryWithCache(args: {
         rows: cachedRows,
         sourceHealth: [{ key: "opportunityClueCache", ok: true, cacheHit: true, categoryKey, cacheScope, scopeId, rowCount: cachedRows.length }],
         remoteTotal: cached.remoteTotal,
+        remoteTotalKnown: cached.remoteTotalKnown === true,
+        scanStatus: cached.scanStatus || "complete",
+        fetchedPages: Number(cached.fetchedPages || 0),
+        nextPage: cached.nextPage,
         cacheHit: true,
         ok: true
       };
@@ -1893,15 +2160,13 @@ async function loadCluesByCategoryWithCache(args: {
     dryRun: args.dryRun,
     mockClues: args.mockClues
   });
-  const fetchedSourceOk = args.mockClues?.length ? true : sourceHealthComplete(fetched.sourceHealth);
+  const fetchedSourceOk = fetched.scanStatus !== "failed" && (args.mockClues?.length ? true : sourceHealthComplete(fetched.sourceHealth));
   if (!fetchedSourceOk) {
-    return { cacheKey: key, cacheScope, scopeId, rows: [], sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, cacheHit: false, ok: false };
+    return { cacheKey: key, cacheScope, scopeId, rows: [], sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, remoteTotalKnown: fetched.remoteTotalKnown, scanStatus: "failed" as const, fetchedPages: fetched.fetchedPages, cacheHit: false, ok: false };
   }
   const rows: DoudianOpportunityClueRow[] = [];
-  let clueWordsApiCount = 0;
   for (const [index, clue] of fetched.rows.entries()) {
     const words = await loadClueWordsForCache(args.payload, args.store, clue, args.dryRun);
-    if (words.length) clueWordsApiCount += 1;
     rows.push({
       ...clue,
       id: `${args.runId}-${clue.clueId}`,
@@ -1911,7 +2176,10 @@ async function loadCluesByCategoryWithCache(args: {
   }
   const allowEmptyCacheWrite = policyBoolean(args.payload.adapter, "opportunityReport.allowEmptyClueCacheWrite", false);
   if (!rows.length && !allowEmptyCacheWrite) {
-    return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, cacheHit: false, ok: true };
+    return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, remoteTotalKnown: fetched.remoteTotalKnown, scanStatus: fetched.scanStatus, fetchedPages: fetched.fetchedPages, nextPage: fetched.nextPage, cacheHit: false, ok: true };
+  }
+  if (fetched.scanStatus !== "complete") {
+    return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, remoteTotalKnown: fetched.remoteTotalKnown, scanStatus: fetched.scanStatus, fetchedPages: fetched.fetchedPages, nextPage: fetched.nextPage, cacheHit: false, ok: true };
   }
   const cacheRows = rows.map(cacheableClueRow);
   const shards = chunk(cacheRows, 100).map((items, index) => ({
@@ -1940,10 +2208,14 @@ async function loadCluesByCategoryWithCache(args: {
     shardCount: shards.length,
     rowCount: rows.length,
     remoteTotal: fetched.remoteTotal,
+    remoteTotalKnown: fetched.remoteTotalKnown,
+    scanStatus: fetched.scanStatus,
+    fetchedPages: fetched.fetchedPages,
+    nextPage: fetched.nextPage,
     sourceHealth: fetched.sourceHealth,
     sourceShopId: args.identity.shopId,
     shopScoped: cacheScope === "shop",
-    clueWordsSource: clueWordsApiCount ? "mixed" : "realtime",
+    clueWordsSource: "realtime",
     clueWordsRequestHash: stableHash({
       adapterVersion: args.payload.adapter.version || "",
       plan: args.payload.adapter.requestPlans?.opportunityClueWords || {},
@@ -1954,7 +2226,7 @@ async function loadCluesByCategoryWithCache(args: {
     updatedAt: now
   } satisfies ClueCacheRecord);
   await repositoryPutMany(clueCacheShardStore, shards, { concurrency: 2 });
-  return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, cacheHit: false, ok: true };
+  return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, remoteTotalKnown: fetched.remoteTotalKnown, scanStatus: fetched.scanStatus, fetchedPages: fetched.fetchedPages, nextPage: fetched.nextPage, cacheHit: false, ok: true };
 }
 
 function clueTokenSources(clue: DoudianOpportunityClueRow) {
@@ -2129,6 +2401,7 @@ function tokenWeight(tokenQuality: Map<string, TokenQuality>, token: string) {
 }
 
 function matchCategoryProductsByAhoTokens(args: {
+  adapter: DoudianAdapterConfig;
   runId: string;
   storeRunId: string;
   clueCacheKey: string;
@@ -2192,42 +2465,60 @@ function matchCategoryProductsByAhoTokens(args: {
       const clue = clueById.get(clueId);
       if (!clue) continue;
       const clueTokens = uniqueText(args.tokenIndex.clueTokens[clueId] || []);
+      const clueEvidenceGroups = groupEvidenceTerms(clueTokens);
       const clueTokenCount = clueTokens.length;
-      if (clueTokenCount <= 0) continue;
+      const evidenceGroupCount = clueEvidenceGroups.length;
+      if (clueTokenCount <= 0 || evidenceGroupCount <= 0) continue;
       const matchedTokens = Array.from(tokenSet).filter((token) => clueTokens.includes(token));
       const matchedTokenCount = matchedTokens.length;
+      const matchedGroups = matchedEvidenceGroups(clueEvidenceGroups, matchedTokens);
+      const matchedEvidenceGroupCount = matchedGroups.length;
       const strongMatchedTokens = matchedTokens.filter((token) => quality.get(token)?.isStrong);
       const genericMatchedTokens = matchedTokens.filter((token) => quality.get(token)?.isGeneric);
-      const effectiveMatchedTokenCount = matchedTokens.length - genericMatchedTokens.length;
-      const totalTokenWeight = clueTokens.reduce((sum, token) => sum + tokenWeight(quality, token), 0);
-      const matchedTokenWeight = matchedTokens.reduce((sum, token) => sum + tokenWeight(quality, token), 0);
+      const effectiveMatchedTokenCount = matchedGroups.filter((group) => group.members.some((token) => !quality.get(token)?.isGeneric)).length;
+      const totalTokenWeight = clueEvidenceGroups.reduce((sum, group) => sum + Math.max(...group.members.map((token) => tokenWeight(quality, token))), 0);
+      const matchedTokenWeight = matchedGroups.reduce((sum, group) => sum + Math.max(...group.members.map((token) => tokenWeight(quality, token))), 0);
       const matchedWeightRatio = totalTokenWeight > 0 ? matchedTokenWeight / totalTokenWeight : 0;
-      const requiredTokenHits = clueTokenCount === 1
+      const requiredTokenHits = evidenceGroupCount === 1
         ? 1
-        : Math.max(2, Math.ceil(clueTokenCount * args.minTokenHitRatio));
+        : Math.max(2, Math.ceil(evidenceGroupCount * args.minTokenHitRatio));
       const fullClueNameMatched = Boolean(clue.name && tokenMatchesTitle(product.title, clue.name));
 
-      if (clueTokenCount === 1) {
-        const token = matchedTokens[0];
-        if (!token || !quality.get(token)?.isStrong) {
+      if (evidenceGroupCount === 1) {
+        const group = matchedGroups[0];
+        if (!group || !group.members.some((token) => quality.get(token)?.isStrong)) {
           diagnostics.filteredByWeakSingleTokenCount += 1;
           continue;
         }
       } else if (effectiveMatchedTokenCount <= 0) {
         diagnostics.filteredByGenericOnlyCount += 1;
         continue;
-      } else if (matchedTokenCount < requiredTokenHits || matchedWeightRatio < args.minWeightHitRatio) {
+      } else if (matchedEvidenceGroupCount < requiredTokenHits || matchedWeightRatio < args.minWeightHitRatio) {
         diagnostics.filteredByThresholdCount += 1;
         continue;
       }
 
       const score = scoreAhoTokenMatch({
-        matchedTokenCount,
-        clueTokenCount,
+        matchedTokenCount: matchedEvidenceGroupCount,
+        clueTokenCount: evidenceGroupCount,
         matchedWeightRatio,
         strongMatchedTokenCount: strongMatchedTokens.length,
         fullClueNameMatched
       });
+      const clueRaw = objectRecord(clue.raw);
+      const anchorEvidence = deriveAnchorEvidence({
+        groups: clueEvidenceGroups,
+        structuredWords: uniqueText([
+          text(clueRaw.brand_name || clueRaw.brandName),
+          text(clueRaw.model || clueRaw.model_name || clueRaw.modelName),
+          ...arrayText(clueRaw.required_words || clueRaw.requiredWords)
+        ]),
+        validatedRuleWords: uniqueText([
+          ...arrayText(clueRaw.validated_anchor_words || clueRaw.validatedAnchorWords),
+          ...validatedAnchorWordsForClue(args.adapter, clue)
+        ])
+      });
+      const missingAnchorWords = anchorEvidence.words.filter((word) => !tokenMatchesTitle(product.title, word));
       diagnostics.passedThresholdCount += 1;
       const id = `${args.runId}-${product.shopId}-${product.productId}-${clue.clueId}`;
       keepProductTopK(topMatches, {
@@ -2260,11 +2551,23 @@ function matchCategoryProductsByAhoTokens(args: {
         effectiveTokenCount: clueTokenCount,
         matchedTokenCount,
         requiredTokenHits,
-        tokenHitRatio: matchedTokenCount / Math.max(1, clueTokenCount),
+        tokenHitRatio: matchedEvidenceGroupCount / Math.max(1, evidenceGroupCount),
         matchedTokenWeight,
         matchedWeightRatio,
         strongMatchedTokens,
         genericMatchedTokens,
+        matchedEvidenceGroups: matchedGroups.map((group) => group.members),
+        matchedEvidenceGroupCount,
+        requiredEvidenceGroupCount: requiredTokenHits,
+        anchorWords: anchorEvidence.words,
+        missingAnchorWords,
+        localMatchVersion: LOCAL_MATCH_VERSION,
+        anchorRuleVersion: ANCHOR_RULE_VERSION,
+        anchorConfidence: anchorEvidence.confidence,
+        matchStatus: "local_candidate",
+        validationStatus: "not_started",
+        submitStatus: "not_queued",
+        auditStatus: "not_started",
         fullClueNameMatched,
         minTokenHitRatio: args.minTokenHitRatio,
         matchRulesHash: args.matchRulesHash,
@@ -2457,48 +2760,89 @@ async function enqueueStoreSubmit(args: {
   storeRunId: string;
   identity: PipelineStoreIdentity;
   candidates: DoudianOpportunityPrematchCandidate[];
+  snapshotVersion: string;
+  inputCoverage: PipelineInputCoverage;
+  candidateDepthMax: number;
 }) {
   const readyCandidates = args.candidates
     .filter((item) => item.eligible && item.status === "ready")
     .sort(compareSubmitQueueCandidates);
   const primaryProductIds = new Set(readyCandidates.map((item) => item.productId));
-  const seenFallbackProducts = new Set<string>();
+  const fallbackCountByProduct = new Map<string, number>();
   const fallbackCandidates = args.candidates
     .filter((item) => item.submitPriority === "fallback" && item.status === "alternative" && primaryProductIds.has(item.productId))
     .sort(compareSubmitQueueCandidates)
     .filter((item) => {
-      if (seenFallbackProducts.has(item.productId)) return false;
-      seenFallbackProducts.add(item.productId);
+      const current = fallbackCountByProduct.get(item.productId) || 0;
+      if (current >= Math.max(0, args.candidateDepthMax - 1)) return false;
+      fallbackCountByProduct.set(item.productId, current + 1);
       return true;
     });
   const taskCandidates = [...readyCandidates, ...fallbackCandidates];
   const candidateIds = taskCandidates.map((item) => item.id);
-  if (!candidateIds.length) return null;
+  if (!candidateIds.length) {
+    if (args.candidates.length) await repositoryPutMany(pipelineCandidateStore, args.candidates, { concurrency: 2 });
+    return null;
+  }
   const concurrencyKey = storeScopeId(args.identity);
   const active = (await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []))
-    .find((task) => task.runId === args.runId && task.concurrencyKey === concurrencyKey && (task.status === "queued" || task.status === "running"));
-  if (active) return active;
+    .find((task) => task.runId === args.runId && task.concurrencyKey === concurrencyKey && (["preparing", "ready", "queued", "running"] as string[]).includes(task.status));
+  if (active && active.status !== "preparing") return active;
   const now = nowIso();
   const task: PipelineSubmitTaskRecord = {
-    id: `${args.storeRunId}-task-1`,
+    ...(active || {} as PipelineSubmitTaskRecord),
+    id: active?.id || `${args.storeRunId}-task-1`,
     runId: args.runId,
     storeRunId: args.storeRunId,
     ...args.identity,
-    status: "queued",
+    status: "preparing",
     concurrencyKey,
     ownerRunId: args.runId,
     candidateIds,
     candidateCount: candidateIds.length,
+    candidateIdsHash: stableHash([...candidateIds].sort()),
+    snapshotVersion: args.snapshotVersion,
+    inputCoverageStatus: args.inputCoverage.productScanStatus === "complete" && args.inputCoverage.clueScanStatus === "complete"
+      ? "complete"
+      : args.inputCoverage.productScanStatus === "failed" || args.inputCoverage.clueScanStatus === "failed"
+        ? "failed"
+        : "partial_coverage",
     primaryCandidateCount: readyCandidates.filter((item) => item.submitPriority !== "fallback").length,
     fallbackCandidateCount: fallbackCandidates.length + readyCandidates.filter((item) => item.submitPriority === "fallback").length,
     submittedCount: 0,
     skippedCount: 0,
     failedCount: 0,
-    createdAt: now,
+    createdAt: active?.createdAt || now,
     updatedAt: now
   };
   await repositoryPut(pipelineSubmitTaskStore, task);
-  return task;
+  const taskCandidateIds = new Set(candidateIds);
+  const persistedCandidates = args.candidates.map((candidate) => taskCandidateIds.has(candidate.id)
+    ? {
+        ...candidate,
+        submitTaskId: task.id,
+        submitStatus: candidate.eligible && candidate.status === "ready" ? "queued" : "fallback"
+      }
+    : candidate);
+  await repositoryPutMany(pipelineCandidateStore, persistedCandidates, { concurrency: 2 });
+  const snapshot = await repositoryGetMany<DoudianOpportunityPrematchCandidate>(pipelineCandidateStore, candidateIds);
+  const snapshotHash = stableHash([...snapshot.map((candidate) => candidate.id)].sort());
+  if (snapshot.length !== candidateIds.length || snapshotHash !== task.candidateIdsHash) {
+    const failedAt = nowIso();
+    const failedTask = {
+      ...task,
+      status: "failed" as const,
+      lastError: "snapshot_incomplete",
+      failedCount: Math.max(1, task.failedCount),
+      finishedAt: failedAt,
+      updatedAt: failedAt
+    };
+    await repositoryPut(pipelineSubmitTaskStore, failedTask);
+    throw new Error("Submit task candidate snapshot is incomplete");
+  }
+  const readyTask = { ...task, status: "ready" as const, updatedAt: nowIso() };
+  await repositoryPut(pipelineSubmitTaskStore, readyTask);
+  return readyTask;
 }
 
 async function cancelPipelinePendingWorkForRun(runId: string, reason = "已取消商机提报任务") {
@@ -2521,7 +2865,7 @@ async function cancelPipelinePendingWorkForRun(runId: string, reason = "已取�
       finishedAt: item.finishedAt || now
     } satisfies PipelineStoreRunRecord)), { concurrency: 2 });
   }
-  const cancellableTasks = tasks.filter((item) => item.status === "queued" || item.status === "running");
+  const cancellableTasks = tasks.filter((item) => ["preparing", "ready", "queued", "running"].includes(item.status));
   if (!cancellableTasks.length) return;
   await repositoryPutMany(pipelineSubmitTaskStore, cancellableTasks.map((item) => ({
     ...item,
@@ -2642,15 +2986,19 @@ async function refreshPipelineRunSummary(runId: string) {
   const primarySubmitCandidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.primarySubmitCandidateCount || 0), 0);
   const fallbackSubmitCandidateCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.fallbackSubmitCandidateCount || 0), 0);
   const runningCount =
-    scopedTasks.filter((item) => item.status === "queued" || item.status === "running").length +
+    scopedTasks.filter((item) => ["preparing", "ready", "queued", "running"].includes(item.status)).length +
     scopedStoreRuns.filter((item) => item.status === "queued" || item.status === "running").length;
+  const inputCoveragePartialCount = scopedStoreRuns.filter((item) => item.inputCoverage && (item.inputCoverage.productScanStatus !== "complete" || item.inputCoverage.clueScanStatus !== "complete")).length;
+  const validationPartialCount = scopedTasks.filter((item) => item.validationStatus === "partial" || item.validationStatus === "failed").length;
   const status: PipelineRunRecord["status"] = run.status === "cancelled"
     ? "cancelled"
     : runningCount
       ? "running"
       : failedCount
         ? (submittedCount || skippedCount ? "partial" : "failed")
-        : "ok";
+        : inputCoveragePartialCount || validationPartialCount
+          ? "partial"
+          : "ok";
   const safetySkippedCount = hasMutationSummary ? Number(mutationSummary!.safetySkipped || 0) : taskSafetySkippedCount;
   const quotaExhaustedCount = scopedTasks.reduce((sum, item) => sum + Number(item.quotaExhaustedCount || 0), 0);
   const cancelledCount = scopedTasks.reduce((sum, item) => sum + Number(item.cancelledCount || 0), 0);
@@ -2661,6 +3009,13 @@ async function refreshPipelineRunSummary(runId: string) {
   const summary = {
     ...(run.summary || {}),
     productCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.productCount || 0), 0),
+    productFetchedCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.inputCoverage?.productFetchedCount || item.productCount || 0), 0),
+    productRemoteTotal: scopedStoreRuns.reduce((sum, item) => sum + Number(item.inputCoverage?.productRemoteTotal || 0), 0),
+    productRemoteTotalKnownStoreCount: scopedStoreRuns.filter((item) => item.inputCoverage?.productRemoteTotalKnown).length,
+    productScanTruncatedCount: scopedStoreRuns.filter((item) => item.inputCoverage?.productScanStatus === "truncated").length,
+    clueFetchedUniqueCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.inputCoverage?.clueFetchedUniqueCount || 0), 0),
+    clueTruncatedCategoryCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.inputCoverage?.clueTruncatedCategoryCount || 0), 0),
+    inputCoveragePartialCount,
     currentCategoryCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.currentCategoryCount || 0), 0),
     effectiveCategoryCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.effectiveCategoryCount || 0), 0),
     clueCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.clueCount || 0), 0),
@@ -2686,6 +3041,12 @@ async function refreshPipelineRunSummary(runId: string) {
     droppedByTopKCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.droppedByTopKCount || item.matchDiagnostics?.droppedByTopKCount || 0), 0),
     submitTaskCount: scopedTasks.length,
     submittedCount,
+    submitAcceptedCount: submittedCount,
+    platformApprovedCount: 0,
+    platformRejectedCount: 0,
+    platformAuditPendingCount: submittedCount,
+    platformAuditExpiredUnknownCount: 0,
+    platformAuditManualObservation: 1,
     failedCount,
     skippedCount,
     safetySkippedCount,
@@ -2693,6 +3054,13 @@ async function refreshPipelineRunSummary(runId: string) {
     cancelledCount,
     unknownCount,
     remoteRequestCount,
+    officialWordsRequestCount: scopedTasks.reduce((sum, item) => sum + Number(item.officialWordsRequestCount || 0), 0),
+    officialWordsCount: scopedTasks.reduce((sum, item) => sum + Number(item.officialWordsCount || 0), 0),
+    officialGoodsRequestCount: scopedTasks.reduce((sum, item) => sum + Number(item.officialGoodsRequestCount || 0), 0),
+    officialVerifiedCount: scopedTasks.reduce((sum, item) => sum + Number(item.officialVerifiedCount || 0), 0),
+    officialRejectedCount: scopedTasks.reduce((sum, item) => sum + Number(item.officialRejectedCount || 0), 0),
+    validationUnknownCount: scopedTasks.reduce((sum, item) => sum + Number(item.validationUnknownCount || 0), 0),
+    validationBudgetExhaustedCount: scopedTasks.reduce((sum, item) => sum + Number(item.validationBudgetExhaustedCount || 0), 0),
     estimatedSubmitGroupCount,
     estimatedSubmitDurationMs,
     mutationReconciled: hasMutationSummary ? 1 : 0,
@@ -2850,7 +3218,9 @@ function pipelineOptions(args: OpportunityArgs) {
 }
 
 function dailyAttemptLimit(args: OpportunityArgs, adapter: DoudianAdapterConfig) {
-  return Math.max(1, Math.min(10000, Math.floor(Number(args.dailyAttemptLimit || policyNumber(adapter, "opportunityReport.dailyAttemptLimit", 1000, 1, 10000)))));
+  const configured = Math.max(1, Math.min(10000, Math.floor(Number(args.dailyAttemptLimit || policyNumber(adapter, "opportunityReport.dailyAttemptLimit", 1000, 1, 10000)))));
+  if (officialValidationMode(adapter) !== "enforce") return configured;
+  return Math.min(configured, policyNumber(adapter, "opportunityReport.canaryDailyAttemptLimit", 10, 1, 1000));
 }
 
 function dynamicTopKPerProduct(args: {
@@ -2893,12 +3263,16 @@ function submittedForDedupe(value: { ok?: boolean; status?: string; stage?: stri
 function structuredAttemptStatus(value: { ok?: boolean; status?: string }) {
   if (submittedForDedupe(value)) return "accepted";
   const status = text(value.status).toLocaleLowerCase();
+  if (status === "prepared" || status === "sending") return status;
   if (status === "cancelled") return "cancelled";
   if (status === "unknown") return "unknown";
+  if (status === "rejected") return "rejected";
   return "failed";
 }
 
 function structuredSubmitAttempt(record: SubmitAttemptRecord, countsAgainstDailyLimit = true) {
+  const status = structuredAttemptStatus(record);
+  const resolved = !["prepared", "sending"].includes(status);
   return {
     ...record,
     attemptId: record.id,
@@ -2910,12 +3284,55 @@ function structuredSubmitAttempt(record: SubmitAttemptRecord, countsAgainstDaily
     relationKey: relationKey(record),
     clueKey: clueKey(record),
     clueCategoryKey: record.clueLastCategoryId ? clueCategoryKey(record) : "",
-    status: structuredAttemptStatus(record),
+    status,
     countsAgainstDailyLimit,
     updatedAt: record.createdAt,
     sentAt: record.createdAt,
-    resolvedAt: record.createdAt
+    resolvedAt: resolved ? record.createdAt : undefined
   };
+}
+
+async function persistSubmitAttemptRecords(records: SubmitAttemptRecord[], countsAgainstDailyLimit = true) {
+  if (!records.length) return;
+  if (await ensureStructuredSubmitAttempts()) {
+    for (const batch of chunk(records.map((record) => structuredSubmitAttempt(record, countsAgainstDailyLimit)), 500)) {
+      await getNativeData()!.opportunityAttempts!.putMany({ attempts: batch });
+    }
+    return;
+  }
+  await repositoryPutMany(submitAttemptStore, records);
+}
+
+function logicalSubmitAttemptRecord(args: {
+  id: string;
+  runId: string;
+  candidate: DoudianOpportunityPrematchCandidate;
+  status: "sending" | "accepted" | "failed" | "unknown" | "cancelled";
+  message: string;
+}) {
+  return {
+    id: args.id,
+    date: todayKey(),
+    runId: args.runId,
+    matchRunId: args.runId,
+    candidateId: args.candidate.id,
+    shopId: args.candidate.shopId,
+    shopName: args.candidate.shopName,
+    clueId: args.candidate.clueId,
+    clueName: args.candidate.clueName,
+    clueCategoryName: args.candidate.clueCategoryName,
+    clueLastCategoryId: args.candidate.clueLastCategoryId,
+    clueLastCategoryKey: args.candidate.clueLastCategoryKey,
+    productId: args.candidate.productId,
+    title: args.candidate.title,
+    status: args.status,
+    ok: args.status === "accepted",
+    message: args.message,
+    stage: "submit",
+    planKey: "opportunitySubmitClue",
+    diagnostic: { logicalSubmitAttempt: true, pipelineCandidateId: args.candidate.id },
+    createdAt: nowIso()
+  } satisfies SubmitAttemptRecord;
 }
 
 async function ensureStructuredSubmitAttempts() {
@@ -3732,22 +4149,407 @@ function titleWithClueWord(
   return `${baseTitle.slice(0, Math.max(0, maxLength - wordText.length))}${wordText}`.slice(0, maxLength);
 }
 
+function officialPlanHash(adapter: DoudianAdapterConfig, planKey: "opportunityClueWords" | "opportunityClueGoodsList") {
+  const plan = objectRecord(adapter.requestPlans?.[planKey]);
+  const endpointKey = text(plan.endpointKey || planKey);
+  return stableHash({
+    adapterVersion: adapter.version || "",
+    planKey,
+    endpoint: adapter.endpoints?.[endpointKey] || "",
+    plan,
+    mappings: planKey === "opportunityClueWords"
+      ? { paths: mappingArray(adapter, "clueWordPaths") }
+      : {
+          listPaths: mappingArray(adapter, "clueGoodsListPaths"),
+          totalPaths: mappingArray(adapter, "clueGoodsTotalPaths"),
+          successStatusPaths: mappingArray(adapter, "clueGoodsSuccessStatusPaths"),
+          successCodes: mappingArray(adapter, "clueGoodsSuccessCodes")
+        },
+    pageSize: planKey === "opportunityClueGoodsList" ? policy(adapter, "opportunityReport.officialProductPageSize") : undefined,
+    maxPages: planKey === "opportunityClueGoodsList" ? policy(adapter, "opportunityReport.maxOfficialProductPages") : undefined
+  });
+}
+
+function officialWordsCacheKey(adapter: DoudianAdapterConfig, identity: PipelineStoreIdentity, clueId: string, semantics: OfficialWordsSemantics) {
+  return stableHash([
+    "official-words-v1",
+    storeScopeId(identity),
+    clueId,
+    adapter.version || "",
+    officialPlanHash(adapter, "opportunityClueWords"),
+    policyText(adapter, "opportunityReport.officialWordsContractVersion", "official-words-contract-unverified-v1"),
+    semantics
+  ].join("|"));
+}
+
+function officialGoodsCacheKey(adapter: DoudianAdapterConfig, identity: PipelineStoreIdentity, clue: DoudianOpportunityClueRow, contractMode: OfficialGoodsContractMode) {
+  return stableHash([
+    "official-goods-v1",
+    identity.tenantId,
+    identity.shopId,
+    identity.storeGeneration,
+    clue.clueId,
+    clue.lastCategoryKey || "third_cid",
+    clue.lastCategoryId || "",
+    adapter.version || "",
+    officialPlanHash(adapter, "opportunityClueGoodsList"),
+    policyText(adapter, "opportunityReport.officialGoodsContractVersion", "official-goods-contract-unverified-v1"),
+    contractMode
+  ].join("|"));
+}
+
+async function queryOfficialClueWords(args: {
+  payload: DoudianAdapterPayload;
+  store: DoudianStoreSummary;
+  clue: DoudianOpportunityClueRow;
+  opportunityArgs?: OpportunityArgs;
+  shouldCancel?: () => boolean;
+}): Promise<OfficialClueWordsResult & { cacheKey: string }> {
+  const identity = normalizePipelineStoreIdentity(args.store);
+  const semantics = args.opportunityArgs?.mockOfficialWordsContract?.[args.clue.clueId] || officialWordsSemantics(args.payload.adapter);
+  const contractVersion = policyText(args.payload.adapter, "opportunityReport.officialWordsContractVersion", "official-words-contract-unverified-v1");
+  const body = { clue_id: platformIntId(args.clue.clueId) };
+  const requestHash = stableHash({ planHash: officialPlanHash(args.payload.adapter, "opportunityClueWords"), body });
+  const cacheKey = officialWordsCacheKey(args.payload.adapter, identity, args.clue.clueId, semantics);
+  const cached = await repositoryGet<OfficialClueWordsCacheRecord>(officialClueWordsCacheStore, cacheKey).catch(() => null);
+  if (cached && cached.expiresAt > nowIso()) {
+    return { ...cached.result, source: "cache", cacheHit: true, requestCount: 0, cacheKey };
+  }
+  assertNotCancelled(args.shouldCancel);
+  const mock = args.opportunityArgs?.mockOfficialClueWords;
+  const hasMock = Boolean(mock && Object.prototype.hasOwnProperty.call(mock, args.clue.clueId));
+  let status: OfficialClueWordsResult["status"] = "failed";
+  let words: string[] = [];
+  let responseHash = "";
+  let message = "";
+  let requestCount = 0;
+  if (hasMock) {
+    words = uniqueText(mock?.[args.clue.clueId] || []);
+    status = words.length ? "complete" : "no_terms";
+    responseHash = stableHash(words);
+  } else {
+    try {
+      const response = await runDoudianRequestPlan(args.payload, {
+        partition: args.store.partition,
+        planKey: "opportunityClueWords",
+        context: bodyContext(body),
+        shouldCancel: args.shouldCancel
+      });
+      requestCount = Math.max(1, Math.floor(Number(response.attemptCount || 1)));
+      assertNotCancelled(args.shouldCancel);
+      message = responseMessage(response);
+      responseHash = stableHash(response.data || null);
+      if (!planOk(response, args.payload.adapter, "opportunityClueWords")) {
+        status = "failed";
+      } else {
+        const mapped = parseOfficialWordsPayload(response.data, mappingArray(args.payload.adapter, "clueWordPaths", ["data.data", "data", "data.words", "data.list", "words", "list"]));
+        if (!mapped.found) {
+          status = "schema_mismatch";
+        } else {
+          words = mapped.words;
+          status = words.length ? "complete" : "no_terms";
+        }
+      }
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+      status = "failed";
+    }
+  }
+  const result: OfficialClueWordsResult = {
+    status,
+    words,
+    source: "remote",
+    semantics,
+    clueId: args.clue.clueId,
+    requestCount,
+    cacheHit: false,
+    requestHash,
+    responseHash,
+    contractVersion,
+    message: message || undefined
+  };
+  if (status === "complete" || status === "no_terms") {
+    const now = nowIso();
+    const ttlMinutes = policyNumber(args.payload.adapter, "opportunityReport.officialWordsCacheTtlMinutes", 360, 1, 1440);
+    await repositoryPut(officialClueWordsCacheStore, {
+      id: cacheKey,
+      ...identity,
+      result,
+      expiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString(),
+      createdAt: now,
+      updatedAt: now
+    } satisfies OfficialClueWordsCacheRecord).catch(() => undefined);
+  }
+  return { ...result, cacheKey };
+}
+
+async function loadOfficialGoodsCache(cacheKey: string) {
+  const cached = await repositoryGet<OfficialClueGoodsCacheRecord>(officialClueGoodsCacheStore, cacheKey).catch(() => null);
+  if (!cached || cached.expiresAt <= nowIso()) return null;
+  const shards = (await repositoryGetAllByPrefix<OfficialClueGoodsCacheShardRecord>(officialClueGoodsCacheShardStore, `${cacheKey}-`, { pageSize: 100, maxItems: 10000 }).catch(() => []))
+    .sort((left, right) => left.shardNo - right.shardNo);
+  if (shards.length !== cached.shardCount) return null;
+  return {
+    ...cached.result,
+    productIds: uniqueText(shards.flatMap((shard) => shard.productIds || [])),
+    cacheHit: true,
+    requestCount: 0
+  } satisfies OfficialClueGoodsResult;
+}
+
+async function queryOfficialClueGoods(args: {
+  payload: DoudianAdapterPayload;
+  store: DoudianStoreSummary;
+  clue: DoudianOpportunityClueRow;
+  runId: string;
+  opportunityArgs?: OpportunityArgs;
+  maxRequests?: number;
+  shouldCancel?: () => boolean;
+}): Promise<OfficialClueGoodsResult & { cacheKey: string }> {
+  const identity = normalizePipelineStoreIdentity(args.store);
+  const contractMode = args.opportunityArgs?.mockOfficialGoodsContract?.[args.clue.clueId] || officialGoodsContractMode(args.payload.adapter);
+  const contractVersion = policyText(args.payload.adapter, "opportunityReport.officialGoodsContractVersion", "official-goods-contract-unverified-v1");
+  const cacheKey = officialGoodsCacheKey(args.payload.adapter, identity, args.clue, contractMode);
+  const cached = await loadOfficialGoodsCache(cacheKey);
+  if (cached) return { ...cached, cacheKey };
+  const pageSize = policyNumber(args.payload.adapter, "opportunityReport.officialProductPageSize", 100, 10, 200);
+  const configuredMaxPages = policyNumber(args.payload.adapter, "opportunityReport.maxOfficialProductPages", 20, 1, 50);
+  const maxPages = configuredMaxPages;
+  const requestBudget = Math.max(0, Math.floor(Number(args.maxRequests ?? configuredMaxPages)));
+  const validationConcurrency = policyNumber(args.payload.adapter, "opportunityReport.officialValidationConcurrency", 2, 1, 10);
+  const configuredPageConcurrency = policyNumber(args.payload.adapter, "opportunityReport.officialGoodsPageConcurrency", 2, 1, 10);
+  const pageConcurrency = Math.min(validationConcurrency, configuredPageConcurrency);
+  const productIds: string[] = [];
+  const responseHashes: string[] = [];
+  let remoteTotal = 0;
+  let remoteTotalKnown = false;
+  let fetchedRowCount = 0;
+  let matchedRowCount = 0;
+  let fetchedPages = 0;
+  let requestCount = 0;
+  let lastPageRowCount: number | undefined;
+  let requestFailed = false;
+  let schemaMismatch = false;
+  let message = "";
+  const mock = args.opportunityArgs?.mockOfficialProductsByClue;
+  const hasMock = Boolean(mock && Object.prototype.hasOwnProperty.call(mock, args.clue.clueId));
+  if (hasMock) {
+    const rows = mock?.[args.clue.clueId] || [];
+    fetchedPages = 1;
+    fetchedRowCount = rows.length;
+    lastPageRowCount = rows.length;
+    remoteTotal = rows.length;
+    remoteTotalKnown = true;
+    const normalized = rows
+      .map((row, index) => normalizeProduct(args.store, row, args.payload.adapter, args.runId, index, { matchedClueId: args.clue.clueId, matchedClueName: args.clue.name, status: "matched" }))
+      .filter((row): row is DoudianOpportunityProductRow => Boolean(row));
+    const matched = normalized.filter((row) => officialProductMatchesClueCategory(row, args.clue));
+    matchedRowCount = matched.length;
+    productIds.push(...matched.map((row) => row.productId));
+    schemaMismatch = rows.length > 0 && normalized.length !== rows.length;
+    responseHashes.push(stableHash(rows));
+  } else if (requestBudget <= 0) {
+    return {
+      status: "truncated",
+      contractMode,
+      shopId: args.store.shopId,
+      clueId: args.clue.clueId,
+      productIds: [],
+      remoteTotal: 0,
+      remoteTotalKnown: false,
+      fetchedRowCount: 0,
+      matchedRowCount: 0,
+      fetchedPages: 0,
+      requestCount: 0,
+      cacheHit: false,
+      requestHash: officialPlanHash(args.payload.adapter, "opportunityClueGoodsList"),
+      responseHash: "",
+      contractVersion,
+      message: "official validation request budget exhausted",
+      cacheKey
+    };
+  } else {
+    let nextPage = 1;
+    let stopPaging = false;
+    while (nextPage <= maxPages && requestCount < requestBudget && !stopPaging) {
+      assertNotCancelled(args.shouldCancel);
+      const remainingBudget = requestBudget - requestCount;
+      const knownPageCount = remoteTotalKnown ? Math.max(1, Math.ceil(remoteTotal / pageSize)) : maxPages;
+      if (remoteTotalKnown && nextPage > knownPageCount) break;
+      const concurrentPageCount = nextPage === 1 || !remoteTotalKnown
+        ? 1
+        : Math.min(pageConcurrency, remainingBudget, maxPages - nextPage + 1, knownPageCount - nextPage + 1);
+      const pages = Array.from({ length: concurrentPageCount }, (_, index) => nextPage + index);
+      try {
+        const responses = await Promise.all(pages.map(async (page) => {
+          const body = {
+            condition: {
+              [args.clue.lastCategoryKey || "third_cid"]: platformIntId(args.clue.lastCategoryId),
+              clue_id: platformIntId(args.clue.clueId)
+            },
+            page: { current: page, page_size: pageSize },
+            with_suggest_seo_title_words: true
+          };
+          const response = await runDoudianRequestPlan(args.payload, {
+            partition: args.store.partition,
+            planKey: "opportunityClueGoodsList",
+            context: bodyContext(body),
+            shouldCancel: args.shouldCancel,
+            maxAttempts: pages.length > 1 ? 1 : Math.max(1, remainingBudget)
+          });
+          return { page, response };
+        }));
+        requestCount += responses.reduce((sum, item) => sum + Math.max(1, Math.floor(Number(item.response.attemptCount || 1))), 0);
+        fetchedPages += responses.length;
+        responseHashes.push(...responses.map((item) => stableHash(item.response.data || null)));
+        for (const { response } of responses) {
+        if (!planOk(response, args.payload.adapter, "opportunityClueGoodsList")) {
+          requestFailed = true;
+          message = responseMessage(response) || "official goods request failed";
+          stopPaging = true;
+          break;
+        }
+        const businessStatus = parseOfficialBusinessStatus(
+          response.data,
+          mappingArray(args.payload.adapter, "clueGoodsSuccessStatusPaths", ["base_resp.status_code", "data.base_resp.status_code"]),
+          mappingArray(args.payload.adapter, "clueGoodsSuccessCodes", ["200"])
+        );
+        if (!businessStatus.found || !businessStatus.ok) {
+          requestFailed = true;
+          message = businessStatus.found
+            ? `official goods business status ${businessStatus.code}`
+            : "official goods business status mapping mismatch";
+          stopPaging = true;
+          break;
+        }
+        const wrapped = { opportunityClueGoodsList: response.data };
+        const mapped = parseOfficialGoodsPage(wrapped, mappingArray(args.payload.adapter, "clueGoodsListPaths", [
+          "opportunityClueGoodsList.data",
+          "opportunityClueGoodsList.data.data",
+          "opportunityClueGoodsList.data.list",
+          "opportunityClueGoodsList.list"
+        ]), mappingArray(args.payload.adapter, "clueGoodsTotalPaths", [
+          "opportunityClueGoodsList.data.total",
+          "opportunityClueGoodsList.data.data.total",
+          "opportunityClueGoodsList.total"
+        ]));
+        if (!mapped.found) {
+          schemaMismatch = true;
+          message = "official goods response list mapping mismatch";
+          stopPaging = true;
+          break;
+        }
+        const rows = mapped.rows.map(objectRecord);
+        lastPageRowCount = rows.length;
+        fetchedRowCount += rows.length;
+        if (mapped.remoteTotalKnown) {
+          remoteTotal = mapped.remoteTotal;
+          remoteTotalKnown = true;
+        }
+        const normalized = rows
+          .map((row, index) => normalizeProduct(args.store, row, args.payload.adapter, args.runId, fetchedRowCount - rows.length + index, { matchedClueId: args.clue.clueId, matchedClueName: args.clue.name, status: "matched" }))
+          .filter((row): row is DoudianOpportunityProductRow => Boolean(row));
+        if (rows.length && normalized.length !== rows.length) {
+          schemaMismatch = true;
+          message = "official goods product id mapping mismatch";
+          stopPaging = true;
+          break;
+        }
+        const matched = normalized.filter((row) => officialProductMatchesClueCategory(row, args.clue));
+        if (rows.length && matched.length !== normalized.length) {
+          schemaMismatch = true;
+          message = "official goods category contract mismatch";
+          stopPaging = true;
+          break;
+        }
+        matchedRowCount += matched.length;
+        productIds.push(...matched.map((row) => row.productId));
+        if ((remoteTotalKnown && fetchedRowCount >= remoteTotal) || rows.length < pageSize) {
+          stopPaging = true;
+          break;
+        }
+        }
+      } catch (error) {
+        requestFailed = true;
+        message = error instanceof Error ? error.message : String(error);
+        stopPaging = true;
+      }
+      nextPage += pages.length;
+    }
+  }
+  const coverage = evaluateInputScanCoverage({
+    requestFailed,
+    schemaMismatch,
+    fetchedCount: fetchedRowCount,
+    remoteTotal: remoteTotalKnown ? remoteTotal : undefined,
+    remoteTotalKnown,
+    fetchedPages,
+    maxPages,
+    pageSize,
+    lastPageRowCount,
+    limitReached: requestCount >= requestBudget
+  });
+  const status: OfficialClueGoodsResult["status"] = schemaMismatch
+    ? "schema_mismatch"
+    : coverage.status;
+  const requestHash = stableHash({
+    planHash: officialPlanHash(args.payload.adapter, "opportunityClueGoodsList"),
+    clueId: args.clue.clueId,
+    categoryKey: args.clue.lastCategoryKey,
+    categoryId: args.clue.lastCategoryId,
+    pageSize,
+    maxPages: configuredMaxPages
+  });
+  const result: OfficialClueGoodsResult = {
+    status,
+    contractMode,
+    shopId: args.store.shopId,
+    clueId: args.clue.clueId,
+    productIds: uniqueText(productIds),
+    remoteTotal,
+    remoteTotalKnown,
+    fetchedRowCount,
+    matchedRowCount,
+    fetchedPages,
+    requestCount,
+    cacheHit: false,
+    requestHash,
+    responseHash: stableHash(responseHashes),
+    contractVersion,
+    message: message || undefined
+  };
+  if (result.status === "complete") {
+    const now = nowIso();
+    const ttlPath = result.productIds.length ? "opportunityReport.officialGoodsCacheTtlMinutes" : "opportunityReport.officialEmptyGoodsCacheTtlMinutes";
+    const ttlMinutes = policyNumber(args.payload.adapter, ttlPath, result.productIds.length ? 15 : 5, 1, 360);
+    const shards = chunk(result.productIds, 250).map((ids, index) => ({
+      id: `${cacheKey}-${index + 1}`,
+      cacheKey,
+      shardNo: index + 1,
+      productIds: ids,
+      createdAt: now,
+      updatedAt: now
+    } satisfies OfficialClueGoodsCacheShardRecord));
+    const { productIds: _productIds, ...cacheResult } = result;
+    await repositoryPut(officialClueGoodsCacheStore, {
+      id: cacheKey,
+      ...identity,
+      result: cacheResult,
+      shardCount: shards.length,
+      expiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString(),
+      createdAt: now,
+      updatedAt: now
+    } satisfies OfficialClueGoodsCacheRecord).catch(() => undefined);
+    if (shards.length) await repositoryPutMany(officialClueGoodsCacheShardStore, shards, { concurrency: 2 }).catch(() => undefined);
+  }
+  return { ...result, cacheKey };
+}
+
 async function queryClueWords(payload: DoudianAdapterPayload, store: DoudianStoreSummary, clue: DoudianOpportunityClueRow, dryRun = false) {
   const fallback = baseClueWords(clue);
   if (dryRun || !policyBoolean(payload.adapter, "opportunityReport.enableRemoteClueWords", false)) return fallback;
-  const planKey = "opportunityClueWords";
-  const body = { clue_id: platformIntId(clue.clueId) };
-  const response = await runDoudianRequestPlan(payload, {
-    partition: store.partition,
-    planKey,
-    context: bodyContext(body)
-  });
-  const words = firstArray(response.data, mappingArray(payload.adapter, "clueWordPaths", ["data.data", "data", "data.words", "data.list", "words", "list"])).map((item) => {
-    if (typeof item === "string" || typeof item === "number") return text(item);
-    const record = objectRecord(item);
-    return text(record.word || record.name || record.clue_word || record.clueWord || record.keyword || record.title);
-  }).filter(Boolean);
-  return uniqueText(words.length ? words : fallback);
+  const result = await queryOfficialClueWords({ payload, store, clue });
+  return result.status === "complete" ? result.words : fallback;
 }
 
 function rawPriceCents(product: DoudianOpportunityProductRow) {
@@ -4630,13 +5432,7 @@ async function recordSubmitAttempts(args: {
       } satisfies SubmitAttemptRecord);
     }
   }
-  if (await ensureStructuredSubmitAttempts()) {
-    for (const batch of chunk(records.map((record) => structuredSubmitAttempt(record)), 500)) {
-      await getNativeData()!.opportunityAttempts!.putMany({ attempts: batch });
-    }
-  } else {
-    await repositoryPutMany(submitAttemptStore, records);
-  }
+  await persistSubmitAttemptRecords(records);
   return records.length;
 }
 
@@ -5073,6 +5869,293 @@ async function saveExecuteResult(
   };
 }
 
+interface TaskOfficialValidationResult {
+  candidates: DoudianOpportunityPrematchCandidate[];
+  writeEnabled: boolean;
+  status: PipelineSubmitTaskRecord["validationStatus"];
+  startedAt: string;
+  finishedAt: string;
+  wordsRequestCount: number;
+  officialWordCount: number;
+  goodsRequestCount: number;
+  cacheHitCount: number;
+  verifiedCount: number;
+  rejectedCount: number;
+  unknownCount: number;
+  budgetExhaustedCount: number;
+  distinctGroupCount: number;
+  skippedCount: number;
+  durationMs: number;
+  policyVersion: string;
+  contractVersion: string;
+}
+
+async function validateTaskCandidatesOfficially(args: {
+  payload: DoudianAdapterPayload;
+  store: DoudianStoreSummary;
+  task: PipelineSubmitTaskRecord;
+  candidates: DoudianOpportunityPrematchCandidate[];
+  opportunityArgs: OpportunityArgs;
+  shouldCancel: () => boolean;
+}): Promise<TaskOfficialValidationResult> {
+  const startedAt = nowIso();
+  const startedMs = Date.now();
+  const mode = officialValidationMode(args.payload.adapter);
+  const inputCoverageAllowsWrite = args.task.inputCoverageStatus === "complete";
+  const writeEnabled = officialWriteAllowed(mode, args.task.inputCoverageStatus);
+  const validationPolicy = officialValidationPolicy(args.payload.adapter);
+  const contractVersion = stableHash({
+    words: policyText(args.payload.adapter, "opportunityReport.officialWordsContractVersion", "official-words-contract-unverified-v1"),
+    goods: policyText(args.payload.adapter, "opportunityReport.officialGoodsContractVersion", "official-goods-contract-unverified-v1"),
+    wordsSemantics: officialWordsSemantics(args.payload.adapter),
+    goodsContractMode: officialGoodsContractMode(args.payload.adapter)
+  });
+  if (mode === "legacy") {
+    const candidates = inputCoverageAllowsWrite
+      ? args.candidates
+      : args.candidates.map((candidate) => ({
+          ...candidate,
+          eligible: false,
+          estimatedCost: 0,
+          status: "skipped",
+          submitStatus: "skipped",
+          skipReason: "input_coverage_not_complete"
+        } satisfies DoudianOpportunityPrematchCandidate));
+    return {
+      candidates, writeEnabled: inputCoverageAllowsWrite, status: "not_started", startedAt, finishedAt: nowIso(),
+      wordsRequestCount: 0, officialWordCount: 0, goodsRequestCount: 0, cacheHitCount: 0, verifiedCount: 0, rejectedCount: 0,
+      unknownCount: 0, budgetExhaustedCount: 0, distinctGroupCount: 0, skippedCount: 0,
+      durationMs: Date.now() - startedMs, policyVersion: validationPolicy.version, contractVersion
+    };
+  }
+  if (mode === "disabled") {
+    const candidates = args.candidates.map((candidate) => ({
+      ...candidate,
+      eligible: false,
+      estimatedCost: 0,
+      status: "skipped",
+      validationStatus: "not_started" as const,
+      validationReason: "official_validation_disabled",
+      submitStatus: "skipped",
+      skipReason: "官方校验已停用，安全模式禁止自动提报"
+    }));
+    return {
+      candidates, writeEnabled: false, status: "not_started", startedAt, finishedAt: nowIso(),
+      wordsRequestCount: 0, officialWordCount: 0, goodsRequestCount: 0, cacheHitCount: 0, verifiedCount: 0, rejectedCount: 0,
+      unknownCount: 0, budgetExhaustedCount: 0, distinctGroupCount: 0, skippedCount: candidates.length,
+      durationMs: Date.now() - startedMs, policyVersion: validationPolicy.version, contractVersion
+    };
+  }
+  const reusableSnapshot = Boolean(
+    args.task.validationFinishedAt
+    && (args.task.validationStatus === "complete" || args.task.validationStatus === "partial")
+    && args.task.validationPolicyVersion === validationPolicy.version
+    && args.task.officialContractVersion === contractVersion
+  );
+  if (reusableSnapshot) {
+    const candidates = args.candidates.map((candidate) => {
+      const submitState = text(candidate.submitStatus || candidate.status);
+      const alreadyResolved = ["accepted", "submitted", "sending", "unknown", "failed", "cancelled", "quota_exhausted"].includes(submitState);
+      const canSubmit = writeEnabled && candidate.validationStatus === "verified" && !alreadyResolved;
+      return {
+        ...candidate,
+        eligible: canSubmit,
+        estimatedCost: canSubmit ? 1 : 0,
+        status: canSubmit ? "ready" : candidate.status,
+        submitStatus: canSubmit ? "queued" : candidate.submitStatus
+      };
+    });
+    return {
+      candidates,
+      writeEnabled,
+      status: args.task.validationStatus,
+      startedAt: args.task.validationStartedAt || startedAt,
+      finishedAt: args.task.validationFinishedAt || nowIso(),
+      wordsRequestCount: Number(args.task.officialWordsRequestCount || 0),
+      officialWordCount: Number(args.task.officialWordsCount || 0),
+      goodsRequestCount: Number(args.task.officialGoodsRequestCount || 0),
+      cacheHitCount: 0,
+      verifiedCount: Number(args.task.officialVerifiedCount || 0),
+      rejectedCount: Number(args.task.officialRejectedCount || 0),
+      unknownCount: Number(args.task.validationUnknownCount || 0),
+      budgetExhaustedCount: Number(args.task.validationBudgetExhaustedCount || 0),
+      distinctGroupCount: 0,
+      skippedCount: 0,
+      durationMs: Date.now() - startedMs,
+      policyVersion: validationPolicy.version,
+      contractVersion
+    };
+  }
+
+  const timeoutMs = policyNumber(args.payload.adapter, "opportunityReport.officialValidationTimeoutMsPerStore", 60000, 1000, 600000);
+  const maxGroups = policyNumber(args.payload.adapter, "opportunityReport.officialValidationMaxGroupsPerStore", 20, 1, 1000);
+  const maxRequests = policyNumber(args.payload.adapter, "opportunityReport.officialValidationMaxRequestsPerStore", 100, 1, 5000);
+  const depthMax = policyNumber(args.payload.adapter, "opportunityReport.officialValidationCandidateDepthMax", 5, 1, 20);
+  const wordsByClue = new Map<string, Awaited<ReturnType<typeof queryOfficialClueWords>>>();
+  const goodsByClue = new Map<string, Awaited<ReturnType<typeof queryOfficialClueGoods>>>();
+  const validationGroups = new Set<string>();
+  const resultById = new Map<string, DoudianOpportunityPrematchCandidate>();
+  let wordsRequestCount = 0;
+  let goodsRequestCount = 0;
+  let cacheHitCount = 0;
+  let verifiedCount = 0;
+  let rejectedCount = 0;
+  let unknownCount = 0;
+  let budgetExhaustedCount = 0;
+  const markBudgetExhausted = (candidate: DoudianOpportunityPrematchCandidate, reason: string) => {
+    budgetExhaustedCount += 1;
+    resultById.set(candidate.id, {
+      ...candidate,
+      eligible: false,
+      estimatedCost: 0,
+      status: "skipped",
+      validationStatus: "budget_exhausted",
+      validationReason: reason,
+      validatedAt: nowIso(),
+      validationPolicyVersion: validationPolicy.version,
+      submitStatus: "skipped",
+      skipReason: "官方校验预算已耗尽"
+    });
+  };
+  const byProduct = new Map<string, DoudianOpportunityPrematchCandidate[]>();
+  for (const candidate of args.candidates) {
+    const list = byProduct.get(candidate.productId) || [];
+    list.push(candidate);
+    byProduct.set(candidate.productId, list);
+  }
+  for (const candidates of byProduct.values()) {
+    const ranked = candidates.sort(compareFallbackCandidates).slice(0, depthMax);
+    let selected = false;
+    let blocked = false;
+    for (const candidate of ranked) {
+      assertNotCancelled(args.shouldCancel);
+      if (selected || blocked) break;
+      const groupKey = `${args.store.shopId}::${candidate.clueId}`;
+      const timedOut = Date.now() - startedMs >= timeoutMs;
+      const groupBudgetReached = !validationGroups.has(groupKey) && validationGroups.size >= maxGroups;
+      const requestBudgetReached = wordsRequestCount + goodsRequestCount >= maxRequests;
+      if (timedOut || groupBudgetReached || requestBudgetReached) {
+        blocked = true;
+        markBudgetExhausted(candidate, timedOut ? "validation_timeout" : groupBudgetReached ? "validation_group_budget_exhausted" : "validation_request_budget_exhausted");
+        break;
+      }
+      validationGroups.add(groupKey);
+      const clue = candidateToClue(candidate);
+      let wordsResult = wordsByClue.get(candidate.clueId);
+      if (!wordsResult) {
+        wordsResult = await queryOfficialClueWords({ payload: args.payload, store: args.store, clue, opportunityArgs: args.opportunityArgs, shouldCancel: args.shouldCancel });
+        wordsByClue.set(candidate.clueId, wordsResult);
+        wordsRequestCount += wordsResult.requestCount;
+        if (wordsResult.cacheHit) cacheHitCount += 1;
+      }
+      if (Date.now() - startedMs >= timeoutMs) {
+        blocked = true;
+        markBudgetExhausted(candidate, "validation_timeout");
+        break;
+      }
+      const remainingRequests = Math.max(0, maxRequests - wordsRequestCount - goodsRequestCount);
+      let goodsResult = goodsByClue.get(candidate.clueId);
+      if (!goodsResult) {
+        goodsResult = await queryOfficialClueGoods({
+          payload: args.payload,
+          store: args.store,
+          clue,
+          runId: args.task.runId,
+          opportunityArgs: args.opportunityArgs,
+          maxRequests: remainingRequests,
+          shouldCancel: args.shouldCancel
+        });
+        goodsByClue.set(candidate.clueId, goodsResult);
+        goodsRequestCount += goodsResult.requestCount;
+        if (goodsResult.cacheHit) cacheHitCount += 1;
+      }
+      if (Date.now() - startedMs >= timeoutMs) {
+        blocked = true;
+        markBudgetExhausted(candidate, "validation_timeout");
+        break;
+      }
+      const decision = validateOfficialCandidate({
+        title: candidate.title,
+        clueName: candidate.clueName,
+        productId: candidate.productId,
+        anchorWords: candidate.anchorWords,
+        anchorConfidence: candidate.anchorConfidence,
+        words: wordsResult,
+        goods: goodsResult,
+        policy: validationPolicy
+      });
+      if (decision.status === "verified") verifiedCount += 1;
+      else if (decision.status === "rejected") rejectedCount += 1;
+      else unknownCount += 1;
+      const canSubmit = writeEnabled && decision.status === "verified";
+      resultById.set(candidate.id, {
+        ...candidate,
+        eligible: canSubmit,
+        estimatedCost: canSubmit ? 1 : 0,
+        status: canSubmit ? "ready" : "skipped",
+        validationStatus: decision.status,
+        validationReason: decision.reason,
+        validatedAt: nowIso(),
+        validationPolicyVersion: validationPolicy.version,
+        missingAnchorWords: decision.missingAnchorWords,
+        officialWords: wordsResult.words,
+        officialWordsHash: wordsResult.responseHash,
+        officialWordsSemantics: wordsResult.semantics,
+        officialWordsCacheKey: wordsResult.cacheKey,
+        officialGoodsCacheKey: goodsResult.cacheKey,
+        officialGoodsComplete: goodsResult.status === "complete",
+        officialGoodsMatched: decision.officialGoodsMatched,
+        officialGoodsContractMode: goodsResult.contractMode,
+        officialGoodsResponseHash: goodsResult.responseHash,
+        submitStatus: canSubmit ? "queued" : "skipped",
+        submitPriority: canSubmit ? "primary" : candidate.submitPriority,
+        fallbackSubmit: canSubmit ? false : candidate.fallbackSubmit,
+        submitModule: candidate.submitModule || "search_page_query",
+        submitModuleDecisionVersion: policyText(args.payload.adapter, "opportunityReport.submitModuleDecisionVersion", "submit-module-existing-source-v1"),
+        skipReason: canSubmit
+          ? undefined
+          : decision.status === "verified" && !inputCoverageAllowsWrite
+            ? "input_coverage_not_complete"
+            : decision.reason
+      });
+      if (decision.status === "verified") selected = true;
+      if (decision.status === "unknown" || decision.status === "budget_exhausted") blocked = true;
+    }
+  }
+  const candidates = args.candidates.map((candidate) => resultById.get(candidate.id) || ({
+    ...candidate,
+    eligible: false,
+    estimatedCost: 0,
+    status: "skipped",
+    submitStatus: "skipped",
+    validationStatus: "not_started",
+    validationReason: candidate.validationReason || "higher_rank_candidate_resolved",
+    skipReason: candidate.skipReason || "更高排名候选已完成官方决策"
+  } satisfies DoudianOpportunityPrematchCandidate));
+  const finishedAt = nowIso();
+  const status: PipelineSubmitTaskRecord["validationStatus"] = budgetExhaustedCount || unknownCount ? "partial" : "complete";
+  return {
+    candidates,
+    writeEnabled,
+    status,
+    startedAt,
+    finishedAt,
+    wordsRequestCount,
+    officialWordCount: uniqueText(Array.from(wordsByClue.values()).flatMap((result) => result.words)).length,
+    goodsRequestCount,
+    cacheHitCount,
+    verifiedCount,
+    rejectedCount,
+    unknownCount,
+    budgetExhaustedCount,
+    distinctGroupCount: validationGroups.size,
+    skippedCount: candidates.filter((candidate) => candidate.submitStatus === "skipped").length,
+    durationMs: Date.now() - startedMs,
+    policyVersion: validationPolicy.version,
+    contractVersion
+  };
+}
+
 async function runSubmitWorker(payload: DoudianAdapterPayload, args: OpportunityArgs = {}) {
   if (pipelineSubmitWorkerRunning) return { ok: true, skipped: true, reason: "worker-running" };
   pipelineSubmitWorkerRunning = true;
@@ -5089,7 +6172,7 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
         : await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []);
       const tasks = taskPool
         .filter((task) => !scopedRunId || task.runId === scopedRunId)
-        .filter((task) => task.status === "queued" || (task.status === "running" && (!task.leaseExpiresAt || Date.parse(task.leaseExpiresAt) < nowMs)))
+        .filter((task) => task.status === "ready" || task.status === "queued" || (task.status === "running" && (!task.leaseExpiresAt || Date.parse(task.leaseExpiresAt) < nowMs)))
         .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
       if (!tasks.length) break;
       const activeKeys = new Set<string>();
@@ -5122,7 +6205,7 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
       const store = stores.find((item) => item.shopId === task.shopId);
       const loadedTaskCandidates = await repositoryGetMany<DoudianOpportunityPrematchCandidate>(pipelineCandidateStore, task.candidateIds).catch(() => []);
       const taskCandidateById = new Map(loadedTaskCandidates.map((candidate) => [candidate.id, candidate]));
-      const taskCandidates = task.candidateIds
+      let taskCandidates = task.candidateIds
         .map((id) => taskCandidateById.get(id))
         .filter((candidate): candidate is DoudianOpportunityPrematchCandidate => Boolean(candidate));
       const updatedCandidates: DoudianOpportunityPrematchCandidate[] = [];
@@ -5135,6 +6218,16 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
       let cancelledCount = Number(task.cancelledCount || 0);
       let unknownCount = Number(task.unknownCount || 0);
       let remoteRequestCount = Number(task.remoteRequestCount || 0);
+      let officialWordsRequestCount = Number(task.officialWordsRequestCount || 0);
+      let officialWordsCount = Number(task.officialWordsCount || 0);
+      let officialGoodsRequestCount = Number(task.officialGoodsRequestCount || 0);
+      let officialVerifiedCount = Number(task.officialVerifiedCount || 0);
+      let officialRejectedCount = Number(task.officialRejectedCount || 0);
+      let validationUnknownCount = Number(task.validationUnknownCount || 0);
+      let validationBudgetExhaustedCount = Number(task.validationBudgetExhaustedCount || 0);
+      let officialValidationCacheHitCount = 0;
+      let officialValidationDurationMs = 0;
+      let distinctValidationGroupCount = 0;
       let submitThrottleReason = "";
       let quotaExhaustedReason = "";
       let cancelledDuringTask = false;
@@ -5142,9 +6235,116 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
       const fallbackEligibleProductIds = new Set<string>();
       const processedCandidateIds = new Set<string>();
       const sendingCandidateIds = new Set<string>();
+      const allowPostSubmitFallback = policyBoolean(payload.adapter, "opportunityReport.allowPostSubmitFallback", false);
       try {
         if (!store) throw new Error("Selected store is missing login partition");
         if (taskCandidates.length !== task.candidateIds.length) throw new Error("Submit task candidate snapshot is incomplete");
+        if (task.candidateIdsHash && task.candidateIdsHash !== stableHash([...taskCandidates.map((candidate) => candidate.id)].sort())) {
+          throw new Error("Submit task candidate snapshot hash is incomplete");
+        }
+        const recoveredSending = taskCandidates.filter(isUnresolvedSubmitState);
+        if (recoveredSending.length) {
+          const recoveredAt = nowIso();
+          const recoveredDedupe = await submittedDedupeIndex(recoveredSending);
+          const recoveredAcceptedIds = new Set(recoveredSending
+            .filter((candidate) => recoveredDedupe.relationKeys.has(relationKey(candidate)))
+            .map((candidate) => candidate.id));
+          const recoveredIds = new Map(recoveredSending.map((candidate) => [
+            candidate.id,
+            candidate.submitAttemptId || logicalSubmitAttemptId(task.runId, candidate)
+          ]));
+          taskCandidates = taskCandidates.map((candidate) => recoveredIds.has(candidate.id)
+            ? recoveredAcceptedIds.has(candidate.id)
+              ? {
+                  ...candidate,
+                  eligible: false,
+                  estimatedCost: 0,
+                  status: "submitted",
+                  submitStatus: "accepted",
+                  auditStatus: "pending",
+                  submitAttemptId: recoveredIds.get(candidate.id),
+                  submittedAt: candidate.submittedAt || recoveredAt,
+                  updatedAt: recoveredAt
+                }
+              : recoverUnresolvedSubmitCandidate(candidate, {
+                  runId: task.runId,
+                  reason: "submit_result_unresolved_after_worker_recovery",
+                  updatedAt: recoveredAt
+                })
+            : candidate);
+          submittedCount += recoveredAcceptedIds.size;
+          unknownCount += recoveredSending.length - recoveredAcceptedIds.size;
+          await repositoryPutMany(pipelineCandidateStore, taskCandidates.filter((candidate) => recoveredIds.has(candidate.id)), { concurrency: 2 });
+          const recoveredAcceptedAttempts = recoveredSending.filter((candidate) => recoveredAcceptedIds.has(candidate.id)).map((candidate) => logicalSubmitAttemptRecord({
+            id: recoveredIds.get(candidate.id)!,
+            runId: task.runId,
+            candidate,
+            status: "accepted",
+            message: "submit acceptance recovered from persisted attempt evidence"
+          }));
+          const recoveredUnknownAttempts = recoveredSending.filter((candidate) => !recoveredAcceptedIds.has(candidate.id)).map((candidate) => logicalSubmitAttemptRecord({
+            id: recoveredIds.get(candidate.id)!,
+            runId: task.runId,
+            candidate,
+            status: "unknown",
+            message: "submit result unresolved after worker recovery"
+          }));
+          await persistSubmitAttemptRecords(recoveredAcceptedAttempts, false);
+          await persistSubmitAttemptRecords(recoveredUnknownAttempts);
+        }
+        const shouldCancelSubmit = () => cancelledPipelineRunIds.has(task.runId) || args.isCancelled?.() === true;
+        await updatePipelineStoreRunProgress(task.storeRunId, { status: "running", phase: "official-validate" }).catch(() => null);
+        if (!args.dryRun) await assertMutationStoreActive(store);
+        if (!task.validationFinishedAt) {
+          const validationStartedAt = nowIso();
+          taskCandidates = taskCandidates.map((candidate) => {
+            const submitState = text(candidate.submitStatus || candidate.status);
+            if (["accepted", "submitted", "sending", "unknown", "failed", "cancelled", "quota_exhausted"].includes(submitState)) return candidate;
+            return { ...candidate, validationStatus: "pending", validationReason: undefined };
+          });
+          await repositoryPutMany(pipelineCandidateStore, taskCandidates, { concurrency: 2 });
+          await updateSubmitTaskFromWorker(task, workerId, {
+            status: "running",
+            validationStatus: "pending",
+            validationStartedAt
+          });
+        }
+        const validation = await validateTaskCandidatesOfficially({
+          payload,
+          store,
+          task,
+          candidates: taskCandidates,
+          opportunityArgs: args,
+          shouldCancel: shouldCancelSubmit
+        });
+        taskCandidates = validation.candidates;
+        officialWordsRequestCount = validation.wordsRequestCount;
+        officialWordsCount = validation.officialWordCount;
+        officialGoodsRequestCount = validation.goodsRequestCount;
+        officialVerifiedCount = validation.verifiedCount;
+        officialRejectedCount = validation.rejectedCount;
+        validationUnknownCount = validation.unknownCount;
+        validationBudgetExhaustedCount = validation.budgetExhaustedCount;
+        officialValidationCacheHitCount = validation.cacheHitCount;
+        officialValidationDurationMs = validation.durationMs;
+        distinctValidationGroupCount = validation.distinctGroupCount;
+        skippedCount += validation.skippedCount;
+        await repositoryPutMany(pipelineCandidateStore, taskCandidates, { concurrency: 2 });
+        await updateSubmitTaskFromWorker(task, workerId, {
+          status: "running",
+          validationStatus: validation.status,
+          validationStartedAt: validation.startedAt,
+          validationFinishedAt: validation.finishedAt,
+          officialWordsRequestCount,
+          officialWordsCount,
+          officialGoodsRequestCount,
+          officialVerifiedCount,
+          officialRejectedCount,
+          validationUnknownCount,
+          validationBudgetExhaustedCount,
+          validationPolicyVersion: validation.policyVersion,
+          officialContractVersion: validation.contractVersion
+        });
         const limit = dailyAttemptLimit(args, payload.adapter);
         let used = await submitAttemptCountForShop(store.shopId);
         const dedupeIndex = await submittedDedupeIndex(taskCandidates);
@@ -5165,9 +6365,19 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             safetySkippedCount,
             quotaExhaustedCount,
             cancelledCount,
-            unknownCount,
-            remoteRequestCount,
-            quotaAttemptCount: used,
+          unknownCount,
+          remoteRequestCount,
+          officialWordsRequestCount,
+          officialWordsCount,
+          officialGoodsRequestCount,
+          officialVerifiedCount,
+          officialRejectedCount,
+          validationUnknownCount,
+          validationBudgetExhaustedCount,
+          officialValidationCacheHitCount,
+          officialValidationDurationMs,
+          distinctValidationGroupCount,
+          quotaAttemptCount: used,
             quotaRemainingAfterSubmit: Math.max(0, limit - used)
           }).catch(() => null);
         };
@@ -5180,11 +6390,11 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
           }
           const isFallback = candidate.submitPriority === "fallback" || candidate.submitStatus === "fallback";
           const terminalStatus = text(candidate.submitStatus || candidate.status);
-          if (["submitted", "failed", "skipped", "cancelled", "quota_exhausted", "unknown"].includes(terminalStatus)) {
+          if (["accepted", "submitted", "failed", "skipped", "cancelled", "quota_exhausted", "unknown"].includes(terminalStatus)) {
             processedCandidateIds.add(candidate.id);
             continue;
           }
-          if (isFallback && !fallbackEligibleProductIds.has(candidate.productId)) {
+          if (isFallback && (!allowPostSubmitFallback || !fallbackEligibleProductIds.has(candidate.productId))) {
             processedCandidateIds.add(candidate.id);
             skippedCount += 1;
             updatedCandidates.push({
@@ -5353,6 +6563,7 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
           }
           const batchLimit = Math.min(submitWorkerBatchSize(payload.adapter), remaining);
           const batchCandidates = [candidate];
+          const candidateAttemptIds = new Map<string, string>();
           for (let nextIndex = candidateIndex + 1; nextIndex < taskCandidates.length && batchCandidates.length < batchLimit; nextIndex += 1) {
             const nextCandidate = taskCandidates[nextIndex];
             if (!nextCandidate || processedCandidateIds.has(nextCandidate.id)) continue;
@@ -5362,7 +6573,6 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             if (shouldSkipSubmittedCandidate(args, dedupeIndex, nextCandidate)) continue;
             batchCandidates.push(nextCandidate);
           }
-          const shouldCancelSubmit = () => cancelledPipelineRunIds.has(task.runId) || args.isCancelled?.() === true;
           const nextExecutions = await submitProductsForClue({
             payload,
             store,
@@ -5373,7 +6583,7 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             submitMode: submitMode(args),
             titleMatchMode: titleMatchMode(args),
             titleUpdatePosition: titleUpdatePosition(args),
-            module: "search_page_query",
+            module: candidate.submitModule || "search_page_query",
             dryRun: args.dryRun,
             validatedByPipeline: true,
             pipelineWords: candidate.clueWords,
@@ -5383,11 +6593,22 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
               const remoteProductIds = new Set(remoteProducts.map((product) => product.productId));
               const sendingCandidates = batchCandidates.filter((batchCandidate) => remoteProductIds.has(batchCandidate.productId));
               const sendingAt = nowIso();
-              sendingCandidates.forEach((batchCandidate) => sendingCandidateIds.add(batchCandidate.id));
+              sendingCandidates.forEach((batchCandidate) => {
+                sendingCandidateIds.add(batchCandidate.id);
+                candidateAttemptIds.set(batchCandidate.id, logicalSubmitAttemptId(task.runId, batchCandidate));
+              });
+              await persistSubmitAttemptRecords(sendingCandidates.map((batchCandidate) => logicalSubmitAttemptRecord({
+                id: candidateAttemptIds.get(batchCandidate.id)!,
+                runId: task.runId,
+                candidate: batchCandidate,
+                status: "sending",
+                message: "submit request is in flight"
+              })));
               await repositoryPutMany(pipelineCandidateStore, sendingCandidates.map((batchCandidate) => ({
                 ...batchCandidate,
                 status: "submitting",
                 submitStatus: "sending",
+                submitAttemptId: candidateAttemptIds.get(batchCandidate.id),
                 submittedAt: undefined,
                 updatedAt: sendingAt
               })), { concurrency: 2 });
@@ -5464,13 +6685,25 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             if (unknown) unknownCount += 1;
             if (!submitted && !failed) skippedCount += 1;
             if (isFallback && submitted) fallbackEligibleProductIds.delete(batchCandidate.productId);
-            if (!isFallback && failed && !unknown && !dailyQuotaExhausted && !submitThrottleReason) fallbackEligibleProductIds.add(batchCandidate.productId);
+            if (allowPostSubmitFallback && !isFallback && failed && !unknown && !dailyQuotaExhausted && !submitThrottleReason) fallbackEligibleProductIds.add(batchCandidate.productId);
+            const logicalAttemptId = candidateAttemptIds.get(batchCandidate.id) || batchCandidate.submitAttemptId;
+            if (logicalAttemptId) {
+              await persistSubmitAttemptRecords([logicalSubmitAttemptRecord({
+                id: logicalAttemptId,
+                runId: task.runId,
+                candidate: batchCandidate,
+                status: submitted ? "accepted" : unknown ? "unknown" : failed ? "failed" : "unknown",
+                message: submitted ? "submit request accepted" : failureMessage || "submit result unresolved"
+              })], attempts <= 0);
+            }
             resolvedBatchCandidates.push({
               ...batchCandidate,
               eligible: false,
               estimatedCost: 0,
               status: submitted ? "submitted" : unknown ? "unknown" : failed ? "failed" : "skipped",
-              submitStatus: submitted ? "submitted" : unknown ? "unknown" : failed ? "failed" : "skipped",
+              submitStatus: submitted ? "accepted" : unknown ? "unknown" : failed ? "failed" : "skipped",
+              auditStatus: submitted ? "pending" : batchCandidate.auditStatus,
+              submitAttemptId: logicalAttemptId,
               skipReason: failed ? failureMessage : batchCandidate.skipReason,
               submittedAt: submitted ? nowIso() : undefined
             });
@@ -5506,6 +6739,10 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
         cancelledDuringTask = cancelledDuringTask || await submitTaskIsCancelled(task, args);
         const finalStatus: PipelineSubmitTaskRecord["status"] = cancelledDuringTask
           ? "cancelled"
+          : task.inputCoverageStatus === "failed"
+            ? "failed"
+          : unknownCount || validationUnknownCount || validationBudgetExhaustedCount || task.inputCoverageStatus === "partial_coverage"
+            ? "partial"
           : failedCount
             ? (submittedCount || skippedCount ? "partial" : "failed")
             : "ok";
@@ -5520,6 +6757,13 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
           cancelledCount,
           unknownCount,
           remoteRequestCount,
+          officialWordsRequestCount,
+          officialWordsCount,
+          officialGoodsRequestCount,
+          officialVerifiedCount,
+          officialRejectedCount,
+          validationUnknownCount,
+          validationBudgetExhaustedCount,
           leaseExpiresAt: undefined,
           lastError: quotaExhaustedReason || submitThrottleReason || task.lastError,
           finishedAt,
@@ -5536,6 +6780,16 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
           cancelledCount,
           unknownCount,
           remoteRequestCount,
+          officialWordsRequestCount,
+          officialGoodsRequestCount,
+          officialVerifiedCount,
+          officialRejectedCount,
+          validationUnknownCount,
+          validationBudgetExhaustedCount,
+          officialValidationCacheHitCount,
+          officialValidationDurationMs,
+          officialValidationCompleteRatio: taskCandidates.length ? officialVerifiedCount / taskCandidates.length : 0,
+          distinctValidationGroupCount,
           skipReason: quotaExhaustedReason || submitThrottleReason || undefined,
           quotaAttemptCount: finalQuotaAttemptCount,
           quotaRemainingAfterSubmit: Math.max(0, limit - finalQuotaAttemptCount),
@@ -5561,6 +6815,16 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             cancelledCount,
             unknownCount,
             remoteRequestCount,
+            officialWordsRequestCount,
+            officialWordsCount,
+            officialGoodsRequestCount,
+            officialVerifiedCount,
+            officialRejectedCount,
+            validationUnknownCount,
+            validationBudgetExhaustedCount,
+            officialValidationCacheHitCount,
+            officialValidationDurationMs,
+            distinctValidationGroupCount,
             executionCount: executions.length,
             quotaAttemptCount: finalQuotaAttemptCount,
             dailyAttemptLimit: limit,
@@ -5589,20 +6853,27 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
         await refreshPipelineRunSummary(task.runId).catch(() => null);
       } catch (error) {
         const cancelled = await submitTaskIsCancelled(task, args);
-        if (cancelled && sendingCandidateIds.size) {
+        if (sendingCandidateIds.size) {
           const unresolvedSending = await repositoryGetMany<DoudianOpportunityPrematchCandidate>(pipelineCandidateStore, Array.from(sendingCandidateIds)).catch(() => []);
           const cancelledAt = nowIso();
-          await repositoryPutMany(pipelineCandidateStore, unresolvedSending
-            .filter((candidate) => candidate.submitStatus === "sending" || candidate.status === "submitting")
-            .map((candidate) => ({
-              ...candidate,
-              eligible: false,
-              estimatedCost: 0,
-              status: "skipped",
-              submitStatus: "cancelled",
-              skipReason: "商机提报任务在平台写请求发出前取消",
+          const unresolvedCandidates = unresolvedSending
+            .filter(isUnresolvedSubmitState)
+            .map((candidate) => recoverUnresolvedSubmitCandidate(candidate, {
+              runId: task.runId,
+              reason: cancelled ? "submit_result_unresolved_during_cancellation" : "submit_result_unresolved_after_worker_error",
               updatedAt: cancelledAt
-            })), { concurrency: 2 }).catch(() => []);
+            }));
+          await repositoryPutMany(pipelineCandidateStore, unresolvedCandidates, { concurrency: 2 }).catch(() => []);
+          await persistSubmitAttemptRecords(unresolvedCandidates
+            .filter((candidate) => candidate.submitAttemptId)
+            .map((candidate) => logicalSubmitAttemptRecord({
+              id: candidate.submitAttemptId!,
+              runId: task.runId,
+              candidate,
+              status: "unknown",
+              message: cancelled ? "submit result unresolved during cancellation" : "submit result unresolved after worker error"
+            }))).catch(() => undefined);
+          unknownCount += unresolvedCandidates.length;
         }
         if (!cancelled) failedCount = Math.max(1, failedCount);
         const failedAt = nowIso();
@@ -5667,6 +6938,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   cancelledPipelineRunIds.delete(runId);
   const matchRules = normalizeOpportunityMatchRules(args.matchRules);
   const filters = args.filters || {};
+  const validationMode = officialValidationMode(payload.adapter);
   try {
     assertOpportunityPipelineContract(payload.adapter);
   } catch (error) {
@@ -5901,6 +7173,19 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       sourceHealth.push(...scan.sourceHealth);
       if (!scan.detail.ok) throw new Error(scan.detail.message || "opportunity product scan failed");
       products.push(...scan.products);
+      const inputCoverage: PipelineInputCoverage = {
+        productScanStatus: scan.scanStatus,
+        productFetchedCount: scan.products.length,
+        productRemoteTotal: scan.remoteTotalKnown ? scan.remoteTotal : undefined,
+        productRemoteTotalKnown: scan.remoteTotalKnown,
+        productFetchedPages: scan.fetchedPages,
+        productNextPage: scan.nextPage,
+        clueScanStatus: "complete",
+        clueFetchedUniqueCount: 0,
+        clueRemoteTotalByCategory: {},
+        clueTruncatedCategoryCount: 0,
+        coverageVersion: inputCoverageVersion
+      };
       const storeDailyAttemptLimit = dailyAttemptLimit(args, payload.adapter);
       const quotaUsedBefore = await submitAttemptCountForShop(identity.shopId);
       const quotaRemainingBefore = Math.max(0, storeDailyAttemptLimit - quotaUsedBefore);
@@ -5934,6 +7219,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
 
       let storeClueCount = 0;
       let storeTokenCount = 0;
+      const storeClueIds = new Set<string>();
       const storeCandidates: DoudianOpportunityPrematchCandidate[] = [];
       const storeDiagnostics = createMatchDiagnostics();
       const storeSourceHealth = [...scan.sourceHealth];
@@ -5994,9 +7280,18 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         storeSourceHealth.push(...clueResult.sourceHealth);
         sourceHealth.push(...clueResult.sourceHealth);
         if (clueResult.ok === false) throw new Error("opportunity clue loading failed");
+        inputCoverage.clueRemoteTotalByCategory[categoryKey] = clueResult.remoteTotalKnown ? clueResult.remoteTotal : null;
+        if (clueResult.scanStatus === "truncated") {
+          inputCoverage.clueScanStatus = "truncated";
+          inputCoverage.clueTruncatedCategoryCount += 1;
+        } else if (clueResult.scanStatus === "failed") {
+          inputCoverage.clueScanStatus = "failed";
+        }
         if (!clueResult.rows.length || !clueResult.cacheKey) continue;
         pipelineClues.push(...clueResult.rows);
         storeClueCount += clueResult.rows.length;
+        clueResult.rows.forEach((clue) => storeClueIds.add(clue.clueId));
+        inputCoverage.clueFetchedUniqueCount = storeClueIds.size;
         await updatePipelineStoreRunProgress(id, {
           phase: "clue-load",
           productCount: scan.products.length,
@@ -6026,6 +7321,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         dispatchPipelineProgress(args, 12 + ((index + 0.35) / targets.length) * 70, `匹配商机词：${identity.shopName || identity.shopId}`);
         failurePhase = "match";
         const matchResult = matchCategoryProductsByAhoTokens({
+          adapter: payload.adapter,
           runId,
           storeRunId: id,
           clueCacheKey: clueResult.cacheKey,
@@ -6077,36 +7373,11 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         runId,
         storeRunId: id,
         identity,
-        candidates: compactedStoreCandidates
+        candidates: compactedStoreCandidates,
+        snapshotVersion: matchRulesHash,
+        inputCoverage,
+        candidateDepthMax: policyNumber(payload.adapter, "opportunityReport.officialValidationCandidateDepthMax", 5, 1, 20)
       });
-      const taskCandidateIds = new Set(task?.candidateIds || []);
-      const persistedCandidates = task
-        ? compactedStoreCandidates.map((candidate) => taskCandidateIds.has(candidate.id)
-          ? {
-              ...candidate,
-              submitTaskId: task.id,
-              submitStatus: candidate.eligible && candidate.status === "ready" ? "queued" : "fallback"
-            }
-          : candidate)
-        : compactedStoreCandidates;
-      if (persistedCandidates.length) {
-        try {
-          await repositoryPutMany(pipelineCandidateStore, persistedCandidates, { concurrency: 2 });
-        } catch (error) {
-          if (task) {
-            const failedAt = nowIso();
-            await repositoryPut(pipelineSubmitTaskStore, {
-              ...task,
-              status: "failed",
-              failedCount: Math.max(1, task.failedCount),
-              lastError: error instanceof Error ? error.message : String(error),
-              finishedAt: failedAt,
-              updatedAt: failedAt
-            } satisfies PipelineSubmitTaskRecord).catch(() => undefined);
-          }
-          throw error;
-        }
-      }
       if (task) {
         submitTaskCount += 1;
       }
@@ -6135,6 +7406,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         ...identity,
         status: task ? "queued" : skipReason ? "skipped" : "ok",
         phase: task ? "submit-queued" : "finished",
+        inputCoverage,
         productCount: scan.products.length,
         currentCategoryCount: extracted.categories.length,
         effectiveCategoryCount: effective.length,
@@ -6316,6 +7588,9 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     ? (processedStoreCount ? "partial" : "failed")
     : "ok";
   const summary = {
+    officialValidationObserveMode: validationMode === "observe" ? 1 : 0,
+    officialValidationDisabledMode: validationMode === "disabled" ? 1 : 0,
+    officialValidationEnforceMode: validationMode === "enforce" ? 1 : 0,
     productCount: products.length,
     currentCategoryCount,
     effectiveCategoryCount,
@@ -6382,7 +7657,11 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     mode: "pipeline-submit",
     message: finalFailedCount
       ? "商机提报已完成，部分候选提报失败"
-      : submitTaskCount
+      : validationMode === "observe"
+        ? "官方校验观察已完成，未执行平台写请求"
+        : validationMode === "disabled"
+          ? "官方校验已停用，未执行平台写请求"
+          : submitTaskCount
         ? "商机提报已生成候选并完成自动提报处理"
         : "商机提报处理完成",
     runId,
@@ -6804,6 +8083,7 @@ export async function runDoudianOpportunityReportSelfCheck(options: { doudianAda
   const pipelineRunId = `opportunity-pipeline-self-check-${suffix}`;
   const submitRunId = `opportunity-submit-self-check-${suffix}`;
   const collectRunId = `opportunity-collect-self-check-${suffix}`;
+  const mockClueId = `clue-${suffix}`;
   try {
     await upsertStoreLedger({
       shopId,
@@ -6816,7 +8096,7 @@ export async function runDoudianOpportunityReportSelfCheck(options: { doudianAda
     });
     const mockClue = {
       clue_detail: {
-        clue_id: `clue-${suffix}`,
+        clue_id: mockClueId,
         name: "Self Check Opportunity",
         short_name: "Self Check Opportunity",
         category_path: ["Self", "Check"],
@@ -6886,6 +8166,10 @@ export async function runDoudianOpportunityReportSelfCheck(options: { doudianAda
       operationId: pipelineRunId,
       mockClues: [mockClue],
       mockProducts: [mockProduct],
+      mockOfficialClueWords: { [mockClueId]: ["Self Check Opportunity"] },
+      mockOfficialProductsByClue: { [mockClueId]: [mockProduct] },
+      mockOfficialWordsContract: { [mockClueId]: "alternative_terms" },
+      mockOfficialGoodsContract: { [mockClueId]: "positive_only" },
       matchRules: { minTokenHitRatio: 0.33 },
       dryRun: true
     });

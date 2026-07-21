@@ -23,6 +23,13 @@ kmsource
 remote-web/client-shell/src/domain/doudian
 !remote-web/client-shell/src/domain/doudian/
 remote-web/client-shell/src/domain/doudian/*
+!remote-web/client-shell/src/domain/doudian/opportunity/
+!remote-web/client-shell/src/domain/doudian/opportunity/**
 !remote-web/client-shell/src/domain/doudian/marketing/
 remote-web/client-shell/src/domain/doudian/marketing/*
 !remote-web/client-shell/src/domain/doudian/marketing/storeContext.ts
+remote-web/client-shell/test/fixtures
+!remote-web/client-shell/test/fixtures/
+remote-web/client-shell/test/fixtures/*
+!remote-web/client-shell/test/fixtures/opportunity/
+!remote-web/client-shell/test/fixtures/opportunity/**

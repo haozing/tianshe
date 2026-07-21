@@ -95,6 +95,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   shouldCancel?: () => boolean;
   beginMutation?: () => void;
   endMutation?: () => void;
+  maxAttempts?: number;
 }): Promise<RequestPlanResult> {
   const startedAt = Date.now();
   let attemptCount = 0;
@@ -184,9 +185,14 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
 
   let response = await runRequest();
   if (response.nonRetryable) return finalize(response);
+  const configuredMaxAttempts = Math.max(1, Math.min(8, Math.floor(Number(plan.maxAttempts || 1))));
+  const requestedMaxAttempts = args.maxAttempts == null
+    ? configuredMaxAttempts
+    : Math.max(1, Math.min(8, Math.floor(Number(args.maxAttempts || 1))));
+  const maxAttempts = Math.min(configuredMaxAttempts, requestedMaxAttempts);
   const prepareMessages = arrayText(plan.prepareOnMessages);
   const prepareAttempts = Math.max(0, Math.min(3, Math.floor(Number(plan.prepareRetryAttempts || (prepareMessages.length ? 1 : 0)))));
-  for (let attempt = 0; attempt < prepareAttempts && responseMatches(response, prepareMessages); attempt += 1) {
+  for (let attempt = 0; attempt < prepareAttempts && attemptCount < maxAttempts && responseMatches(response, prepareMessages); attempt += 1) {
     if (args.shouldCancel?.()) break;
     await reportPlanRetry(args.planKey, args.partition, "prepare", attempt + 1, response);
     const delayMs = requestRetryDelayMs(plan, attempt + 1, "prepareRetryDelayMs", "prepareRetryBackoff", 0, response);
@@ -197,9 +203,8 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
     if (response.nonRetryable) return finalize(response);
   }
 
-  const maxAttempts = Math.max(1, Math.min(8, Math.floor(Number(plan.maxAttempts || 1))));
   if (plan.retryOnHttpError === true) {
-    for (let attempt = 1; attempt < maxAttempts && responseHasHttpError(response); attempt += 1) {
+    for (let attempt = 1; attempt < maxAttempts && attemptCount < maxAttempts && responseHasHttpError(response); attempt += 1) {
       if (args.shouldCancel?.()) break;
       await reportPlanRetry(args.planKey, args.partition, "http", attempt, response);
       const delayMs = requestRetryDelayMs(plan, attempt, "retryDelayMs", "retryBackoff", 1000, response);
@@ -211,7 +216,7 @@ export async function runDoudianRequestPlan(payload: DoudianAdapterPayload, args
   }
 
   if (plan.retryOnBusinessFailure === true) {
-    for (let attempt = 1; attempt < maxAttempts && !requestPlanResponseOk(response, adapter, args.planKey); attempt += 1) {
+    for (let attempt = 1; attempt < maxAttempts && attemptCount < maxAttempts && !requestPlanResponseOk(response, adapter, args.planKey); attempt += 1) {
       if (args.shouldCancel?.()) break;
       await reportPlanRetry(args.planKey, args.partition, "business", attempt, response);
       const delayMs = requestRetryDelayMs(plan, attempt, "retryDelayMs", "retryBackoff", 1000, response);
