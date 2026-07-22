@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.22.opportunity-submit-live-lookup-v3",
+  "version": "2026.07.22.workflow-usability-v1",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "dbfe705-dirty",
-    "buildTime": "2026-07-22T09:19:42.453Z"
+    "gitCommit": "0c7b8ac",
+    "buildTime": "2026-07-22T10:15:25.390Z"
   }
 }

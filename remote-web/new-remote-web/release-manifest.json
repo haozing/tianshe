@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026.07.22.opportunity-submit-live-lookup-v3",
-  "buildTime": "2026-07-22T09:19:42.453Z",
+  "releaseId": "2026.07.22.workflow-usability-v1",
+  "buildTime": "2026-07-22T10:15:25.390Z",
   "entry": {
     "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
   },
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "fa95029b33685248f71af7d88da86f79dc39008c5c03ba77154fd9342bfd219f"
+      "sha256": "d9ec38e84ddbedb3064c723b8ece8fd2eda628a8e6a5b80b37e4b938809e6a1d"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,14 +36,14 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "ca00b5fe20ac69d098c39866428f0ef2c59b258ef03d96968dd37c95cdf8bd4a"
+      "sha256": "e014b3cf8a2ea095233a86c2092a6c6275008dc141f849d50ec0f8bd336a4ad7"
     },
     {
       "path": "new-remote-web/styles.css",
       "type": "remote-css",
       "cache": "short",
       "required": true,
-      "sha256": "9b833a5503406ba4e6aca63b5853b2e008a40ec15a3a52084bfebc7eda3fddfc"
+      "sha256": "e2ee441b3936ba4c34136f3afc2a9e9a68b71d49a3538264879e68b7d9b3833b"
     },
     {
       "path": "new-remote-web/assets/chihu-app-icon.png",
@@ -71,7 +71,7 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "13c8f49b7097be2a36307763f620678efb286c5cd135b704e9ed30b5382778c2"
+      "sha256": "40985be65782dfc5964cad326a0e8f01e44ce1b419d84bf4ed5a6c89ed5ca2df"
     },
     {
       "path": "new-remote-web/config/chihu-config.marketing-pilot.json",
@@ -106,7 +106,7 @@
       "type": "update-notes",
       "cache": "no-cache",
       "required": true,
-      "sha256": "6bfe92bd77809c2256af734b480c2a2de8b4e3427d1fa0f2b4b66aab3d11a6a5"
+      "sha256": "ad322a2561b368394ea9aac724464fde049c6d02860d68927cb0c8fa1ac5fc64"
     },
     {
       "path": "new-remote-web/config/invalid-config.json",
@@ -141,7 +141,7 @@
     "schemaVersion": 1,
     "algorithm": "ed25519",
     "keyId": "chihu-remote-web-ed25519-2026-07",
-    "payloadSha256": "6bb96be2459e37f05c241e5bb9b4dce0c03fef5cd8bb6de4db971aa1921250d6",
-    "value": "oviH/aVuDSWowmIEYeuh12UCPoLHPj6GVG1Ydtz/XDDOU89tePfH9OKY2Vbmq90ks3mwpItwU6Zudb2ysnhEDA=="
+    "payloadSha256": "c36fd8df7ad1b2153a9f3c554422e53f14546077d64f12957ccd7808dee37932",
+    "value": "dxrR1m6zkVL/2BRXAyB/nNlUW16VQK+sDobF+swdGQ+IqXa95pK3UKc05kjoNKtcSIC3MsWBytLQuzdd5mo6BQ=="
   }
 }
