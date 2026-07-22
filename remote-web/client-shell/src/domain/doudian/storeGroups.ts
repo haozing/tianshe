@@ -413,7 +413,8 @@ export async function openStoreWindow(shopId: string, options: OpenStoreOptions 
 
   const winId = await native.windows.open({
     url,
-    title: options.title || `${store.shopName || store.shopId} - 抖店后台`,
+    title: options.title || store.shopName || store.shopId,
+    lockTitle: true,
     partition: store.partition || defaultPartition(store.shopId, options.doudianAdapter),
     width: 1280,
     height: 820,

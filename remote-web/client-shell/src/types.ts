@@ -311,6 +311,7 @@ export interface DoudianStoreSummary {
   lastFailureReason?: string;
   lastFailureMessage?: string;
   adapterVersion?: string;
+  loginPending?: boolean;
 }
 
 export interface DoudianStoreIdentityRef {

@@ -3,6 +3,7 @@ const { APP_TITLE, HOME_PRELOAD, ICON_PATH } = require("../config");
 const { addDevShortcuts } = require("../utils/dev-shortcuts");
 const { registerWebContentsPrincipal } = require("../security/web-contents-principal");
 const { markRunnerWindowProgrammaticClose, registerTaskChildWindow, runnerOwnsWindow, runnerWindowCommand, taskChildTarget } = require("../tasks/task-manager");
+const { lockBrowserWindowTitle } = require("../window/window-title");
 
 const ENABLE_GPU = process.env.CHIHU_ENABLE_GPU === "1";
 
@@ -68,6 +69,7 @@ function registerWindowHandlers() {
 
     const child = new BrowserWindow(params);
     child.setMenu(null);
+    if (args.lockTitle) lockBrowserWindowTitle(child, args.title);
     const taskContext = runnerTarget ? registerTaskChildWindow(event, child, args.url, args.partition) : null;
     if (!taskContext) {
       const target = new URL(args.url);

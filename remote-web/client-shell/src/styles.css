@@ -76,6 +76,107 @@ textarea {
   margin: 0;
 }
 
+.opportunity-live-panel.is-running::after {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: #4ade80;
+  box-shadow: 0 0 14px rgba(74, 222, 128, 0.8);
+  content: "";
+  pointer-events: none;
+  animation: opportunity-live-scan 3.6s linear infinite;
+}
+
+.opportunity-live-rail {
+  position: relative;
+}
+
+.opportunity-live-rail::after {
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 68px;
+  height: 1px;
+  background: #f6c85f;
+  box-shadow: 0 0 10px rgba(246, 200, 95, 0.65);
+  content: "";
+  animation: opportunity-live-rail 2.8s ease-in-out infinite;
+}
+
+.opportunity-live-panel.is-running .opportunity-submit-button {
+  animation: opportunity-submit-pulse 1.8s ease-in-out infinite;
+}
+
+.opportunity-log-entry {
+  opacity: 0;
+  transform: translateY(8px);
+  animation: opportunity-log-enter 280ms ease-out forwards;
+}
+
+@keyframes opportunity-live-scan {
+  0% {
+    top: 48px;
+    opacity: 0;
+  }
+
+  12% {
+    opacity: 0.75;
+  }
+
+  88% {
+    opacity: 0.35;
+  }
+
+  100% {
+    top: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes opportunity-live-rail {
+  0%,
+  100% {
+    transform: translateX(0);
+    opacity: 0.45;
+  }
+
+  50% {
+    transform: translateX(260px);
+    opacity: 1;
+  }
+}
+
+@keyframes opportunity-submit-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 18px rgba(34, 197, 94, 0.24);
+  }
+
+  50% {
+    box-shadow: 0 0 34px rgba(34, 197, 94, 0.5);
+  }
+}
+
+@keyframes opportunity-log-enter {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .opportunity-live-panel.is-running::after,
+  .opportunity-live-rail::after,
+  .opportunity-live-panel.is-running .opportunity-submit-button,
+  .opportunity-log-entry {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @media (max-width: 760px) {
   body {
     overflow: auto;

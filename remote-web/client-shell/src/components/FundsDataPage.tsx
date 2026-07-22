@@ -182,7 +182,7 @@ const defaultSummaryMetrics: NonNullable<RemoteFundsFieldSchema["summaryMetrics"
 ];
 const fundsMetricKeySet = new Set<string>(fundsMetricKeys);
 const CURRENT_SNAPSHOT_LABEL = "当前资金快照";
-const DEFAULT_AUTO_REFRESH_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_CACHE_STALE_TTL_MS = 5 * 60 * 1000;
 const columnFormatSet = new Set<string>(["money", "number"]);
 const toneSet = new Set<string>(["default", "blue", "green", "warning", "danger"]);
 const defaultMetricColumnWidth = 112;
@@ -698,7 +698,7 @@ export function FundsDataPage() {
   const [loadState, setLoadState] = useState<LoadState>(() => previewMode ? "ready" : "loading");
   const [loadMessage, setLoadMessage] = useState("");
   const [syncing, setSyncing] = useState(false);
-  const [lastSyncAt, setLastSyncAt] = useState(() => new Date());
+  const [lastSyncAt, setLastSyncAt] = useState<Date | null>(() => previewMode ? new Date() : null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fundsRows, setFundsRows] = useState<FundsRow[]>(() => previewMode ? sampleFundsRows(sampleStores) : []);
   const fundsRowsRef = useRef(fundsRows);
@@ -721,7 +721,7 @@ export function FundsDataPage() {
   const [adapterVersion, setAdapterVersion] = useState("");
   const [fieldSchemaVersion, setFieldSchemaVersion] = useState("");
   const [exportFormat, setExportFormat] = useState<ExportFormat>("Excel");
-  const [autoRefreshTtlMs, setAutoRefreshTtlMs] = useState(DEFAULT_AUTO_REFRESH_TTL_MS);
+  const [cacheStaleTtlMs, setCacheStaleTtlMs] = useState(DEFAULT_CACHE_STALE_TTL_MS);
   const columnResizeState = useRef<{ key: FundsMetricKey; pointerId: number; startX: number; startWidth: number } | null>(null);
 
   function commitFundsRows(rows: FundsRow[]) {
@@ -766,7 +766,6 @@ export function FundsDataPage() {
           return next;
         });
         setLoadState("ready");
-        setLastSyncAt(new Date());
       } else {
         setLoadState("error");
         setLoadMessage(result.message || "店铺列表读取失败");
@@ -779,7 +778,7 @@ export function FundsDataPage() {
     }
   }
 
-  async function refreshFundsData(ids = selectedIds, generation = ++requestGeneration.current) {
+  async function fetchFundsDataManually(ids = selectedIds, generation = ++requestGeneration.current) {
     const shopIds = [...ids];
     if (bridgeMissing) {
       if (generation !== requestGeneration.current) return;
@@ -819,7 +818,7 @@ export function FundsDataPage() {
       if (generation !== requestGeneration.current) return;
       if (result.status === "cancelled") {
         setFundsState("ready");
-        setFundsMessage(result.message || "已取消资金数据同步");
+        setFundsMessage(result.message || "已取消资金数据获取");
         return;
       }
       const detailList = Array.isArray(result.details) ? result.details : [];
@@ -879,34 +878,22 @@ export function FundsDataPage() {
   }
 
   async function hydrateLatestFundsData(ids = selectedIds, generation = requestGeneration.current) {
-    if (previewMode || !stores.length || !ids.size) return new Set<string>();
+    if (previewMode || !stores.length || !ids.size) return;
     try {
       const result = await fetchDoudianFundsDataLatest({
         shopIds: [...ids]
       });
-      if (generation !== requestGeneration.current) return new Set<string>();
-      if (!result.rows?.length) return new Set(ids);
+      if (generation !== requestGeneration.current) return;
+      if (!result.rows?.length) return;
       const detailList = Array.isArray(result.details) ? result.details : [];
       const detailById = new Map(detailList.map((detail) => [String(detail.shopId || ""), detail]));
       const rowById = new Map(result.rows.map((row) => [String(row.shopId), row]));
       const now = Date.now();
-      const refreshIds = new Set([...ids].filter((id) => {
-        const detail = detailById.get(id);
-        if (!rowById.has(id) || !detail) return true;
-        const updatedAt = Date.parse(detail?.dataUpdatedAt || detail?.attemptedAt || "");
-        const diagnostic = detailDiagnostic(detail);
-        const summary = diagnostic.rowSummary && typeof diagnostic.rowSummary === "object" ? diagnostic.rowSummary as Record<string, unknown> : {};
-        return !Number.isFinite(updatedAt) ||
-          now - updatedAt > autoRefreshTtlMs ||
-          detail.status === "partial" ||
-          Number(diagnostic.dataSourceFailureCount || 0) > 0 ||
-          Number(summary.unavailableFieldCount || 0) > 0;
-      }));
       commitFundsRows(stores.map((store) => {
         const row = rowById.get(store.id);
         const detail = detailById.get(store.id);
         const updatedAt = Date.parse(detail?.dataUpdatedAt || detail?.attemptedAt || "");
-        const cachedStale = !Number.isFinite(updatedAt) || now - updatedAt > autoRefreshTtlMs;
+        const cachedStale = !Number.isFinite(updatedAt) || now - updatedAt > cacheStaleTtlMs;
         return row ? fundsRowFromRemote(row, store, detail, undefined, cachedStale) : zeroFundsRow(store);
       }));
       setFundsDetails(detailList);
@@ -919,10 +906,8 @@ export function FundsDataPage() {
         .filter(Number.isFinite)
         .sort((left, right) => right - left)[0];
       if (latestTimestamp) setLastSyncAt(new Date(latestTimestamp));
-      return refreshIds;
     } catch {
-      // Latest cached data is optional; an explicit sync is authoritative.
-      return new Set(ids);
+      // Cached data is optional; only the manual action may request fresh funds data.
     }
   }
 
@@ -944,7 +929,7 @@ export function FundsDataPage() {
         const fundsPolicy = policies?.fundsData && typeof policies.fundsData === "object" ? policies.fundsData as Record<string, unknown> : {};
         const cachePolicy = fundsPolicy.cachePolicy && typeof fundsPolicy.cachePolicy === "object" ? fundsPolicy.cachePolicy as Record<string, unknown> : {};
         const configuredTtl = Number(cachePolicy.autoRefreshTtlMs);
-        setAutoRefreshTtlMs(Number.isFinite(configuredTtl) && configuredTtl >= 0 ? configuredTtl : DEFAULT_AUTO_REFRESH_TTL_MS);
+        setCacheStaleTtlMs(Number.isFinite(configuredTtl) && configuredTtl >= 0 ? configuredTtl : DEFAULT_CACHE_STALE_TTL_MS);
         const nextOrder = savedColumnOrder(columns, schema.version);
         const nextWidths = savedColumnWidths(columns, schema.version);
         storageSet(fundsColumnOrderStorageKey(schema.version), nextOrder);
@@ -972,14 +957,11 @@ export function FundsDataPage() {
     if (previewMode) return;
     if (loadState !== "ready" || !stores.length) return;
     const generation = ++requestGeneration.current;
-    void (async () => {
-      const refreshIds = await hydrateLatestFundsData(selectedIds, generation);
-      if (refreshIds.size && generation === requestGeneration.current) await refreshFundsData(refreshIds, generation);
-    })();
+    void hydrateLatestFundsData(selectedIds, generation);
     return () => {
       if (requestGeneration.current === generation) requestGeneration.current += 1;
     };
-  }, [previewMode, loadState, stores, autoRefreshTtlMs]);
+  }, [previewMode, loadState, stores, cacheStaleTtlMs]);
 
   useEffect(() => {
     return addDoudianProgressListener((event) => {
@@ -1015,7 +997,7 @@ export function FundsDataPage() {
     setSyncing(false);
     setFundsProgress("");
     setFundsState("ready");
-    setFundsMessage("已取消资金数据同步");
+    setFundsMessage("已取消资金数据获取");
   }
 
   const filteredStores = useMemo(() => {
@@ -1085,7 +1067,7 @@ export function FundsDataPage() {
   const selectedRowsAllUnavailable = fundsState === "ready" && selectedRows.length > 0 && selectedRows.every((row) => !fundsRowHasKnownMetric(row));
   const riskStoreCount = selectedRows.filter((row) => row.riskCount > 0).length;
   const fundsWarningTitle = failedDetailCount
-    ? `${failedDetailCount} 家同步失败`
+    ? `${failedDetailCount} 家获取失败`
     : staleStoreCount
       ? `${staleStoreCount} 家正在显示历史有效值`
     : selectedRowsAllUnavailable && !previewMode
@@ -1094,7 +1076,7 @@ export function FundsDataPage() {
         ? `${riskStoreCount} 家存在资金事项`
         : "";
   const fundsWarningDetail = failedDetailCount
-    ? "本次同步失败，已保留最近成功数据；请确认登录态后重试。"
+    ? "本次获取失败，已保留最近成功数据；请确认登录态后重试。"
     : staleStoreCount
       ? "部分来源本次未取得数据，金额保留为最近成功值，数据时间见单元格提示。"
     : selectedRowsAllUnavailable && !previewMode
@@ -1338,12 +1320,12 @@ export function FundsDataPage() {
               <Landmark className="size-[14px]" strokeWidth={2} />
               <span>{CURRENT_SNAPSHOT_LABEL}</span>
             </div>
-            <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] disabled:opacity-50" type="button" disabled={syncing || !selectedIds.size} onClick={() => void refreshFundsData()}>
+            <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#ffc6b5] bg-[#fff7f4] px-2.5 text-[12px] font-semibold text-brand-fox transition-colors hover:bg-brand-foxSoft disabled:cursor-not-allowed disabled:opacity-50" type="button" title="手动获取资金数据" disabled={syncing || !selectedIds.size} onClick={() => void fetchFundsDataManually()}>
               <RefreshCw className={cn("size-[14px]", syncing ? "animate-spin" : "")} strokeWidth={2} />
-              同步
+              获取资金数据
             </button>
             {syncing && activeOperationId ? (
-              <button className="grid size-8 place-items-center rounded-md border border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" type="button" aria-label="取消资金数据同步" title="取消资金数据同步" onClick={() => void cancelFundsSync()}>
+              <button className="grid size-8 place-items-center rounded-md border border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" type="button" aria-label="取消资金数据获取" title="取消资金数据获取" onClick={() => void cancelFundsSync()}>
                 <CircleStop className="size-[15px]" strokeWidth={2} />
               </button>
             ) : null}
@@ -1367,14 +1349,14 @@ export function FundsDataPage() {
               <WalletCards className="size-[16px] text-brand-navy" strokeWidth={2.2} />
               <strong className="text-[15px] font-semibold text-[#101828]">店铺资金明细</strong>
               {fundsState === "loading" ? (
-                <span className="inline-flex h-6 max-w-[360px] items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#667085]" title={fundsProgress || "正在同步资金数据"}>
+                <span className="inline-flex h-6 max-w-[360px] items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#667085]" title={fundsProgress || "正在获取资金数据"}>
                   <Loader2 className="size-[13px] animate-spin" strokeWidth={2} />
-                  <span className="truncate">{fundsProgress || "同步中"}</span>
+                  <span className="truncate">{fundsProgress || "获取中"}</span>
                 </span>
               ) : fundsState === "error" ? (
                 <span className="inline-flex h-6 max-w-[380px] items-center gap-1 rounded-md border border-[#ffd1d1] bg-[#fff1f0] px-2 text-[12px] font-semibold text-[#b42318]" title={fundsMessage}>
                   <AlertTriangle className="size-[13px] shrink-0" strokeWidth={2} />
-                  <span className="truncate">{fundsMessage || "资金数据同步失败"}</span>
+                  <span className="truncate">{fundsMessage || "资金数据获取失败"}</span>
                 </span>
               ) : fundsWarningTitle ? (
                 <span className="inline-flex h-6 max-w-[440px] items-center gap-1 rounded-md border border-[#ffdca8] bg-[#fff7e8] px-2 text-[12px] font-semibold text-[#b54708]" title={fundsWarningDetail}>
@@ -1554,7 +1536,7 @@ export function FundsDataPage() {
                         <span className="grid size-14 place-items-center rounded-full bg-brand-foxSoft text-brand-fox">
                           {fundsState === "loading" ? <Loader2 className="size-7 animate-spin" strokeWidth={2.2} /> : <CircleDollarSign className="size-7" strokeWidth={2.2} />}
                         </span>
-                        <strong className="text-[14px] text-[#344054]">{fundsState === "loading" ? "正在同步" : "暂无数据"}</strong>
+                        <strong className="text-[14px] text-[#344054]">{fundsState === "loading" ? "正在获取" : "暂无数据"}</strong>
                         <span className="text-[13px] leading-6">{fundsState === "loading" ? (fundsProgress || "正在读取资金数据") : "请从左侧选择店铺"}</span>
                       </div>
                     </td>
@@ -1566,7 +1548,7 @@ export function FundsDataPage() {
 
           <div className="flex items-center justify-between gap-3 border-t border-[#edf1f6] px-4 text-[12px] text-[#667085]">
             <span className="min-w-0 truncate" title={[fundsWarningDetail, unavailableWarningDetail, fundsMessage].filter(Boolean).join(" ")}>
-              共 {selectedRows.length} 家店铺，最近同步 {lastSyncAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}
+              共 {selectedRows.length} 家店铺，最近获取 {lastSyncAt ? lastSyncAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }) : "暂无"}
               {displayedDataAt ? `，数据截至 ${displayedDataAt.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}` : ""}
               {fundsWarningTitle ? `，${fundsWarningTitle}` : ""}
               {unavailableWarningTitle ? `，${unavailableWarningTitle}` : ""}

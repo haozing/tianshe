@@ -3,6 +3,7 @@ import type { NativeDataApi } from "../nativeData/types";
 export interface NativeOpenWindowRequest {
   url: string;
   title?: string;
+  lockTitle?: boolean;
   partition?: string;
   width?: number;
   height?: number;

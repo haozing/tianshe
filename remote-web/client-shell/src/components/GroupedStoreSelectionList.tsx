@@ -1,5 +1,6 @@
-import { Check } from "lucide-react";
-import { useMemo } from "react";
+import { Check, ChevronDown, ChevronRight } from "lucide-react";
+import { useMemo, useState } from "react";
+import { STORAGE_KEY_STORE_GROUPS_COLLAPSED, storageGet, storageSet } from "../bridge/storage";
 import { groupStoresByName } from "../domain/doudian/storeSelection";
 import { cn } from "../lib/utils";
 import type { DoudianStoreStatus } from "../types";
@@ -42,6 +43,17 @@ function StatusTag({ status }: { status: DoudianStoreStatus }) {
 
 export function GroupedStoreSelectionList<T extends GroupedSelectableStore>({ stores, selectedIds, onToggleIds }: GroupedStoreSelectionListProps<T>) {
   const groups = useMemo(() => groupStoresByName(stores), [stores]);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set(storageGet<string[]>(STORAGE_KEY_STORE_GROUPS_COLLAPSED, [])));
+
+  function toggleGroup(groupName: string) {
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(groupName)) next.delete(groupName);
+      else next.add(groupName);
+      storageSet(STORAGE_KEY_STORE_GROUPS_COLLAPSED, [...next]);
+      return next;
+    });
+  }
 
   return (
     <div className="divide-y divide-[#e4eaf3]">
@@ -50,16 +62,20 @@ export function GroupedStoreSelectionList<T extends GroupedSelectableStore>({ st
         const selectedCount = ids.filter((id) => selectedIds.has(id)).length;
         const allSelected = ids.length > 0 && selectedCount === ids.length;
         const someSelected = selectedCount > 0 && !allSelected;
+        const collapsed = collapsedGroups.has(group.name);
         return (
           <section key={group.name}>
             <div className="sticky top-0 z-10 flex h-8 items-center justify-between gap-2 border-b border-[#edf1f6] bg-[#f8fafc] px-3">
-              <button className="inline-flex min-w-0 flex-1 items-center gap-2 text-left text-[12px] font-semibold text-[#344054]" type="button" onClick={() => onToggleIds(ids)}>
+              <button className="grid size-5 shrink-0 place-items-center" type="button" aria-label={`${allSelected ? "取消选择" : "选择"}分组 ${group.name}`} title={`${allSelected ? "取消选择" : "选择"}该分组`} onClick={() => onToggleIds(ids)}>
                 <CheckboxBox checked={allSelected} mixed={someSelected} />
+              </button>
+              <button className="inline-flex min-w-0 flex-1 items-center gap-1.5 text-left text-[12px] font-semibold text-[#344054]" type="button" aria-expanded={!collapsed} title={`${collapsed ? "展开" : "收起"} ${group.name}`} onClick={() => toggleGroup(group.name)}>
+                {collapsed ? <ChevronRight className="size-[14px] shrink-0 text-[#667085]" strokeWidth={2.2} /> : <ChevronDown className="size-[14px] shrink-0 text-[#667085]" strokeWidth={2.2} />}
                 <span className="truncate" title={group.name}>{group.name}</span>
               </button>
               <span className="shrink-0 text-[11px] text-[#98a2b3]">{selectedCount}/{ids.length}</span>
             </div>
-            <div className="divide-y divide-[#edf1f6]">
+            {!collapsed ? <div className="divide-y divide-[#edf1f6]">
               {group.stores.map((store) => (
                 <button
                   className={cn("grid w-full grid-cols-[20px_minmax(0,1fr)] gap-2 px-3 py-2.5 text-left transition-colors hover:bg-[#f8fbff]", selectedIds.has(store.id) ? "bg-[#fffaf7]" : "bg-white")}
@@ -77,7 +93,7 @@ export function GroupedStoreSelectionList<T extends GroupedSelectableStore>({ st
                   </span>
                 </button>
               ))}
-            </div>
+            </div> : null}
           </section>
         );
       })}

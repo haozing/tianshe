@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
+  Activity,
   Check,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  FolderTree,
   Loader2,
+  Radio,
   RefreshCw,
+  Search,
   Send,
-  Square
+  Square,
+  X,
+  XCircle
 } from "lucide-react";
 import { cancelDoudianStoreOperation, fetchDoudianOpportunityPipelineRun, fetchDoudianOpportunityPipelineSummary, fetchDoudianOpportunityReportLatest, listDoudianOpportunityCandidatesPage, listDoudianOpportunityStoreCategories, listDoudianStores, restoreDoudianOpportunityPipelineTask, runDoudianOpportunityPipelineTask } from "../bridge/client";
 import { addDoudianProgressListener } from "../domain/doudian/progress";
@@ -28,6 +36,21 @@ import type {
 interface Option<T extends string | number = string> {
   value: T;
   label: string;
+}
+
+interface StoreCategoryOption {
+  key: string;
+  label: string;
+  productCount: number;
+  shopCount: number;
+  lastSeenAt: string;
+}
+
+interface PipelineLiveLog {
+  id: number;
+  time: string;
+  message: string;
+  tone: "idle" | "running" | "success" | "error";
 }
 
 const rankTabs: Option[] = [
@@ -173,13 +196,99 @@ function MultiChoiceField<T extends number>({ label, values, options, onToggle, 
   );
 }
 
-function CheckOption({ checked, label, onChange }: { checked: boolean; label: string; onChange: (checked: boolean) => void }) {
+function CategorySelectionDialog({ open, options, selectedKeys, busy, onOpenChange, onToggle, onSelectAll, onRefresh }: {
+  open: boolean;
+  options: StoreCategoryOption[];
+  selectedKeys: string[];
+  busy: boolean;
+  onOpenChange: (open: boolean) => void;
+  onToggle: (key: string) => void;
+  onSelectAll: () => void;
+  onRefresh: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const keyword = query.trim().toLowerCase();
+  const visibleOptions = options.filter((item) => !keyword || item.label.toLowerCase().includes(keyword));
+  const allSelected = options.length > 0 && selectedKeys.length === options.length;
+
   return (
-    <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] hover:border-brand-fox">
-      <input className="size-4 accent-brand-fox" checked={checked} type="checkbox" onChange={(event) => onChange(event.target.checked)} />
-      {label}
-    </label>
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/28" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[min(680px,calc(100vh-40px))] w-[min(760px,calc(100vw-36px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-[#dbe5f2] bg-white shadow-[0_24px_70px_rgba(15,23,42,0.24)]">
+          <div className="flex min-h-[58px] items-center justify-between gap-3 border-b border-[#edf1f6] px-4">
+            <div className="min-w-0">
+              <Dialog.Title className="m-0 text-[16px] font-semibold text-[#101828]">选择店铺类目</Dialog.Title>
+              <Dialog.Description className="mt-1 text-[12px] font-medium text-[#667085]">已选 {selectedKeys.length} / {options.length}</Dialog.Description>
+            </div>
+            <Dialog.Close asChild>
+              <button className="grid size-8 place-items-center rounded-md border border-[#dbe5f2] text-[#667085] hover:bg-[#f8fafc]" type="button" aria-label="关闭类目选择">
+                <X className="size-4" strokeWidth={2} />
+              </button>
+            </Dialog.Close>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 border-b border-[#edf1f6] bg-[#fbfcff] p-3">
+            <label className="flex h-9 min-w-[240px] flex-1 items-center gap-2 rounded-md border border-[#dbe5f2] bg-white px-3 text-[#98a2b3]">
+              <Search className="size-4 shrink-0" strokeWidth={2} />
+              <input className="min-w-0 flex-1 bg-transparent text-[13px] text-[#1d2939] outline-none" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索类目" />
+            </label>
+            <button className={cn("inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-[12px] font-semibold", allSelected ? "border-brand-fox bg-brand-foxSoft text-brand-fox" : "border-[#dbe5f2] bg-white text-[#475467]")} type="button" onClick={onSelectAll} disabled={!options.length}>
+              <Check className="size-3.5" strokeWidth={2.5} />
+              全选
+            </button>
+            <button className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-3 text-[12px] font-semibold text-[#475467] disabled:opacity-50" type="button" onClick={onRefresh} disabled={busy}>
+              <RefreshCw className={cn("size-3.5", busy && "animate-spin")} strokeWidth={2} />
+              刷新
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto p-3">
+            <div className="grid grid-cols-2 gap-2 max-[620px]:grid-cols-1">
+              {visibleOptions.map((item) => {
+                const selected = selectedKeys.includes(item.key);
+                return (
+                  <button className={cn("flex min-h-[54px] min-w-0 items-center gap-3 rounded-md border px-3 text-left transition-colors", selected ? "border-[#ffc8ad] bg-[#fff7f2]" : "border-[#dbe5f2] bg-white hover:border-brand-fox")} key={item.key} type="button" onClick={() => onToggle(item.key)}>
+                    <span className={cn("grid size-5 shrink-0 place-items-center rounded border", selected ? "border-brand-fox bg-brand-fox text-white" : "border-[#cfd8e6] bg-white text-transparent")}>
+                      <Check className="size-3.5" strokeWidth={3} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <strong className="block truncate text-[13px] text-[#344054]" title={item.label}>{item.label}</strong>
+                      <span className="mt-0.5 block text-[11px] font-medium text-[#98a2b3]">{formatNumber(item.productCount)} 件商品 · {formatNumber(item.shopCount)} 家店铺</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {!visibleOptions.length ? <div className="grid min-h-[180px] place-items-center text-[13px] font-medium text-[#98a2b3]">暂无匹配类目</div> : null}
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
+}
+
+function pipelineLogTone(message: string): PipelineLiveLog["tone"] {
+  if (/失败|错误|取消失败/.test(message)) return "error";
+  if (/完成|成功|已受理/.test(message)) return "success";
+  if (/等待|待命|已取消/.test(message)) return "idle";
+  return "running";
+}
+
+function pipelineLogTime() {
+  return new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+}
+
+export function reconcileStoreCategorySelection(availableKeys: string[], selectedKeys: string[] | null) {
+  if (!availableKeys.length) return [];
+  if (selectedKeys === null) return [...availableKeys];
+  const available = new Set(availableKeys);
+  const next = selectedKeys.filter((key) => available.has(key));
+  return next.length ? next : [...availableKeys];
+}
+
+export function toggleStoreCategorySelection(selectedKeys: string[], key: string) {
+  if (!selectedKeys.includes(key)) return [...selectedKeys, key];
+  if (selectedKeys.length <= 1) return selectedKeys;
+  return selectedKeys.filter((item) => item !== key);
 }
 
 function uniqueText(values: Array<string | undefined>) {
@@ -289,7 +398,7 @@ export function OpportunityProductPrematchPage() {
   const [stores, setStores] = useState<DoudianStoreSummary[]>([]);
   const [selectedShopIds, setSelectedShopIds] = useState<Set<string>>(() => new Set());
   const [storeCategories, setStoreCategories] = useState<DoudianOpportunityStoreCategoryLedger[]>([]);
-  const [selectedStoreCategoryKeys, setSelectedStoreCategoryKeys] = useState<string[]>([]);
+  const [selectedStoreCategoryKeys, setSelectedStoreCategoryKeys] = useState<string[] | null>(null);
   const [products, setProducts] = useState<DoudianOpportunityProductRow[]>([]);
   const [clues, setClues] = useState<DoudianOpportunityClueRow[]>([]);
   const [candidates, setCandidates] = useState<DoudianOpportunityPrematchCandidate[]>([]);
@@ -303,12 +412,11 @@ export function OpportunityProductPrematchPage() {
   const [selectedReasonIds, setSelectedReasonIds] = useState<number[]>([]);
   const [selectedBenefitIds, setSelectedBenefitIds] = useState<number[]>([]);
   const [recentlyDayType, setRecentlyDayType] = useState(3);
-  const [skipSubmittedClueCategory, setSkipSubmittedClueCategory] = useState(false);
-  const [skipSubmittedClue, setSkipSubmittedClue] = useState(false);
-  const [skipSubmittedProductInSameClue, setSkipSubmittedProductInSameClue] = useState(true);
   const [loading, setLoading] = useState<"" | "stores" | "latest" | "products" | "clues" | "match" | "submit" | "pipeline">("");
   const [pipelineInFlight, setPipelineInFlight] = useState(false);
   const [pipelineLog, setPipelineLog] = useState("等待一键提报");
+  const [pipelineLogs, setPipelineLogs] = useState<PipelineLiveLog[]>(() => [{ id: 0, time: pipelineLogTime(), message: "提报通道待命 · 等待选择店铺", tone: "idle" }]);
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"submit" | "autoSubmit">("submit");
   const [autoSubmitPage, setAutoSubmitPage] = useState(0);
   const [candidatePageCursors, setCandidatePageCursors] = useState<Array<string | null>>([null]);
@@ -320,6 +428,9 @@ export function OpportunityProductPrematchPage() {
   const lastPipelineSnapshotRefreshRef = useRef(0);
   const pipelineSnapshotRequestSeqRef = useRef(0);
   const pipelineSnapshotInFlightRef = useRef(false);
+  const categoryRequestSeqRef = useRef(0);
+  const pipelineLogSeqRef = useRef(1);
+  const pipelineLogViewportRef = useRef<HTMLDivElement | null>(null);
 
   const filters = useMemo<DoudianOpportunityFilters>(() => ({
     activeKey: activeRank,
@@ -331,7 +442,7 @@ export function OpportunityProductPrematchPage() {
 
   const matchRules = useMemo<DoudianOpportunityMatchRules>(() => ({
     ...defaultMatchRules,
-    storeCategoryKeys: selectedStoreCategoryKeys
+    storeCategoryKeys: selectedStoreCategoryKeys || []
   }), [selectedStoreCategoryKeys]);
 
   const candidateSummary = useMemo(() => {
@@ -435,6 +546,7 @@ export function OpportunityProductPrematchPage() {
         return {
           shopId: store.shopId,
           shopName: store.shopName,
+          groupName: store.groupName || "未分组",
           index: detail?.index || index + 1,
           status,
           phase: diagnosticPhase || messagePhase,
@@ -452,8 +564,8 @@ export function OpportunityProductPrematchPage() {
       });
   }, [candidateCountByShop, productCountByShop, runDetails, stores]);
 
-  const categoryOptions = useMemo(() => {
-    const byKey = new Map<string, { key: string; label: string; productCount: number; shopCount: number; lastSeenAt: string }>();
+  const categoryOptions = useMemo<StoreCategoryOption[]>(() => {
+    const byKey = new Map<string, StoreCategoryOption>();
     for (const item of storeCategories) {
       const current = byKey.get(item.categoryKey) || {
         key: item.categoryKey,
@@ -472,9 +584,36 @@ export function OpportunityProductPrematchPage() {
       .slice(0, 40);
   }, [storeCategories]);
 
+  const selectedCategoryKeys = selectedStoreCategoryKeys || [];
+  const selectedCategoryCount = selectedCategoryKeys.length;
+  const liveSubmittedCount = Number(resultSummary.submittedCount || 0);
+  const liveFailedCount = Number(resultSummary.failedCount || 0);
+  const liveProcessedCount = Number(resultSummary.processedStoreCount || 0);
+
+  function recordPipelineLog(message: string) {
+    const normalized = String(message || "").trim();
+    if (!normalized) return;
+    setPipelineLog(normalized);
+    setPipelineLogs((current) => {
+      if (current[current.length - 1]?.message === normalized) return current;
+      const next = [...current, {
+        id: pipelineLogSeqRef.current++,
+        time: pipelineLogTime(),
+        message: normalized,
+        tone: pipelineLogTone(normalized)
+      }];
+      return next.slice(-80);
+    });
+  }
+
   useEffect(() => {
     void initializePage();
   }, []);
+
+  useEffect(() => {
+    const viewport = pipelineLogViewportRef.current;
+    if (viewport) viewport.scrollTop = viewport.scrollHeight;
+  }, [pipelineLogs]);
 
   useEffect(() => addDoudianProgressListener((event) => {
     const detail = event.detail;
@@ -482,7 +621,7 @@ export function OpportunityProductPrematchPage() {
     if (!activePipelineOperationIdRef.current || detail.operationId !== activePipelineOperationIdRef.current) return;
     if (detail.status === "running") {
       setPipelineInFlight(true);
-      setPipelineLog(`${Math.round(Number(detail.progress || 0))}% · ${detail.message || "一键提报处理中"}`);
+      recordPipelineLog(`${Math.round(Number(detail.progress || 0))}% · ${detail.store?.shopName ? `${detail.store.shopName} · ` : ""}${detail.message || "一键提报处理中"}`);
       const now = Date.now();
       if (now - lastPipelineSnapshotRefreshRef.current >= 10000) {
         lastPipelineSnapshotRefreshRef.current = now;
@@ -496,17 +635,17 @@ export function OpportunityProductPrematchPage() {
       const runId = activePipelineOperationIdRef.current;
       activePipelineOperationIdRef.current = "";
       lastPipelineSnapshotRefreshRef.current = 0;
-      setPipelineLog("一键提报完成，正在刷新结果");
+      recordPipelineLog("一键提报完成，正在刷新结果");
       void restorePipelineRun(runId);
       return;
     }
     if (detail.status === "cancelled") {
       activePipelineOperationIdRef.current = "";
       lastPipelineSnapshotRefreshRef.current = 0;
-      setPipelineLog("一键提报已取消");
+      recordPipelineLog("一键提报已取消");
       return;
     }
-    setPipelineLog(detail.error ? `一键提报失败：${detail.error}` : "一键提报失败");
+    recordPipelineLog(detail.error ? `一键提报失败：${detail.error}` : "一键提报失败");
   }), []);
 
   useEffect(() => {
@@ -542,7 +681,7 @@ export function OpportunityProductPrematchPage() {
     activePipelineOperationIdRef.current = operation.operationId;
     setMatchRunId(operation.operationId);
     setPipelineInFlight(true);
-    setPipelineLog("已恢复运行中的商机提报任务");
+    recordPipelineLog("已恢复运行中的商机提报任务");
     await restorePipelineRun(operation.operationId, {
       activeStores,
       silent: true,
@@ -567,20 +706,25 @@ export function OpportunityProductPrematchPage() {
   }
 
   async function refreshStoreCategories(requestedStores = activeStoreSelection(stores, selectedShopIds)) {
+    const requestSeq = ++categoryRequestSeqRef.current;
     const storeRefs = activeStoreRefs(requestedStores);
     if (!storeRefs.length) {
+      if (requestSeq !== categoryRequestSeqRef.current) return false;
       setStoreCategories([]);
-      setSelectedStoreCategoryKeys([]);
+      setSelectedStoreCategoryKeys(null);
       return true;
     }
     try {
       const rows = await listDoudianOpportunityStoreCategories({ storeRefs });
+      if (requestSeq !== categoryRequestSeqRef.current) return false;
       setStoreCategories(rows);
-      setSelectedStoreCategoryKeys((current) => current.filter((key) => rows.some((row) => row.categoryKey === key)));
+      const availableKeys = Array.from(new Set(rows.map((row) => row.categoryKey).filter(Boolean)));
+      setSelectedStoreCategoryKeys((current) => reconcileStoreCategorySelection(availableKeys, current));
       return true;
     } catch (error) {
+      if (requestSeq !== categoryRequestSeqRef.current) return false;
       console.error("店铺类目加载失败", error);
-      setPipelineLog("店铺类目刷新失败，已保留当前筛选");
+      recordPipelineLog("店铺类目刷新失败，已保留当前筛选");
       return false;
     }
   }
@@ -660,15 +804,12 @@ export function OpportunityProductPrematchPage() {
       setSelectedReasonIds([...(restoredFilters.tagIdList || [])]);
       setSelectedBenefitIds([...(restoredFilters.profitIdList || [])]);
       if (restoredFilters.recentlyDayType !== undefined) setRecentlyDayType(Number(restoredFilters.recentlyDayType));
-      setSelectedStoreCategoryKeys([...(restoredRules.storeCategoryKeys || [])]);
-      setSkipSubmittedClueCategory(result.pipelineOptions?.skipSubmittedClueCategory === true);
-      setSkipSubmittedClue(result.pipelineOptions?.skipSubmittedClue === true);
-      setSkipSubmittedProductInSameClue(result.pipelineOptions?.skipSubmittedProductInSameClue !== false);
+      setSelectedStoreCategoryKeys(restoredRules.storeCategoryKeys?.length ? [...restoredRules.storeCategoryKeys] : null);
       setSelectedShopIds((current) => restoredShopIds.size
         ? restoredShopIds
         : reconcileSelectedShopIds(activeStores, current));
     }
-    if (options.updatePipelineLog) setPipelineLog(pipelineSnapshotLog(details, result.summary || {}));
+    if (options.updatePipelineLog) recordPipelineLog(pipelineSnapshotLog(details, result.summary || {}));
     const runId = hasCompatibleRun ? (result.matchRunId || result.runId || "") : "";
     setMatchRunId(runId);
     const pipelineStatus = String(result.pipelineStatus || result.status || "");
@@ -754,30 +895,30 @@ export function OpportunityProductPrematchPage() {
   }
 
   function toggleStoreCategory(key: string) {
-    setSelectedStoreCategoryKeys((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
+    setSelectedStoreCategoryKeys((current) => toggleStoreCategorySelection(current || [], key));
   }
 
   async function cancelPipelineSubmit() {
     const operationId = activePipelineOperationIdRef.current;
     if (!operationId) return;
-    setPipelineLog("正在取消商机提报任务");
+    recordPipelineLog("正在取消商机提报任务");
     pipelineSnapshotRequestSeqRef.current += 1;
     try {
       await cancelDoudianStoreOperation(operationId);
       actionLockRef.current = false;
       activePipelineOperationIdRef.current = "";
       setPipelineInFlight(false);
-      setPipelineLog("商机提报任务已取消");
+      recordPipelineLog("商机提报任务已取消");
       await restorePipelineRun(operationId, { silent: true, updatePipelineLog: true });
     } catch (error) {
-      setPipelineLog(`取消失败：${error instanceof Error ? error.message : String(error)}`);
+      recordPipelineLog(`取消失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   function runPipelineSubmit() {
     if (actionLockRef.current) return;
     if (!selectedShopIds.size) {
-      setPipelineLog("请先选择店铺");
+      recordPipelineLog("请先选择店铺");
       return;
     }
     actionLockRef.current = true;
@@ -791,15 +932,13 @@ export function OpportunityProductPrematchPage() {
     setCandidateHasMore(false);
     setRunDetails([]);
     setResultSummary({});
-    setPipelineLog("0% · 一键提报已启动，正在创建后台任务");
+    recordPipelineLog("0% · 一键提报已启动，正在创建后台任务");
     activePipelineOperationIdRef.current = operationId;
     const promise = runDoudianOpportunityPipelineTask({
       shopIds: Array.from(selectedShopIds),
       filters,
       matchRules,
-      skipSubmittedClueCategory,
-      skipSubmittedClue,
-      skipSubmittedProductInSameClue,
+      skipSubmittedProductInSameClue: true,
       operationId
     });
     promise.then((operation) => {
@@ -807,21 +946,31 @@ export function OpportunityProductPrematchPage() {
       activePipelineOperationIdRef.current = activeOperationId;
       setMatchRunId(activeOperationId);
       if (activeOperationId !== operationId) {
-        setPipelineLog("已连接到运行中的商机提报任务");
+        recordPipelineLog("已连接到运行中的商机提报任务");
         void restorePipelineRun(activeOperationId, { silent: true, includeCandidates: false, updatePipelineLog: true, summaryOnly: true, restoreConfiguration: true });
       } else {
-        setPipelineLog("0% · 后台任务已创建，等待扫描店铺");
+        recordPipelineLog("0% · 后台任务已创建，等待扫描店铺");
       }
     }).catch((error) => {
       console.error("商机提报任务启动失败", error);
       actionLockRef.current = false;
       setPipelineInFlight(false);
-      setPipelineLog(`一键提报启动失败：${error instanceof Error ? error.message : String(error)}`);
+      recordPipelineLog(`一键提报启动失败：${error instanceof Error ? error.message : String(error)}`);
     });
   }
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden text-[#101828]" data-business-slot="ready">
+      <CategorySelectionDialog
+        open={categoryDialogOpen}
+        options={categoryOptions}
+        selectedKeys={selectedCategoryKeys}
+        busy={busy}
+        onOpenChange={setCategoryDialogOpen}
+        onToggle={toggleStoreCategory}
+        onSelectAll={() => setSelectedStoreCategoryKeys(categoryOptions.map((item) => item.key))}
+        onRefresh={() => void refreshStoreCategories()}
+      />
       <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-brand-line bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[#edf1f6] p-3 max-[1180px]:flex-col max-[1180px]:items-start">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -865,7 +1014,7 @@ export function OpportunityProductPrematchPage() {
 
         <div className="min-h-0 flex-1 overflow-hidden p-3">
           {activeTab === "submit" ? (
-            <div className="grid h-full min-h-0 grid-cols-[620px_minmax(0,1fr)] gap-3 max-[1280px]:grid-cols-1">
+            <div className="grid h-full min-h-0 grid-cols-[680px_minmax(0,1fr)] gap-3 max-[1380px]:grid-cols-1">
               <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-brand-line bg-white">
                 <div className="flex min-h-[44px] shrink-0 items-center justify-between border-b border-[#edf1f6] bg-[#fbfcff] px-3">
                   <strong className="text-[14px] text-brand-navy">店铺范围</strong>
@@ -905,32 +1054,32 @@ export function OpportunityProductPrematchPage() {
                     })}
                   </div>
                 ) : null}
-                <div className="grid min-h-[38px] shrink-0 grid-cols-[60px_minmax(120px,1fr)_78px_68px_68px_82px_82px] items-center border-b border-[#edf1f6] bg-[#fbfcff] text-[12px] font-semibold text-[#667085]">
+                <div className="grid min-h-[38px] shrink-0 grid-cols-[54px_minmax(120px,1fr)_94px_78px_64px_64px_82px] items-center border-b border-[#edf1f6] bg-[#fbfcff] text-[12px] font-semibold text-[#667085]">
                   <span className="text-center">序号</span>
                   <span className="px-3">店铺名称</span>
+                  <span className="px-2">分组名</span>
                   <span className="text-center">状态</span>
                   <span className="px-2 text-right">商品数</span>
                   <span className="px-2 text-right">商机数</span>
                   <span className="px-2 text-right">接口受理</span>
-                  <span className="px-2 text-right">失败提报</span>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
                   {storeRunRows.map((row) => {
                     const statusInfo = storeRangeStatusInfo(row);
                     return (
-                      <label className="grid min-h-[42px] cursor-pointer grid-cols-[60px_minmax(120px,1fr)_78px_68px_68px_82px_82px] items-center border-b border-[#edf1f6] text-[12px] text-[#344054] hover:bg-[#fffaf7]" key={row.shopId}>
+                      <label className="grid min-h-[42px] cursor-pointer grid-cols-[54px_minmax(120px,1fr)_94px_78px_64px_64px_82px] items-center border-b border-[#edf1f6] text-[12px] text-[#344054] hover:bg-[#fffaf7]" key={row.shopId}>
                         <span className="flex items-center justify-center gap-1.5">
                           <input checked={selectedShopIds.has(row.shopId)} className="size-4 accent-brand-fox" type="checkbox" onChange={() => toggleStore(row.shopId)} />
                           <span className="font-semibold text-[#667085]">{row.index}</span>
                         </span>
                         <span className="min-w-0 truncate px-3 font-semibold text-[13px]" title={row.shopName}>{row.shopName}</span>
+                        <span className="min-w-0 truncate px-2 font-medium text-[#667085]" title={row.groupName}>{row.groupName}</span>
                         <span className="px-2 text-center">
                           <span className={cn("inline-flex rounded-md px-2 py-0.5 text-[12px] font-semibold", statusInfo.className)} title={row.estimatedSubmitDurationMs ? `节流预计 ${formatDuration(row.estimatedSubmitDurationMs)}` : undefined}>{statusInfo.label}</span>
                         </span>
                         <span className="px-2 text-right font-semibold text-[#475467]">{formatNumber(row.productCount)}</span>
                         <span className="px-2 text-right font-semibold text-[#475467]">{formatNumber(row.clueCount)}</span>
                         <span className="px-2 text-right font-semibold text-[#087443]">{formatNumber(row.submittedCount)}</span>
-                        <span className="px-2 text-right font-semibold text-[#b42318]">{formatNumber(row.failedCount)}</span>
                       </label>
                     );
                   })}
@@ -938,79 +1087,97 @@ export function OpportunityProductPrematchPage() {
                 </div>
               </section>
 
-              <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-brand-line bg-[#fbfcff]">
-                <div className="min-h-0 flex-1 overflow-auto p-3">
-                  <div className="grid gap-3">
-                    <div className="grid gap-3 rounded-md border border-[#ffdcca] bg-[#fffaf7] p-3">
-                      <div className="flex min-h-[40px] items-center gap-3">
-                        <button className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md bg-brand-fox px-4 text-[14px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] transition-colors hover:bg-brand-foxHover disabled:opacity-50" type="button" onClick={runPipelineSubmit} disabled={busy || pipelineBusy || !selectedShopIds.size}>
-                          {pipelineBusy ? <Loader2 className="size-[16px] animate-spin" strokeWidth={2} /> : <Send className="size-[16px]" strokeWidth={2} />}
-                          {pipelineBusy ? "后台运行" : "一键提报"}
+              <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-brand-line bg-[#f6f8fb]">
+                <div className="grid h-full min-h-0 grid-rows-[auto_minmax(240px,1fr)] gap-3 overflow-auto p-3">
+                  <div className="grid gap-3 rounded-md border border-[#edf1f6] bg-white p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <strong className="text-[14px] text-brand-navy">提报设置</strong>
+                    </div>
+                    <div className="grid grid-cols-[180px_minmax(0,1fr)] gap-3 max-[760px]:grid-cols-1">
+                      <SelectField label="上新时间" value={recentlyDayType} options={recentlyOptions} onChange={setRecentlyDayType} />
+                      <div className="grid min-w-0 gap-1.5">
+                        <span className="text-[13px] font-semibold text-[#475467]">店铺类目</span>
+                        <button className="flex h-9 min-w-0 items-center gap-2 rounded-md border border-[#dbe5f2] bg-[#fbfcff] px-2.5 text-left transition-colors hover:border-brand-fox" type="button" onClick={() => setCategoryDialogOpen(true)}>
+                          <FolderTree className="size-4 shrink-0 text-brand-fox" strokeWidth={2} />
+                          <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+                            {categoryOptions.filter((item) => selectedCategoryKeys.includes(item.key)).map((item) => (
+                              <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[11px] font-semibold text-[#526a91]" key={item.key}>{item.label}</span>
+                            ))}
+                            {!categoryOptions.length ? <span className="truncate text-[12px] font-semibold text-[#98a2b3]">暂无店铺类目</span> : null}
+                          </span>
+                          <span className="shrink-0 rounded-md bg-brand-foxSoft px-2 py-0.5 text-[11px] font-bold text-brand-fox">{selectedCategoryCount}/{categoryOptions.length}</span>
                         </button>
-                        {pipelineBusy ? (
-                          <button className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-[#fda29b] bg-white px-3 text-[13px] font-semibold text-[#b42318] transition-colors hover:bg-[#fff1ef]" type="button" onClick={cancelPipelineSubmit}>
-                            <Square className="size-[14px]" fill="currentColor" strokeWidth={2} />
-                            取消
-                          </button>
-                        ) : null}
-                        <div className={cn("flex min-w-0 flex-1 items-center gap-2 rounded-md border px-3 py-2 text-[12px] font-semibold", pipelineBusy ? "border-[#fedf89] bg-[#fffbeb] text-[#b54708]" : "border-[#edf1f6] bg-white text-[#667085]")}>
-                          {pipelineBusy ? <Loader2 className="size-[14px] shrink-0 animate-spin" strokeWidth={2} /> : <span className="size-2 shrink-0 rounded-full bg-[#98a2b3]" />}
-                          <span className="min-w-0 truncate" title={pipelineLog}>{pipelineLog}</span>
-                        </div>
                       </div>
                     </div>
+                    <div className="grid gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[13px] font-semibold text-[#475467]">搜索词类型</span>
+                        <span className="rounded-md bg-[#f2f4f7] px-2 py-0.5 text-[12px] font-semibold text-[#667085]">消费者热搜词</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {rankTabs.map((item) => (
+                          <button className={cn("h-8 rounded-md border px-2.5 text-[12px] font-semibold transition-colors", activeRank === item.value ? "border-brand-fox bg-brand-foxSoft text-brand-fox" : "border-[#dbe5f2] bg-white text-[#526a91] hover:border-brand-fox")} key={item.value} type="button" onClick={() => setActiveRank(item.value)}>
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <MultiChoiceField label="推荐理由" values={selectedReasonIds} options={reasonOptions} onToggle={(value) => toggleNumberSelection(value, setSelectedReasonIds)} onClear={() => setSelectedReasonIds([])} />
+                    <MultiChoiceField label="权益" values={selectedBenefitIds} options={benefitOptions} onToggle={(value) => toggleNumberSelection(value, setSelectedBenefitIds)} onClear={() => setSelectedBenefitIds([])} />
+                  </div>
 
-                    <div className="grid gap-3 rounded-md border border-[#edf1f6] bg-white p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <strong className="text-[14px] text-brand-navy">提报设置</strong>
+                  <div className={cn("opportunity-live-panel relative flex min-h-[260px] flex-col overflow-hidden rounded-md border bg-[#101a1d] text-white shadow-[0_18px_45px_rgba(16,26,29,0.22)]", pipelineBusy ? "is-running border-[#22c55e]/70" : "border-[#31464c]")}>
+                    <div className="flex min-h-[48px] shrink-0 items-center justify-between gap-3 border-b border-[#2b3d42] bg-[#142226] px-4">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className={cn("grid size-7 place-items-center rounded-md", pipelineBusy ? "bg-[#123b2c] text-[#4ade80]" : "bg-[#25343a] text-[#a7bac1]")}>
+                          <Radio className={cn("size-4", pipelineBusy && "animate-pulse")} strokeWidth={2.2} />
+                        </span>
+                        <strong className="shrink-0 text-[14px] tracking-[0] text-white">实时提报</strong>
+                        <span className="min-w-0 truncate text-[12px] font-semibold text-[#9fb2b8]" title={pipelineLog}>{pipelineLog}</span>
                       </div>
-                      <div className="grid max-w-[180px] gap-3">
-                        <SelectField label="上新时间" value={recentlyDayType} options={recentlyOptions} onChange={setRecentlyDayType} />
+                      <div className="flex shrink-0 items-center gap-3 text-[12px] font-semibold">
+                        <span className="text-[#5ee6a8]">受理 {formatNumber(liveSubmittedCount)}</span>
+                        <span className="text-[#ff8d85]">失败 {formatNumber(liveFailedCount)}</span>
+                        <span className="text-[#f6c85f]">店铺 {formatNumber(liveProcessedCount)}/{formatNumber(totalStoreCount || selectedShopIds.size)}</span>
                       </div>
-                      <div className="grid gap-2">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-[13px] font-semibold text-[#475467]">店铺类目</span>
-                          <div className="flex items-center gap-2">
-                            <button className="inline-flex h-8 items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#526a91] transition-colors hover:border-brand-fox hover:text-brand-fox disabled:opacity-50" type="button" onClick={() => void refreshStoreCategories()} disabled={busy}>
-                              <RefreshCw className="size-[13px]" strokeWidth={2} />
-                              刷新
-                            </button>
-                            <button className={cn("h-8 rounded-md border px-2.5 text-[12px] font-semibold", selectedStoreCategoryKeys.length === 0 ? "border-brand-fox bg-brand-foxSoft text-brand-fox" : "border-[#dbe5f2] bg-white text-[#526a91] hover:border-brand-fox")} type="button" onClick={() => setSelectedStoreCategoryKeys([])}>
-                              全部
-                            </button>
+                    </div>
+                    <div className="grid min-h-0 flex-1 grid-cols-[210px_minmax(0,1fr)] max-[820px]:grid-cols-1">
+                      <div className="flex flex-col justify-center gap-3 border-r border-[#2b3d42] bg-[#122024] p-4 max-[820px]:border-b max-[820px]:border-r-0">
+                        <button className={cn("opportunity-submit-button inline-flex h-14 w-full items-center justify-center gap-2 rounded-md px-4 text-[16px] font-bold text-white transition-[transform,background-color,box-shadow] hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-45", pipelineBusy ? "bg-[#17864f] shadow-[0_0_28px_rgba(34,197,94,0.34)]" : "bg-brand-fox shadow-[0_0_28px_rgba(255,80,32,0.38)] hover:bg-brand-foxHover")} type="button" onClick={runPipelineSubmit} disabled={busy || pipelineBusy || !selectedShopIds.size}>
+                          {pipelineBusy ? <Loader2 className="size-5 animate-spin" strokeWidth={2.2} /> : <Send className="size-5" strokeWidth={2.2} />}
+                          {pipelineBusy ? "正在提报" : "一键提报"}
+                        </button>
+                        {pipelineBusy ? (
+                          <button className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-md border border-[#7a3434] bg-[#2a1b1c] text-[12px] font-semibold text-[#ff9b94] hover:bg-[#352022]" type="button" onClick={cancelPipelineSubmit}>
+                            <Square className="size-3.5" fill="currentColor" strokeWidth={2} />
+                            取消任务
+                          </button>
+                        ) : null}
+                        <div className="grid grid-cols-2 gap-2 text-center">
+                          <span className="rounded-md border border-[#275e47] bg-[#153326] px-2 py-2 text-[11px] font-semibold text-[#5ee6a8]">成功 {formatNumber(liveSubmittedCount)}</span>
+                          <span className="rounded-md border border-[#613635] bg-[#301f20] px-2 py-2 text-[11px] font-semibold text-[#ff8d85]">失败 {formatNumber(liveFailedCount)}</span>
+                        </div>
+                      </div>
+                      <div className="relative min-h-0 overflow-hidden bg-[#0d171a]">
+                        <div className="opportunity-live-rail flex h-7 items-center gap-3 border-b border-[#26383d] px-3 text-[10px] font-bold uppercase text-[#789098]">
+                          <Activity className={cn("size-3.5", pipelineBusy && "text-[#4ade80]")} strokeWidth={2.2} />
+                          <span>LIVE EVENT STREAM</span>
+                          <span className="ml-auto">{pipelineLogs.length.toString().padStart(2, "0")} EVENTS</span>
+                        </div>
+                        <div className="h-[calc(100%-28px)] overflow-y-auto px-3 py-2" ref={pipelineLogViewportRef}>
+                          <div className="grid gap-1.5">
+                            {pipelineLogs.map((item, index) => {
+                              const icon = item.tone === "success" ? <CheckCircle2 className="size-3.5" strokeWidth={2.2} /> : item.tone === "error" ? <XCircle className="size-3.5" strokeWidth={2.2} /> : item.tone === "running" ? <Activity className="size-3.5" strokeWidth={2.2} /> : <Radio className="size-3.5" strokeWidth={2.2} />;
+                              return (
+                                <div className={cn("opportunity-log-entry grid grid-cols-[58px_20px_minmax(0,1fr)] items-start gap-1.5 rounded px-2 py-1.5 text-[12px]", item.tone === "success" ? "bg-[#123126] text-[#6ee7ad]" : item.tone === "error" ? "bg-[#321f20] text-[#ff9b94]" : item.tone === "running" ? "bg-[#15272b] text-[#d7e7eb]" : "text-[#91a7ad]")} key={item.id} style={{ animationDelay: `${Math.min(index, 8) * 30}ms` }}>
+                                  <span className="font-mono text-[10px] text-[#6f858b]">{item.time}</span>
+                                  <span className={cn("grid size-5 place-items-center", item.tone === "success" ? "text-[#4ade80]" : item.tone === "error" ? "text-[#fb7185]" : item.tone === "running" ? "text-[#f6c85f]" : "text-[#789098]")}>{icon}</span>
+                                  <span className="min-w-0 break-words font-medium leading-5">{item.message}</span>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
-                        <div className="flex max-h-[128px] flex-wrap gap-2 overflow-auto rounded-md border border-[#edf1f6] bg-[#fbfcff] p-2">
-                          {categoryOptions.map((item) => {
-                            const active = selectedStoreCategoryKeys.includes(item.key);
-                            return (
-                              <button className={cn("h-8 max-w-full truncate rounded-md border px-2.5 text-[12px] font-semibold", active ? "border-brand-fox bg-brand-foxSoft text-brand-fox" : "border-[#dbe5f2] bg-white text-[#526a91] hover:border-brand-fox")} key={item.key} title={item.label} type="button" onClick={() => toggleStoreCategory(item.key)}>
-                                {item.label}
-                              </button>
-                            );
-                          })}
-                          {!categoryOptions.length ? <span className="px-1 py-1 text-[12px] font-semibold text-[#98a2b3]">暂无店铺类目台账，运行一次一键提报后会自动沉淀</span> : null}
-                        </div>
-                      </div>
-                      <div className="grid gap-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[13px] font-semibold text-[#475467]">搜索词类型</span>
-                          <span className="rounded-md bg-[#f2f4f7] px-2 py-0.5 text-[12px] font-semibold text-[#667085]">消费者热搜词</span>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {rankTabs.map((item) => (
-                            <button className={cn("h-8 rounded-md border px-2.5 text-[12px] font-semibold transition-colors", activeRank === item.value ? "border-brand-fox bg-brand-foxSoft text-brand-fox" : "border-[#dbe5f2] bg-white text-[#526a91] hover:border-brand-fox")} key={item.value} type="button" onClick={() => setActiveRank(item.value)}>
-                              {item.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <MultiChoiceField label="推荐理由" values={selectedReasonIds} options={reasonOptions} onToggle={(value) => toggleNumberSelection(value, setSelectedReasonIds)} onClear={() => setSelectedReasonIds([])} />
-                      <MultiChoiceField label="权益" values={selectedBenefitIds} options={benefitOptions} onToggle={(value) => toggleNumberSelection(value, setSelectedBenefitIds)} onClear={() => setSelectedBenefitIds([])} />
-                      <div className="flex flex-wrap gap-2">
-                        <CheckOption checked={skipSubmittedClueCategory} label="跳过已报商机类目" onChange={setSkipSubmittedClueCategory} />
-                        <CheckOption checked={skipSubmittedClue} label="跳过已报商机" onChange={setSkipSubmittedClue} />
-                        <CheckOption checked={skipSubmittedProductInSameClue} label="跳过已报商品（同一商机）" onChange={setSkipSubmittedProductInSameClue} />
                       </div>
                     </div>
                   </div>

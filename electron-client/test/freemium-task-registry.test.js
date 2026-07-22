@@ -46,6 +46,20 @@ test("task params reject renderer-controlled transport and policy fields", () =>
 });
 
 test("task-specific modes fail closed", () => {
+  assert.deepEqual(validateTaskParams("fetchDoudianStores", { mode: "discover" }), { mode: "discover" });
+  assert.deepEqual(validateTaskParams("fetchDoudianStores", {
+    mode: "login_selected",
+    repairShopIds: ["1001"],
+    repairShopNames: ["测试店铺"],
+    sourceOperationId: "store-1720000000000-abc123"
+  }), {
+    mode: "login_selected",
+    repairShopIds: ["1001"],
+    repairShopNames: ["测试店铺"],
+    sourceOperationId: "store-1720000000000-abc123"
+  });
+  assert.throws(() => validateTaskParams("fetchDoudianStores", { mode: "login_all" }), /mode is invalid/);
+  assert.throws(() => validateTaskParams("fetchDoudianStores", { mode: "login_selected", repairShopIds: ["1001"] }), /sourceOperationId is invalid/);
   assert.deepEqual(validateTaskParams("bulkDeleteScan", { mode: "scan", shopIds: ["1"] }), { mode: "scan", shopIds: ["1"] });
   assert.throws(() => validateTaskParams("bulkDeleteExecute", { mode: "scan" }), /mode must be execute/);
   assert.throws(() => validateTaskParams("opportunityReportScan", { mode: "collect" }), /mode is invalid/);

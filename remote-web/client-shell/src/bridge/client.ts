@@ -201,14 +201,21 @@ export async function listDoudianStores(): Promise<DoudianStoreResult> {
   return listStoreLedger();
 }
 
+export interface FetchDoudianStoresOptions {
+  mode?: "import" | "discover" | "login_selected" | "discard_discovery";
+  repairShopIds?: string[];
+  repairShopNames?: string[];
+  sourceOperationId?: string;
+}
+
 export async function fetchDoudianStores(
   operationId?: string,
-  repairShopIds?: string[],
+  options: FetchDoudianStoresOptions = {},
   onStarted?: (operationId: string) => void
 ): Promise<DoudianStoreResult> {
   const args = await withDoudianAdapter({
     ...(operationId ? { operationId } : {}),
-    ...(repairShopIds?.length ? { repairShopIds } : {})
+    ...options
   });
   const loginTimeoutMs = Math.max(3000, Number(args.doudianAdapter.adapter.timeouts?.loginMs || 300000));
   return runDoudianStoreTask({
@@ -218,7 +225,10 @@ export async function fetchDoudianStores(
     ruleVersion: args.doudianAdapter.scripts?.version || "",
     payload: {
       doudianAdapter: args.doudianAdapter,
-      repairShopIds,
+      mode: options.mode || "import",
+      repairShopIds: options.repairShopIds || [],
+      repairShopNames: options.repairShopNames || [],
+      sourceOperationId: options.sourceOperationId || "",
       timeoutMs: loginTimeoutMs
     }
   }, loginTimeoutMs + 60000, onStarted);

@@ -40,6 +40,7 @@ export interface DoudianStoreProgress {
   status: string;
   index: number;
   total: number;
+  phase?: "discovered" | "updated";
 }
 
 export interface DoudianBusinessProgress {

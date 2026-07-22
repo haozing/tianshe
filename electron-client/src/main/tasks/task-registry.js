@@ -125,7 +125,7 @@ const MARKETING_PLAN_POLICY = Object.freeze({
 });
 
 const TASK_PARAM_KEYS = Object.freeze({
-  fetchDoudianStores: keys("repairShopIds", "timeoutMs"),
+  fetchDoudianStores: keys("mode", "repairShopIds", "repairShopNames", "sourceOperationId", "timeoutMs"),
   refreshDoudianStoreStatus: keys("shopIds"),
   syncProductCatalog: keys("shopIds", "tenantId", "storeGeneration", "forceRefresh"),
   businessData: keys("shopIds", "datePreset", "beginDate", "endDate"),
@@ -265,8 +265,10 @@ function validateTaskParams(taskType, value) {
     if (!allowedKeys?.has(key)) throw paramsError(`params.${key} is not allowed for ${taskType}`);
   }
   const params = structuredClone(value);
-  for (const key of ["shopIds", "repairShopIds", "candidateIds", "clueIds", "productIds"]) validateStringArray(params, key);
+  for (const key of ["shopIds", "repairShopIds", "repairShopNames", "candidateIds", "clueIds", "productIds"]) validateStringArray(params, key);
   const mode = String(params.mode || "");
+  if (taskType === "fetchDoudianStores" && mode && !["import", "discover", "login_selected", "discard_discovery"].includes(mode)) throw paramsError("fetchDoudianStores mode is invalid");
+  if (taskType === "fetchDoudianStores" && ["login_selected", "discard_discovery"].includes(mode) && !/^[A-Za-z0-9._:-]{1,200}$/.test(String(params.sourceOperationId || ""))) throw paramsError("fetchDoudianStores sourceOperationId is invalid");
   if (taskType === "bulkDeleteScan" && mode && mode !== "scan") throw paramsError("bulkDeleteScan mode must be scan");
   if (taskType === "bulkDeleteExecute" && mode !== "execute") throw paramsError("bulkDeleteExecute mode must be execute");
   if (taskType === "staleGoodsScan" && mode && mode !== "scan") throw paramsError("staleGoodsScan mode must be scan");

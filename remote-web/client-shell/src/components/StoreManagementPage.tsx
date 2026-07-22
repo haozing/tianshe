@@ -64,6 +64,7 @@ interface StoreRow {
   lastFailureReason: string;
   lastFailureMessage: string;
   adapterVersion: string;
+  pendingLogin: boolean;
 }
 
 interface StoreGroupRow {
@@ -84,15 +85,6 @@ interface RunDetail {
   diagnostic?: unknown;
 }
 
-interface OperationRunSummary {
-  title: string;
-  tone: NoticeTone;
-  summary: string;
-  details: RunDetail[];
-  result?: DoudianStoreResult;
-  at: string;
-}
-
 interface MetricCard {
   label: string;
   value: number;
@@ -100,14 +92,10 @@ interface MetricCard {
   Icon: LucideIcon;
 }
 
-interface StoreImportProgress {
-  progress: number;
-  message: string;
-  shopId?: string;
-  shopName?: string;
-  status?: DoudianStoreSummary["status"];
-  index?: number;
-  total?: number;
+interface StoreLoginSelection {
+  sourceOperationId: string;
+  candidates: DoudianStoreSummary[];
+  phase: "selecting" | "logging_in";
 }
 
 const statusCopy: Record<DoudianStoreSummary["status"], { label: string; className: string }> = {
@@ -126,8 +114,8 @@ const operationCopy: Record<OperationKey, {
 }> = {
   fetchStores: {
     title: "获取店铺",
-    description: "将打开或复用本机抖店登录态，识别账号可管理店铺并保存到本地台账；失败时会展示原因和重试入口。",
-    confirmText: "开始获取",
+    description: "登录抖店主账号后，将先显示该账号可管理的店铺；您可以全选或多选需要登录的店铺，未选择的店铺不会登录。",
+    confirmText: "登录主账号",
     tone: "success"
   },
   refreshStatus: {
@@ -170,7 +158,8 @@ const demoRows: StoreRow[] = [
     updatedAt: "2026-07-04T09:24:00.000Z",
     lastFailureReason: "",
     lastFailureMessage: "",
-    adapterVersion: "demo"
+    adapterVersion: "demo",
+    pendingLogin: false
   },
   {
     id: "demo-10002",
@@ -190,7 +179,8 @@ const demoRows: StoreRow[] = [
     updatedAt: "2026-07-03T17:36:00.000Z",
     lastFailureReason: "",
     lastFailureMessage: "",
-    adapterVersion: "demo"
+    adapterVersion: "demo",
+    pendingLogin: false
   },
   {
     id: "demo-10003",
@@ -210,7 +200,8 @@ const demoRows: StoreRow[] = [
     updatedAt: "2026-07-04T08:55:00.000Z",
     lastFailureReason: "api-no-data",
     lastFailureMessage: "当前分区不是目标店铺或已离线",
-    adapterVersion: "demo"
+    adapterVersion: "demo",
+    pendingLogin: false
   }
 ];
 
@@ -262,7 +253,8 @@ function mapStoreToRow(store: DoudianStoreSummary): StoreRow {
     updatedAt: store.updatedAt || "",
     lastFailureReason: store.lastFailureReason || "",
     lastFailureMessage: store.lastFailureMessage || "",
-    adapterVersion: store.adapterVersion || "-"
+    adapterVersion: store.adapterVersion || "-",
+    pendingLogin: Boolean(store.loginPending)
   };
 }
 
@@ -318,24 +310,6 @@ function summarizeDetails(result: DoudianStoreResult): RunDetail[] {
 
 function detailFailed(detail: RunDetail) {
   return detail.ok === false || detail.status === "offline" || detail.status === "check_failed" || !!detail.reason;
-}
-
-function runFailedShopIds(run: OperationRunSummary) {
-  return Array.from(new Set(run.details.filter(detailFailed).map((detail) => detail.shopId || "").filter(Boolean)));
-}
-
-function diagnosticSummary(diagnostic: unknown) {
-  if (!diagnostic || typeof diagnostic !== "object" || Array.isArray(diagnostic)) return diagnostic ? String(diagnostic) : "";
-  const record = diagnostic as Record<string, unknown>;
-  const current = [record.currentShopName, record.currentShopId].map((item) => String(item || "").trim()).filter(Boolean).join(" / ");
-  const target = [record.targetShopName, record.targetShopId].map((item) => String(item || "").trim()).filter(Boolean).join(" / ");
-  const parts = [
-    current ? `当前：${current}` : "",
-    target ? `目标：${target}` : "",
-    record.error ? `错误：${String(record.error)}` : "",
-    record.signFailureReason ? `签名：${String(record.signFailureReason)}` : ""
-  ].filter(Boolean);
-  return parts.join("；");
 }
 
 function timestamp(value: string) {
@@ -442,77 +416,12 @@ function OperationNotice({ tone, message, onClose }: { tone: NoticeTone; message
   );
 }
 
-function RunDetailsSummary({
-  run,
-  busy,
-  onClose,
-  onRetryFailed
-}: {
-  run: OperationRunSummary | null;
-  busy: boolean;
-  onClose: () => void;
-  onRetryFailed: (ids: string[]) => void;
-}) {
-  if (!run) return null;
-  const failed = run.details.filter(detailFailed);
-  const successCount = run.details.filter((detail) => detail.ok !== false).length;
-  const failedIds = runFailedShopIds(run);
-  const visibleDetails = (failed.length ? failed : run.details).slice(0, 5);
-  const Icon = failed.length ? AlertTriangle : CheckCircle2;
-  const style = failed.length
-    ? "border-[#ffdca8] bg-[#fffaf0] text-[#92400e]"
-    : "border-[#cdebd7] bg-[#f3fff7] text-[#087443]";
-
-  return (
-    <div className={cn("border-b px-4 py-3", style)}>
-      <div className="flex flex-wrap items-center gap-3">
-        <Icon className="size-[17px] shrink-0" strokeWidth={2.2} />
-        <div className="min-w-[220px] flex-1">
-          <div className="truncate text-[13px] font-semibold text-[#101828]">{run.title}</div>
-          <div className="mt-0.5 text-[12px] text-[#475467]">
-            {run.summary}
-            {run.details.length ? ` · 成功 ${successCount} 项，失败 ${failed.length} 项` : ""}
-            {run.result?.status ? ` · 状态 ${run.result.status}` : ""}
-          </div>
-        </div>
-        {failedIds.length ? (
-          <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#ffdca8] bg-white px-3 text-[12px] font-semibold text-[#b54708] disabled:opacity-50" type="button" disabled={busy} onClick={() => onRetryFailed(failedIds)}>
-            <KeyRound className="size-[13px]" strokeWidth={2} />
-            重试失败
-          </button>
-        ) : null}
-        <button className="grid size-8 place-items-center rounded-md border border-white/70 bg-white/70 text-[#667085]" type="button" aria-label="关闭任务详情" onClick={onClose}>
-          <X className="size-[14px]" strokeWidth={2} />
-        </button>
-      </div>
-      {visibleDetails.length ? (
-        <div className="mt-2 grid gap-1.5">
-          {visibleDetails.map((detail, index) => {
-            const diagnostic = diagnosticSummary(detail.diagnostic);
-            return (
-              <div className="grid gap-0.5 rounded-md bg-white/70 px-3 py-2 text-[12px] text-[#344054]" key={`${detail.shopId || detail.shopName || index}-${index}`}>
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <span className="font-semibold text-[#101828]">{detail.shopName || detail.shopId || "未知店铺"}</span>
-                  {detail.reason ? <span className="rounded bg-[#fff1e6] px-1.5 py-0.5 text-[#b54708]">{detail.reason}</span> : null}
-                  <span className={cn("rounded px-1.5 py-0.5", detailFailed(detail) ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eafaf0] text-[#087443]")}>
-                    {detailFailed(detail) ? "失败" : "成功"}
-                  </span>
-                </div>
-                <div className="truncate text-[#475467]" title={[detail.message, diagnostic].filter(Boolean).join("；")}>{[detail.message, diagnostic].filter(Boolean).join("；")}</div>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function OperationDialog({
   operation,
   selectedCount,
   visibleCount,
   groupName,
+  groupOptions,
   busy,
   onGroupNameChange,
   onCancel,
@@ -523,6 +432,7 @@ function OperationDialog({
   selectedCount: number;
   visibleCount: number;
   groupName: string;
+  groupOptions: string[];
   busy: boolean;
   onGroupNameChange: (value: string) => void;
   onCancel: () => void;
@@ -562,17 +472,25 @@ function OperationDialog({
           </div>
           {operation === "updateGroup" ? (
             <label className="mb-4 grid gap-2 text-[13px] font-medium text-[#344054]">
-              <span>分组名称</span>
-              <input
-                className="h-9 rounded-md border border-[#dbe5f2] px-3 text-[13px] text-[#101828] outline-none focus:border-brand-fox"
-                value={groupName}
-                onChange={(event) => onGroupNameChange(event.target.value)}
-                placeholder="例如：宠物生活"
-              />
+              <span>选择已有分组</span>
+              <span className="relative inline-flex h-9 items-center rounded-md border border-[#dbe5f2] bg-white text-[13px] text-[#101828] focus-within:border-brand-fox">
+                <select
+                  className="h-full w-full appearance-none rounded-md bg-transparent px-3 pr-9 outline-none"
+                  value={groupName}
+                  onChange={(event) => onGroupNameChange(event.target.value)}
+                >
+                  <option value="" disabled>请选择已有分组</option>
+                  {groupOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 size-[14px] text-[#667085]" strokeWidth={2} />
+              </span>
             </label>
           ) : null}
-          {disabled && needsSelection ? (
+          {needsSelection && selectedCount === 0 ? (
             <div className="mb-4 rounded-lg border border-[#ffdca8] bg-[#fff7e8] px-3 py-2 text-[13px] text-[#b54708]">请先选择需要操作的店铺。</div>
+          ) : null}
+          {operation === "updateGroup" && selectedCount > 0 && !groupName.trim() ? (
+            <div className="mb-4 rounded-lg border border-[#ffdca8] bg-[#fff7e8] px-3 py-2 text-[13px] text-[#b54708]">请选择要移动到的已有分组。</div>
           ) : null}
           <div className="flex justify-end gap-3">
             <Dialog.Close asChild>
@@ -692,7 +610,7 @@ export function StoreManagementPage() {
   const [activeOperationId, setActiveOperationId] = useState<string | null>(null);
   const [activeTask, setActiveTask] = useState<"fetchStores" | "refreshStatus" | null>(null);
   const [operationCancelling, setOperationCancelling] = useState(false);
-  const [storeImportProgress, setStoreImportProgress] = useState<StoreImportProgress | null>(null);
+  const [storeLoginSelection, setStoreLoginSelection] = useState<StoreLoginSelection | null>(null);
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
   const [targetGroupName, setTargetGroupName] = useState("");
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
@@ -703,7 +621,6 @@ export function StoreManagementPage() {
   const [storeListMessage, setStoreListMessage] = useState("");
   const [page, setPage] = useState(1);
   const [notice, setNotice] = useState<{ tone: NoticeTone; message: string } | null>(null);
-  const [lastRun, setLastRun] = useState<OperationRunSummary | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -754,7 +671,13 @@ export function StoreManagementPage() {
       if (disposed || !hasNativeStoreBridge()) return;
       const result = await listDoudianStores();
       if (disposed || !result.ok) return;
-      setRows(mapStoresToRows(result.stores || []));
+      setRows((current) => {
+        const ledgerRows = mapStoresToRows(result.stores || []);
+        const ledgerIds = new Set(ledgerRows.map((row) => row.id));
+        const ledgerNames = new Set(ledgerRows.map((row) => row.name));
+        const waitingRows = current.filter((row) => row.pendingLogin && !ledgerIds.has(row.id) && !ledgerNames.has(row.name));
+        return [...ledgerRows, ...waitingRows];
+      });
       setStoreGroups(mapGroupsToRows(result.groups || []));
       setStoreListState("ready");
     }
@@ -773,18 +696,35 @@ export function StoreManagementPage() {
       const progress = Number.isFinite(detail.progress) ? `${Math.round(detail.progress)}%` : "";
       const message = detail.message || detail.resultSummary || detail.error || "";
       if (detail.taskType === "fetchDoudianStores" && detail.status === "running") {
-        const status = detail.store?.status;
-        setStoreImportProgress({
-          progress: Number.isFinite(detail.progress) ? Math.round(detail.progress) : 0,
-          message: message || "正在获取店铺",
-          shopId: detail.store?.shopId,
-          shopName: detail.store?.shopName,
-          status: status && status in statusCopy ? status as DoudianStoreSummary["status"] : undefined,
-          index: detail.store?.index,
-          total: detail.store?.total
-        });
-        if (detail.store) {
+        if (detail.store?.phase === "discovered") {
+          const candidate: DoudianStoreSummary = {
+            shopId: detail.store.shopId,
+            shopName: detail.store.shopName,
+            platform: "doudian",
+            partition: "",
+            status: "unknown",
+            operateStatus: "待登录",
+            groupName: "未分组",
+            lastCheckStatus: "pending_login",
+            lastCheckMessage: "等待选择登录",
+            lastResult: "待登录",
+            loginPending: true
+          };
+          setRows((current) => {
+            const next = current.filter((row) => row.id !== candidate.shopId && row.name !== candidate.shopName);
+            next.push(mapStoreToRow(candidate));
+            return next;
+          });
+          setSelectedIds((current) => new Set(current).add(candidate.shopId));
+          setStoreLoginSelection((current) => {
+            const candidates = current?.candidates || [];
+            const nextCandidates = candidates.some((store) => store.shopId === candidate.shopId || store.shopName === candidate.shopName)
+              ? candidates
+              : [...candidates, candidate];
+            return { sourceOperationId: detail.operationId, candidates: nextCandidates, phase: "selecting" };
+          });
           setPendingOperation(null);
+        } else if (detail.store) {
           scheduleRowsRefresh(80);
         }
       }
@@ -792,8 +732,7 @@ export function StoreManagementPage() {
         setNotice({ tone: detail.status === "failed" ? "warning" : "info", message: [progress, message].filter(Boolean).join(" · ") });
       }
       if (["succeeded", "partial", "failed", "cancelled"].includes(detail.status)) {
-        setStoreImportProgress(null);
-        scheduleRowsRefresh();
+        if (detail.taskType === "refreshDoudianStoreStatus") scheduleRowsRefresh();
       }
     });
 
@@ -827,6 +766,10 @@ export function StoreManagementPage() {
       .map(([name, count]) => ({ name, count, virtual: count === 0 && (virtualGroups.includes(name) || storeGroups.some((group) => group.name === name && group.virtual)) }))
       .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
   }, [rows, storeGroups, virtualGroups]);
+  const assignableGroupOptions = useMemo(
+    () => ["未分组", ...groupOptions.filter((name) => name !== "全部分组" && name !== "未分组")],
+    [groupOptions]
+  );
   const allGroupOptions = groupOptions;
   const visibleRows = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -906,7 +849,7 @@ export function StoreManagementPage() {
   }
 
   function openOperation(operation: OperationKey) {
-    if (operation === "updateGroup") setTargetGroupName(groupFilter === "全部分组" ? "" : groupFilter);
+    if (operation === "updateGroup") setTargetGroupName("");
     setPendingOperation(operation);
   }
 
@@ -922,14 +865,8 @@ export function StoreManagementPage() {
     }
   }
 
-  function rememberRun(title: string, tone: NoticeTone, summary: string, details: RunDetail[], result?: DoudianStoreResult) {
+  function showOperationResult(tone: NoticeTone, summary: string) {
     setNotice({ tone, message: summary });
-    setLastRun({ title, tone, summary, details, result, at: new Date().toISOString() });
-  }
-
-  function rememberFetchFailure(title: string, tone: NoticeTone, summary: string, details: RunDetail[], result?: DoudianStoreResult) {
-    setNotice(null);
-    setLastRun({ title, tone, summary, details, result, at: new Date().toISOString() });
   }
 
   function taskStarted(task: "fetchStores" | "refreshStatus") {
@@ -947,28 +884,26 @@ export function StoreManagementPage() {
     const operationId = createStoreOperationId();
     setActiveTask("fetchStores");
     setOperationCancelling(false);
-    setStoreImportProgress({ progress: 0, message: `正在为 ${ids.length} 家店铺重建登录态` });
     setOperationBusy(true);
     setNotice({ tone: "info", message: `正在为 ${ids.length} 家店铺重建登录态。` });
     try {
-      const result = await fetchDoudianStores(operationId, ids, taskStarted("fetchStores"));
+      const result = await fetchDoudianStores(operationId, { mode: "import", repairShopIds: ids }, taskStarted("fetchStores"));
       applyStores(result);
       const details = summarizeDetails(result);
       if (result.status === "cancelled") {
-        rememberRun("重新登录已取消", "info", result.message || "已取消重新登录任务。", details, result);
+        showOperationResult("info", result.message || "已取消重新登录任务。");
         return;
       }
       const failed = details.filter((item) => item.ok === false).length;
-      rememberRun("重新登录结果", result.ok && failed === 0 ? "success" : failed ? "warning" : "error", result.ok
+      showOperationResult(result.ok && failed === 0 ? "success" : failed ? "warning" : "error", result.ok
         ? `已重建 ${result.imported || 0} 家店铺登录态，${failed} 家需关注。`
-        : result.message || "重新登录失败。", details, result);
+        : result.message || "重新登录失败。");
     } catch (error) {
-      rememberRun("重新登录失败", "error", error instanceof Error ? error.message : String(error), []);
+      showOperationResult("error", error instanceof Error ? error.message : String(error));
     } finally {
       setOperationBusy(false);
       setActiveTask(null);
       setOperationCancelling(false);
-      setStoreImportProgress(null);
       setActiveOperationId(null);
     }
   }
@@ -1021,39 +956,72 @@ export function StoreManagementPage() {
     }
   }
 
-  async function runFetchStoresOperation() {
+  async function loginSelectedStores() {
+    if (!storeLoginSelection || operationBusy) return;
+    const candidates = storeLoginSelection.candidates.filter((store) => selectedIds.has(store.shopId));
+    if (!candidates.length) {
+      setNotice({ tone: "warning", message: "请至少选择一家需要登录的店铺。" });
+      return;
+    }
+
     const operationId = createStoreOperationId();
+    setStoreLoginSelection((current) => current ? { ...current, phase: "logging_in" } : current);
     setActiveTask("fetchStores");
     setOperationCancelling(false);
-    setStoreImportProgress({ progress: 0, message: "正在打开抖店登录窗口" });
     setOperationBusy(true);
     setNotice(null);
-    setLastRun(null);
-
     try {
-      const result = await fetchDoudianStores(operationId, undefined, taskStarted("fetchStores"));
+      const result = await fetchDoudianStores(operationId, {
+        mode: "login_selected",
+        sourceOperationId: storeLoginSelection.sourceOperationId,
+        repairShopIds: candidates.map((store) => store.shopId),
+        repairShopNames: candidates.map((store) => store.shopName)
+      }, taskStarted("fetchStores"));
       applyStores(result);
+      setStoreLoginSelection(null);
+      setSelectedIds(new Set());
       const details = summarizeDetails(result);
       const failed = details.filter(detailFailed).length;
       if (storeImportFeedback({ ok: result.ok, status: result.status, failedCount: failed }) === "hidden") {
         setNotice(null);
-        setLastRun(null);
-        setPendingOperation(null);
-      } else if (result.ok) {
-        rememberFetchFailure("部分店铺获取失败", "warning", result.message || `已导入 ${result.imported || 0} 家店铺，${failed} 家失败。`, details, result);
-        setPendingOperation(null);
       } else {
-        rememberFetchFailure("获取店铺失败", result.status === "cancelled" ? "info" : "error", result.message || "获取店铺失败。", details, result);
-        if (result.status === "cancelled") setPendingOperation(null);
+        showOperationResult(
+          result.status === "cancelled" ? "info" : result.ok ? "warning" : "error",
+          result.message || "店铺登录失败。"
+        );
       }
     } catch (error) {
-      rememberFetchFailure("获取店铺失败", "error", error instanceof Error ? error.message : String(error), []);
+      setStoreLoginSelection(null);
+      setSelectedIds(new Set());
+      showOperationResult("error", error instanceof Error ? error.message : String(error));
+      const ledger = await listDoudianStores().catch(() => null);
+      if (ledger?.ok) applyStores(ledger);
     } finally {
       setOperationBusy(false);
       setActiveTask(null);
       setOperationCancelling(false);
-      setStoreImportProgress(null);
       setActiveOperationId(null);
+    }
+  }
+
+  async function discardStoreLoginSelection() {
+    if (!storeLoginSelection || operationBusy) return;
+    const sourceOperationId = storeLoginSelection.sourceOperationId;
+    setStoreLoginSelection(null);
+    setSelectedIds(new Set());
+    setNotice(null);
+    setOperationBusy(true);
+    try {
+      const result = await fetchDoudianStores(createStoreOperationId(), {
+        mode: "discard_discovery",
+        sourceOperationId
+      });
+      applyStores(result);
+    } catch {
+      const ledger = await listDoudianStores().catch(() => null);
+      if (ledger?.ok) applyStores(ledger);
+    } finally {
+      setOperationBusy(false);
     }
   }
 
@@ -1066,22 +1034,33 @@ export function StoreManagementPage() {
       if (pendingOperation === "fetchStores") {
         setActiveTask("fetchStores");
         setOperationCancelling(false);
-        setStoreImportProgress({ progress: 0, message: "正在打开抖店登录窗口" });
+        setStoreLoginSelection(null);
+        setSelectedIds(new Set());
+        setRows([]);
         setNotice(null);
-        setLastRun(null);
-        const result = await fetchDoudianStores(operationId, undefined, taskStarted("fetchStores"));
+        const result = await fetchDoudianStores(operationId, { mode: "discover" }, taskStarted("fetchStores"));
         applyStores(result);
+        if (result.ok && result.multiStorePending) {
+          const candidates = (result.stores || []).filter((store) => store.loginPending);
+          setStoreLoginSelection({
+            sourceOperationId: result.operationId || operationId,
+            candidates,
+            phase: "selecting"
+          });
+          setSelectedIds(new Set(candidates.map((store) => store.shopId)));
+          setPendingOperation(null);
+          return;
+        }
         const details = summarizeDetails(result);
         const failed = details.filter(detailFailed).length;
         if (storeImportFeedback({ ok: result.ok, status: result.status, failedCount: failed }) === "hidden") {
           setNotice(null);
-          setLastRun(null);
           setPendingOperation(null);
         } else if (result.ok) {
-          rememberFetchFailure("部分店铺获取失败", "warning", result.message || `已导入 ${result.imported || 0} 家店铺，${failed} 家失败。`, details, result);
+          showOperationResult("warning", result.message || `已导入 ${result.imported || 0} 家店铺，${failed} 家失败。`);
           setPendingOperation(null);
         } else {
-          rememberFetchFailure("获取店铺失败", result.status === "cancelled" ? "info" : "error", result.message || "获取店铺失败。", details, result);
+          showOperationResult(result.status === "cancelled" ? "info" : "error", result.message || "获取店铺失败。");
           if (result.status === "cancelled") setPendingOperation(null);
         }
         return;
@@ -1093,8 +1072,12 @@ export function StoreManagementPage() {
         applyStores(result);
         const details = summarizeDetails(result);
         const failed = details.filter((item) => item.ok === false).length;
-        const tone: NoticeTone = result.ok && failed === 0 ? "success" : result.ok ? "warning" : "error";
-        rememberRun("登录态刷新结果", tone, result.ok ? `已刷新 ${result.refreshed || 0} 家店铺，${failed} 家需关注。` : result.message || "刷新失败。", details, result);
+        if (result.ok && failed === 0) {
+          setNotice(null);
+        } else {
+          const tone: NoticeTone = result.ok ? "warning" : result.status === "cancelled" ? "info" : "error";
+          showOperationResult(tone, result.ok ? `${failed} 家店铺登录态刷新失败，请处理后重试。` : result.message || "刷新失败。");
+        }
         if (result.ok) setPendingOperation(null);
         return;
       }
@@ -1105,10 +1088,10 @@ export function StoreManagementPage() {
         applyStores(result);
         if (result.ok) {
           setSelectedIds(new Set());
-          rememberRun("删除店铺结果", "success", `已删除 ${result.deleted || 0} 家店铺。`, ids.map((id) => ({ shopId: id, ok: true, message: "已删除" })), result);
+          setNotice(null);
           setPendingOperation(null);
         } else {
-          rememberRun("删除店铺失败", "error", result.message || "删除失败。", [], result);
+          showOperationResult("error", result.message || "删除店铺失败，请稍后重试。");
         }
         return;
       }
@@ -1118,20 +1101,23 @@ export function StoreManagementPage() {
         const result = await updateDoudianStoreGroup(ids, targetGroupName.trim());
         applyStores(result);
         if (result.ok) {
-          rememberRun("设置分组结果", "success", `已更新 ${result.updated || 0} 家店铺分组。`, ids.map((id) => ({ shopId: id, ok: true, message: `已移动到 ${targetGroupName.trim()}` })), result);
+          showOperationResult("success", `已更新 ${result.updated || 0} 家店铺分组。`);
           setPendingOperation(null);
         } else {
-          rememberRun("设置分组失败", "error", result.message || "设置分组失败。", [], result);
+          showOperationResult("error", result.message || "设置分组失败。");
         }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      rememberRun("操作失败", "error", message, []);
+      if (pendingOperation === "deleteStores") {
+        showOperationResult("error", message || "删除店铺失败，请稍后重试。");
+      } else {
+        showOperationResult("error", message);
+      }
     } finally {
       setOperationBusy(false);
       setActiveTask(null);
       setOperationCancelling(false);
-      setStoreImportProgress(null);
       setActiveOperationId(null);
     }
   }
@@ -1170,7 +1156,7 @@ export function StoreManagementPage() {
       applyStores(result);
       const details = summarizeDetails(result);
       const failed = details.some((item) => item.ok === false);
-      rememberRun("单店刷新结果", failed ? "warning" : result.ok ? "success" : "error", failed ? `${row.name} 已标记待复核，台账已保留。` : result.ok ? `已刷新 ${row.name} 登录态。` : result.message || "刷新失败。", details, result);
+      showOperationResult(failed ? "warning" : result.ok ? "success" : "error", failed ? `${row.name} 已标记待复核，台账已保留。` : result.ok ? `已刷新 ${row.name} 登录态。` : result.message || "刷新失败。");
     } catch (error) {
       setNotice({ tone: "error", message: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -1191,6 +1177,7 @@ export function StoreManagementPage() {
         selectedCount={selectedCount}
         visibleCount={visibleRows.length}
         groupName={targetGroupName}
+        groupOptions={assignableGroupOptions}
         busy={operationBusy}
         onGroupNameChange={setTargetGroupName}
         onCancel={() => setPendingOperation(null)}
@@ -1216,21 +1203,21 @@ export function StoreManagementPage() {
             activeTask === "fetchStores" ? "border border-[#ffd1d1] bg-white text-[#d92d20]" : "bg-brand-fox text-white hover:bg-brand-foxHover"
           )}
           type="button"
-          disabled={operationBusy && activeTask !== "fetchStores" || operationCancelling || activeTask === "fetchStores" && !activeOperationId}
+          disabled={(Boolean(storeLoginSelection) && activeTask !== "fetchStores") || (operationBusy && activeTask !== "fetchStores") || operationCancelling || (activeTask === "fetchStores" && !activeOperationId)}
           onClick={() => activeTask === "fetchStores" ? void cancelActiveOperation() : openOperation("fetchStores")}
         >
           {activeTask === "fetchStores" ? <Loader2 className="size-[15px] animate-spin" strokeWidth={2.1} /> : <Zap className="size-[15px]" strokeWidth={2.1} />}
           {activeTask === "fetchStores" ? operationCancelling ? "正在取消" : "取消获取" : "获取店铺"}
         </button>
-        <button className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#dbe5f2] bg-white px-4 text-[13px] font-semibold text-[#1d2939] disabled:cursor-not-allowed disabled:opacity-60" type="button" disabled={operationBusy || visibleRows.length === 0} onClick={() => openOperation("refreshStatus")}>
+        <button className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#dbe5f2] bg-white px-4 text-[13px] font-semibold text-[#1d2939] disabled:cursor-not-allowed disabled:opacity-60" type="button" disabled={Boolean(storeLoginSelection) || operationBusy || visibleRows.length === 0} onClick={() => openOperation("refreshStatus")}>
           <RefreshCw className={cn("size-[15px]", operationBusy && pendingOperation === "refreshStatus" ? "animate-spin" : "")} strokeWidth={2} />
           刷新登录态
         </button>
-        <button className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#ffdca8] bg-white px-4 text-[13px] font-semibold text-[#b54708] disabled:cursor-not-allowed disabled:opacity-60" type="button" disabled={operationBusy || failedVisibleIds.length === 0} onClick={() => void runRepairStores(selectedFailedIds.length ? selectedFailedIds : failedVisibleIds)}>
+        <button className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#ffdca8] bg-white px-4 text-[13px] font-semibold text-[#b54708] disabled:cursor-not-allowed disabled:opacity-60" type="button" disabled={Boolean(storeLoginSelection) || operationBusy || failedVisibleIds.length === 0} onClick={() => void runRepairStores(selectedFailedIds.length ? selectedFailedIds : failedVisibleIds)}>
           <KeyRound className="size-[15px]" strokeWidth={2} />
           重新登录需关注
         </button>
-        <button className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#dbe5f2] bg-white px-4 text-[13px] font-semibold text-[#1d2939]" type="button" onClick={() => setGroupManagerOpen(true)}>
+        <button className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#dbe5f2] bg-white px-4 text-[13px] font-semibold text-[#1d2939] disabled:cursor-not-allowed disabled:opacity-60" type="button" disabled={Boolean(storeLoginSelection) || operationBusy} onClick={() => setGroupManagerOpen(true)}>
           <FolderInput className="size-[15px]" strokeWidth={2} />
           分组管理
         </button>
@@ -1271,33 +1258,7 @@ export function StoreManagementPage() {
 
       <div className="grid min-h-0 grid-cols-1 gap-3 overflow-hidden">
         <div className="min-h-0 min-w-0 overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-          <div className={cn("grid h-full min-h-0", lastRun || storeImportProgress ? "grid-rows-[auto_minmax(0,1fr)_44px]" : "grid-rows-[minmax(0,1fr)_44px]")}>
-          {storeImportProgress ? (
-            <div className="border-b border-[#bfdbfe] bg-[#f5f9ff] px-4 py-3">
-              <div className="flex min-w-0 items-center gap-3">
-                <Loader2 className="size-[17px] shrink-0 animate-spin text-[#2563eb]" strokeWidth={2.2} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 items-center gap-2 text-[13px]">
-                    <span className="shrink-0 font-semibold text-[#101828]">正在获取店铺</span>
-                    {storeImportProgress.index && storeImportProgress.total ? <span className="shrink-0 text-[#475467]">{storeImportProgress.index} / {storeImportProgress.total}</span> : null}
-                    {storeImportProgress.shopName ? <span className="truncate font-medium text-[#1d4ed8]">{storeImportProgress.shopName}</span> : null}
-                    {storeImportProgress.shopId ? <span className="shrink-0 font-mono text-[12px] text-[#667085]">{storeImportProgress.shopId}</span> : null}
-                    {storeImportProgress.status ? <StatusTag status={storeImportProgress.status} /> : null}
-                  </div>
-                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#dbeafe]">
-                    <div className="h-full rounded-full bg-[#2563eb] transition-[width] duration-300" style={{ width: `${Math.max(2, Math.min(100, storeImportProgress.progress))}%` }} />
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : lastRun ? (
-            <RunDetailsSummary
-              run={lastRun}
-              busy={operationBusy}
-              onClose={() => setLastRun(null)}
-              onRetryFailed={(ids) => void runRepairStores(ids)}
-            />
-          ) : null}
+          <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_44px]">
           <div className="min-h-0 overflow-auto">
             <table className="w-full min-w-[1320px] border-collapse text-left text-[13px]">
               <thead className="bg-[#fbfcff] text-[#344054]">
@@ -1321,9 +1282,9 @@ export function StoreManagementPage() {
                       </button>
                     </td>
                     <td className="max-w-[260px] truncate px-3 font-medium text-[#1d2939]" title={row.name}>{row.name}</td>
-                    <td className="whitespace-nowrap px-3 font-mono text-[12px] text-[#344054]">{row.id}</td>
+                    <td className="whitespace-nowrap px-3 font-mono text-[12px] text-[#344054]">{row.pendingLogin && row.id.startsWith("pending:") ? "待识别" : row.id}</td>
                     <td className="whitespace-nowrap px-3 text-[#1d2939]">{row.group}</td>
-                    <td className="px-3"><StatusTag status={row.status} /></td>
+                    <td className="px-3">{row.pendingLogin ? <span className="inline-flex h-6 items-center rounded-md border border-[#ffdca8] bg-[#fff7e8] px-2 text-[12px] font-medium text-[#b54708]">待登录</span> : <StatusTag status={row.status} />}</td>
                     <td className="max-w-[180px] truncate px-3 text-[#344054]" title={row.lastCheckMessage || row.lastFailureMessage || rowRecentResult(row)}>{rowRecentResult(row)}</td>
                     <td className="max-w-[150px] truncate px-3 text-[#1d2939]" title={row.operateStatus}>{row.operateStatus}</td>
                     <td className="max-w-[170px] truncate px-3 text-[#b54708]" title={row.lastFailureMessage}>{row.lastFailureReason ? row.lastFailureReason : "-"}</td>
@@ -1331,14 +1292,14 @@ export function StoreManagementPage() {
                     <td className="whitespace-nowrap px-3 text-[#667085]">{toDateTime(row.lastLoginCheckAt)}</td>
                     <td className="px-3">
                       <div className="flex items-center gap-2">
-                        <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#1d2939] disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={operationBusy || activeRowId === row.id} onClick={() => handleOpenStore(row)}>
+                        <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#1d2939] disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={row.pendingLogin || operationBusy || activeRowId === row.id} onClick={() => handleOpenStore(row)}>
                           {activeRowId === row.id ? <Loader2 className="size-[13px] animate-spin" strokeWidth={2.2} /> : <ExternalLink className="size-[13px]" strokeWidth={2.1} />}
                           打开
                         </button>
-                        <button className="grid size-8 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054] disabled:cursor-not-allowed disabled:opacity-50" type="button" aria-label={`刷新 ${row.name}`} disabled={operationBusy || activeRowId === row.id} onClick={() => handleRefreshOne(row)}>
+                        <button className="grid size-8 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054] disabled:cursor-not-allowed disabled:opacity-50" type="button" aria-label={`刷新 ${row.name}`} disabled={row.pendingLogin || operationBusy || activeRowId === row.id} onClick={() => handleRefreshOne(row)}>
                           <RefreshCw className={cn("size-[14px]", activeRowId === row.id ? "animate-spin" : "")} strokeWidth={2} />
                         </button>
-                        <button className={cn("grid size-8 place-items-center rounded-md border bg-white disabled:cursor-not-allowed disabled:opacity-50", rowNeedsAttention(row) ? "border-[#ffdca8] text-[#b54708]" : "border-[#dbe5f2] text-[#344054]")} type="button" aria-label={`重新登录 ${row.name}`} title="重新登录/重建登录态" disabled={operationBusy || activeRowId === row.id} onClick={() => void runRepairStores([row.id])}>
+                        <button className={cn("grid size-8 place-items-center rounded-md border bg-white disabled:cursor-not-allowed disabled:opacity-50", rowNeedsAttention(row) ? "border-[#ffdca8] text-[#b54708]" : "border-[#dbe5f2] text-[#344054]")} type="button" aria-label={`重新登录 ${row.name}`} title="重新登录/重建登录态" disabled={row.pendingLogin || operationBusy || activeRowId === row.id} onClick={() => void runRepairStores([row.id])}>
                           <KeyRound className="size-[14px]" strokeWidth={2} />
                         </button>
                       </div>
@@ -1365,7 +1326,18 @@ export function StoreManagementPage() {
       </div>
 
       <div className="grid h-[60px] min-h-0 place-items-center">
-        {selectedCount > 0 ? (
+        {storeLoginSelection ? (
+          <div className="mx-auto flex h-[56px] w-[min(760px,calc(100vw-48px))] flex-nowrap items-center justify-center gap-3 overflow-x-auto rounded-lg border border-[#ffdca8] bg-white/96 px-5 shadow-[0_14px_34px_rgba(15,23,42,0.14)] backdrop-blur">
+            <span className="whitespace-nowrap text-[14px] font-medium text-[#344054]">
+              已发现 <strong className="px-1 text-[#101828]">{storeLoginSelection.candidates.length}</strong> 家，已选 <strong className="px-1 text-brand-fox">{selectedCount}</strong> 家
+            </span>
+            <button className="h-9 whitespace-nowrap rounded-md border border-[#dbe5f2] bg-white px-4 text-[13px] font-semibold text-[#344054] disabled:opacity-45" type="button" disabled={operationBusy} onClick={() => void discardStoreLoginSelection()}>取消</button>
+            <button className="inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-md bg-brand-fox px-4 text-[13px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45" type="button" disabled={operationBusy || selectedCount === 0} onClick={() => void loginSelectedStores()}>
+              {storeLoginSelection.phase === "logging_in" ? <Loader2 className="size-[15px] animate-spin" strokeWidth={2.2} /> : <KeyRound className="size-[15px]" strokeWidth={2.1} />}
+              {storeLoginSelection.phase === "logging_in" ? "正在登录" : "登录已选店铺"}
+            </button>
+          </div>
+        ) : selectedCount > 0 ? (
           <div className="mx-auto flex h-[56px] w-[min(980px,calc(100vw-48px))] flex-nowrap items-center justify-center gap-3 overflow-x-auto rounded-lg border border-[#e1e8f3] bg-white/96 px-5 shadow-[0_14px_34px_rgba(15,23,42,0.14)] backdrop-blur">
             <span className="whitespace-nowrap text-[14px] font-medium text-[#344054]">已选择 <strong className="px-1 text-brand-fox">{selectedCount}</strong> 家店铺</span>
             <button className="whitespace-nowrap text-[13px] font-semibold text-brand-navy" type="button" onClick={() => setSelectedIds(new Set())}>清空选择</button>

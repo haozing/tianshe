@@ -8,6 +8,8 @@ export const STORAGE_KEY_DOUDIAN_ADAPTER_STATUS = "chihu20_doudian_adapter_statu
 export const STORAGE_KEY_BUSINESS_DATA_COLUMNS = "chihu20_business_data_columns";
 export const STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER = "chihu20_business_data_column_order";
 export const STORAGE_KEY_BUSINESS_DATA_COLUMN_WIDTHS = "chihu20_business_data_column_widths";
+export const STORAGE_KEY_BUSINESS_DATA_AUTO_REFRESH = "chihu20_business_data_auto_refresh";
+export const STORAGE_KEY_STORE_GROUPS_COLLAPSED = "chihu20_store_groups_collapsed";
 export const STORAGE_KEY_FUNDS_DATA_COLUMNS = "chihu20_funds_data_columns";
 export const STORAGE_KEY_FUNDS_DATA_COLUMN_ORDER = "chihu20_funds_data_column_order";
 export const STORAGE_KEY_FUNDS_DATA_COLUMN_WIDTHS = "chihu20_funds_data_column_widths";
@@ -29,6 +31,8 @@ export const STORAGE_KEYS = [
   STORAGE_KEY_BUSINESS_DATA_COLUMNS,
   STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER,
   STORAGE_KEY_BUSINESS_DATA_COLUMN_WIDTHS,
+  STORAGE_KEY_BUSINESS_DATA_AUTO_REFRESH,
+  STORAGE_KEY_STORE_GROUPS_COLLAPSED,
   STORAGE_KEY_FUNDS_DATA_COLUMNS,
   STORAGE_KEY_FUNDS_DATA_COLUMN_ORDER,
   STORAGE_KEY_FUNDS_DATA_COLUMN_WIDTHS,

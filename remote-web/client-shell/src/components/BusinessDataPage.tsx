@@ -7,6 +7,7 @@ import {
   CalendarDays,
   Check,
   ChevronDown,
+  Clock3,
   Download,
   Gauge,
   GripVertical,
@@ -23,7 +24,7 @@ import {
 } from "lucide-react";
 import { cancelDoudianStoreOperation, fetchDoudianBusinessData, fetchDoudianBusinessDataLatest, listDoudianStores } from "../bridge/client";
 import { loadDoudianAdapterPayload } from "../bridge/doudianAdapter";
-import { STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER, STORAGE_KEY_BUSINESS_DATA_COLUMN_WIDTHS, STORAGE_KEY_BUSINESS_DATA_COLUMNS, storageGet, storageSet } from "../bridge/storage";
+import { STORAGE_KEY_BUSINESS_DATA_AUTO_REFRESH, STORAGE_KEY_BUSINESS_DATA_COLUMN_ORDER, STORAGE_KEY_BUSINESS_DATA_COLUMN_WIDTHS, STORAGE_KEY_BUSINESS_DATA_COLUMNS, storageGet, storageSet } from "../bridge/storage";
 import { addDoudianProgressListener } from "../domain/doudian";
 import { toggleStoreIds } from "../domain/doudian/storeSelection";
 import { GroupedStoreSelectionList } from "./GroupedStoreSelectionList";
@@ -89,6 +90,7 @@ type BusinessRow = {
   shopName: string;
   group: string;
   status: DoudianStoreStatus;
+  loaded: boolean;
   lastMessage?: string;
   ok?: boolean;
   metricAvailability: Partial<Record<BusinessMetricKey, boolean>>;
@@ -237,6 +239,28 @@ const toneSet = new Set<string>(["default", "blue", "green", "warning", "danger"
 const defaultMetricColumnWidth = 108;
 const minMetricColumnWidth = 72;
 const maxMetricColumnWidth = 360;
+const minAutoRefreshMinutes = 1;
+const maxAutoRefreshMinutes = 1440;
+const defaultAutoRefreshMinutes = 15;
+
+interface BusinessAutoRefreshPreference {
+  enabled: boolean;
+  minutes: number;
+}
+
+function normalizeAutoRefreshMinutes(value: unknown) {
+  const minutes = Math.round(Number(value));
+  if (!Number.isFinite(minutes)) return defaultAutoRefreshMinutes;
+  return Math.min(maxAutoRefreshMinutes, Math.max(minAutoRefreshMinutes, minutes));
+}
+
+function savedBusinessAutoRefresh(): BusinessAutoRefreshPreference {
+  const saved = storageGet<Partial<BusinessAutoRefreshPreference>>(STORAGE_KEY_BUSINESS_DATA_AUTO_REFRESH, {});
+  return {
+    enabled: saved.enabled === true,
+    minutes: normalizeAutoRefreshMinutes(saved.minutes)
+  };
+}
 
 function hasNativeStoreBridge() {
   return Boolean(window.chihuNative && (window.nativeData || window.chihuNative.nativeData));
@@ -265,6 +289,7 @@ function zeroBusinessRow(store: StoreOption): BusinessRow {
     shopName: store.name,
     group: store.group,
     status: store.status,
+    loaded: false,
     metricAvailability: Object.fromEntries(businessMetricKeys.map((key) => [key, false])),
     ...emptyMetrics()
   };
@@ -305,9 +330,24 @@ function businessRowFromRemote(row: DoudianBusinessDataRow, store?: StoreOption,
   }
   const metricSources = businessDetailDiagnostic(detail).metricSources || {};
   base.metricAvailability = Object.fromEntries(businessMetricKeys.map((key) => [key, metricSources[key]?.available === true]));
+  base.loaded = true;
   base.lastMessage = detail?.message;
   base.ok = detail?.ok;
   return base;
+}
+
+function businessRowsForStores(stores: StoreOption[], currentRows: BusinessRow[] = [], resetIds: Set<string> = new Set()) {
+  const currentById = new Map(currentRows.map((row) => [row.shopId, row]));
+  return stores.map((store) => {
+    const current = currentById.get(store.id);
+    if (!current || resetIds.has(store.id)) return zeroBusinessRow(store);
+    return {
+      ...current,
+      shopName: store.name,
+      group: store.group,
+      status: store.status
+    };
+  });
 }
 
 function normalizeRemoteColumns(schema?: RemoteBusinessFieldSchema): DataColumn[] {
@@ -570,10 +610,12 @@ export function BusinessDataPage() {
   const [loadMessage, setLoadMessage] = useState(() => nativeBridge ? "" : "本地店铺桥接不可用，请在赤狐客户端内打开");
   const [storeSyncing, setStoreSyncing] = useState(false);
   const [businessSyncing, setBusinessSyncing] = useState(false);
+  const [businessAutoRefresh, setBusinessAutoRefresh] = useState<BusinessAutoRefreshPreference>(savedBusinessAutoRefresh);
   const [lastSyncAt, setLastSyncAt] = useState(() => new Date());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [businessRows, setBusinessRows] = useState<BusinessRow[]>([]);
   const [businessState, setBusinessState] = useState<BusinessLoadState>("idle");
+  const [businessCacheLoading, setBusinessCacheLoading] = useState(false);
   const [businessMessage, setBusinessMessage] = useState("");
   const [businessDetails, setBusinessDetails] = useState<DoudianRunDetail[]>([]);
   const [businessProgress, setBusinessProgress] = useState("");
@@ -601,6 +643,16 @@ export function BusinessDataPage() {
   function updateActiveOperationId(operationId: string) {
     activeOperationIdRef.current = operationId;
     setActiveOperationId(operationId);
+  }
+
+  function updateBusinessAutoRefresh(patch: Partial<BusinessAutoRefreshPreference>) {
+    const next = {
+      ...businessAutoRefresh,
+      ...patch,
+      minutes: normalizeAutoRefreshMinutes(patch.minutes ?? businessAutoRefresh.minutes)
+    };
+    setBusinessAutoRefresh(next);
+    storageSet(STORAGE_KEY_BUSINESS_DATA_AUTO_REFRESH, next);
   }
 
   function applyBusinessResult(result: Awaited<ReturnType<typeof fetchDoudianBusinessData>>, requestedShopIds: string[]) {
@@ -641,10 +693,7 @@ export function BusinessDataPage() {
       if (result.ok) {
         const nextStores = (result.stores || []).map(mapStoreToOption).filter((store) => store.id);
         setStores(nextStores);
-        setBusinessRows((currentRows) => {
-          const validIds = new Set(nextStores.map((store) => store.id));
-          return currentRows.filter((row) => validIds.has(row.shopId));
-        });
+        setBusinessRows((currentRows) => businessRowsForStores(nextStores, currentRows));
         setSelectedIds((current) => {
           const validIds = new Set(nextStores.map((store) => store.id));
           const next = new Set([...current].filter((id) => validIds.has(id)));
@@ -690,13 +739,14 @@ export function BusinessDataPage() {
       if (activeOperationIdRef.current === previousOperationId) updateActiveOperationId("");
       if (requestSeq !== businessRequestSeq.current) return;
     }
+    setBusinessCacheLoading(false);
     setBusinessSyncing(true);
     setBusinessState("loading");
     setBusinessMessage("");
     setBusinessProgress("");
     setBusinessItemProgress(null);
     const requestedIds = new Set(shopIds);
-    setBusinessRows((currentRows) => currentRows.filter((row) => !requestedIds.has(row.shopId)));
+    setBusinessRows((currentRows) => businessRowsForStores(stores, currentRows, requestedIds));
     setBusinessDetails((currentDetails) => currentDetails.filter((detail) => !requestedIds.has(String(detail.shopId || ""))));
     let startedOperationId = "";
     try {
@@ -793,7 +843,14 @@ export function BusinessDataPage() {
 
   useEffect(() => {
     if (!nativeBridge || loadState !== "ready" || !stores.length) return;
+    const supersededOperationId = activeOperationIdRef.current;
     if (!customRangeValid) {
+      businessRequestSeq.current += 1;
+      if (supersededOperationId) void cancelDoudianStoreOperation(supersededOperationId).catch(() => undefined);
+      updateActiveOperationId("");
+      setBusinessSyncing(false);
+      setBusinessProgress("");
+      setBusinessItemProgress(null);
       setBusinessState("error");
       setBusinessMessage("自定义日期的开始日期不能晚于结束日期");
       return;
@@ -801,24 +858,38 @@ export function BusinessDataPage() {
     const ids = new Set(selectedIds);
     const requestSeq = businessRequestSeq.current + 1;
     businessRequestSeq.current = requestSeq;
-    setBusinessRows([]);
+    if (supersededOperationId) void cancelDoudianStoreOperation(supersededOperationId).catch(() => undefined);
+    updateActiveOperationId("");
+    setBusinessSyncing(false);
+    setBusinessProgress("");
+    setBusinessItemProgress(null);
+    setBusinessRows((currentRows) => businessRowsForStores(stores, currentRows, new Set(stores.map((store) => store.id))));
     setBusinessDetails([]);
     setActualDateRange(null);
     setBusinessMessage("");
-    setBusinessState("loading");
+    setBusinessState("ready");
+    setBusinessCacheLoading(true);
     void (async () => {
       await hydrateLatestBusinessData(ids, requestSeq);
       if (requestSeq !== businessRequestSeq.current) return;
-      setBusinessState("ready");
+      setBusinessCacheLoading(false);
     })();
   }, [nativeBridge, loadState, storeIdKey, datePreset, customBeginDate, customEndDate]);
 
   const selectedIdKey = [...selectedIds].sort().join("|");
-  const loadedIdKey = businessRows.map((row) => row.shopId).sort().join("|");
+  const loadedIdKey = businessRows.filter((row) => row.loaded).map((row) => row.shopId).sort().join("|");
 
   useEffect(() => {
-    if (businessState === "loading" || loadState !== "ready") return;
-    const loadedIds = new Set(businessRows.map((row) => row.shopId));
+    if (!businessAutoRefresh.enabled || businessSyncing || storeSyncing || loadState !== "ready" || !selectedIds.size || !customRangeValid) return;
+    const timer = window.setTimeout(() => {
+      void refreshBusinessData();
+    }, businessAutoRefresh.minutes * 60_000);
+    return () => window.clearTimeout(timer);
+  }, [businessAutoRefresh.enabled, businessAutoRefresh.minutes, businessSyncing, customBeginDate, customEndDate, customRangeValid, datePreset, loadState, selectedIdKey, storeSyncing]);
+
+  useEffect(() => {
+    if (businessCacheLoading || businessState === "loading" || loadState !== "ready") return;
+    const loadedIds = new Set(businessRows.filter((row) => row.loaded).map((row) => row.shopId));
     const missingIds = [...selectedIds].filter((id) => !loadedIds.has(id));
     if (!missingIds.length) return;
     void (async () => {
@@ -827,17 +898,15 @@ export function BusinessDataPage() {
       businessRequestSeq.current = requestSeq;
       await hydrateLatestBusinessData(ids, requestSeq);
     })();
-  }, [selectedIdKey, loadedIdKey, businessState, loadState]);
+  }, [selectedIdKey, loadedIdKey, businessCacheLoading, businessState, loadState]);
 
   useEffect(() => {
     return addDoudianProgressListener((event) => {
       const detail = event.detail || {};
       if (detail.taskType !== "businessData") return;
       const currentOperationId = activeOperationIdRef.current;
-      if (currentOperationId && currentOperationId !== detail.operationId) return;
-      if (!currentOperationId && detail.status !== "running") return;
-      if (detail.status === "running") updateActiveOperationId(detail.operationId || "");
-      else if (currentOperationId === detail.operationId) updateActiveOperationId("");
+      if (!currentOperationId || currentOperationId !== detail.operationId) return;
+      if (detail.status !== "running") updateActiveOperationId("");
       const progress = Number.isFinite(detail.progress) ? `${Math.round(detail.progress)}%` : "";
       const message = detail.message || detail.resultSummary || detail.error || "";
       setBusinessProgress([progress, message].filter(Boolean).join(" · "));
@@ -1191,6 +1260,32 @@ export function BusinessDataPage() {
               <CalendarDays className="size-[14px]" strokeWidth={2} />
               <span className="truncate">{actualRangeLabel && actualRangeLabel !== range.label ? `平台 ${actualRangeLabel}` : range.label}</span>
             </div>
+            <div className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] text-[#475467]" title={businessAutoRefresh.enabled ? `每 ${businessAutoRefresh.minutes} 分钟刷新选中店铺` : "定时刷新已关闭"}>
+              <Clock3 className="size-[14px]" strokeWidth={2} />
+              <span className="font-semibold">定时</span>
+              <button
+                className={cn("relative h-5 w-9 rounded-full transition-colors", businessAutoRefresh.enabled ? "bg-brand-fox" : "bg-[#d0d5dd]")}
+                type="button"
+                role="switch"
+                aria-checked={businessAutoRefresh.enabled}
+                aria-label="定时刷新经营数据"
+                onClick={() => updateBusinessAutoRefresh({ enabled: !businessAutoRefresh.enabled })}
+              >
+                <span className={cn("absolute left-0 top-0.5 size-4 rounded-full bg-white shadow-sm transition-transform", businessAutoRefresh.enabled ? "translate-x-[18px]" : "translate-x-0.5")} />
+              </button>
+              <input
+                className="h-6 w-11 rounded border border-[#dbe5f2] bg-white px-1 text-center font-mono text-[12px] text-[#344054] outline-none focus:border-brand-fox disabled:bg-[#f2f4f7] disabled:text-[#98a2b3]"
+                type="number"
+                min={minAutoRefreshMinutes}
+                max={maxAutoRefreshMinutes}
+                step={1}
+                value={businessAutoRefresh.minutes}
+                disabled={!businessAutoRefresh.enabled}
+                aria-label="定时刷新间隔（分钟）"
+                onChange={(event) => updateBusinessAutoRefresh({ minutes: event.target.valueAsNumber })}
+              />
+              <span>分钟</span>
+            </div>
             <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#ffc6b5] bg-[#fff7f4] px-2.5 text-[12px] font-semibold text-brand-fox transition-colors hover:bg-brand-foxSoft disabled:cursor-not-allowed disabled:opacity-50" type="button" title="手动刷新经营数据" disabled={storeSyncing || businessSyncing || !selectedIds.size || !customRangeValid} onClick={() => void refreshBusinessData()}>
               <RefreshCw className={cn("size-[14px]", businessSyncing ? "animate-spin" : "")} strokeWidth={2} />
               刷新数据
@@ -1224,10 +1319,10 @@ export function BusinessDataPage() {
                   {formatNumber(totals.overdueShipment + totals.violationPending + totals.rectificationRisk)} 项待处理
                 </span>
               ) : null}
-              {businessState === "loading" ? (
-                <span className="inline-flex h-6 max-w-[360px] items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#667085]" title={businessProgress || "正在同步经营数据"}>
+              {businessSyncing ? (
+                <span className="inline-flex h-6 max-w-[360px] items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#667085]" title={businessProgress || "正在刷新经营数据"}>
                   <Loader2 className="size-[13px] animate-spin" strokeWidth={2} />
-                  <span className="truncate">{businessProgress || "同步中"}</span>
+                  <span className="truncate">{businessProgress || "刷新中"}</span>
                 </span>
               ) : businessState === "error" ? (
                 <span className="inline-flex h-6 max-w-[360px] items-center gap-1 rounded-md border border-[#ffd1d1] bg-[#fff1f0] px-2 text-[12px] font-semibold text-[#b42318]" title={businessMessage}>

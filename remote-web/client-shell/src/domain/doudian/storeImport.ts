@@ -12,11 +12,15 @@ import { dispatchDoudianProgress } from "./progress";
 import { loadDoudianAdapterPayload } from "../../bridge/doudianAdapter";
 import { runRefreshDoudianStoreStatusTask } from "./storeStatus";
 import { currentShopFromResponse, currentShopState, normalizeShopItem, objectRecord, policyNumber, text } from "./storeResponse";
+import { candidateKey, partitionToken } from "./storeIdentity";
 
 interface FetchStoresPayload {
   operationId: string;
   doudianAdapter: DoudianAdapterPayload;
+  mode?: "import" | "discover" | "login_selected" | "discard_discovery";
   repairShopIds?: string[];
+  repairShopNames?: string[];
+  sourceOperationId?: string;
   mockStores?: Array<Partial<DoudianStoreSummary>>;
   mockDelayMs?: number;
   mockOpenWindowUrl?: string;
@@ -55,10 +59,6 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function partitionToken(value: string) {
-  return value.replace(/[^a-zA-Z0-9_-]/g, "_");
-}
-
 function progress(args: FetchStoresPayload, value: number, message: string) {
   dispatchDoudianProgress({
     operationId: args.operationId,
@@ -90,7 +90,7 @@ function closedLoginDetection(roleNames: string[], isHomePage: boolean): LoginDe
   };
 }
 
-function storeProgress(args: FetchStoresPayload, value: number, store: DoudianStoreSummary, index: number, total: number) {
+function storeProgress(args: FetchStoresPayload, value: number, store: DoudianStoreSummary, index: number, total: number, phase: "discovered" | "updated" = "updated") {
   const loginStatus = store.status === "online" ? "登录有效" : store.status === "offline" ? "登录失效" : "待复核";
   dispatchDoudianProgress({
     operationId: args.operationId,
@@ -103,13 +103,14 @@ function storeProgress(args: FetchStoresPayload, value: number, store: DoudianSt
       shopName: store.shopName,
       status: store.status,
       index,
-      total
+      total,
+      phase
     }
   });
 }
 
 function sourcePartition(adapter: DoudianAdapterPayload, operationId: string) {
-  return `${adapter.adapter.shopPartitionPrefix || "persist:chihu_doudian_shop_"}source_${partitionToken(operationId)}_${Date.now()}`;
+  return `${adapter.adapter.shopPartitionPrefix || "persist:chihu_doudian_shop_"}source_${partitionToken(operationId)}`;
 }
 
 function shopPartition(adapter: DoudianAdapterPayload, shop: Partial<DoudianStoreSummary>, index = 0) {
@@ -210,10 +211,46 @@ function storesFromRoleNames(roleNames: string[], apiStores: Array<Partial<Doudi
     .filter((store): store is Partial<DoudianStoreSummary> => !!store));
 }
 
-function filterRepairStores(stores: Array<Partial<DoudianStoreSummary>>, repairShopIds?: string[]) {
+function discoveredStore(store: Partial<DoudianStoreSummary>, adapter: DoudianAdapterPayload): DoudianStoreSummary | null {
+  const shopName = text(store.shopName || store.shopInfoSummary?.shop_name);
+  const shopId = candidateKey(store);
+  if (!shopId || !shopName) return null;
+  const timestamp = nowIso();
+  return {
+    shopId,
+    shopName,
+    platform: "doudian",
+    partition: "",
+    status: "unknown",
+    operateStatus: "待登录",
+    groupId: "",
+    groupName: "未分组",
+    shopInfoSummary: {
+      ...(store.shopInfoSummary || {}),
+      id: text(store.shopId),
+      shop_name: shopName
+    },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    lastFetchAt: timestamp,
+    lastLoginCheckAt: "",
+    lastOnlineAt: "",
+    lastCheckStatus: "pending_login",
+    lastCheckMessage: "等待选择登录",
+    lastResult: "待登录",
+    lastResultAt: timestamp,
+    lastFailureReason: "",
+    lastFailureMessage: "",
+    adapterVersion: adapter.adapter.version,
+    loginPending: true
+  };
+}
+
+function filterRepairStores(stores: Array<Partial<DoudianStoreSummary>>, repairShopIds?: string[], repairShopNames?: string[]) {
   const ids = new Set((repairShopIds || []).map((id) => text(id)).filter(Boolean));
-  if (!ids.size) return stores;
-  return stores.filter((store) => ids.has(text(store.shopId)));
+  const names = new Set((repairShopNames || []).map((name) => text(name)).filter(Boolean));
+  if (!ids.size && !names.size) return stores;
+  return stores.filter((store) => ids.has(candidateKey(store)) || names.has(text(store.shopName)));
 }
 
 function detailForStore(store: DoudianStoreSummary, index: number, total: number): DoudianRunDetail {
@@ -465,7 +502,24 @@ async function importMockStores(args: FetchStoresPayload): Promise<DoudianStoreR
   const delayMs = Math.max(0, Number(args.mockDelayMs || 0));
   if (delayMs) await delayWithCancel(delayMs, args);
 
-  const mockStores = args.mockStores || [];
+  const mockStores = filterRepairStores(args.mockStores || [], args.repairShopIds, args.repairShopNames);
+  if (args.mode === "discover") {
+    const candidates = mockStores
+      .map((store) => discoveredStore(store, args.doudianAdapter))
+      .filter((store): store is DoudianStoreSummary => !!store);
+    candidates.forEach((store, index) => storeProgress(args, 30 + Math.round(((index + 1) / Math.max(candidates.length, 1)) * 25), store, index + 1, candidates.length, "discovered"));
+    return {
+      ok: true,
+      status: "selection_required",
+      operationId: args.operationId,
+      imported: 0,
+      failed: 0,
+      multiStorePending: true,
+      stores: candidates,
+      message: `已发现 ${candidates.length} 家店铺，请选择需要登录的店铺`,
+      details: { imported: [], failed: [] }
+    };
+  }
   const records = mockStores
     .map((store, index) => normalizeStore(store, args.doudianAdapter, text(store.partition) || shopPartition(args.doudianAdapter, store, index), index))
     .filter((store): store is DoudianStoreSummary => !!store);
@@ -502,46 +556,83 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
 
   const adapter = args.doudianAdapter;
   const native = requireChihuNative();
-  const partition = sourcePartition(adapter, args.operationId);
+  const mode = args.mode || "import";
+  const sourceOperationId = text(args.sourceOperationId) || args.operationId;
+  const partition = sourcePartition(adapter, sourceOperationId);
   let loginWinId: number | null = null;
-  progress(args, 5, "正在打开抖店登录窗口");
+  let preserveSourcePartition = false;
 
   try {
-    loginWinId = await native.windows.open({
-      url: adapter.adapter.loginUrl,
-      title: "赤狐管家 - 登录抖店",
-      partition,
-      show: true,
-      waitForLoad: false,
-      width: 1280,
-      height: 820,
-      nodeIntegration: false,
-      contextIsolation: true
-    });
-    args.trackWindow?.(loginWinId);
-
-    progress(args, 10, "等待用户完成抖店登录");
-    const detection = await waitForLoginDetection(loginWinId, partition, args);
-    progress(args, 30, detection.message);
-    if (!detection.ok) {
-      const cancelled = detection.source === "closed";
+    if (mode === "discard_discovery") {
+      await native.cookies.clear({ partition }).catch(() => null);
+      await cleanDoudianPartitions(native, adapter).catch(() => null);
       return {
         ...(await listStoreLedger()),
-        ok: false,
-        status: cancelled ? "cancelled" : "login-timeout",
+        ok: true,
+        status: "discarded",
         operationId: args.operationId,
-        message: cancelled
-          ? "已取消获取店铺：登录窗口已关闭。"
-          : "未检测到抖店登录完成，请完成登录后重试或确认账号有店铺权限。",
+        message: "已放弃本次店铺登录选择",
         details: { imported: [], failed: [] }
       };
     }
-    await native.windows.destroy({ winId: loginWinId }).catch(() => null);
-    loginWinId = null;
 
-    let shopListResult = detection.shopListResult;
-    let currentResult = detection.currentResult;
-    let detectedStores = detection.stores || [];
+    let shopListResult: RequestPlanResult | undefined;
+    let currentResult: RequestPlanResult | undefined;
+    let detectedStores: Array<Partial<DoudianStoreSummary>> = [];
+    let detectionMessage = "";
+
+    if (mode === "login_selected") {
+      progress(args, 20, "正在读取已发现的店铺");
+      [shopListResult, currentResult] = await Promise.all([
+        runDoudianRequestPlan(adapter, { partition, planKey: "shopList" }),
+        runDoudianRequestPlan(adapter, { partition, planKey: "currentShop" })
+      ]);
+      detectedStores = storesFromResponses(shopListResult.data, currentResult.data, adapter);
+      for (const shopName of args.repairShopNames || []) {
+        if (!detectedStores.some((store) => text(store.shopName) === text(shopName))) {
+          detectedStores.push({ shopId: "", shopName: text(shopName), shopInfoSummary: { shop_name: text(shopName) } });
+        }
+      }
+      detectionMessage = `Store APIs returned ${shopListResult.status}/${currentResult.status}`;
+    } else {
+      progress(args, 5, "正在打开抖店登录窗口");
+      loginWinId = await native.windows.open({
+        url: adapter.adapter.loginUrl,
+        title: "赤狐管家 - 登录抖店",
+        partition,
+        show: true,
+        waitForLoad: false,
+        width: 1280,
+        height: 820,
+        nodeIntegration: false,
+        contextIsolation: true
+      });
+      args.trackWindow?.(loginWinId);
+
+      progress(args, 10, "等待用户完成抖店登录");
+      const detection = await waitForLoginDetection(loginWinId, partition, args);
+      progress(args, 30, detection.message);
+      if (!detection.ok) {
+        const cancelled = detection.source === "closed";
+        return {
+          ...(await listStoreLedger()),
+          ok: false,
+          status: cancelled ? "cancelled" : "login-timeout",
+          operationId: args.operationId,
+          message: cancelled
+            ? "已取消获取店铺：登录窗口已关闭。"
+            : "未检测到抖店登录完成，请完成登录后重试或确认账号有店铺权限。",
+          details: { imported: [], failed: [] }
+        };
+      }
+      await native.windows.destroy({ winId: loginWinId }).catch(() => null);
+      loginWinId = null;
+      shopListResult = detection.shopListResult;
+      currentResult = detection.currentResult;
+      detectedStores = detection.stores || [];
+      detectionMessage = detection.message;
+    }
+
     if (!detectedStores.length && (!shopListResult || !currentResult)) {
       progress(args, 40, "正在获取抖店店铺列表");
       [shopListResult, currentResult] = await Promise.all([
@@ -554,8 +645,8 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
     }
     progress(args, 55, shopListResult && currentResult
       ? `Store APIs returned ${shopListResult.status}/${currentResult.status}`
-      : detection.message);
-    const sourceStores = filterRepairStores(detectedStores, args.repairShopIds);
+      : detectionMessage);
+    const sourceStores = filterRepairStores(detectedStores, args.repairShopIds, args.repairShopNames);
     if (!sourceStores.length) {
       return {
         ...(await listStoreLedger()),
@@ -564,6 +655,29 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
         operationId: args.operationId,
         message: "未识别到店铺，请确认账号有店铺权限。",
         details: { imported: [], failed: [] }
+      };
+    }
+
+    if (mode === "discover") {
+      const candidates = sourceStores
+        .map((store) => discoveredStore(store, adapter))
+        .filter((store): store is DoudianStoreSummary => !!store);
+      candidates.forEach((store, index) => storeProgress(args, 30 + Math.round(((index + 1) / Math.max(candidates.length, 1)) * 25), store, index + 1, candidates.length, "discovered"));
+      preserveSourcePartition = candidates.length > 0;
+      const ledger = await listStoreLedger();
+      return {
+        ...ledger,
+        stores: candidates,
+        ok: candidates.length > 0,
+        status: candidates.length ? "selection_required" : "not-detected",
+        operationId: args.operationId,
+        imported: 0,
+        failed: 0,
+        multiStorePending: candidates.length > 0,
+        message: candidates.length
+          ? `已发现 ${candidates.length} 家店铺，请选择需要登录的店铺`
+          : "未识别到店铺，请确认账号有店铺权限。",
+        details: { imported: [], failed: [], roleNames: candidates.map((store) => store.shopName) }
       };
     }
 
@@ -582,7 +696,8 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
         progress(args, Math.max(60, Math.round(((index + 1) / sourceStores.length) * 90)), "Copying login state");
         continue;
       }
-      if (!text(shop.shopId) && text(shop.shopName)) {
+      const pendingShopId = !text(shop.shopId) && text(shop.shopName) ? candidateKey(shop) : "";
+      if (pendingShopId) {
         record.shopId = "";
         record.shopInfoSummary = {
           ...(record.shopInfoSummary || {}),
@@ -605,6 +720,12 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
         failed.push(failure);
         const failedRecord: DoudianStoreSummary = {
           ...record,
+          shopId: pendingShopId || record.shopId,
+          shopInfoSummary: {
+            ...(record.shopInfoSummary || {}),
+            id: pendingShopId || record.shopInfoSummary?.id,
+            shop_name: record.shopName
+          },
           status: "check_failed",
           lastCheckStatus: "check_failed",
           lastCheckMessage: "登录态未确认，需重新登录",
@@ -635,8 +756,10 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
     };
   } finally {
     if (loginWinId) await native.windows.destroy({ winId: loginWinId }).catch(() => null);
-    await native.cookies.clear({ partition }).catch(() => null);
-    await cleanDoudianPartitions(native, adapter).catch(() => null);
+    if (!preserveSourcePartition) {
+      await native.cookies.clear({ partition }).catch(() => null);
+      await cleanDoudianPartitions(native, adapter).catch(() => null);
+    }
   }
 }
 
