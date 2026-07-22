@@ -3728,7 +3728,7 @@
         "supply_status": "",
         "order_field": "audit_time",
         "sort": "desc",
-        "id_name_code": "{keyword}",
+        "id_name_code": "{idNameCode}",
         "category_leaf_id": "{categoryLeafId}",
         "start_time": "{startTime}",
         "end_time": "{endTime}"

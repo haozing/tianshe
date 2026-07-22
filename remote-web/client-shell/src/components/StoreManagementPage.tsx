@@ -34,6 +34,7 @@ import {
 } from "../bridge/client";
 import { addDoudianProgressListener } from "../domain/doudian";
 import { cn } from "../lib/utils";
+import { showStoreOperationToast, storeImportFeedback } from "../lib/storeImportFeedback";
 import type { DoudianStoreGroup, DoudianStoreResult, DoudianStoreSummary } from "../types";
 
 type StoreStatusFilter = "全部状态" | "在线" | "离线" | "待复核" | "未知";
@@ -99,6 +100,16 @@ interface MetricCard {
   Icon: LucideIcon;
 }
 
+interface StoreImportProgress {
+  progress: number;
+  message: string;
+  shopId?: string;
+  shopName?: string;
+  status?: DoudianStoreSummary["status"];
+  index?: number;
+  total?: number;
+}
+
 const statusCopy: Record<DoudianStoreSummary["status"], { label: string; className: string }> = {
   online: { label: "在线", className: "border-[#bff0cf] bg-[#eafaf0] text-[#087443]" },
   offline: { label: "离线", className: "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" },
@@ -115,7 +126,7 @@ const operationCopy: Record<OperationKey, {
 }> = {
   fetchStores: {
     title: "获取店铺",
-    description: "将打开或复用本机抖店登录态，识别账号可管理店铺并保存到本地台账；完成后会展示导入确认和失败重试入口。",
+    description: "将打开或复用本机抖店登录态，识别账号可管理店铺并保存到本地台账；失败时会展示原因和重试入口。",
     confirmText: "开始获取",
     tone: "success"
   },
@@ -679,6 +690,9 @@ export function StoreManagementPage() {
   const [pendingOperation, setPendingOperation] = useState<OperationKey | null>(null);
   const [operationBusy, setOperationBusy] = useState(false);
   const [activeOperationId, setActiveOperationId] = useState<string | null>(null);
+  const [activeTask, setActiveTask] = useState<"fetchStores" | "refreshStatus" | null>(null);
+  const [operationCancelling, setOperationCancelling] = useState(false);
+  const [storeImportProgress, setStoreImportProgress] = useState<StoreImportProgress | null>(null);
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
   const [targetGroupName, setTargetGroupName] = useState("");
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
@@ -745,12 +759,12 @@ export function StoreManagementPage() {
       setStoreListState("ready");
     }
 
-    function scheduleRowsRefresh() {
-      if (refreshTimer) window.clearTimeout(refreshTimer);
+    function scheduleRowsRefresh(delayMs = 700) {
+      if (refreshTimer) return;
       refreshTimer = window.setTimeout(() => {
         refreshTimer = null;
         void refreshRowsFromBridge();
-      }, 700);
+      }, delayMs);
     }
 
     const removeProgressListener = addDoudianProgressListener((event) => {
@@ -758,10 +772,27 @@ export function StoreManagementPage() {
       if (detail.taskType !== "fetchDoudianStores" && detail.taskType !== "refreshDoudianStoreStatus") return;
       const progress = Number.isFinite(detail.progress) ? `${Math.round(detail.progress)}%` : "";
       const message = detail.message || detail.resultSummary || detail.error || "";
-      if (message) {
+      if (detail.taskType === "fetchDoudianStores" && detail.status === "running") {
+        const status = detail.store?.status;
+        setStoreImportProgress({
+          progress: Number.isFinite(detail.progress) ? Math.round(detail.progress) : 0,
+          message: message || "正在获取店铺",
+          shopId: detail.store?.shopId,
+          shopName: detail.store?.shopName,
+          status: status && status in statusCopy ? status as DoudianStoreSummary["status"] : undefined,
+          index: detail.store?.index,
+          total: detail.store?.total
+        });
+        if (detail.store) {
+          setPendingOperation(null);
+          scheduleRowsRefresh(80);
+        }
+      }
+      if (message && showStoreOperationToast(detail.taskType)) {
         setNotice({ tone: detail.status === "failed" ? "warning" : "info", message: [progress, message].filter(Boolean).join(" · ") });
       }
-      if (detail.status === "succeeded" || detail.status === "cancelled") {
+      if (["succeeded", "partial", "failed", "cancelled"].includes(detail.status)) {
+        setStoreImportProgress(null);
         scheduleRowsRefresh();
       }
     });
@@ -896,26 +927,49 @@ export function StoreManagementPage() {
     setLastRun({ title, tone, summary, details, result, at: new Date().toISOString() });
   }
 
+  function rememberFetchFailure(title: string, tone: NoticeTone, summary: string, details: RunDetail[], result?: DoudianStoreResult) {
+    setNotice(null);
+    setLastRun({ title, tone, summary, details, result, at: new Date().toISOString() });
+  }
+
+  function taskStarted(task: "fetchStores" | "refreshStatus") {
+    return (operationId: string) => {
+      setActiveOperationId(operationId);
+      setActiveTask(task);
+    };
+  }
+
   async function runRepairStores(ids: string[]) {
     if (!ids.length) {
       setNotice({ tone: "warning", message: "没有需要重新登录的店铺。" });
       return;
     }
     const operationId = createStoreOperationId();
-    setActiveOperationId(operationId);
+    setActiveTask("fetchStores");
+    setOperationCancelling(false);
+    setStoreImportProgress({ progress: 0, message: `正在为 ${ids.length} 家店铺重建登录态` });
     setOperationBusy(true);
     setNotice({ tone: "info", message: `正在为 ${ids.length} 家店铺重建登录态。` });
     try {
-      const result = await fetchDoudianStores(operationId, ids);
+      const result = await fetchDoudianStores(operationId, ids, taskStarted("fetchStores"));
       applyStores(result);
       const details = summarizeDetails(result);
+      if (result.status === "cancelled") {
+        rememberRun("重新登录已取消", "info", result.message || "已取消重新登录任务。", details, result);
+        return;
+      }
       const failed = details.filter((item) => item.ok === false).length;
-      rememberRun("重新登录结果", failed ? "warning" : "success", `已重建 ${result.imported || 0} 家店铺登录态，${failed} 家需关注。`, details, result);
+      rememberRun("重新登录结果", result.ok && failed === 0 ? "success" : failed ? "warning" : "error", result.ok
+        ? `已重建 ${result.imported || 0} 家店铺登录态，${failed} 家需关注。`
+        : result.message || "重新登录失败。", details, result);
     } catch (error) {
       rememberRun("重新登录失败", "error", error instanceof Error ? error.message : String(error), []);
     } finally {
       setOperationBusy(false);
-      setActiveOperationId((current) => current === operationId ? null : current);
+      setActiveTask(null);
+      setOperationCancelling(false);
+      setStoreImportProgress(null);
+      setActiveOperationId(null);
     }
   }
 
@@ -969,51 +1023,73 @@ export function StoreManagementPage() {
 
   async function runFetchStoresOperation() {
     const operationId = createStoreOperationId();
-    setActiveOperationId(operationId);
+    setActiveTask("fetchStores");
+    setOperationCancelling(false);
+    setStoreImportProgress({ progress: 0, message: "正在打开抖店登录窗口" });
     setOperationBusy(true);
-    setNotice({ tone: "info", message: "正在打开抖店登录窗口。" });
+    setNotice(null);
+    setLastRun(null);
 
     try {
-      const result = await fetchDoudianStores(operationId);
+      const result = await fetchDoudianStores(operationId, undefined, taskStarted("fetchStores"));
       applyStores(result);
       const details = summarizeDetails(result);
-      if (result.ok) {
-        rememberRun("获取店铺结果", "success", result.message || `已导入 ${result.imported || 0} 家店铺。`, details, result);
+      const failed = details.filter(detailFailed).length;
+      if (storeImportFeedback({ ok: result.ok, status: result.status, failedCount: failed }) === "hidden") {
+        setNotice(null);
+        setLastRun(null);
+        setPendingOperation(null);
+      } else if (result.ok) {
+        rememberFetchFailure("部分店铺获取失败", "warning", result.message || `已导入 ${result.imported || 0} 家店铺，${failed} 家失败。`, details, result);
         setPendingOperation(null);
       } else {
-        rememberRun("获取店铺失败", result.status === "cancelled" ? "info" : "error", result.message || "获取店铺失败。", details, result);
+        rememberFetchFailure("获取店铺失败", result.status === "cancelled" ? "info" : "error", result.message || "获取店铺失败。", details, result);
+        if (result.status === "cancelled") setPendingOperation(null);
       }
     } catch (error) {
-      rememberRun("获取店铺失败", "error", error instanceof Error ? error.message : String(error), []);
+      rememberFetchFailure("获取店铺失败", "error", error instanceof Error ? error.message : String(error), []);
     } finally {
       setOperationBusy(false);
-      setActiveOperationId((current) => current === operationId ? null : current);
+      setActiveTask(null);
+      setOperationCancelling(false);
+      setStoreImportProgress(null);
+      setActiveOperationId(null);
     }
   }
 
   async function completeOperation() {
     if (!pendingOperation) return;
     const operationId = createStoreOperationId();
-    setActiveOperationId(operationId);
     setOperationBusy(true);
 
     try {
       if (pendingOperation === "fetchStores") {
-        setNotice({ tone: "info", message: "正在打开抖店登录窗口。" });
-        const result = await fetchDoudianStores(operationId);
+        setActiveTask("fetchStores");
+        setOperationCancelling(false);
+        setStoreImportProgress({ progress: 0, message: "正在打开抖店登录窗口" });
+        setNotice(null);
+        setLastRun(null);
+        const result = await fetchDoudianStores(operationId, undefined, taskStarted("fetchStores"));
         applyStores(result);
         const details = summarizeDetails(result);
-        if (result.ok) {
-          rememberRun("获取店铺结果", "success", result.message || `已导入 ${result.imported || 0} 家店铺。`, details, result);
+        const failed = details.filter(detailFailed).length;
+        if (storeImportFeedback({ ok: result.ok, status: result.status, failedCount: failed }) === "hidden") {
+          setNotice(null);
+          setLastRun(null);
+          setPendingOperation(null);
+        } else if (result.ok) {
+          rememberFetchFailure("部分店铺获取失败", "warning", result.message || `已导入 ${result.imported || 0} 家店铺，${failed} 家失败。`, details, result);
           setPendingOperation(null);
         } else {
-          rememberRun("获取店铺失败", result.status === "cancelled" ? "info" : "error", result.message || "获取店铺失败。", details, result);
+          rememberFetchFailure("获取店铺失败", result.status === "cancelled" ? "info" : "error", result.message || "获取店铺失败。", details, result);
+          if (result.status === "cancelled") setPendingOperation(null);
         }
         return;
       }
 
       if (pendingOperation === "refreshStatus") {
-        const result = await refreshDoudianStoreStatus(actionTargetIds, operationId);
+        setActiveTask("refreshStatus");
+        const result = await refreshDoudianStoreStatus(actionTargetIds, operationId, taskStarted("refreshStatus"));
         applyStores(result);
         const details = summarizeDetails(result);
         const failed = details.filter((item) => item.ok === false).length;
@@ -1053,17 +1129,22 @@ export function StoreManagementPage() {
       rememberRun("操作失败", "error", message, []);
     } finally {
       setOperationBusy(false);
-      setActiveOperationId((current) => current === operationId ? null : current);
+      setActiveTask(null);
+      setOperationCancelling(false);
+      setStoreImportProgress(null);
+      setActiveOperationId(null);
     }
   }
 
   async function cancelActiveOperation() {
     if (!activeOperationId) return;
     const operationId = activeOperationId;
+    setOperationCancelling(true);
     setNotice({ tone: "info", message: "正在取消店铺任务..." });
     try {
       await cancelDoudianStoreOperation(operationId);
     } catch (error) {
+      setOperationCancelling(false);
       setNotice({ tone: "error", message: error instanceof Error ? error.message : String(error) });
     }
   }
@@ -1082,10 +1163,10 @@ export function StoreManagementPage() {
 
   async function handleRefreshOne(row: StoreRow) {
     const operationId = createStoreOperationId();
-    setActiveOperationId(operationId);
+    setActiveTask("refreshStatus");
     setActiveRowId(row.id);
     try {
-      const result = await refreshDoudianStoreStatus([row.id], operationId);
+      const result = await refreshDoudianStoreStatus([row.id], operationId, taskStarted("refreshStatus"));
       applyStores(result);
       const details = summarizeDetails(result);
       const failed = details.some((item) => item.ok === false);
@@ -1094,7 +1175,8 @@ export function StoreManagementPage() {
       setNotice({ tone: "error", message: error instanceof Error ? error.message : String(error) });
     } finally {
       setActiveRowId(null);
-      setActiveOperationId((current) => current === operationId ? null : current);
+      setActiveTask(null);
+      setActiveOperationId(null);
     }
   }
 
@@ -1128,9 +1210,17 @@ export function StoreManagementPage() {
       />
 
       <div className="scrollbar-none flex h-[42px] items-center gap-2 overflow-x-auto overflow-y-hidden">
-        <button className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-brand-fox px-4 text-[13px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] transition-colors hover:bg-brand-foxHover disabled:cursor-not-allowed disabled:opacity-60" type="button" disabled={operationBusy} onClick={() => openOperation("fetchStores")}>
-          <Zap className="size-[15px]" strokeWidth={2.1} />
-          获取店铺
+        <button
+          className={cn(
+            "inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-4 text-[13px] font-semibold shadow-[0_8px_18px_rgba(255,80,32,0.18)] transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+            activeTask === "fetchStores" ? "border border-[#ffd1d1] bg-white text-[#d92d20]" : "bg-brand-fox text-white hover:bg-brand-foxHover"
+          )}
+          type="button"
+          disabled={operationBusy && activeTask !== "fetchStores" || operationCancelling || activeTask === "fetchStores" && !activeOperationId}
+          onClick={() => activeTask === "fetchStores" ? void cancelActiveOperation() : openOperation("fetchStores")}
+        >
+          {activeTask === "fetchStores" ? <Loader2 className="size-[15px] animate-spin" strokeWidth={2.1} /> : <Zap className="size-[15px]" strokeWidth={2.1} />}
+          {activeTask === "fetchStores" ? operationCancelling ? "正在取消" : "取消获取" : "获取店铺"}
         </button>
         <button className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#dbe5f2] bg-white px-4 text-[13px] font-semibold text-[#1d2939] disabled:cursor-not-allowed disabled:opacity-60" type="button" disabled={operationBusy || visibleRows.length === 0} onClick={() => openOperation("refreshStatus")}>
           <RefreshCw className={cn("size-[15px]", operationBusy && pendingOperation === "refreshStatus" ? "animate-spin" : "")} strokeWidth={2} />
@@ -1181,8 +1271,26 @@ export function StoreManagementPage() {
 
       <div className="grid min-h-0 grid-cols-1 gap-3 overflow-hidden">
         <div className="min-h-0 min-w-0 overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-          <div className={cn("grid h-full min-h-0", lastRun ? "grid-rows-[auto_minmax(0,1fr)_44px]" : "grid-rows-[minmax(0,1fr)_44px]")}>
-          {lastRun ? (
+          <div className={cn("grid h-full min-h-0", lastRun || storeImportProgress ? "grid-rows-[auto_minmax(0,1fr)_44px]" : "grid-rows-[minmax(0,1fr)_44px]")}>
+          {storeImportProgress ? (
+            <div className="border-b border-[#bfdbfe] bg-[#f5f9ff] px-4 py-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <Loader2 className="size-[17px] shrink-0 animate-spin text-[#2563eb]" strokeWidth={2.2} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-2 text-[13px]">
+                    <span className="shrink-0 font-semibold text-[#101828]">正在获取店铺</span>
+                    {storeImportProgress.index && storeImportProgress.total ? <span className="shrink-0 text-[#475467]">{storeImportProgress.index} / {storeImportProgress.total}</span> : null}
+                    {storeImportProgress.shopName ? <span className="truncate font-medium text-[#1d4ed8]">{storeImportProgress.shopName}</span> : null}
+                    {storeImportProgress.shopId ? <span className="shrink-0 font-mono text-[12px] text-[#667085]">{storeImportProgress.shopId}</span> : null}
+                    {storeImportProgress.status ? <StatusTag status={storeImportProgress.status} /> : null}
+                  </div>
+                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#dbeafe]">
+                    <div className="h-full rounded-full bg-[#2563eb] transition-[width] duration-300" style={{ width: `${Math.max(2, Math.min(100, storeImportProgress.progress))}%` }} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : lastRun ? (
             <RunDetailsSummary
               run={lastRun}
               busy={operationBusy}

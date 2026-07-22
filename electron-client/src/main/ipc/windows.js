@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, session, screen } = require("electron");
 const { APP_TITLE, HOME_PRELOAD, ICON_PATH } = require("../config");
 const { addDevShortcuts } = require("../utils/dev-shortcuts");
 const { registerWebContentsPrincipal } = require("../security/web-contents-principal");
-const { registerTaskChildWindow, runnerOwnsWindow, runnerWindowCommand, taskChildTarget } = require("../tasks/task-manager");
+const { markRunnerWindowProgrammaticClose, registerTaskChildWindow, runnerOwnsWindow, runnerWindowCommand, taskChildTarget } = require("../tasks/task-manager");
 
 const ENABLE_GPU = process.env.CHIHU_ENABLE_GPU === "1";
 
@@ -127,7 +127,10 @@ function registerWindowHandlers() {
   const destroyWindow = async (event, args = {}) => {
     if (!runnerOwnsWindow(event, args.winId)) throw new Error("runner does not own target window");
     const win = BrowserWindow.fromId(args.winId);
-    if (win && !win.isDestroyed()) win.destroy();
+    if (win && !win.isDestroyed()) {
+      markRunnerWindowProgrammaticClose(event, args.winId);
+      win.destroy();
+    }
     return { ok: true };
   };
 

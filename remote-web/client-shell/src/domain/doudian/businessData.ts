@@ -10,7 +10,7 @@ import { requireChihuNative } from "../../native/client";
 import { repositoryDelete, repositoryGetAll, repositoryGetMany, repositoryPutMany } from "./repository";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
-import { dispatchDoudianProgress } from "./progress";
+import { DOUDIAN_PROGRESS_EVENT, dispatchDoudianProgress, type DoudianProgressDetail } from "./progress";
 import { reportDoudianDiagnostic } from "./diagnosticLog";
 import businessDataResponseFixture from "./fixtures/businessDataResponse.json";
 
@@ -1112,6 +1112,25 @@ function throwIfCancelled(args: BusinessDataArgs) {
   if (args.isCancelled?.()) throw new Error("cancelled");
 }
 
+function publishBusinessProgress(
+  args: BusinessDataArgs,
+  row: DoudianBusinessDataRow,
+  detail: DoudianRunDetail,
+  completed: number,
+  total: number
+) {
+  const status = detail.status === "ok" ? "获取成功" : detail.status === "partial" ? "部分数据" : "获取失败";
+  const amount = Number(row.dealAmount || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  dispatchDoudianProgress({
+    operationId: args.operationId || "",
+    taskType: "businessData",
+    status: "running",
+    progress: Math.round((completed / Math.max(1, total)) * 95),
+    message: `已获取 ${completed}/${total}：${row.shopName || row.shopId} · 成交金额 ¥${amount} · ${status}`,
+    business: { row, detail, completed, total }
+  });
+}
+
 async function collectStoreBusinessData(payload: DoudianAdapterPayload, store: DoudianStoreSummary, planKeys: string[], dateContext: DateContext, index: number, total: number, args: BusinessDataArgs) {
   if (!store.partition) throw new Error("store partition missing");
   throwIfCancelled(args);
@@ -1210,13 +1229,6 @@ async function collectStoreBusinessData(payload: DoudianAdapterPayload, store: D
   };
 
   await reportBusinessDataRow({ store, row, detail, summary, metricSources, responseSummary, responses, adapter: payload.adapter });
-  dispatchDoudianProgress({
-    operationId: args.operationId || "",
-    taskType: "businessData",
-    status: "running",
-    progress: Math.round((index / Math.max(1, total)) * 95),
-    message: `${store.shopName || store.shopId} ${index}/${total}`
-  });
   return { row, detail };
 }
 
@@ -1303,7 +1315,20 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
         total: rows.length
       };
     });
-    await saveBusinessLatestRows({ rows, details, dateContext, adapterVersion, ruleVersion: scriptsVersion, fieldSchemaVersion: schemaVersion, requestPlanHash: planHash });
+    let cacheWriteCount = 0;
+    for (let index = 0; index < rows.length; index += 1) {
+      const written = await saveBusinessLatestRows({
+        rows: [rows[index]],
+        details: [details[index]],
+        dateContext,
+        adapterVersion,
+        ruleVersion: scriptsVersion,
+        fieldSchemaVersion: schemaVersion,
+        requestPlanHash: planHash
+      });
+      cacheWriteCount += written;
+      publishBusinessProgress(args, rows[index], details[index], index + 1, rows.length);
+    }
     return {
       ok: true,
       status: "ok",
@@ -1317,6 +1342,8 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
       partialSourceCount: 0,
       noMetricMatchCount: 0,
       coreIncompleteCount: 0,
+      cacheWriteCount,
+      cacheSkippedCount: rows.length - cacheWriteCount,
       dateRange: publicDateRange(dateContext),
       adapterVersion,
       scriptsVersion,
@@ -1344,9 +1371,45 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
   const defaultConcurrency = Math.max(1, Math.min(8, Math.floor(policyNumber(payload.adapter, "businessData.concurrency", activateBeforeFetch ? 1 : 3))));
   const concurrencyCap = activateBeforeFetch ? 3 : 8;
   const concurrency = Math.max(1, Math.min(concurrencyCap, Math.floor(Number(args.concurrency || defaultConcurrency))));
+  let completedCount = 0;
+  let cacheWriteCount = 0;
   const settled = await mapStoresWithPartitionConcurrency(targets, concurrency, async (store, index) => {
     throwIfCancelled(args);
-    return collectStoreBusinessData(payload, store, planKeys, dateContext, index + 1, targets.length, args);
+    let result: { row: DoudianBusinessDataRow; detail: DoudianRunDetail };
+    try {
+      result = await collectStoreBusinessData(payload, store, planKeys, dateContext, index + 1, targets.length, args);
+    } catch (error) {
+      if (args.isCancelled?.() || (error instanceof Error && error.message === "cancelled")) throw error;
+      const message = error instanceof Error ? error.message : String(error || "Business data request failed");
+      result = {
+        row: emptyBusinessDataRow(store),
+        detail: {
+          shopId: store.shopId,
+          shopName: store.shopName,
+          status: "failed",
+          ok: false,
+          message,
+          reason: "business-data-request-failed",
+          category: "api",
+          diagnostic: { error: message },
+          index: index + 1,
+          total: targets.length
+        }
+      };
+    }
+    const written = await saveBusinessLatestRows({
+      rows: [result.row],
+      details: [result.detail],
+      dateContext,
+      adapterVersion,
+      ruleVersion: scriptsVersion,
+      fieldSchemaVersion: schemaVersion,
+      requestPlanHash: planHash
+    });
+    cacheWriteCount += written;
+    completedCount += 1;
+    publishBusinessProgress(args, result.row, result.detail, completedCount, targets.length);
+    return result;
   });
   const rows: DoudianBusinessDataRow[] = [];
   const details: DoudianRunDetail[] = [];
@@ -1405,15 +1468,6 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
       })
       : policyMessage(payload.adapter, "businessData.messages.done", "Business data synced for {successCount} stores", { successCount });
 
-  const cacheWriteCount = await saveBusinessLatestRows({
-    rows,
-    details,
-    dateContext,
-    adapterVersion,
-    ruleVersion: scriptsVersion,
-    fieldSchemaVersion: schemaVersion,
-    requestPlanHash: planHash
-  });
   const cacheSkippedCount = rows.length - cacheWriteCount;
   await cleanupBusinessLatestCache(adapterVersion, schemaVersion, planHash);
 
@@ -1560,18 +1614,45 @@ export async function runDoudianBusinessDataSelfCheck(options: { doudianAdapter?
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const shopId = `business-self-check-${suffix}`;
   const shopName = `Business Self Check ${suffix}`;
+  const secondShopId = `${shopId}-second`;
+  const secondShopName = `${shopName} Second`;
   const checkedContexts: DateContext[] = [];
+  const progressRows: Array<{ shopId: string; dealAmount: number; orderCount: number; completed: number; total: number }> = [];
+  const progressCacheChecks: Array<Promise<boolean>> = [];
+  const progressListener = (event: Event) => {
+    const detail = (event as CustomEvent<DoudianProgressDetail>).detail;
+    if (detail?.taskType !== "businessData" || !detail.business) return;
+    progressRows.push({
+      shopId: detail.business.row.shopId,
+      dealAmount: detail.business.row.dealAmount,
+      orderCount: detail.business.row.orderCount,
+      completed: detail.business.completed,
+      total: detail.business.total
+    });
+    if (detail.business.total > 1) {
+      progressCacheChecks.push(fetchBusinessDataLatest({
+        doudianAdapter: payload,
+        shopIds: [detail.business.row.shopId],
+        datePreset: "today"
+      }).then((latest) => latest.rows?.some((row) => (
+        row.shopId === detail.business?.row.shopId &&
+        row.dealAmount === detail.business?.row.dealAmount
+      )) === true));
+    }
+  };
+  window.addEventListener(DOUDIAN_PROGRESS_EVENT, progressListener);
 
   try {
-    await upsertStoreLedger({
-      shopId,
-      shopName,
+    await Promise.all([
+      { shopId, shopName, partition: `persist:chihu-business-self-check-${suffix}` },
+      { shopId: secondShopId, shopName: secondShopName, partition: `persist:chihu-business-self-check-${suffix}-second` }
+    ].map((store) => upsertStoreLedger({
+      ...store,
       platform: "doudian",
-      partition: `persist:chihu-business-self-check-${suffix}`,
       status: "online",
       groupName: "Self Check",
       adapterVersion: payload.adapter.version
-    });
+    })));
 
     const fixtureCheck = runDoudianBusinessDataFixtureSelfCheck(payload.adapter);
 
@@ -1626,21 +1707,66 @@ export async function runDoudianBusinessDataSelfCheck(options: { doudianAdapter?
       });
     }
 
+    const multiContext = dataDateContext({ datePreset: "today" }, payload.adapter);
+    checkedContexts.push(multiContext);
+    const multiRows = [
+      { shopId, shopName, partition: `persist:chihu-business-self-check-${suffix}`, dealAmount: 56789 },
+      { shopId: secondShopId, shopName: secondShopName, partition: `persist:chihu-business-self-check-${suffix}-second`, dealAmount: 67890 }
+    ].map((store, index) => ({
+      ...emptyBusinessDataRow({
+        ...store,
+        platform: "doudian",
+        status: "online" as const,
+        groupName: "Self Check"
+      }),
+      dealAmount: store.dealAmount,
+      orderCount: 8 + index,
+      customerPrice: store.dealAmount / (8 + index),
+      datePreset: multiContext.datePreset,
+      beginDate: multiContext.beginDate,
+      endDate: multiContext.endDate
+    }));
+    const multiResult = await fetchBusinessData({
+      doudianAdapter: payload,
+      shopIds: [shopId, secondShopId],
+      datePreset: "today",
+      mockRows: multiRows
+    });
+    const progressCacheOk = (await Promise.all(progressCacheChecks)).every(Boolean);
+    const singleProgressOk = cases.every((item) => progressRows.some((row) => (
+      row.shopId === shopId &&
+      row.dealAmount === item.dealAmount &&
+      row.orderCount === 7 &&
+      row.completed === 1 &&
+      row.total === 1
+    )));
+    const multiProgressOk = multiResult.ok === true && multiRows.every((row, index) => progressRows.some((progressRow) => (
+      progressRow.shopId === row.shopId &&
+      progressRow.dealAmount === row.dealAmount &&
+      progressRow.orderCount === row.orderCount &&
+      progressRow.completed === index + 1 &&
+      progressRow.total === multiRows.length
+    )));
+    const progressOk = singleProgressOk && multiProgressOk && progressCacheOk;
     return {
-      ok: fixtureCheck.ok && results.every((item) => item.fetchOk && item.latestOk && item.metadataOk && item.dateRangeOk),
+      ok: fixtureCheck.ok && progressOk && results.every((item) => item.fetchOk && item.latestOk && item.metadataOk && item.dateRangeOk),
       fixtureOk: fixtureCheck.fixtureOk,
       explicitZeroOk: fixtureCheck.explicitZeroOk,
       latestOk: results.every((item) => item.latestOk),
       datePresetOk: results.every((item) => item.dateRangeOk),
       metadataOk: results.every((item) => item.metadataOk),
+      progressOk,
       cases: [...fixtureCheck.cases, ...results]
     };
   } finally {
-    await deleteStoreLedger([shopId]).catch(() => undefined);
+    window.removeEventListener(DOUDIAN_PROGRESS_EVENT, progressListener);
+    await deleteStoreLedger([shopId, secondShopId]).catch(() => undefined);
     const planKeys = requestPlanKeys(payload.adapter);
     const adapterVersion = payload.adapter.version || "";
     const schemaVersion = fieldSchemaVersion(payload.adapter);
     const planHash = requestPlanHash(planKeys);
-    await Promise.all(checkedContexts.map((context) => repositoryDelete("business_latest", latestId(shopId, context, adapterVersion, schemaVersion, planHash)).catch(() => undefined)));
+    await Promise.all([shopId, secondShopId].flatMap((id) => checkedContexts.map((context) => (
+      repositoryDelete("business_latest", latestId(id, context, adapterVersion, schemaVersion, planHash)).catch(() => undefined)
+    ))));
   }
 }

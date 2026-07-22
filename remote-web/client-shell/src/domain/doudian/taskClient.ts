@@ -58,7 +58,8 @@ function operationLogPayload(record: DoudianOperationRecord | null | undefined) 
 async function reportOperationLog(phase: OperationLogPhase, record: DoudianOperationRecord | null | undefined, detail: Record<string, unknown> = {}) {
   const requiredFundsSummary = record?.taskType === "fundsData" && phase !== "started";
   const requiredViolationsLog = record?.taskType === "violationsData";
-  if (!requiredFundsSummary && !requiredViolationsLog && !getPreferences().autoOperationLog) return;
+  const requiredOpportunityPipelineLog = record?.taskType === "opportunityPipelineSubmit";
+  if (!requiredFundsSummary && !requiredViolationsLog && !requiredOpportunityPipelineLog && !getPreferences().autoOperationLog) return;
   const native = getChihuNative();
   if (!native?.logs?.report) return;
   await native.logs.report({
@@ -131,6 +132,19 @@ function violationsResultLogSummary(result: unknown) {
 function taskResultLogSummary(taskType: string | undefined, result: unknown) {
   if (taskType === "fundsData") return fundsResultLogSummary(result);
   if (taskType === "violationsData") return violationsResultLogSummary(result);
+  if (taskType === "opportunityPipelineSubmit" && result && typeof result === "object") {
+    const record = result as Record<string, unknown>;
+    const summary = record.summary && typeof record.summary === "object" ? record.summary as Record<string, unknown> : {};
+    return {
+      runId: String(record.runId || record.operationId || ""),
+      status: String(record.status || ""),
+      candidateCount: Number(summary.candidateCount || 0),
+      plannedSubmitCandidateCount: Number(summary.plannedSubmitCandidateCount || 0),
+      submittedCount: Number(summary.submittedCount || 0),
+      failedCount: Number(summary.failedCount || 0),
+      remoteRequestCount: Number(summary.remoteRequestCount || 0)
+    };
+  }
   return {};
 }
 
@@ -186,7 +200,9 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
       taskType: existing?.taskType,
       status: existing?.status === "cancelling" ? "cancelling" : existing?.status === "reconciling" ? "reconciling" : "running",
       progress: message.progress,
-      message: message.message
+      message: message.message,
+      store: message.store,
+      business: message.business
     });
     return;
   }
@@ -428,8 +444,13 @@ export async function startMockLongDoudianTask(options: Omit<DoudianTaskRequest,
   return startDoudianTask({ ...options, taskType: "mockLongTask" });
 }
 
-export async function runDoudianStoreTask(task: DoudianTaskRequest, timeoutMs = 120000): Promise<DoudianStoreResult> {
+export async function runDoudianStoreTask(
+  task: DoudianTaskRequest,
+  timeoutMs = 120000,
+  onStarted?: (operationId: string) => void
+): Promise<DoudianStoreResult> {
   const operation = await startDoudianTask(task);
+  onStarted?.(operation.operationId);
   const result = await waitForDoudianTaskResult(operation.operationId, timeoutMs).catch(async (error) => {
     const message = error instanceof Error ? error.message : String(error);
     const mutation = isDoudianMutationTask(task);
@@ -466,7 +487,7 @@ export async function runDoudianStoreTask(task: DoudianTaskRequest, timeoutMs = 
       ? result.result as DoudianStoreResult
       : { ok: false, status: "failed", operationId: operation.operationId, message: result.error || "task failed", stores: [] };
   }
-  if (result.status === "cancelled") return { ok: false, status: "cancelled", operationId: operation.operationId, message: "已取消任务", stores: [] };
+  if (result.status === "cancelled") return { ok: false, status: "cancelled", operationId: operation.operationId, message: "已取消任务" };
   if (result.status === "reconciling" || result.status === "interrupted") return { ok: false, status: result.status, operationId: operation.operationId, message: result.resultSummary || "任务需要对账", stores: [] };
   return (result.result && typeof result.result === "object")
     ? result.result as DoudianStoreResult

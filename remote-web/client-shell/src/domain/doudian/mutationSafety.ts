@@ -4,6 +4,7 @@ import type { CatalogMutationStatus, CatalogMutationRecordInput } from "../../na
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { normalizeDoudianProductStatus } from "./productStatus";
 import { bulkDeleteLiveLookupContext, type BulkDeleteLiveLookupScope } from "./bulkDeleteContract";
+import { opportunityLiveLookupContext } from "./opportunity/mutationSafetyContract.ts";
 
 const DEFAULT_TENANT_ID = "local-user";
 const LIVE_LOOKUP_CACHE_TTL_MS = 60_000;
@@ -198,27 +199,6 @@ function liveLookupPlanKey(adapter: DoudianAdapterConfig, feature: string) {
   return "";
 }
 
-function liveLookupContext(productId: string) {
-  return {
-    productId,
-    idNameCode: productId,
-    keyword: "",
-    page: "0",
-    pageSize: "20",
-    productStatus: "",
-    checkStatus: "",
-    draftStatus: "",
-    isOnline: "",
-    isOffline: "",
-    offlineType: "",
-    productTab: "all",
-    needPayNoStockSkus: "false",
-    commentPercent: "",
-    orderField: "audit_time",
-    sort: "desc"
-  };
-}
-
 function bulkDeleteLiveLookupScope(candidate: MutationCandidateInput, stage?: string): BulkDeleteLiveLookupScope {
   if (stage === "delete") return "recycle";
   const lifecycleStatus = normalizeLifecycleStatus(candidate.status);
@@ -367,7 +347,7 @@ async function fetchLiveLookupProduct(payload: DoudianAdapterPayload, store: Dou
   const response = await runDoudianRequestPlan(payload, {
     partition: store.partition,
     planKey,
-    context: liveLookupContext(productId),
+    context: opportunityLiveLookupContext(productId),
     shouldCancel
   });
   const mapping = mappingFor(adapter);

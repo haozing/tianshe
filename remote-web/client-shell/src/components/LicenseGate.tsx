@@ -21,6 +21,7 @@ const DESKTOP_SETUP_DOWNLOAD_URL = "http://chihu.facaishe.cn/desktop/win/chihu-g
 const DESKTOP_SETUP_FILE_NAME = "chihu-guanjia-2.2.0-freemium-v2-setup.exe";
 
 type ClientUpdatePhase = "idle" | "checking" | "downloading" | "downloaded" | "error";
+type RedeemHandler = (cardKey: string) => Promise<boolean>;
 
 function isClientUpdateRequired(status: LicenseStatus) {
   return status.reason === "LICENSE_BRIDGE_UNAVAILABLE";
@@ -109,9 +110,9 @@ function statusCopy(status: LicenseStatus) {
   if (status.status === "pending") return "正在检查授权";
   if (isClientUpdateRequired(status)) return "客户端需要更新";
   if (!status.configured) return "授权服务暂不可用";
-  if (status.licensed) return "设备授权有效";
   if (status.authStatus === "expired" || status.status === "expired") return "授权已到期";
   if (status.status === "redeem_error") return "卡密兑换失败";
+  if (status.licensed) return "设备授权有效";
   if (status.status === "error") return "授权校验失败";
   return "授权未开通";
 }
@@ -137,7 +138,7 @@ export function PaidFeatureGate({
   checking: boolean;
   redeeming: boolean;
   message: string;
-  onRedeem: (cardKey: string) => Promise<void>;
+  onRedeem: RedeemHandler;
   onRefresh: () => Promise<void>;
 }) {
   return (
@@ -248,7 +249,7 @@ function LicenseRedeemForm({
   busy: boolean;
   checking: boolean;
   message: string;
-  onRedeem: (cardKey: string) => Promise<void>;
+  onRedeem: RedeemHandler;
   onRefresh: () => Promise<void>;
 }) {
   const [cardKey, setCardKey] = useState("");
@@ -263,8 +264,8 @@ function LicenseRedeemForm({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canSubmit) return;
-    await onRedeem(cardKey);
-    setCardKey("");
+    const redeemed = await onRedeem(cardKey);
+    if (redeemed) setCardKey("");
   }
 
   async function downloadWithProgress(fallbackMessage?: string) {
@@ -373,6 +374,8 @@ function LicenseRedeemForm({
     );
   }
 
+  const messageIsError = status.status === "redeem_error" || status.ok === false;
+
   return (
     <form className="grid gap-3" onSubmit={submit}>
       <label className="grid gap-1.5">
@@ -389,9 +392,13 @@ function LicenseRedeemForm({
       {message || status.message ? (
         <div className={cn(
           "flex items-start gap-2 rounded-md border px-3 py-2 text-[13px] leading-5",
-          status.licensed ? "border-[#bff0cf] bg-[#f0fff5] text-[#087443]" : "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]"
-        )}>
-          {status.licensed ? <CheckCircle2 className="mt-0.5 size-[15px] shrink-0" strokeWidth={2.2} /> : <AlertCircle className="mt-0.5 size-[15px] shrink-0" strokeWidth={2.2} />}
+          messageIsError
+            ? "border-red-200 bg-red-50 text-red-600"
+            : status.licensed
+              ? "border-[#bff0cf] bg-[#f0fff5] text-[#087443]"
+              : "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]"
+        )} role={messageIsError ? "alert" : "status"} aria-live="polite">
+          {!messageIsError && status.licensed ? <CheckCircle2 className="mt-0.5 size-[15px] shrink-0" strokeWidth={2.2} /> : <AlertCircle className="mt-0.5 size-[15px] shrink-0" strokeWidth={2.2} />}
           <span>{message || status.message}</span>
         </div>
       ) : null}
@@ -431,7 +438,7 @@ export function LicenseGateScreen({
   checking: boolean;
   redeeming: boolean;
   message: string;
-  onRedeem: (cardKey: string) => Promise<void>;
+  onRedeem: RedeemHandler;
   onRefresh: () => Promise<void>;
 }) {
   const Icon = status.licensed ? ShieldCheck : isClientUpdateRequired(status) ? Download : status.configured ? CreditCard : AlertCircle;
@@ -502,7 +509,7 @@ export function LicenseRenewDialog({
   redeeming: boolean;
   message: string;
   onOpenChange: (open: boolean) => void;
-  onRedeem: (cardKey: string) => Promise<void>;
+  onRedeem: RedeemHandler;
   onRefresh: () => Promise<void>;
 }) {
   const title = useMemo(() => {

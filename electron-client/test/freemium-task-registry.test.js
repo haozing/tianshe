@@ -14,7 +14,7 @@ const {
 
 const adapter = require("../../remote-web/client-shell/public/config/doudian-adapter.marketing-pilot.json");
 const { paidDataRequest, runnerDataAllowed } = require("../src/main/license/data-access-policy");
-const { interruptedTaskStatus, taskResultPersistence, terminalTaskStatus } = require("../src/main/tasks/task-result-policy");
+const { interruptedTaskStatus, opportunitySubmitProgressStalled, taskResultPersistence, terminalTaskStatus } = require("../src/main/tasks/task-result-policy");
 const { httpTransportFingerprint, runnerPartitionAllowed, transportMatchesPlan, transportMatchesPlanTemplate } = require("../src/main/tasks/task-transport-policy");
 const { taskWindowCommandScript } = require("../src/main/tasks/task-window-commands");
 const { urlMatchesPrincipal } = require("../src/main/security/web-contents-principal");
@@ -249,8 +249,21 @@ test("main process derives and bounds runner terminal evidence", () => {
   assert.equal(interruptedTaskStatus({ cancellationRequested: true }), "cancelled");
   assert.equal(interruptedTaskStatus({ currentStatus: "running" }), "failed");
   assert.equal(interruptedTaskStatus({ mutation: true, currentStatus: "cancelling" }), "reconciling");
+  assert.equal(interruptedTaskStatus({ mutation: true, mutationStarted: false, inFlightMutations: 0 }), "failed");
+  assert.equal(interruptedTaskStatus({ mutation: true, mutationStarted: true, inFlightMutations: 0 }), "reconciling");
+  assert.equal(interruptedTaskStatus({ mutation: true, mutationStarted: false, inFlightMutations: 1 }), "reconciling");
+  assert.equal(interruptedTaskStatus({ mutation: true, mutationStarted: false, cancellationRequested: true }), "cancelled");
   assert.deepEqual(taskResultPersistence(undefined), { bytes: 0, messageAllowed: true, persistResult: true });
   assert.equal(taskResultPersistence({ value: "x".repeat(4 * 1024 * 1024) }).persistResult, false);
+});
+
+test("opportunity submit runner fails closed when worker progress stalls", () => {
+  const now = Date.now();
+  assert.equal(opportunitySubmitProgressStalled({ taskType: "businessData", lastProgress: 82, lastProgressAt: 0 }, now), false);
+  assert.equal(opportunitySubmitProgressStalled({ taskType: "opportunityPipelineSubmit", lastProgress: 81, lastProgressAt: 0 }, now), false);
+  assert.equal(opportunitySubmitProgressStalled({ taskType: "opportunityPipelineSubmit", lastProgress: 82, lastProgressAt: now - 60_000 }, now), false);
+  assert.equal(opportunitySubmitProgressStalled({ taskType: "opportunityPipelineSubmit", lastProgress: 82, lastProgressAt: now - 301_000 }, now), true);
+  assert.equal(opportunitySubmitProgressStalled({ taskType: "opportunityPipelineSubmit", lastProgress: 95, lastProgressAt: now - 301_000 }, now), false);
 });
 
 test("HTTP transport grants bind the complete request and task partition", () => {

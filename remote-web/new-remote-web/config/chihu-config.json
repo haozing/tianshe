@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.22.bulk-delete-segmented-scan-v4",
+  "version": "2026.07.22.opportunity-submit-live-lookup-v3",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "348df08-dirty",
-    "buildTime": "2026-07-22T02:15:55.651Z"
+    "gitCommit": "dbfe705-dirty",
+    "buildTime": "2026-07-22T09:19:42.453Z"
   }
 }

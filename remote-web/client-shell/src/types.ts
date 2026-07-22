@@ -1312,6 +1312,7 @@ declare global {
         latestOk: boolean;
         datePresetOk: boolean;
         metadataOk: boolean;
+        progressOk: boolean;
         cases: Array<Record<string, unknown>>;
       }>;
       fundsDataSelfCheck: () => Promise<{

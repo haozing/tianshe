@@ -30,6 +30,12 @@ function marketingReadHomeUrl(value) {
   return url.toString();
 }
 
+function diagnosticRuntimeHomeUrl(value) {
+  const url = new URL(value);
+  url.searchParams.set("smoke", "1");
+  return url.toString();
+}
+
 const binaryBody = "chihu-http-smoke-binary";
 const fileDownloadBody = "chihu-file-smoke-download";
 const uploadExpectedText = "chihu-file-upload-payload";
@@ -244,14 +250,18 @@ async function main() {
   const userDataDir = configuredUserDataDir || fs.mkdtempSync(path.join(os.tmpdir(), `chihu-electron-smoke-${scenario}-`));
   const ownsUserDataDir = !configuredUserDataDir;
   const defaultHomeUrl = process.env.CHIHU_HOME_URL || process.env.CHIHU_REMOTE_WEB_URL || "http://chihu-remote.localhost:4173/new-remote-web/";
-  const homeUrl = ["marketing-read", "marketing-write"].includes(scenario) ? marketingReadHomeUrl(defaultHomeUrl) : defaultHomeUrl;
+  const homeUrl = ["marketing-read", "marketing-write"].includes(scenario)
+    ? marketingReadHomeUrl(defaultHomeUrl)
+    : scenario === "business-progress"
+      ? diagnosticRuntimeHomeUrl(defaultHomeUrl)
+      : defaultHomeUrl;
   const env = {
     ...process.env,
     CHIHU_E2E_SMOKE: "1",
     CHIHU_E2E_SMOKE_SCENARIO: scenario,
     CHIHU_EXPLICIT_TEST_MODE: "1",
     ...(["marketing-read", "marketing-write"].includes(scenario) ? { CHIHU_LICENSE_BYPASS: "1" } : {}),
-    CHIHU_E2E_TIMEOUT_MS: process.env.CHIHU_E2E_TIMEOUT_MS || (["bridge", "freemium"].includes(scenario) ? "45000" : ["marketing-read", "marketing-write"].includes(scenario) ? "240000" : scenario === "sqlite" ? "30000" : "15000"),
+    CHIHU_E2E_TIMEOUT_MS: process.env.CHIHU_E2E_TIMEOUT_MS || (["bridge", "freemium"].includes(scenario) ? "45000" : ["marketing-read", "marketing-write"].includes(scenario) ? "240000" : ["sqlite", "business-progress"].includes(scenario) ? "30000" : "15000"),
     CHIHU_USER_DATA_DIR: userDataDir,
     CHIHU_HOME_URL: homeUrl
   };

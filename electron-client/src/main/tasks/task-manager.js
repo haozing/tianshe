@@ -22,7 +22,7 @@ const {
   taskMutation,
   validateTaskParams
 } = require("./task-registry");
-const { interruptedTaskStatus, taskResultPersistence, terminalTaskStatus } = require("./task-result-policy");
+const { interruptedTaskStatus, opportunitySubmitProgressStalled, taskResultPersistence, terminalTaskStatus } = require("./task-result-policy");
 const { httpTransportFingerprint, runnerPartitionAllowed, transportMatchesPlan, transportMatchesPlanTemplate } = require("./task-transport-policy");
 const { taskWindowCommandScript } = require("./task-window-commands");
 
@@ -175,6 +175,8 @@ async function writeOperationEvidence(context, status = "running", patch = {}) {
     ownerSessionId: `main:${context.ownerWebContentsId}`,
     adapterSnapshotHash: context.adapterSnapshotHash,
     paidGrantedAtStart: context.paidGrantedAtStart,
+    mutationStarted: context.mutationStarted === true,
+    inFlightMutations: Math.max(0, Number(context.inFlightMutations || 0)),
     taskEvidence: {
       accessTier: context.accessTier,
       mutation: context.mutation,
@@ -223,10 +225,16 @@ async function closeRunnerContext(context, reason, options = {}) {
   clearTimeout(context.lifetimeTimer);
   clearInterval(context.heartbeatTimer);
   if (!options.terminal) {
-    const status = interruptedTaskStatus({ mutation: context.mutation, cancellationRequested: context.cancellationRequested === true });
+    const status = interruptedTaskStatus({
+      mutation: context.mutation,
+      mutationStarted: context.mutationStarted,
+      inFlightMutations: context.inFlightMutations,
+      cancellationRequested: context.cancellationRequested === true
+    });
     const cancelled = status === "cancelled";
+    const reconciling = status === "reconciling";
     await writeOperationEvidence(context, status, {
-      resultSummary: cancelled ? "cancelled" : context.mutation ? "runner lost; reconciliation required" : "runner interrupted",
+      resultSummary: cancelled ? "cancelled" : reconciling ? "runner lost; reconciliation required" : context.mutation ? "runner stopped before mutation" : "runner interrupted",
       ...(cancelled ? {} : { error: reason })
     }).catch(() => undefined);
     sendOwnerEvent(context, {
@@ -234,7 +242,7 @@ async function closeRunnerContext(context, reason, options = {}) {
       operationId: context.operationId,
       ...(cancelled
         ? { resultSummary: "cancelled", result: { ok: false, status: "cancelled", message: "已取消任务" } }
-        : { error: context.mutation ? "runner lost; reconciliation required" : reason })
+        : { error: reconciling ? "runner lost; reconciliation required" : reason })
     });
   }
   const win = BrowserWindow.fromWebContents(context.runnerWebContents);
@@ -281,6 +289,9 @@ function createRunnerWindow(context, snapshot, task) {
       operation: { operationId: context.operationId, taskType: context.taskType, status: "running", progress: 0 },
       task
     });
+    if (context.cancellationRequested) {
+      runner.webContents.send("chihu:tasks:command", { type: "task:cancel", operationId: context.operationId });
+    }
   });
   runner.once("closed", () => void closeRunnerContext(context, "runner window closed"));
   void runner.loadURL(runnerUrl).catch((error) => closeRunnerContext(context, error.message || String(error)));
@@ -335,10 +346,16 @@ async function startRunner(event, request = {}) {
     allowedDataScopes: materializeDataScopes(definition.allowedDataScopes, operationId),
     childWindowIds: new Set(),
     childWindowPartitions: new Map(),
+    programmaticWindowCloseIds: new Set(),
     activePlanGrants: new Map(),
     httpGrants: new Map(),
     createdAt: new Date().toISOString(),
+    createdAtMs: Date.now(),
     lastHeartbeatAt: Date.now(),
+    lastProgressAt: Date.now(),
+    lastProgress: 0,
+    mutationStarted: false,
+    inFlightMutations: 0,
     cancellationRequested: false,
     closed: false
   };
@@ -357,7 +374,9 @@ async function startRunner(event, request = {}) {
   const runner = createRunnerWindow(context, snapshot, task);
   context.lifetimeTimer = setTimeout(() => void closeRunnerContext(context, "runner lifetime exceeded"), MAX_RUNNER_LIFETIME_MS);
   context.heartbeatTimer = setInterval(() => {
-    if (Date.now() - context.lastHeartbeatAt > HEARTBEAT_TIMEOUT_MS) void closeRunnerContext(context, "runner heartbeat expired");
+    const now = Date.now();
+    if (now - context.lastHeartbeatAt > HEARTBEAT_TIMEOUT_MS) void closeRunnerContext(context, "runner heartbeat expired");
+    else if (opportunitySubmitProgressStalled(context, now)) void closeRunnerContext(context, "opportunity submit worker progress stalled");
   }, 5000);
   return { ok: true, operationId, status: "started", runnerWinId: runner.id };
 }
@@ -370,8 +389,23 @@ async function runnerEvent(event, message = {}) {
   }
   if (!["task:progress", "task:heartbeat", "task:result", "task:error"].includes(message.type)) throw taskError("TASK_RESULT_DENIED", "runner event type is invalid");
   context.lastHeartbeatAt = Date.now();
+  if (message.type === "task:heartbeat" || message.type === "task:error") {
+    const previousMutationStarted = context.mutationStarted === true;
+    const previousInFlightMutations = Number(context.inFlightMutations || 0);
+    context.mutationStarted = previousMutationStarted || message.mutationStarted === true;
+    context.inFlightMutations = Math.max(0, Number(message.inFlightMutations || 0));
+    if (context.mutationStarted !== previousMutationStarted || context.inFlightMutations !== previousInFlightMutations) {
+      await writeOperationEvidence(context, context.cancellationRequested ? "cancelling" : "running", {
+        mutationStarted: context.mutationStarted,
+        inFlightMutations: context.inFlightMutations
+      }).catch(() => undefined);
+    }
+  }
   if (message.type === "task:progress") {
-    await writeOperationEvidence(context, "running", { progress: Math.max(0, Math.min(100, Number(message.progress || 0))) }).catch(() => undefined);
+    const progress = Math.max(0, Math.min(100, Number(message.progress || 0)));
+    context.lastProgress = progress;
+    context.lastProgressAt = Date.now();
+    await writeOperationEvidence(context, "running", { progress }).catch(() => undefined);
   }
   let ownerMessage = message;
   if (message.type === "task:result") {
@@ -397,7 +431,7 @@ async function runnerEvent(event, message = {}) {
       await writeOperationEvidence(context, terminalStatus, patch).catch(() => undefined);
     }
   } else if (message.type === "task:error") {
-    const terminalStatus = context.mutation ? "reconciling" : "failed";
+    const terminalStatus = context.mutation && context.mutationStarted ? "reconciling" : "failed";
     const error = String(message.error || "runner task failed").slice(0, 4000);
     await writeOperationEvidence(context, terminalStatus, { error, resultSummary: error }).catch(() => undefined);
     ownerMessage = { ...message, error };
@@ -419,8 +453,14 @@ async function cancelRunner(event, request = {}) {
     context.runnerWebContents.send("chihu:tasks:command", { type: "task:cancel", operationId: context.operationId });
     return { ok: true, operationId: context.operationId, status: "cancelling", runnerAlive: true };
   }
+  const interruptedStatus = interruptedTaskStatus({
+    mutation: context.mutation,
+    mutationStarted: context.mutationStarted,
+    inFlightMutations: context.inFlightMutations,
+    cancellationRequested: true
+  });
   await closeRunnerContext(context, "runner unavailable during cancellation");
-  return { ok: true, operationId: context.operationId, status: context.mutation ? "reconciling" : "cancelled", runnerAlive: false };
+  return { ok: true, operationId: context.operationId, status: interruptedStatus, runnerAlive: false };
 }
 
 async function recoverRunner(event, request = {}) {
@@ -465,10 +505,16 @@ async function recoverRunner(event, request = {}) {
     allowedDataScopes: materializeDataScopes(definition.allowedDataScopes, operationId),
     childWindowIds: new Set(),
     childWindowPartitions: new Map(),
+    programmaticWindowCloseIds: new Set(),
     activePlanGrants: new Map(),
     httpGrants: new Map(),
     createdAt: new Date().toISOString(),
+    createdAtMs: Date.now(),
     lastHeartbeatAt: Date.now(),
+    lastProgressAt: Date.now(),
+    lastProgress: Number(record.progress || 0),
+    mutationStarted: record.mutationStarted !== false,
+    inFlightMutations: Math.max(0, Number(record.inFlightMutations || 0)),
     closed: false
   };
   operationContexts.set(operationId, context);
@@ -511,7 +557,12 @@ async function interruptPersistedTask(event, request = {}) {
   if (["succeeded", "partial", "failed", "cancelled"].includes(String(record.status))) return { ...record, runnerAlive: false };
   const mutation = record?.taskEvidence?.mutation === true || record?.metadata?.mutation === true;
   const now = new Date().toISOString();
-  const nextStatus = interruptedTaskStatus({ mutation, currentStatus: String(record.status || "running") });
+  const nextStatus = interruptedTaskStatus({
+    mutation,
+    mutationStarted: record.mutationStarted,
+    inFlightMutations: record.inFlightMutations,
+    currentStatus: String(record.status || "running")
+  });
   const next = {
     ...record,
     status: nextStatus,
@@ -684,11 +735,25 @@ function registerTaskChildWindow(event, child, targetUrl, partition = "") {
     ownerOperationId: context.operationId,
     allowedPlatformOrigins: [target.origin]
   });
+  child.on("close", () => {
+    if (context.closed || context.programmaticWindowCloseIds.has(child.id)) return;
+    if (context.taskType !== "fetchDoudianStores" || !child.isVisible() || context.cancellationRequested) return;
+    context.cancellationRequested = true;
+    if (context.runnerWebContents && !context.runnerWebContents.isDestroyed()) {
+      context.runnerWebContents.send("chihu:tasks:command", { type: "task:cancel", operationId: context.operationId });
+    }
+  });
   child.once("closed", () => {
     context.childWindowIds.delete(child.id);
     context.childWindowPartitions.delete(child.id);
+    context.programmaticWindowCloseIds.delete(child.id);
   });
   return context;
+}
+
+function markRunnerWindowProgrammaticClose(event, winId) {
+  const context = getRunnerContextForSender(event?.sender);
+  if (context && context.childWindowIds.has(Number(winId))) context.programmaticWindowCloseIds.add(Number(winId));
 }
 
 function runnerOwnsWindow(event, winId) {
@@ -724,6 +789,7 @@ function installTaskHandlers() {
 
 module.exports = {
   getRunnerContextForSender,
+  markRunnerWindowProgrammaticClose,
   installTaskHandlers,
   registerTaskChildWindow,
   runnerCookieAllowed,

@@ -1,6 +1,6 @@
 {
   "name": "@chihu/client-shell",
-  "version": "2026.07.20-freemium-v2",
+  "version": "2026.07.22-workflow-usability-v1",
   "private": true,
   "type": "module",
   "scripts": {

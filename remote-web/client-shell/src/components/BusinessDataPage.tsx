@@ -114,6 +114,14 @@ interface BusinessDetailDiagnostic {
   unavailableCriticalFields?: string[];
 }
 
+interface BusinessItemProgress {
+  row: BusinessRow;
+  detail: DoudianRunDetail;
+  completed: number;
+  total: number;
+  progress: number;
+}
+
 interface MetricItem {
   label: string;
   value: string;
@@ -560,7 +568,8 @@ export function BusinessDataPage() {
   const [sortKey, setSortKey] = useState<SortKey>("成交金额");
   const [loadState, setLoadState] = useState<LoadState>(() => nativeBridge ? "loading" : "error");
   const [loadMessage, setLoadMessage] = useState(() => nativeBridge ? "" : "本地店铺桥接不可用，请在赤狐客户端内打开");
-  const [syncing, setSyncing] = useState(false);
+  const [storeSyncing, setStoreSyncing] = useState(false);
+  const [businessSyncing, setBusinessSyncing] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState(() => new Date());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [businessRows, setBusinessRows] = useState<BusinessRow[]>([]);
@@ -568,6 +577,7 @@ export function BusinessDataPage() {
   const [businessMessage, setBusinessMessage] = useState("");
   const [businessDetails, setBusinessDetails] = useState<DoudianRunDetail[]>([]);
   const [businessProgress, setBusinessProgress] = useState("");
+  const [businessItemProgress, setBusinessItemProgress] = useState<BusinessItemProgress | null>(null);
   const [activeOperationId, setActiveOperationId] = useState("");
   const [fieldSchema, setFieldSchema] = useState<RemoteBusinessFieldSchema>({});
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<Set<string>>(() => visibleColumnKeySet(tableColumns));
@@ -580,12 +590,18 @@ export function BusinessDataPage() {
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [adapterVersion, setAdapterVersion] = useState("");
   const businessRequestSeq = useRef(0);
+  const activeOperationIdRef = useRef("");
   const columnResizeState = useRef<{ key: BusinessMetricKey; pointerId: number; startX: number; startWidth: number } | null>(null);
 
   const requestedRange = datePreset === "custom"
     ? { beginDate: customBeginDate, endDate: customEndDate, label: `${customBeginDate} - ${customEndDate}` }
     : dateRangeForPreset(datePreset);
   const customRangeValid = datePreset !== "custom" || (!!customBeginDate && !!customEndDate && customBeginDate <= customEndDate);
+
+  function updateActiveOperationId(operationId: string) {
+    activeOperationIdRef.current = operationId;
+    setActiveOperationId(operationId);
+  }
 
   function applyBusinessResult(result: Awaited<ReturnType<typeof fetchDoudianBusinessData>>, requestedShopIds: string[]) {
     const detailList = Array.isArray(result.details) ? result.details : [];
@@ -618,7 +634,7 @@ export function BusinessDataPage() {
       setLoadMessage("本地店铺桥接不可用，请在赤狐客户端内打开");
       return;
     }
-    setSyncing(true);
+    setStoreSyncing(true);
     setLoadMessage("");
     try {
       const result = await listDoudianStores();
@@ -645,13 +661,13 @@ export function BusinessDataPage() {
       setLoadState("error");
       setLoadMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      setSyncing(false);
+      setStoreSyncing(false);
     }
   }
 
-  async function refreshBusinessData(ids = selectedIds, options: { preserveSequence?: boolean } = {}) {
-    const requestSeq = options.preserveSequence ? businessRequestSeq.current : businessRequestSeq.current + 1;
-    if (!options.preserveSequence) businessRequestSeq.current = requestSeq;
+  async function refreshBusinessData(ids = selectedIds) {
+    const requestSeq = businessRequestSeq.current + 1;
+    businessRequestSeq.current = requestSeq;
     if (!nativeBridge) {
       setBusinessState("error");
       setBusinessMessage("本地经营数据桥接不可用");
@@ -668,16 +684,34 @@ export function BusinessDataPage() {
       setBusinessState("ready");
       return;
     }
-    setSyncing(true);
+    const previousOperationId = activeOperationIdRef.current;
+    if (previousOperationId) {
+      await cancelDoudianStoreOperation(previousOperationId).catch(() => undefined);
+      if (activeOperationIdRef.current === previousOperationId) updateActiveOperationId("");
+      if (requestSeq !== businessRequestSeq.current) return;
+    }
+    setBusinessSyncing(true);
     setBusinessState("loading");
     setBusinessMessage("");
     setBusinessProgress("");
+    setBusinessItemProgress(null);
+    const requestedIds = new Set(shopIds);
+    setBusinessRows((currentRows) => currentRows.filter((row) => !requestedIds.has(row.shopId)));
+    setBusinessDetails((currentDetails) => currentDetails.filter((detail) => !requestedIds.has(String(detail.shopId || ""))));
+    let startedOperationId = "";
     try {
       const result = await fetchDoudianBusinessData({
         shopIds,
         datePreset,
         ...(datePreset === "custom" ? { beginDate: customBeginDate, endDate: customEndDate } : {}),
         forceAdapter: true
+      }, (operationId) => {
+        startedOperationId = operationId;
+        if (requestSeq === businessRequestSeq.current) {
+          updateActiveOperationId(operationId);
+        } else {
+          void cancelDoudianStoreOperation(operationId);
+        }
       });
       if (requestSeq !== businessRequestSeq.current) return;
       applyBusinessResult(result, shopIds);
@@ -694,8 +728,10 @@ export function BusinessDataPage() {
       setBusinessMessage(error instanceof Error ? error.message : String(error));
     } finally {
       if (requestSeq === businessRequestSeq.current) {
-        setSyncing(false);
+        if (!startedOperationId || activeOperationIdRef.current === startedOperationId) updateActiveOperationId("");
+        setBusinessSyncing(false);
         setBusinessProgress("");
+        setBusinessItemProgress(null);
       }
     }
   }
@@ -714,7 +750,7 @@ export function BusinessDataPage() {
       applyBusinessResult(result, [...ids]);
       return result.rows.map((row) => String(row.shopId || "")).filter(Boolean);
     } catch {
-      // Latest cached data is a convenience layer; remote refresh remains authoritative.
+      // Latest cached data is a convenience layer; manual refresh remains authoritative.
       return [];
     }
   }
@@ -768,11 +804,12 @@ export function BusinessDataPage() {
     setBusinessRows([]);
     setBusinessDetails([]);
     setActualDateRange(null);
+    setBusinessMessage("");
     setBusinessState("loading");
     void (async () => {
       await hydrateLatestBusinessData(ids, requestSeq);
       if (requestSeq !== businessRequestSeq.current) return;
-      await refreshBusinessData(ids, { preserveSequence: true });
+      setBusinessState("ready");
     })();
   }, [nativeBridge, loadState, storeIdKey, datePreset, customBeginDate, customEndDate]);
 
@@ -789,8 +826,6 @@ export function BusinessDataPage() {
       const requestSeq = businessRequestSeq.current + 1;
       businessRequestSeq.current = requestSeq;
       await hydrateLatestBusinessData(ids, requestSeq);
-      if (requestSeq !== businessRequestSeq.current) return;
-      await refreshBusinessData(ids, { preserveSequence: true });
     })();
   }, [selectedIdKey, loadedIdKey, businessState, loadState]);
 
@@ -798,11 +833,38 @@ export function BusinessDataPage() {
     return addDoudianProgressListener((event) => {
       const detail = event.detail || {};
       if (detail.taskType !== "businessData") return;
-      if (detail.status === "running") setActiveOperationId(detail.operationId || "");
-      else setActiveOperationId((current) => current === detail.operationId ? "" : current);
+      const currentOperationId = activeOperationIdRef.current;
+      if (currentOperationId && currentOperationId !== detail.operationId) return;
+      if (!currentOperationId && detail.status !== "running") return;
+      if (detail.status === "running") updateActiveOperationId(detail.operationId || "");
+      else if (currentOperationId === detail.operationId) updateActiveOperationId("");
       const progress = Number.isFinite(detail.progress) ? `${Math.round(detail.progress)}%` : "";
       const message = detail.message || detail.resultSummary || detail.error || "";
       setBusinessProgress([progress, message].filter(Boolean).join(" · "));
+      if (detail.status === "running" && detail.business) {
+        const item = detail.business;
+        const row = businessRowFromRemote(item.row, undefined, item.detail);
+        setBusinessRows((currentRows) => {
+          const byId = new Map(currentRows.map((currentRow) => [currentRow.shopId, currentRow]));
+          byId.set(row.shopId, row);
+          return [...byId.values()];
+        });
+        setBusinessDetails((currentDetails) => {
+          const byId = new Map(currentDetails.map((currentDetail) => [String(currentDetail.shopId || ""), currentDetail]));
+          byId.set(row.shopId, item.detail);
+          return [...byId.values()];
+        });
+        setBusinessItemProgress({
+          row,
+          detail: item.detail,
+          completed: item.completed,
+          total: item.total,
+          progress: Math.round(detail.progress || 0)
+        });
+        setLastSyncAt(new Date());
+      } else if (detail.status !== "running") {
+        setBusinessItemProgress(null);
+      }
     });
   }, []);
 
@@ -810,9 +872,10 @@ export function BusinessDataPage() {
     if (!activeOperationId) return;
     await cancelDoudianStoreOperation(activeOperationId);
     businessRequestSeq.current += 1;
-    setActiveOperationId("");
-    setSyncing(false);
+    updateActiveOperationId("");
+    setBusinessSyncing(false);
     setBusinessProgress("");
+    setBusinessItemProgress(null);
     setBusinessState("ready");
     setBusinessMessage("已取消经营数据同步");
   }
@@ -1077,8 +1140,8 @@ export function BusinessDataPage() {
           </div>
           <div className="flex items-center justify-between border-t border-[#edf1f6] px-3 py-2">
             <span className="truncate text-[12px] text-[#98a2b3]">店铺列表同步</span>
-            <button className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#344054] disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={syncing} onClick={() => void refreshStores()}>
-              <RefreshCw className={cn("size-[13px]", syncing ? "animate-spin" : "")} strokeWidth={2} />
+            <button className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#344054] disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={storeSyncing || businessSyncing} onClick={() => void refreshStores()}>
+              <RefreshCw className={cn("size-[13px]", storeSyncing ? "animate-spin" : "")} strokeWidth={2} />
               刷新
             </button>
           </div>
@@ -1128,11 +1191,11 @@ export function BusinessDataPage() {
               <CalendarDays className="size-[14px]" strokeWidth={2} />
               <span className="truncate">{actualRangeLabel && actualRangeLabel !== range.label ? `平台 ${actualRangeLabel}` : range.label}</span>
             </div>
-            <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] disabled:opacity-50" type="button" disabled={syncing || !selectedIds.size || !customRangeValid} onClick={() => void refreshBusinessData()}>
-              <RefreshCw className={cn("size-[14px]", syncing ? "animate-spin" : "")} strokeWidth={2} />
-              刷新
+            <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#ffc6b5] bg-[#fff7f4] px-2.5 text-[12px] font-semibold text-brand-fox transition-colors hover:bg-brand-foxSoft disabled:cursor-not-allowed disabled:opacity-50" type="button" title="手动刷新经营数据" disabled={storeSyncing || businessSyncing || !selectedIds.size || !customRangeValid} onClick={() => void refreshBusinessData()}>
+              <RefreshCw className={cn("size-[14px]", businessSyncing ? "animate-spin" : "")} strokeWidth={2} />
+              刷新数据
             </button>
-            {syncing && activeOperationId ? (
+            {businessSyncing && activeOperationId ? (
               <button className="grid size-8 place-items-center rounded-md border border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" type="button" aria-label="取消经营数据同步" title="取消经营数据同步" onClick={() => void cancelBusinessSync()}>
                 <CircleStop className="size-[15px]" strokeWidth={2} />
               </button>
@@ -1150,7 +1213,7 @@ export function BusinessDataPage() {
           </div>
         </section>
 
-        <section className="grid min-h-0 grid-rows-[44px_minmax(0,1fr)_38px] overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+        <section className={cn("grid min-h-0 overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]", businessItemProgress ? "grid-rows-[44px_46px_minmax(0,1fr)_38px]" : "grid-rows-[44px_minmax(0,1fr)_38px]")}>
           <div className="flex items-center justify-between gap-3 border-b border-[#edf1f6] px-3.5">
             <div className="flex min-w-0 items-center gap-2">
               <Gauge className="size-[16px] text-brand-navy" strokeWidth={2.2} />
@@ -1186,6 +1249,23 @@ export function BusinessDataPage() {
               </button>
             </div>
           </div>
+
+          {businessItemProgress ? (
+            <div className="flex min-w-0 items-center gap-3 border-b border-[#bfdbfe] bg-[#f5f9ff] px-3.5 text-[12px]">
+              <Loader2 className="size-[15px] shrink-0 animate-spin text-[#2563eb]" strokeWidth={2.2} />
+              <span className="shrink-0 font-semibold text-[#101828]">正在获取 {businessItemProgress.completed} / {businessItemProgress.total}</span>
+              <span className="max-w-[220px] truncate font-semibold text-[#1d4ed8]" title={businessItemProgress.row.shopName}>{businessItemProgress.row.shopName}</span>
+              <span className="shrink-0 font-mono text-[#667085]">{businessItemProgress.row.shopId}</span>
+              <span className="shrink-0 font-semibold text-brand-navy">成交金额 {formatMoney(businessItemProgress.row.dealAmount)}</span>
+              <span className="shrink-0 text-[#344054]">订单 {formatNumber(businessItemProgress.row.orderCount)}</span>
+              <span className={cn("shrink-0 rounded-md border px-2 py-0.5 font-semibold", businessItemProgress.detail.status === "ok" ? "border-[#bff0cf] bg-[#eafaf0] text-[#087443]" : businessItemProgress.detail.status === "partial" ? "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" : "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]")}>
+                {businessItemProgress.detail.status === "ok" ? "获取成功" : businessItemProgress.detail.status === "partial" ? "部分数据" : "获取失败"}
+              </span>
+              <div className="ml-auto h-1.5 w-[140px] shrink-0 overflow-hidden rounded-full bg-[#dbeafe]">
+                <div className="h-full rounded-full bg-[#2563eb] transition-[width] duration-300" style={{ width: `${Math.max(2, Math.min(100, businessItemProgress.progress))}%` }} />
+              </div>
+            </div>
+          ) : null}
 
           <div className="min-h-0 overflow-auto">
             {columnPanelOpen ? (
@@ -1310,8 +1390,8 @@ export function BusinessDataPage() {
                         <span className="grid size-14 place-items-center rounded-full bg-brand-foxSoft text-brand-fox">
                           {businessState === "loading" ? <Loader2 className="size-7 animate-spin" strokeWidth={2.2} /> : <BarChart3 className="size-7" strokeWidth={2.2} />}
                         </span>
-                        <strong className="text-[14px] text-[#344054]">{businessState === "loading" ? "正在同步" : "暂无数据"}</strong>
-                        <span className="text-[13px] leading-6">{businessState === "loading" ? (businessProgress || "正在读取经营数据") : "请选择左侧店铺或调整时间范围"}</span>
+                        <strong className="text-[14px] text-[#344054]">{businessState === "loading" ? "正在读取" : "暂无数据"}</strong>
+                        <span className="text-[13px] leading-6">{businessState === "loading" ? (businessProgress || "正在读取最近数据") : selectedIds.size ? "暂无数据，请点击右上角“刷新数据”" : "请先选择左侧店铺"}</span>
                       </div>
                     </td>
                   </tr>

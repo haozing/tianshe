@@ -28,7 +28,7 @@ interface FetchStoresPayload {
 
 interface LoginDetectionResult {
   ok: boolean;
-  source: "role-list" | "api" | "home-page" | "timeout";
+  source: "role-list" | "api" | "home-page" | "timeout" | "closed";
   message: string;
   shopListResult?: RequestPlanResult;
   currentResult?: RequestPlanResult;
@@ -66,6 +66,45 @@ function progress(args: FetchStoresPayload, value: number, message: string) {
     status: "running",
     progress: value,
     message
+  });
+}
+
+async function loginWindowClosed(native: ReturnType<typeof requireChihuNative>, winId: number) {
+  if (native.windows.getInfo) {
+    const info = await native.windows.getInfo({ winId }).catch(() => undefined);
+    if (info === null) return true;
+  }
+  if (native.windows.isDestroyed) {
+    return await native.windows.isDestroyed({ winId }).then((value) => value === true).catch(() => false);
+  }
+  return false;
+}
+
+function closedLoginDetection(roleNames: string[], isHomePage: boolean): LoginDetectionResult {
+  return {
+    ok: false,
+    source: "closed",
+    message: "登录窗口已关闭，获取店铺任务已取消。",
+    roleNames,
+    isHomePage
+  };
+}
+
+function storeProgress(args: FetchStoresPayload, value: number, store: DoudianStoreSummary, index: number, total: number) {
+  const loginStatus = store.status === "online" ? "登录有效" : store.status === "offline" ? "登录失效" : "待复核";
+  dispatchDoudianProgress({
+    operationId: args.operationId,
+    taskType: "fetchDoudianStores",
+    status: "running",
+    progress: value,
+    message: `已获取 ${index}/${total}：${store.shopName}（${store.shopId}）· ${loginStatus}`,
+    store: {
+      shopId: store.shopId,
+      shopName: store.shopName,
+      status: store.status,
+      index,
+      total
+    }
   });
 }
 
@@ -292,7 +331,7 @@ function importActivationLogPayload(store: DoudianStoreSummary, activation: Impo
   };
 }
 
-async function activateImportedStore(adapter: DoudianAdapterPayload, store: DoudianStoreSummary): Promise<ImportActivationResult> {
+async function activateImportedStore(adapter: DoudianAdapterPayload, store: DoudianStoreSummary, args?: FetchStoresPayload): Promise<ImportActivationResult> {
   const native = requireChihuNative();
   const context = { shopId: store.shopId, shopName: store.shopName };
   const report = async (activation: ImportActivationResult) => {
@@ -328,6 +367,7 @@ async function activateImportedStore(adapter: DoudianAdapterPayload, store: Doud
       nodeIntegration: false,
       contextIsolation: true
     });
+    args?.trackWindow?.(winId);
     const bootWaitMs = Math.max(0, policyNumber(adapter.adapter, "businessData.activateBootWaitMs", 1200));
     if (bootWaitMs) await delay(bootWaitMs);
     const selectTimeoutMs = adapterTimeout(adapter.adapter, "shopSelectMs", 15000);
@@ -338,6 +378,7 @@ async function activateImportedStore(adapter: DoudianAdapterPayload, store: Doud
     const readyHints = Array.isArray(adapter.adapter.strategies?.homePageReadyPathHints) ? adapter.adapter.strategies.homePageReadyPathHints : [];
     const selectDeadline = Date.now() + selectTimeoutMs;
     while (Date.now() < selectDeadline) {
+      if (args?.isCancelled?.()) throw new Error("cancelled");
       switchAttempts += 1;
       lastSwitchResult = await native.windows.command({
         winId,
@@ -363,6 +404,7 @@ async function activateImportedStore(adapter: DoudianAdapterPayload, store: Doud
     const verifyDeadline = Date.now() + verifyTimeoutMs;
     let lastState = beforeState;
     while (Date.now() < verifyDeadline) {
+      if (args?.isCancelled?.()) throw new Error("cancelled");
       const after = await readCurrentShop(adapter, store, context);
       lastState = withActivationIdFallback(currentShopState(after, adapter.adapter, store), store, lastSwitchResult);
       if (lastState.ok) {
@@ -391,6 +433,7 @@ async function activateImportedStore(adapter: DoudianAdapterPayload, store: Doud
       switchAttempts
     });
   } catch (error) {
+    if (args?.isCancelled?.() || (error instanceof Error && error.message === "cancelled")) throw error;
     return await report({
       ok: false,
       activateUrl,
@@ -426,17 +469,14 @@ async function importMockStores(args: FetchStoresPayload): Promise<DoudianStoreR
   const records = mockStores
     .map((store, index) => normalizeStore(store, args.doudianAdapter, text(store.partition) || shopPartition(args.doudianAdapter, store, index), index))
     .filter((store): store is DoudianStoreSummary => !!store);
-  const changed = await upsertStoreLedgers(records);
-  const details = changed.map((store, index) => detailForStore(store, index + 1, changed.length));
-  for (const item of details) {
-    dispatchDoudianProgress({
-      operationId: args.operationId,
-      taskType: "fetchDoudianStores",
-      status: "running",
-      progress: Math.round(((item.index || 1) / Math.max(details.length, 1)) * 100),
-      message: item.message
-    });
+  const changed: DoudianStoreSummary[] = [];
+  for (const [index, record] of records.entries()) {
+    const [saved] = await upsertStoreLedgers([record]);
+    if (!saved) continue;
+    changed.push(saved);
+    storeProgress(args, Math.round(((index + 1) / Math.max(records.length, 1)) * 100), saved, index + 1, records.length);
   }
+  const details = changed.map((store, index) => detailForStore(store, index + 1, changed.length));
   return {
     ...(await listStoreLedger()),
     ok: true,
@@ -464,7 +504,7 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
   const native = requireChihuNative();
   const partition = sourcePartition(adapter, args.operationId);
   let loginWinId: number | null = null;
-  progress(args, 5, "Opening Doudian login window");
+  progress(args, 5, "正在打开抖店登录窗口");
 
   try {
     loginWinId = await native.windows.open({
@@ -480,16 +520,19 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
     });
     args.trackWindow?.(loginWinId);
 
-    progress(args, 10, "Waiting for Doudian login state");
+    progress(args, 10, "等待用户完成抖店登录");
     const detection = await waitForLoginDetection(loginWinId, partition, args);
     progress(args, 30, detection.message);
     if (!detection.ok) {
+      const cancelled = detection.source === "closed";
       return {
         ...(await listStoreLedger()),
         ok: false,
-        status: "login-timeout",
+        status: cancelled ? "cancelled" : "login-timeout",
         operationId: args.operationId,
-        message: "未检测到抖店登录完成，请完成登录后重试或确认账号有店铺权限。",
+        message: cancelled
+          ? "已取消获取店铺：登录窗口已关闭。"
+          : "未检测到抖店登录完成，请完成登录后重试或确认账号有店铺权限。",
         details: { imported: [], failed: [] }
       };
     }
@@ -500,7 +543,7 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
     let currentResult = detection.currentResult;
     let detectedStores = detection.stores || [];
     if (!detectedStores.length && (!shopListResult || !currentResult)) {
-      progress(args, 40, "Fetching Doudian store list");
+      progress(args, 40, "正在获取抖店店铺列表");
       [shopListResult, currentResult] = await Promise.all([
         runDoudianRequestPlan(adapter, { partition, planKey: "shopList" }),
         runDoudianRequestPlan(adapter, { partition, planKey: "currentShop" })
@@ -524,7 +567,7 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
       };
     }
 
-    const records: DoudianStoreSummary[] = [];
+    const changed: DoudianStoreSummary[] = [];
     const failed: DoudianRunDetail[] = [];
     for (const [index, shop] of sourceStores.entries()) {
       if (args.isCancelled?.()) throw new Error("cancelled");
@@ -548,19 +591,35 @@ export async function runFetchDoudianStoresTask(args: FetchStoresPayload): Promi
         };
       }
       progress(args, Math.max(60, Math.round(((index + 1) / sourceStores.length) * 85)), `${record.shopName} login copied`);
-      const activation = await activateImportedStore(adapter, record);
+      const activation = await activateImportedStore(adapter, record, args);
       if (activation.ok) {
         const confirmedRecord = mergeConfirmedStore(record, activation, adapter, index);
-        records.push(confirmedRecord);
-        progress(args, Math.max(65, Math.round(((index + 1) / sourceStores.length) * 95)), `${confirmedRecord.shopName} active`);
+        const [saved] = await upsertStoreLedgers([confirmedRecord]);
+        if (saved) {
+          changed.push(saved);
+          storeProgress(args, Math.max(65, Math.round(((index + 1) / sourceStores.length) * 95)), saved, index + 1, sourceStores.length);
+        }
       } else {
         await native.cookies.clear({ partition: targetPartition }).catch(() => null);
-        failed.push(failureDetail(record, activation.message || "target shop not confirmed after import", activation));
-        progress(args, Math.max(65, Math.round(((index + 1) / sourceStores.length) * 95)), `${record.shopName} activation failed`);
+        const failure = failureDetail(record, activation.message || "target shop not confirmed after import", activation);
+        failed.push(failure);
+        const failedRecord: DoudianStoreSummary = {
+          ...record,
+          status: "check_failed",
+          lastCheckStatus: "check_failed",
+          lastCheckMessage: "登录态未确认，需重新登录",
+          lastResult: "待复核",
+          lastResultAt: nowIso(),
+          lastFailureReason: failure.reason || "activate-store-failed",
+          lastFailureMessage: failure.message
+        };
+        const [saved] = await upsertStoreLedgers([failedRecord]);
+        if (saved) {
+          storeProgress(args, Math.max(65, Math.round(((index + 1) / sourceStores.length) * 95)), saved, index + 1, sourceStores.length);
+        }
       }
     }
 
-    const changed = await upsertStoreLedgers(records);
     const details = changed.map((store, index) => detailForStore(store, index + 1, changed.length));
     return {
       ...(await listStoreLedger()),
@@ -656,6 +715,7 @@ async function waitForLoginDetection(winId: number, partition: string, args: Fet
   }
   while (Date.now() < deadline) {
     if (args.isCancelled?.()) throw new Error("cancelled");
+    if (await loginWindowClosed(native, winId)) return closedLoginDetection(lastRoleNames, isHomePage);
     const roleNames = await native.windows.command({
       winId,
       command: "collect-role-shop-names",
@@ -682,11 +742,14 @@ async function waitForLoginDetection(winId: number, partition: string, args: Fet
       }
     }
 
+    if (await loginWindowClosed(native, winId)) return closedLoginDetection(lastRoleNames, isHomePage);
+
     isHomePage = !!(await native.windows.command({
       winId,
       command: "is-home-page",
       timeoutMs: probeEvalTimeoutMs
     }).catch(() => false));
+    if (await loginWindowClosed(native, winId)) return closedLoginDetection(lastRoleNames, isHomePage);
     homePageAttempts = isHomePage ? homePageAttempts + 1 : 0;
 
     const [shopListResult, currentResult] = await Promise.all([

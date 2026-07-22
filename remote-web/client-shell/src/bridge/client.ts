@@ -201,7 +201,11 @@ export async function listDoudianStores(): Promise<DoudianStoreResult> {
   return listStoreLedger();
 }
 
-export async function fetchDoudianStores(operationId?: string, repairShopIds?: string[]): Promise<DoudianStoreResult> {
+export async function fetchDoudianStores(
+  operationId?: string,
+  repairShopIds?: string[],
+  onStarted?: (operationId: string) => void
+): Promise<DoudianStoreResult> {
   const args = await withDoudianAdapter({
     ...(operationId ? { operationId } : {}),
     ...(repairShopIds?.length ? { repairShopIds } : {})
@@ -217,10 +221,14 @@ export async function fetchDoudianStores(operationId?: string, repairShopIds?: s
       repairShopIds,
       timeoutMs: loginTimeoutMs
     }
-  }, loginTimeoutMs + 60000);
+  }, loginTimeoutMs + 60000, onStarted);
 }
 
-export async function refreshDoudianStoreStatus(shopIds?: string[], operationId?: string): Promise<DoudianStoreResult> {
+export async function refreshDoudianStoreStatus(
+  shopIds?: string[],
+  operationId?: string,
+  onStarted?: (operationId: string) => void
+): Promise<DoudianStoreResult> {
   const args = await withDoudianAdapter({ shopIds: shopIds || [], ...(operationId ? { operationId } : {}) });
   return runDoudianStoreTask({
     taskType: "refreshDoudianStoreStatus",
@@ -231,7 +239,7 @@ export async function refreshDoudianStoreStatus(shopIds?: string[], operationId?
       doudianAdapter: args.doudianAdapter,
       shopIds: shopIds || []
     }
-  }, 180000);
+  }, 180000, onStarted);
 }
 
 export async function syncDoudianProductCatalog(args: {
@@ -269,7 +277,7 @@ export async function fetchDoudianBusinessData(args: {
   endDate?: string;
   operationId?: string;
   forceAdapter?: boolean;
-} = {}): Promise<DoudianBusinessDataResult> {
+} = {}, onStarted?: (operationId: string) => void): Promise<DoudianBusinessDataResult> {
   const nextArgs = await withDoudianAdapter({
     shopIds: args.shopIds || [],
     ...(args.datePreset ? { datePreset: args.datePreset } : {}),
@@ -291,7 +299,7 @@ export async function fetchDoudianBusinessData(args: {
     ruleVersion: nextArgs.doudianAdapter.scripts?.version || "",
     metadata: { dedupeKey, replaceActive: true },
     payload: nextArgs
-  }, 900000) as Promise<DoudianBusinessDataResult>;
+  }, 900000, onStarted) as Promise<DoudianBusinessDataResult>;
 }
 
 export async function fetchDoudianBusinessDataLatest(args: {
@@ -744,6 +752,8 @@ export async function restoreDoudianOpportunityPipelineTask(): Promise<DoudianOp
   const records = await resubscribeDoudianTasks();
   return records
     .filter((record) => record.taskType === "opportunityPipelineSubmit")
+    .filter((record) => (record as DoudianOperationRecord & { runnerAlive?: boolean }).runnerAlive === true)
+    .filter((record) => record.status === "running" || record.status === "cancelling")
     .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
 }
 

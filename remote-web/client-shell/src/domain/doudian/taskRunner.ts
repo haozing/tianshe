@@ -30,6 +30,7 @@ interface RunningTask {
   mutation: boolean;
   inFlightMutations: number;
   mutationStarted: boolean;
+  terminalPosted?: boolean;
   timer?: number;
   heartbeatTimer?: number;
   cleanup?: () => Promise<void> | void;
@@ -80,7 +81,9 @@ function installProgressForwarder(channel: RunnerChannel) {
       type: "task:progress",
       operationId: detail.operationId,
       progress: detail.progress,
-      message: detail.message
+      message: detail.message,
+      store: detail.store,
+      business: detail.business
     });
   };
   window.addEventListener(DOUDIAN_PROGRESS_EVENT, listener);
@@ -99,9 +102,15 @@ function startTask(channel: RunnerChannel, message: Extract<DoudianTaskMessage, 
 }
 
 function startHeartbeat(channel: RunnerChannel, operationId: string, state: RunningTask) {
-  const send = () => post(channel, { type: "task:heartbeat", operationId, inFlightMutations: state.inFlightMutations });
+  const send = () => post(channel, {
+    type: "task:heartbeat",
+    operationId,
+    inFlightMutations: state.inFlightMutations,
+    mutationStarted: state.mutationStarted
+  });
   send();
   state.heartbeatTimer = window.setInterval(send, 2000);
+  return send;
 }
 
 function stopHeartbeat(state: RunningTask) {
@@ -206,25 +215,28 @@ async function runDomainTask(channel: RunnerChannel, operationId: string, task: 
     if (!native?.windows.destroy) return;
     await Promise.all((state.windows || []).map((winId) => native.windows.destroy({ winId }).catch(() => null)));
   };
-  const hydratedPayload = await hydrateTaskPayload(task.payload || {});
-  const payload = {
-    operationId,
-    ...hydratedPayload,
-    isCancelled: () => state.cancelled,
-    beginMutation: () => {
-      state.mutationStarted = true;
-      state.inFlightMutations += 1;
-    },
-    endMutation: () => {
-      state.inFlightMutations = Math.max(0, state.inFlightMutations - 1);
-    },
-    trackWindow: (winId: number) => {
-      if (Number.isInteger(winId)) state.windows?.push(winId);
-    }
-  };
   runningTasks.set(operationId, state);
-  startHeartbeat(channel, operationId, state);
+  const reportHeartbeat = startHeartbeat(channel, operationId, state);
   try {
+    const hydratedPayload = await hydrateTaskPayload(task.payload || {});
+    const payload = {
+      operationId,
+      ...hydratedPayload,
+      isCancelled: () => state.cancelled,
+      beginMutation: () => {
+        state.mutationStarted = true;
+        state.inFlightMutations += 1;
+        reportHeartbeat();
+      },
+      endMutation: () => {
+        state.inFlightMutations = Math.max(0, state.inFlightMutations - 1);
+        reportHeartbeat();
+      },
+      trackWindow: (winId: number) => {
+        if (Number.isInteger(winId)) state.windows?.push(winId);
+      }
+    };
+    if (state.cancelled) throw new Error("cancelled");
     let result: unknown = null;
     if (task.taskType === "fetchDoudianStores") {
       result = await runFetchDoudianStoresTask({
@@ -296,7 +308,9 @@ async function runDomainTask(channel: RunnerChannel, operationId: string, task: 
     } else {
       throw new Error(`unsupported task type: ${task.taskType}`);
     }
-    if (state.cancelled && !state.mutation) {
+    if (state.terminalPosted) {
+      // Cancellation already reported immediately by the command handler.
+    } else if (state.cancelled && !state.mutation) {
       post(channel, { type: "task:result", operationId, resultSummary: "cancelled", result: { ok: false, status: "cancelled", message: "已取消任务" } });
     } else if (state.cancelled) {
       const outcome = mutationCancellationOutcome({ mutation: true, mutationStarted: state.mutationStarted, result });
@@ -310,7 +324,17 @@ async function runDomainTask(channel: RunnerChannel, operationId: string, task: 
       post(channel, { type: "task:result", operationId, resultSummary: "completed", result: channelResult(task, result) });
     }
   } catch (error) {
-    post(channel, { type: "task:error", operationId, error: error instanceof Error ? error.message : String(error) });
+    if (!state.terminalPosted) {
+      post(channel, state.cancelled && !state.mutation
+        ? { type: "task:result", operationId, resultSummary: "cancelled", result: { ok: false, status: "cancelled", message: "已取消任务" } }
+        : {
+            type: "task:error",
+            operationId,
+            error: error instanceof Error ? error.message : String(error),
+            mutationStarted: state.mutationStarted,
+            inFlightMutations: state.inFlightMutations
+          });
+    }
   } finally {
     stopHeartbeat(state);
     await state.cleanup?.();
@@ -331,11 +355,13 @@ export function installDoudianTaskRunner() {
   };
   const handleCancel = async (operationId: string) => {
     if (!isTargetTask(operationId)) return false;
-    await cancelTask(operationId);
     const task = runningTasks.get(operationId);
-    if (task?.mutation) return true;
+    if (!task) return false;
+    await cancelTask(operationId);
+    if (task.mutation) return true;
+    task.terminalPosted = true;
     post(channel, { type: "task:result", operationId, resultSummary: "cancelled", result: { ok: false, status: "cancelled", message: "已取消任务" } });
-    if (task) stopHeartbeat(task);
+    stopHeartbeat(task);
     runningTasks.delete(operationId);
     return true;
   };

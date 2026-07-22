@@ -1,10 +1,31 @@
 {
   "schemaVersion": 1,
   "productName": "赤狐管家",
-  "currentVersion": "2.2.4-bulk-delete-segmented-scan",
-  "updatedAt": "2026-07-22T10:13:21+08:00",
-  "summary": "修复商品数超过单次分页窗口时批量删除扫描被阻断的问题。",
+  "currentVersion": "2.2.5-workflow-usability",
+  "updatedAt": "2026-07-22T18:09:35+08:00",
+  "summary": "优化卡密续费、店铺管理、经营数据和活动营销的日常操作体验。",
   "releases": [
+    {
+      "version": "2.2.5-workflow-usability",
+      "date": "2026-07-22",
+      "sections": [
+        {
+          "title": "优化",
+          "items": [
+            "卡密兑换失败时保留设备续费窗口并展示明确错误，成功后才关闭窗口。",
+            "店铺获取成功后不再显示结果面板和右上角提示，失败或部分失败时仍保留明细。",
+            "经营数据切换页面时不再自动刷新，改由用户点击刷新按钮手动同步。",
+            "活动管理新增当前筛选结果全选、活动总数与已选数量，并支持按店铺筛选和查看各店铺活动数。"
+          ]
+        },
+        {
+          "title": "稳定性",
+          "items": [
+            "完善商机提交任务的写入安全、恢复状态与结果判断，避免不确定结果被误报。"
+          ]
+        }
+      ]
+    },
     {
       "version": "2.2.4-bulk-delete-segmented-scan",
       "date": "2026-07-22",

@@ -59,7 +59,7 @@ test("official goods business status follows the verified nested base response c
   assert.equal(parseOfficialBusinessStatus({ data: [] }, mappings.clueGoodsSuccessStatusPaths, mappings.clueGoodsSuccessCodes).found, false);
 });
 
-test("all published adapter variants keep official validation fail closed", async () => {
+test("all published adapter variants keep official validation in observation mode", async () => {
   for (const url of [configUrl, pilotConfigUrl]) {
     const config = await readJson(url);
     const policy = config.policies.opportunityReport;

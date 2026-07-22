@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   evaluateInputScanCoverage,
+  officialDecisionAllowsWrite,
   officialEnforcementReady,
   officialWriteAllowed,
   validateOfficialCandidate
@@ -37,7 +38,41 @@ test("enforce remains closed until contracts and high-confidence anchors are ena
   assert.equal(officialWriteAllowed("enforce", "complete"), true);
   assert.equal(officialWriteAllowed("enforce", "partial_coverage"), false);
   assert.equal(officialWriteAllowed("enforce", "failed"), false);
-  assert.equal(officialWriteAllowed("observe", "complete"), false);
+  assert.equal(officialWriteAllowed("observe", "complete"), true);
+  assert.equal(officialWriteAllowed("observe", "partial_coverage", "report"), true);
+  assert.equal(officialWriteAllowed("observe", "failed", "report"), false);
+  assert.equal(officialWriteAllowed("disabled", "complete", "report"), false);
+});
+
+test("observe records official decisions without blocking locally ready candidates", () => {
+  assert.equal(officialDecisionAllowsWrite({
+    mode: "observe",
+    writeEnabled: true,
+    locallyEligible: true,
+    localStatus: "ready",
+    validationStatus: "unknown"
+  }), true);
+  assert.equal(officialDecisionAllowsWrite({
+    mode: "observe",
+    writeEnabled: true,
+    locallyEligible: false,
+    localStatus: "alternative",
+    validationStatus: "verified"
+  }), false);
+  assert.equal(officialDecisionAllowsWrite({
+    mode: "enforce",
+    writeEnabled: true,
+    locallyEligible: true,
+    localStatus: "ready",
+    validationStatus: "unknown"
+  }), false);
+  assert.equal(officialDecisionAllowsWrite({
+    mode: "enforce",
+    writeEnabled: true,
+    locallyEligible: true,
+    localStatus: "ready",
+    validationStatus: "verified"
+  }), true);
 });
 
 function words(overrides = {}) {

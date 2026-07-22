@@ -58,8 +58,26 @@ export function officialEnforcementReady(args: {
     && args.anchorEnforcementMode === "enforce_high_confidence";
 }
 
-export function officialWriteAllowed(mode: "disabled" | "observe" | "enforce" | "legacy", inputCoverageStatus?: "complete" | "partial_coverage" | "failed") {
-  return (mode === "enforce" || mode === "legacy") && inputCoverageStatus === "complete";
+export function officialWriteAllowed(
+  mode: "disabled" | "observe" | "enforce" | "legacy",
+  inputCoverageStatus?: "complete" | "partial_coverage" | "failed",
+  inputCoverageMode: "enforce" | "report" = "enforce"
+) {
+  const coverageAllowsWrite = inputCoverageStatus === "complete"
+    || (inputCoverageMode === "report" && inputCoverageStatus === "partial_coverage");
+  return mode !== "disabled" && coverageAllowsWrite;
+}
+
+export function officialDecisionAllowsWrite(args: {
+  mode: "observe" | "enforce";
+  writeEnabled: boolean;
+  locallyEligible: boolean;
+  localStatus: string;
+  validationStatus?: OfficialValidationStatus;
+}) {
+  if (!args.writeEnabled) return false;
+  if (args.mode === "observe") return args.locallyEligible && args.localStatus === "ready";
+  return args.validationStatus === "verified";
 }
 
 export interface OfficialCandidateDecision {

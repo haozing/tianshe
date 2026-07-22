@@ -11,6 +11,7 @@ import {
   redeemLicense,
   type LicenseStatus
 } from "./bridge/license";
+import { isSuccessfulLicenseRedemption } from "./bridge/licenseRedemption";
 import {
   initStorage,
   refreshStorageHealth,
@@ -452,9 +453,22 @@ export function App() {
     setLicenseMessage("");
     try {
       const redeemed = await redeemLicense(cardKey);
+      const redemptionSucceeded = isSuccessfulLicenseRedemption(redeemed);
       setLicenseStatus(redeemed);
-      setLicenseMessage(redeemed.status === "redeemed_refresh_failed" ? redeemed.message || "卡密兑换成功，但授权状态刷新失败。" : redeemed.paidAccessGranted ? "卡密兑换成功，已绑定当前设备。" : redeemed.message || "卡密兑换失败");
-      if (redeemed.paidAccessGranted) setLicenseDialogOpen(false);
+      setLicenseMessage(redeemed.status === "redeemed_refresh_failed" ? redeemed.message || "卡密兑换成功，但授权状态刷新失败。" : redemptionSucceeded ? "卡密兑换成功，已绑定当前设备。" : redeemed.message || "卡密兑换失败，请检查卡密后重试。");
+      if (redemptionSucceeded) setLicenseDialogOpen(false);
+      return redemptionSucceeded;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLicenseStatus((current) => ({
+        ...current,
+        ok: false,
+        status: "redeem_error",
+        reason: "CARD_REDEEM_FAILED",
+        message
+      }));
+      setLicenseMessage(message || "卡密兑换失败，请稍后重试。");
+      return false;
     } finally {
       setLicenseRedeeming(false);
     }

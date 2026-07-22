@@ -49,7 +49,7 @@ function installSmokeCheck(win) {
 
     probing = true;
     try {
-      const probeTimeoutCapMs = ["bridge", "freemium"].includes(scenario) ? 40000 : ["marketing-read", "marketing-write"].includes(scenario) ? 240000 : 10000;
+      const probeTimeoutCapMs = ["bridge", "freemium"].includes(scenario) ? 40000 : ["marketing-read", "marketing-write"].includes(scenario) ? 240000 : scenario === "business-progress" ? 25000 : 10000;
       const probeTimeoutMs = Math.min(probeTimeoutCapMs, Math.max(3000, timeoutMs - (Date.now() - startedAt) - 500));
       const result = await Promise.race([
         win.webContents.executeJavaScript(`
@@ -154,6 +154,25 @@ function installSmokeCheck(win) {
               result.freemium.forgedRunnerDenied &&
               result.freemium.forgedWindowCommandDenied &&
               result.freemium.arbitraryEvalAbsent;
+            resolve(result);
+            return;
+          }
+
+          if (result.scenario === "business-progress") {
+            try {
+              const runtimeDeadline = Date.now() + 10000;
+              while (!window.chihuDoudianStoreRuntime && Date.now() < runtimeDeadline) await sleep(100);
+              if (!window.chihuDoudianStoreRuntime) throw new Error("chihuDoudianStoreRuntime missing");
+              result.businessProgress = await withTimeout("businessProgressSelfCheck", window.chihuDoudianStoreRuntime.businessDataSelfCheck(), 15000);
+              result.businessProgressOk = result.businessProgress.ok === true &&
+                result.businessProgress.latestOk === true &&
+                result.businessProgress.datePresetOk === true &&
+                result.businessProgress.metadataOk === true &&
+                result.businessProgress.progressOk === true;
+            } catch (error) {
+              result.businessProgressOk = false;
+              result.businessProgressError = error && error.message ? error.message : String(error);
+            }
             resolve(result);
             return;
           }
@@ -1578,7 +1597,8 @@ function installSmokeCheck(win) {
                 metricASelfCheck.ok === true &&
                 metricASelfCheck.latestOk === true &&
                 metricASelfCheck.datePresetOk === true &&
-                metricASelfCheck.metadataOk === true;
+                metricASelfCheck.metadataOk === true &&
+                metricASelfCheck.progressOk === true;
 
               bridge.steps.push("remoteMetricB");
               const metricBSelfCheck = await withTimeout("remoteMetricBSelfCheck", storeRuntime["funds" + "DataSelfCheck"](), 10000);
@@ -1722,6 +1742,7 @@ function installSmokeCheck(win) {
         scenario === "ui-contract" ? result.uiContractOk :
         scenario === "maintenance" ? result.maintenanceOk :
         scenario === "sqlite" ? result.sqliteOk :
+        scenario === "business-progress" ? result.businessProgressOk :
         scenario === "marketing-write" ? result.marketingWriteOk :
         scenario === "marketing-read" ? result.marketingReadOk :
         result.bridgeOk;
@@ -1732,7 +1753,7 @@ function installSmokeCheck(win) {
         return;
       }
 
-      if (["marketing-read", "marketing-write"].includes(scenario)) {
+      if (["marketing-read", "marketing-write", "business-progress"].includes(scenario)) {
         clearTimeout(timer);
         finish(1, result);
         return;

@@ -59,6 +59,7 @@ import {
 } from "./opportunity/matching";
 import {
   evaluateInputScanCoverage,
+  officialDecisionAllowsWrite,
   officialEnforcementReady,
   officialWriteAllowed,
   parseOfficialBusinessStatus,
@@ -72,6 +73,8 @@ import {
   type OfficialWordsSemantics
 } from "./opportunity/officialValidation";
 import { isUnresolvedSubmitState, logicalSubmitAttemptId, recoverUnresolvedSubmitCandidate } from "./opportunity/submitRecovery.ts";
+import { activeSubmitTasksForRun, submitWorkerProgress } from "./opportunity/submitWorkerState.ts";
+import { pipelineDiagnosticsBlockCompletion, pipelineSubmitResultMessage } from "./opportunity/pipelineResult.ts";
 
 const clueScanStore = "opportunity_clue_scan_runs_v1" as const;
 const clueCandidateStore = "opportunity_clue_candidates_v1" as const;
@@ -118,7 +121,7 @@ const productCategoryIdFallbackPaths = [
   "category_detail.first_cid",
   "categoryDetail.firstCid"
 ];
-let pipelineSubmitWorkerRunning = false;
+let pipelineSubmitWorkerTail: Promise<unknown> = Promise.resolve();
 const cancelledPipelineRunIds = new Set<string>();
 
 interface OpportunityArgs {
@@ -157,6 +160,8 @@ interface OpportunityArgs {
   mockOfficialGoodsContract?: Record<string, OfficialGoodsContractMode>;
   mockPlatformAuditByAttempt?: Record<string, "pending" | "approved" | "rejected">;
   isCancelled?: () => boolean;
+  beginMutation?: () => void;
+  endMutation?: () => void;
 }
 
 interface ClueScanRunRecord {
@@ -1420,10 +1425,12 @@ let submitAttemptMigrationPromise: Promise<boolean> | null = null;
 const submitAttemptMigrationMetaId = "opportunity-submit-attempts-v2-migration";
 
 function productListContext(filters: DoudianOpportunityFilters = {}, page: number, pageSize: number, categoryLeafId = "") {
+  const idNameCode = text(filters.keyword);
   return {
     page: String(page),
     pageSize: String(pageSize),
-    keyword: text(filters.keyword),
+    keyword: idNameCode,
+    idNameCode,
     categoryLeafId: text(categoryLeafId || filters.categoryLeafId),
     startTime: text(filters.startTime || thirtyDaysAgo()),
     endTime: text(filters.endTime || businessDateKey())
@@ -1685,13 +1692,17 @@ async function updatePipelineStoreRunProgress(id: string, patch: Partial<Pipelin
 }
 
 async function loadPipelineSubmitTasksForRun(runId: string, maxItems = 10000) {
+  return loadPipelineSubmitTasksForRunStrict(runId, maxItems).catch(() => []);
+}
+
+async function loadPipelineSubmitTasksForRunStrict(runId: string, maxItems = 10000) {
   const id = text(runId);
   if (!id) return [];
   return repositoryGetAllByPrefix<PipelineSubmitTaskRecord>(
     pipelineSubmitTaskStore,
     pipelineRunRecordPrefix(id),
     { pageSize: 500, maxItems }
-  ).catch(() => []);
+  );
 }
 
 async function loadPipelineCandidatesForRun(runId: string, maxItems = latestPipelineCandidatePreviewLimit) {
@@ -2990,13 +3001,19 @@ async function refreshPipelineRunSummary(runId: string) {
     scopedStoreRuns.filter((item) => item.status === "queued" || item.status === "running").length;
   const inputCoveragePartialCount = scopedStoreRuns.filter((item) => item.inputCoverage && (item.inputCoverage.productScanStatus !== "complete" || item.inputCoverage.clueScanStatus !== "complete")).length;
   const validationPartialCount = scopedTasks.filter((item) => item.validationStatus === "partial" || item.validationStatus === "failed").length;
+  const diagnosticsBlockCompletion = pipelineDiagnosticsBlockCompletion({
+    inputCoverageReportMode: Number(run.summary?.inputCoverageReportMode || 0) === 1,
+    inputCoveragePartialCount,
+    officialValidationEnforceMode: Number(run.summary?.officialValidationEnforceMode || 0) === 1,
+    validationPartialCount
+  });
   const status: PipelineRunRecord["status"] = run.status === "cancelled"
     ? "cancelled"
     : runningCount
       ? "running"
       : failedCount
         ? (submittedCount || skippedCount ? "partial" : "failed")
-        : inputCoveragePartialCount || validationPartialCount
+        : diagnosticsBlockCompletion
           ? "partial"
           : "ok";
   const safetySkippedCount = hasMutationSummary ? Number(mutationSummary!.safetySkipped || 0) : taskSafetySkippedCount;
@@ -4752,7 +4769,14 @@ function productFailureMessages(message: string) {
   return failures;
 }
 
-async function submitWithRetry(payload: DoudianAdapterPayload, store: DoudianStoreSummary, body: Record<string, unknown>, shouldCancel?: () => boolean) {
+async function submitWithRetry(
+  payload: DoudianAdapterPayload,
+  store: DoudianStoreSummary,
+  body: Record<string, unknown>,
+  shouldCancel?: () => boolean,
+  beginMutation?: () => void,
+  endMutation?: () => void
+) {
   const planKey = "opportunitySubmitClue";
   const retryLimit = policyNumber(payload.adapter, "opportunityReport.submitRetryLimit", 1, 1, 3);
   const retryDelay = policyNumber(payload.adapter, "opportunityReport.submitRetryDelayMs", 5900, 0, 30000);
@@ -4760,7 +4784,14 @@ async function submitWithRetry(payload: DoudianAdapterPayload, store: DoudianSto
   let attemptCount = 0;
   for (let attempt = 0; attempt < retryLimit; attempt += 1) {
     assertNotCancelled(shouldCancel);
-    response = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context: bodyContext(body), shouldCancel });
+    response = await runDoudianRequestPlan(payload, {
+      partition: store.partition,
+      planKey,
+      context: bodyContext(body),
+      shouldCancel,
+      beginMutation,
+      endMutation
+    });
     attemptCount += Math.max(1, Math.floor(Number(response.attemptCount || 1)));
     const message = responseMessage(response);
     if (submitResponseOk(response) || !transientSubmitMessage(message, response)) break;
@@ -4769,7 +4800,15 @@ async function submitWithRetry(payload: DoudianAdapterPayload, store: DoudianSto
   return { response, attemptCount };
 }
 
-async function editTitles(payload: DoudianAdapterPayload, store: DoudianStoreSummary, products: DoudianOpportunityProductRow[], nextTitles: Map<string, string>, dryRun = false) {
+async function editTitles(
+  payload: DoudianAdapterPayload,
+  store: DoudianStoreSummary,
+  products: DoudianOpportunityProductRow[],
+  nextTitles: Map<string, string>,
+  dryRun = false,
+  beginMutation?: () => void,
+  endMutation?: () => void
+) {
   const productIds = products.map((product) => product.productId).filter(Boolean);
   if (!productIds.length || !nextTitles.size) return { ok: true, message: "" };
   if (dryRun) return { ok: true, message: "dry-run title edit skipped" };
@@ -4780,7 +4819,9 @@ async function editTitles(payload: DoudianAdapterPayload, store: DoudianStoreSum
   const response = await runDoudianRequestPlan(payload, {
     partition: store.partition,
     planKey: "opportunityEditGoodsTitle",
-    context: bodyContext(body)
+    context: bodyContext(body),
+    beginMutation,
+    endMutation
   });
   return {
     ok: planOk(response, payload.adapter, "opportunityEditGoodsTitle"),
@@ -4944,6 +4985,8 @@ async function submitProductsForClue(args: {
   validatedByPipeline?: boolean;
   pipelineWords?: string[];
   shouldCancel?: () => boolean;
+  beginMutation?: () => void;
+  endMutation?: () => void;
   onRemoteSubmitStart?: (products: DoudianOpportunityProductRow[]) => Promise<void>;
 }) {
   const executions: DoudianOpportunityExecution[] = [];
@@ -5032,7 +5075,15 @@ async function submitProductsForClue(args: {
     return executions;
   }
   if (!args.dryRun) await assertMutationStoreActive(args.store);
-  const edit = await editTitles(args.payload, args.store, safeProducts, filtered.nextTitles, args.dryRun);
+  const edit = await editTitles(
+    args.payload,
+    args.store,
+    safeProducts,
+    filtered.nextTitles,
+    args.dryRun,
+    args.beginMutation,
+    args.endMutation
+  );
   if (!edit.ok) {
     executions.push(...executionForProducts({
       runId: args.runId,
@@ -5072,7 +5123,14 @@ async function submitProductsForClue(args: {
       assertNotCancelled(args.shouldCancel);
       await assertMutationStoreActive(args.store);
       await args.onRemoteSubmitStart?.(batch);
-      const submitResult = await submitWithRetry(args.payload, args.store, submitBody(args.clue, batch, args.store, args.module), args.shouldCancel);
+      const submitResult = await submitWithRetry(
+        args.payload,
+        args.store,
+        submitBody(args.clue, batch, args.store, args.module),
+        args.shouldCancel,
+        args.beginMutation,
+        args.endMutation
+      );
       const response = submitResult.response;
       const remoteCode = responseCode(response);
       const ok = submitResponseOk(response);
@@ -5215,7 +5273,9 @@ async function fetchClueSubmit(payload: DoudianAdapterPayload, args: Opportunity
           titleMatchMode: matchMode,
           titleUpdatePosition: updatePosition,
           module: "query",
-          dryRun: args.dryRun
+          dryRun: args.dryRun,
+          beginMutation: args.beginMutation,
+          endMutation: args.endMutation
         });
         executions.push(...nextExecutions);
       } catch (error) {
@@ -5343,7 +5403,9 @@ async function fetchProductSubmit(payload: DoudianAdapterPayload, args: Opportun
           titleMatchMode: matchMode,
           titleUpdatePosition: updatePosition,
           module: "search_page_query",
-          dryRun: args.dryRun
+          dryRun: args.dryRun,
+          beginMutation: args.beginMutation,
+          endMutation: args.endMutation
         }));
       }
     } catch (error) {
@@ -5592,7 +5654,9 @@ async function fetchPrematchSubmit(payload: DoudianAdapterPayload, args: Opportu
       titleMatchMode: matchMode,
       titleUpdatePosition: updatePosition,
       module: "search_page_query",
-      dryRun: args.dryRun
+      dryRun: args.dryRun,
+      beginMutation: args.beginMutation,
+      endMutation: args.endMutation
     });
     const attempts = args.dryRun ? 0 : await recordSubmitAttempts({ runId, matchRunId, candidate, executions: nextExecutions });
     const nextUsed = used + attempts;
@@ -5901,8 +5965,12 @@ async function validateTaskCandidatesOfficially(args: {
   const startedAt = nowIso();
   const startedMs = Date.now();
   const mode = officialValidationMode(args.payload.adapter);
-  const inputCoverageAllowsWrite = args.task.inputCoverageStatus === "complete";
-  const writeEnabled = officialWriteAllowed(mode, args.task.inputCoverageStatus);
+  const inputCoverageMode = policyText(args.payload.adapter, "opportunityReport.inputCoverageMode", "enforce") === "report"
+    ? "report"
+    : "enforce";
+  const writeEnabled = officialWriteAllowed(mode, args.task.inputCoverageStatus, inputCoverageMode);
+  const inputCoverageAllowsWrite = args.task.inputCoverageStatus === "complete"
+    || (inputCoverageMode === "report" && args.task.inputCoverageStatus === "partial_coverage");
   const validationPolicy = officialValidationPolicy(args.payload.adapter);
   const contractVersion = stableHash({
     words: policyText(args.payload.adapter, "opportunityReport.officialWordsContractVersion", "official-words-contract-unverified-v1"),
@@ -5911,7 +5979,7 @@ async function validateTaskCandidatesOfficially(args: {
     goodsContractMode: officialGoodsContractMode(args.payload.adapter)
   });
   if (mode === "legacy") {
-    const candidates = inputCoverageAllowsWrite
+    const candidates = writeEnabled
       ? args.candidates
       : args.candidates.map((candidate) => ({
           ...candidate,
@@ -5922,7 +5990,7 @@ async function validateTaskCandidatesOfficially(args: {
           skipReason: "input_coverage_not_complete"
         } satisfies DoudianOpportunityPrematchCandidate));
     return {
-      candidates, writeEnabled: inputCoverageAllowsWrite, status: "not_started", startedAt, finishedAt: nowIso(),
+      candidates, writeEnabled, status: "not_started", startedAt, finishedAt: nowIso(),
       wordsRequestCount: 0, officialWordCount: 0, goodsRequestCount: 0, cacheHitCount: 0, verifiedCount: 0, rejectedCount: 0,
       unknownCount: 0, budgetExhaustedCount: 0, distinctGroupCount: 0, skippedCount: 0,
       durationMs: Date.now() - startedMs, policyVersion: validationPolicy.version, contractVersion
@@ -5956,7 +6024,14 @@ async function validateTaskCandidatesOfficially(args: {
     const candidates = args.candidates.map((candidate) => {
       const submitState = text(candidate.submitStatus || candidate.status);
       const alreadyResolved = ["accepted", "submitted", "sending", "unknown", "failed", "cancelled", "quota_exhausted"].includes(submitState);
-      const canSubmit = writeEnabled && candidate.validationStatus === "verified" && !alreadyResolved;
+      const canSubmit = !alreadyResolved && officialDecisionAllowsWrite({
+        mode,
+        writeEnabled,
+        locallyEligible: candidate.eligible,
+        localStatus: candidate.status,
+        validationStatus: candidate.validationStatus
+      });
+      if (mode === "observe" && writeEnabled) return candidate;
       return {
         ...candidate,
         eligible: canSubmit,
@@ -6006,15 +6081,15 @@ async function validateTaskCandidatesOfficially(args: {
     budgetExhaustedCount += 1;
     resultById.set(candidate.id, {
       ...candidate,
-      eligible: false,
-      estimatedCost: 0,
-      status: "skipped",
+      eligible: mode === "observe" && writeEnabled ? candidate.eligible : false,
+      estimatedCost: mode === "observe" && writeEnabled ? candidate.estimatedCost : 0,
+      status: mode === "observe" && writeEnabled ? candidate.status : "skipped",
       validationStatus: "budget_exhausted",
       validationReason: reason,
       validatedAt: nowIso(),
       validationPolicyVersion: validationPolicy.version,
-      submitStatus: "skipped",
-      skipReason: "官方校验预算已耗尽"
+      submitStatus: mode === "observe" && writeEnabled ? candidate.submitStatus : "skipped",
+      skipReason: mode === "observe" && writeEnabled ? candidate.skipReason : "官方校验预算已耗尽"
     });
   };
   const byProduct = new Map<string, DoudianOpportunityPrematchCandidate[]>();
@@ -6087,12 +6162,19 @@ async function validateTaskCandidatesOfficially(args: {
       if (decision.status === "verified") verifiedCount += 1;
       else if (decision.status === "rejected") rejectedCount += 1;
       else unknownCount += 1;
-      const canSubmit = writeEnabled && decision.status === "verified";
+      const canSubmit = officialDecisionAllowsWrite({
+        mode,
+        writeEnabled,
+        locallyEligible: candidate.eligible,
+        localStatus: candidate.status,
+        validationStatus: decision.status
+      });
+      const observeWrite = mode === "observe" && writeEnabled;
       resultById.set(candidate.id, {
         ...candidate,
         eligible: canSubmit,
-        estimatedCost: canSubmit ? 1 : 0,
-        status: canSubmit ? "ready" : "skipped",
+        estimatedCost: canSubmit ? Math.max(1, Number(candidate.estimatedCost || 1)) : 0,
+        status: observeWrite ? candidate.status : canSubmit ? "ready" : "skipped",
         validationStatus: decision.status,
         validationReason: decision.reason,
         validatedAt: nowIso(),
@@ -6107,13 +6189,15 @@ async function validateTaskCandidatesOfficially(args: {
         officialGoodsMatched: decision.officialGoodsMatched,
         officialGoodsContractMode: goodsResult.contractMode,
         officialGoodsResponseHash: goodsResult.responseHash,
-        submitStatus: canSubmit ? "queued" : "skipped",
-        submitPriority: canSubmit ? "primary" : candidate.submitPriority,
-        fallbackSubmit: canSubmit ? false : candidate.fallbackSubmit,
+        submitStatus: observeWrite ? candidate.submitStatus : canSubmit ? "queued" : "skipped",
+        submitPriority: observeWrite ? candidate.submitPriority : canSubmit ? "primary" : candidate.submitPriority,
+        fallbackSubmit: observeWrite ? candidate.fallbackSubmit : canSubmit ? false : candidate.fallbackSubmit,
         submitModule: candidate.submitModule || "search_page_query",
         submitModuleDecisionVersion: policyText(args.payload.adapter, "opportunityReport.submitModuleDecisionVersion", "submit-module-existing-source-v1"),
-        skipReason: canSubmit
-          ? undefined
+        skipReason: observeWrite
+          ? candidate.skipReason
+          : canSubmit
+            ? undefined
           : decision.status === "verified" && !inputCoverageAllowsWrite
             ? "input_coverage_not_complete"
             : decision.reason
@@ -6122,16 +6206,22 @@ async function validateTaskCandidatesOfficially(args: {
       if (decision.status === "unknown" || decision.status === "budget_exhausted") blocked = true;
     }
   }
-  const candidates = args.candidates.map((candidate) => resultById.get(candidate.id) || ({
-    ...candidate,
-    eligible: false,
-    estimatedCost: 0,
-    status: "skipped",
-    submitStatus: "skipped",
-    validationStatus: "not_started",
-    validationReason: candidate.validationReason || "higher_rank_candidate_resolved",
-    skipReason: candidate.skipReason || "更高排名候选已完成官方决策"
-  } satisfies DoudianOpportunityPrematchCandidate));
+  const candidates: DoudianOpportunityPrematchCandidate[] = args.candidates.map((candidate) => resultById.get(candidate.id) || (mode === "observe" && writeEnabled
+    ? ({
+        ...candidate,
+        validationStatus: "not_started" as const,
+        validationReason: candidate.validationReason || "higher_rank_candidate_resolved"
+      } satisfies DoudianOpportunityPrematchCandidate)
+    : ({
+        ...candidate,
+        eligible: false,
+        estimatedCost: 0,
+        status: "skipped",
+        submitStatus: "skipped",
+        validationStatus: "not_started",
+        validationReason: candidate.validationReason || "higher_rank_candidate_resolved",
+        skipReason: candidate.skipReason || "更高排名候选已完成官方决策"
+      } satisfies DoudianOpportunityPrematchCandidate)));
   const finishedAt = nowIso();
   const status: PipelineSubmitTaskRecord["validationStatus"] = budgetExhaustedCount || unknownCount ? "partial" : "complete";
   return {
@@ -6156,20 +6246,23 @@ async function validateTaskCandidatesOfficially(args: {
   };
 }
 
-async function runSubmitWorker(payload: DoudianAdapterPayload, args: OpportunityArgs = {}) {
-  if (pipelineSubmitWorkerRunning) return { ok: true, skipped: true, reason: "worker-running" };
-  pipelineSubmitWorkerRunning = true;
-  try {
+async function executeSubmitWorker(payload: DoudianAdapterPayload, args: OpportunityArgs = {}) {
     const ledger = await listStoreLedger();
     const stores = ledger.stores || [];
     const scopedRunId = text(args.runId || args.operationId || args.sourceRunId);
     const workerId = `${scopedRunId || "global"}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    void reportDoudianDiagnostic({
+      category: "opportunity-pipeline",
+      event: "submit-worker-started",
+      runId: scopedRunId,
+      workerId
+    }, true);
     let processed = 0;
     while (true) {
       const nowMs = Date.now();
       const taskPool = scopedRunId
-        ? await loadPipelineSubmitTasksForRun(scopedRunId)
-        : await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []);
+        ? await loadPipelineSubmitTasksForRunStrict(scopedRunId)
+        : await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore);
       const tasks = taskPool
         .filter((task) => !scopedRunId || task.runId === scopedRunId)
         .filter((task) => task.status === "ready" || task.status === "queued" || (task.status === "running" && (!task.leaseExpiresAt || Date.parse(task.leaseExpiresAt) < nowMs)))
@@ -6208,6 +6301,16 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
       let taskCandidates = task.candidateIds
         .map((id) => taskCandidateById.get(id))
         .filter((candidate): candidate is DoudianOpportunityPrematchCandidate => Boolean(candidate));
+      dispatchPipelineProgress(args, submitWorkerProgress(0, taskCandidates.length), `商机提报队列已接管，待处理 ${taskCandidates.length} 项`);
+      void reportDoudianDiagnostic({
+        category: "opportunity-pipeline",
+        event: "submit-worker-task-claimed",
+        runId: task.runId,
+        taskId: task.id,
+        shopId: task.shopId,
+        candidateCount: taskCandidates.length,
+        workerId
+      }, true);
       const updatedCandidates: DoudianOpportunityPrematchCandidate[] = [];
       const executions: DoudianOpportunityExecution[] = [];
       let submittedCount = Number(task.submittedCount || 0);
@@ -6588,6 +6691,8 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             validatedByPipeline: true,
             pipelineWords: candidate.clueWords,
             shouldCancel: shouldCancelSubmit,
+            beginMutation: args.beginMutation,
+            endMutation: args.endMutation,
             onRemoteSubmitStart: async (remoteProducts) => {
               assertNotCancelled(shouldCancelSubmit);
               const remoteProductIds = new Set(remoteProducts.map((product) => product.productId));
@@ -6713,6 +6818,11 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
             resolvedBatchCandidates.forEach((batchCandidate) => sendingCandidateIds.delete(batchCandidate.id));
           }
           if (batchAttempts > 0 || batchCandidates.length > 1) await updateStoreSubmitProgress();
+          dispatchPipelineProgress(
+            args,
+            submitWorkerProgress(processedCandidateIds.size, taskCandidates.length),
+            `商机提报处理中 ${processedCandidateIds.size}/${taskCandidates.length}`
+          );
           if (!args.dryRun && batchAttempts > 0 && !submitThrottleReason) {
             const delayMs = submitCandidateDelayMs(payload.adapter);
             if (delayMs) await cancellableWait(delayMs, shouldCancelSubmit);
@@ -6737,11 +6847,15 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
         }
         if (updatedCandidates.length) await repositoryPutMany(pipelineCandidateStore, updatedCandidates, { concurrency: 2 });
         cancelledDuringTask = cancelledDuringTask || await submitTaskIsCancelled(task, args);
+        const validationBlocksCompletion = officialValidationMode(payload.adapter) === "enforce"
+          && Boolean(validationUnknownCount || validationBudgetExhaustedCount);
+        const coverageBlocksCompletion = policyText(payload.adapter, "opportunityReport.inputCoverageMode", "enforce") !== "report"
+          && task.inputCoverageStatus === "partial_coverage";
         const finalStatus: PipelineSubmitTaskRecord["status"] = cancelledDuringTask
           ? "cancelled"
           : task.inputCoverageStatus === "failed"
             ? "failed"
-          : unknownCount || validationUnknownCount || validationBudgetExhaustedCount || task.inputCoverageStatus === "partial_coverage"
+          : unknownCount || validationBlocksCompletion || coverageBlocksCompletion
             ? "partial"
           : failedCount
             ? (submittedCount || skippedCount ? "partial" : "failed")
@@ -6769,6 +6883,7 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
           finishedAt,
           updatedAt: finishedAt
         });
+        dispatchPipelineProgress(args, 94, `店铺 ${task.shopName || task.shopId} 商机提报队列处理完成`);
         const finalQuotaAttemptCount = await submitAttemptCountForShop(store.shopId);
         await updatePipelineStoreRunProgress(task.storeRunId, {
           status: finalStatus,
@@ -6924,10 +7039,53 @@ async function runSubmitWorker(payload: DoudianAdapterPayload, args: Opportunity
       }
       if (!processedThisPass) break;
     }
+    void reportDoudianDiagnostic({
+      category: "opportunity-pipeline",
+      event: "submit-worker-finished",
+      runId: scopedRunId,
+      workerId,
+      processed
+    }, true);
     return { ok: true, processed };
-  } finally {
-    pipelineSubmitWorkerRunning = false;
-  }
+}
+
+function runSubmitWorker(payload: DoudianAdapterPayload, args: OpportunityArgs = {}) {
+  const scheduled = pipelineSubmitWorkerTail
+    .catch(() => undefined)
+    .then(() => executeSubmitWorker(payload, args));
+  pipelineSubmitWorkerTail = scheduled.then(() => undefined, () => undefined);
+  return scheduled;
+}
+
+async function failUnconsumedSubmitTasks(tasks: PipelineSubmitTaskRecord[], reason: string) {
+  const failedAt = nowIso();
+  await repositoryPutMany(pipelineSubmitTaskStore, tasks.map((task) => ({
+    ...task,
+    status: "failed" as const,
+    leaseExpiresAt: undefined,
+    failedCount: Math.max(1, Number(task.failedCount || 0)),
+    lastError: reason,
+    finishedAt: task.finishedAt || failedAt,
+    updatedAt: failedAt
+  })), { concurrency: 2 });
+  await Promise.all(tasks.map(async (task) => {
+    await updatePipelineStoreRunProgress(task.storeRunId, {
+      status: "failed",
+      phase: "finished",
+      failedCount: Math.max(1, Number(task.failedCount || 0)),
+      skipReason: reason,
+      finishedAt: failedAt
+    }).catch(() => null);
+    await writePipelineEvent({
+      runId: task.runId,
+      storeRunId: task.storeRunId,
+      shopId: task.shopId,
+      level: "error",
+      event: "pipeline-submit-worker-stalled",
+      message: reason,
+      detail: { taskId: task.id, taskStatus: task.status }
+    }).catch(() => undefined);
+  }));
 }
 
 async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: OpportunityArgs): Promise<DoudianOpportunityReportResult> {
@@ -7580,7 +7738,31 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   if (pipelineCancelled(args)) return finishCancelled();
   if (submitTaskCount > 0) {
     dispatchPipelineProgress(args, 82, "自动提报任务处理中");
-    await runSubmitWorker(payload, { ...args, runId });
+    const workerResult = await runSubmitWorker(payload, { ...args, runId });
+    const submitTasksAfterWorker = await loadPipelineSubmitTasksForRunStrict(runId);
+    const unconsumedTasks = activeSubmitTasksForRun(submitTasksAfterWorker, runId);
+    if (unconsumedTasks.length) {
+      const reason = `商机提报 worker 已退出，但仍有 ${unconsumedTasks.length} 个队列任务未消费`;
+      await failUnconsumedSubmitTasks(unconsumedTasks, reason);
+      failedCount += unconsumedTasks.length;
+      details.push(...unconsumedTasks.map((task) => ({
+        shopId: task.shopId,
+        shopName: task.shopName,
+        status: "failed",
+        ok: false,
+        message: reason,
+        reason: "submit-worker-unconsumed-task",
+        category: "client",
+        diagnostic: { taskId: task.id, taskStatus: task.status, workerProcessed: workerResult.processed }
+      } satisfies DoudianRunDetail)));
+      await reportDoudianDiagnostic({
+        category: "opportunity-pipeline",
+        event: "submit-worker-stalled",
+        runId,
+        unconsumedTaskCount: unconsumedTasks.length,
+        workerProcessed: workerResult.processed
+      }, true);
+    }
     dispatchPipelineProgress(args, 95, "自动提报任务已完成，正在汇总");
   }
 
@@ -7591,6 +7773,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     officialValidationObserveMode: validationMode === "observe" ? 1 : 0,
     officialValidationDisabledMode: validationMode === "disabled" ? 1 : 0,
     officialValidationEnforceMode: validationMode === "enforce" ? 1 : 0,
+    inputCoverageReportMode: policyText(payload.adapter, "opportunityReport.inputCoverageMode", "enforce") === "report" ? 1 : 0,
     productCount: products.length,
     currentCategoryCount,
     effectiveCategoryCount,
@@ -7641,6 +7824,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   const finalStatus = refreshedRun?.status || status;
   const finalSummary = refreshedRun?.summary || summary;
   const finalFailedCount = Number(finalSummary.failedCount || failedCount || 0);
+  const finalSubmittedCount = Number(finalSummary.submittedCount || 0);
   const previewCandidates = await loadPipelineCandidatesForRun(runId, latestPipelineCandidatePreviewLimit);
   const candidateTotalCount = Number(finalSummary.candidateCount || candidateCount || previewCandidates.length);
   const responseSummary = {
@@ -7655,15 +7839,12 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     ok: finalStatus === "ok",
     status: finalStatus,
     mode: "pipeline-submit",
-    message: finalFailedCount
-      ? "商机提报已完成，部分候选提报失败"
-      : validationMode === "observe"
-        ? "官方校验观察已完成，未执行平台写请求"
-        : validationMode === "disabled"
-          ? "官方校验已停用，未执行平台写请求"
-          : submitTaskCount
-        ? "商机提报已生成候选并完成自动提报处理"
-        : "商机提报处理完成",
+    message: pipelineSubmitResultMessage({
+      failedCount: finalFailedCount,
+      submittedCount: finalSubmittedCount,
+      validationMode,
+      submitTaskCount
+    }),
     runId,
     operationId: args.operationId,
     rows: pipelineClues,
@@ -7674,7 +7855,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     details,
     successCount: details.filter((detail) => detail.ok).length,
     failureCount: finalFailedCount,
-    partialCount: submitTaskCount,
+    partialCount: finalStatus === "partial" ? submitTaskCount : 0,
     summary: responseSummary,
     scanSummary: responseSummary,
     sourceHealth,
