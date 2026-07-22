@@ -914,6 +914,10 @@ export interface DoudianBulkDeleteResult extends DoudianStoreResult {
   rows?: DoudianBulkDeleteRow[];
   candidates?: DoudianBulkDeleteCandidate[];
   executions?: DoudianBulkDeleteExecution[];
+  candidateCount?: number;
+  executionCount?: number;
+  candidatesDeferred?: boolean;
+  executionsDeferred?: boolean;
   successCount?: number;
   failureCount?: number;
   partialCount?: number;

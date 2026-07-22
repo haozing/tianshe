@@ -3,9 +3,11 @@ import { getNativeData } from "../../nativeData/client";
 import type { CatalogMutationStatus, CatalogMutationRecordInput } from "../../nativeData/types";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { normalizeDoudianProductStatus } from "./productStatus";
+import { bulkDeleteLiveLookupContext, type BulkDeleteLiveLookupScope } from "./bulkDeleteContract";
 
 const DEFAULT_TENANT_ID = "local-user";
 const LIVE_LOOKUP_CACHE_TTL_MS = 60_000;
+const BULK_DELETE_LIVE_LOOKUP_BATCH_SIZE = 50;
 
 export interface MutationCandidateInput {
   id?: string;
@@ -14,6 +16,7 @@ export interface MutationCandidateInput {
   productId: string;
   title?: string;
   action?: string;
+  status?: string;
 }
 
 export interface MutationPreparedCandidate<T extends MutationCandidateInput> extends MutationCandidateInput {
@@ -216,6 +219,145 @@ function liveLookupContext(productId: string) {
   };
 }
 
+function bulkDeleteLiveLookupScope(candidate: MutationCandidateInput, stage?: string): BulkDeleteLiveLookupScope {
+  if (stage === "delete") return "recycle";
+  const lifecycleStatus = normalizeLifecycleStatus(candidate.status);
+  if (lifecycleStatus === "selling" || lifecycleStatus === "offline" || lifecycleStatus === "recycle") return lifecycleStatus;
+  return "all";
+}
+
+async function fetchBulkDeleteLiveLookupBatch(
+  payload: DoudianAdapterPayload,
+  store: DoudianStoreSummary,
+  productIds: string[],
+  scope: BulkDeleteLiveLookupScope,
+  shouldCancel?: () => boolean
+) {
+  const planKey = liveLookupPlanKey(payload.adapter, "bulk-delete");
+  if (!planKey) {
+    return new Map<string, LiveLookupResult>(productIds.map((productId): [string, LiveLookupResult] => [productId, {
+      ok: false,
+      found: false,
+      planKey,
+      lifecycleStatus: "unknown",
+      message: "live lookup request plan missing"
+    } satisfies LiveLookupResult]));
+  }
+  const response = await runDoudianRequestPlan(payload, {
+    partition: store.partition,
+    planKey,
+    context: bulkDeleteLiveLookupContext(productIds, scope),
+    shouldCancel
+  });
+  const mapping = mappingFor(payload.adapter);
+  const wrapped = { [planKey]: response.data };
+  const rows = firstArray(wrapped, listPathsFor(planKey, mapping));
+  const productIdPaths = fieldPaths(payload.adapter, mapping, "productId", ["product_id", "productId", "goods_id", "goodsId", "item_id", "itemId", "id"]);
+  const statusPaths = fieldPaths(payload.adapter, mapping, "status", ["product_status", "productStatus", "goods_status", "goodsStatus", "status_name", "statusName", "status", "is_online", "isOnline", "is_offline", "isOffline"]);
+  const requestOk = requestPlanResponseOk(response, payload.adapter, planKey, mapping);
+  const rowsByProductId = new Map(rows.map((row) => [text(firstPathValue(row, productIdPaths)), row]));
+  return new Map<string, LiveLookupResult>(productIds.map((productId): [string, LiveLookupResult] => {
+    if (!requestOk) {
+      return [productId, {
+        ok: false,
+        found: false,
+        planKey,
+        lifecycleStatus: "unknown",
+        message: response.error || "live lookup failed",
+        response
+      } satisfies LiveLookupResult];
+    }
+    const match = rowsByProductId.get(productId);
+    if (!match) {
+      return [productId, {
+        ok: true,
+        found: false,
+        planKey,
+        lifecycleStatus: "not_found",
+        message: "live lookup did not find product",
+        response
+      } satisfies LiveLookupResult];
+    }
+    const normalizedStatus = normalizeLifecycleStatus(preferredStatusValue(match, statusPaths));
+    return [productId, {
+      ok: true,
+      found: true,
+      planKey,
+      lifecycleStatus: normalizedStatus === "unknown" && scope !== "all" ? scope : normalizedStatus,
+      message: "",
+      raw: match,
+      response
+    } satisfies LiveLookupResult];
+  }));
+}
+
+async function bulkDeleteLiveLookupResults<T extends MutationCandidateInput>(args: {
+  payload: DoudianAdapterPayload;
+  store: DoudianStoreSummary;
+  candidates: T[];
+  stage?: string;
+  lookupConcurrency?: number;
+  lookupBatchSize?: number;
+  lookupBatchDelayMs?: number;
+  confirmAttempts: number;
+  confirmDelayMs: number;
+  shouldCancel?: () => boolean;
+}) {
+  const grouped = new Map<BulkDeleteLiveLookupScope, Array<{ index: number; productId: string }>>();
+  args.candidates.forEach((candidate, index) => {
+    const scope = bulkDeleteLiveLookupScope(candidate, args.stage);
+    const entries = grouped.get(scope) || [];
+    entries.push({ index, productId: text(candidate.productId) });
+    grouped.set(scope, entries);
+  });
+  const batchSize = Math.max(1, Math.min(100, Math.floor(Number(args.lookupBatchSize || BULK_DELETE_LIVE_LOOKUP_BATCH_SIZE))));
+  const jobs: Array<{ scope: BulkDeleteLiveLookupScope; entries: Array<{ index: number; productId: string }> }> = [];
+  grouped.forEach((entries, scope) => {
+    for (let index = 0; index < entries.length; index += batchSize) jobs.push({ scope, entries: entries.slice(index, index + batchSize) });
+  });
+
+  const results = new Array<LiveLookupResult>(args.candidates.length);
+  const concurrency = Math.max(1, Math.min(jobs.length || 1, Math.floor(Number(args.lookupConcurrency || 1))));
+  const batchDelayMs = Math.max(0, Math.min(10000, Math.floor(Number(args.lookupBatchDelayMs || 0))));
+  let nextJob = 0;
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    for (;;) {
+      const jobIndex = nextJob;
+      nextJob += 1;
+      if (jobIndex >= jobs.length) return;
+      if (args.shouldCancel?.()) throw new Error("bulk-delete operation cancelled");
+      const job = jobs[jobIndex];
+      let pending = job.entries;
+      for (let attempt = 0; pending.length && attempt < args.confirmAttempts; attempt += 1) {
+        if (attempt > 0 && args.confirmDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, args.confirmDelayMs));
+        const batchResults = await fetchBulkDeleteLiveLookupBatch(
+          args.payload,
+          args.store,
+          pending.map((entry) => entry.productId),
+          job.scope,
+          args.shouldCancel
+        );
+        pending.forEach((entry) => {
+          results[entry.index] = batchResults.get(entry.productId) || {
+            ok: false,
+            found: false,
+            planKey: liveLookupPlanKey(args.payload.adapter, "bulk-delete"),
+            lifecycleStatus: "unknown",
+            message: "live lookup result missing"
+          };
+        });
+        if (args.stage !== "delete") break;
+        pending = pending.filter((entry) => {
+          const result = results[entry.index];
+          return result.ok && result.lifecycleStatus !== "recycle";
+        });
+      }
+      if (batchDelayMs > 0 && jobIndex < jobs.length - 1) await new Promise((resolve) => setTimeout(resolve, batchDelayMs));
+    }
+  }));
+  return results;
+}
+
 async function fetchLiveLookupProduct(payload: DoudianAdapterPayload, store: DoudianStoreSummary, productId: string, feature: string, shouldCancel?: () => boolean): Promise<LiveLookupResult> {
   const adapter = payload.adapter;
   const planKey = liveLookupPlanKey(adapter, feature);
@@ -339,6 +481,8 @@ export async function prepareMutationSafety<T extends MutationCandidateInput>(ar
   dryRun?: boolean;
   protectMode?: "includeSelling" | "skipSelling";
   lookupConcurrency?: number;
+  lookupBatchSize?: number;
+  lookupBatchDelayMs?: number;
   confirmAttempts?: number;
   confirmDelayMs?: number;
   shouldCancel?: () => boolean;
@@ -380,27 +524,42 @@ export async function prepareMutationSafety<T extends MutationCandidateInput>(ar
   const mutations: CatalogMutationRecordInput[] = [];
   const requestHash = mutationRequestHash({ action: args.action, stage: args.stage, planKey: args.planKey, productIds });
 
-  const lookupResults = new Array<LiveLookupResult>(args.candidates.length);
+  let lookupResults = new Array<LiveLookupResult>(args.candidates.length);
   const concurrency = Math.max(1, Math.min(args.candidates.length || 1, Math.floor(Number(args.lookupConcurrency || 4))));
   const confirmAttempts = args.stage === "delete" ? Math.max(1, Math.min(10, Math.floor(Number(args.confirmAttempts || 1)))) : 1;
   const confirmDelayMs = Math.max(0, Math.min(10000, Math.floor(Number(args.confirmDelayMs || 0))));
-  let nextIndex = 0;
-  await Promise.all(Array.from({ length: concurrency }, async () => {
-    for (;;) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= args.candidates.length) return;
-      if (args.shouldCancel?.()) throw new Error(`${args.feature} operation cancelled`);
-      const productId = text(args.candidates[index].productId);
-      let live = await liveLookupProduct(args.payload, args.store, productId, args.feature, args.shouldCancel);
-      for (let attempt = 1; attempt < confirmAttempts && live.ok && live.lifecycleStatus !== "recycle"; attempt += 1) {
+  if (args.feature === "bulk-delete") {
+    lookupResults = await bulkDeleteLiveLookupResults({
+      payload: args.payload,
+      store: args.store,
+      candidates: args.candidates,
+      stage: args.stage,
+      lookupConcurrency: args.lookupConcurrency,
+      lookupBatchSize: args.lookupBatchSize,
+      lookupBatchDelayMs: args.lookupBatchDelayMs,
+      confirmAttempts,
+      confirmDelayMs,
+      shouldCancel: args.shouldCancel
+    });
+  } else {
+    let nextIndex = 0;
+    await Promise.all(Array.from({ length: concurrency }, async () => {
+      for (;;) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= args.candidates.length) return;
         if (args.shouldCancel?.()) throw new Error(`${args.feature} operation cancelled`);
-        if (confirmDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, confirmDelayMs));
-        live = await liveLookupProduct(args.payload, args.store, productId, args.feature, args.shouldCancel);
+        const productId = text(args.candidates[index].productId);
+        let live = await liveLookupProduct(args.payload, args.store, productId, args.feature, args.shouldCancel);
+        for (let attempt = 1; attempt < confirmAttempts && live.ok && live.lifecycleStatus !== "recycle"; attempt += 1) {
+          if (args.shouldCancel?.()) throw new Error(`${args.feature} operation cancelled`);
+          if (confirmDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, confirmDelayMs));
+          live = await liveLookupProduct(args.payload, args.store, productId, args.feature, args.shouldCancel);
+        }
+        lookupResults[index] = live;
       }
-      lookupResults[index] = live;
-    }
-  }));
+    }));
+  }
 
   await assertMutationStoreActive(args.store);
 
@@ -414,7 +573,7 @@ export async function prepareMutationSafety<T extends MutationCandidateInput>(ar
       : live.ok && live.found
       ? allowedStatus(args.action, args.stage, live.lifecycleStatus)
       : live.ok
-        ? { ok: true, allowed: false, reason: "live-not-found", message: live.message }
+        ? { ok: args.feature !== "bulk-delete", allowed: false, reason: "live-not-found", message: live.message }
         : { ok: false, allowed: false, reason: "live-lookup-failed", message: live.message };
 
     if (!statusCheck.allowed) {

@@ -14,7 +14,6 @@ import {
   RotateCcw,
   Search,
   ShieldAlert,
-  SlidersHorizontal,
   Store,
   Trash2,
   Upload,
@@ -1173,13 +1172,6 @@ export function BulkDeletePage() {
                   setPreviewPage(0);
                 }}
               />
-              <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" onClick={() => {
-                setPreviewPage(0);
-                setAnalyzed(false);
-              }}>
-                <SlidersHorizontal className="size-[14px]" strokeWidth={2} />
-                修改筛选
-              </button>
             </div>
           </div>
 

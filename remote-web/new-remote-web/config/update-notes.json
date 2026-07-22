@@ -1,10 +1,62 @@
 {
   "schemaVersion": 1,
   "productName": "赤狐管家",
-  "currentVersion": "2.2.4-stale-goods-real-execution",
-  "updatedAt": "2026-07-21T21:00:00+08:00",
-  "summary": "Slow-moving cleanup now performs live offline, recycle, and permanent delete operations with strict mutation safety.",
+  "currentVersion": "2.2.4-bulk-delete-segmented-scan",
+  "updatedAt": "2026-07-22T10:13:21+08:00",
+  "summary": "修复商品数超过单次分页窗口时批量删除扫描被阻断的问题。",
   "releases": [
+    {
+      "version": "2.2.4-bulk-delete-segmented-scan",
+      "date": "2026-07-22",
+      "sections": [
+        {
+          "title": "修复",
+          "items": [
+            "店铺商品数超过 2000 条时，扫描会按商品创建日期递归拆分为互不重叠的时间段，并分页返回完整数据。",
+            "任一时间段请求失败、单日数据仍超限、分段数超限或最终商品数与平台总数不一致时，仍会阻断删除操作。"
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.2.4-bulk-delete-toolbar",
+      "date": "2026-07-22",
+      "sections": [
+        {
+          "title": "调整",
+          "items": [
+            "移除批量删除预览工具栏中的修改筛选按钮，上方筛选条件、排序和分页功能保持不变。"
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.2.4-bulk-delete-live-lookup",
+      "date": "2026-07-22",
+      "sections": [
+        {
+          "title": "修复",
+          "items": [
+            "实时校验按 50 个商品一组通过 id_name_code 精确查询，并按在售、下架和回收站状态选择对应列表视图。",
+            "将单店近千次逐商品校验压缩为分组查询，降低访问频控；彻底删除阶段独立回查回收站，不再复用前一阶段状态。",
+            "未找到、校验失败和被跳过的商品不再误报为删除成功，失败提示改为准确的商品数量。"
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.2.4-bulk-delete-paged-results",
+      "date": "2026-07-22",
+      "sections": [
+        {
+          "title": "修复",
+          "items": [
+            "修复候选商品较多时任务结果超过 8 MiB 消息上限、预览被标记为失败的问题。",
+            "候选商品与执行明细改为本地落库后分页传输，页面展示、选择、排序和导出仍保留完整数据。"
+          ]
+        }
+      ]
+    },
     {
       "version": "2.2.4-stale-goods-real-execution",
       "date": "2026-07-21",

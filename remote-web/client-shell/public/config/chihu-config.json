@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.22.stale-goods-item-results-v15",
+  "version": "2026.07.22.bulk-delete-segmented-scan-v4",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "718cf9f-dirty",
-    "buildTime": "2026-07-21T23:27:04.163Z"
+    "gitCommit": "348df08-dirty",
+    "buildTime": "2026-07-22T02:15:55.651Z"
   }
 }

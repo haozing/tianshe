@@ -10,9 +10,12 @@ const publicConfig = JSON.parse(read("remote-web/client-shell/public/config/doud
 const deployedConfig = JSON.parse(read("remote-web/new-remote-web/config/doudian-adapter.json"));
 const bulkSource = read("remote-web/client-shell/src/domain/doudian/bulkDelete.ts");
 const safetySource = read("remote-web/client-shell/src/domain/doudian/mutationSafety.ts");
+const contractSource = read("remote-web/client-shell/src/domain/doudian/bulkDeleteContract.ts");
 const productStatusSource = read("remote-web/client-shell/src/domain/doudian/productStatus.ts");
 const repositorySource = read("remote-web/client-shell/src/domain/doudian/repository.ts");
 const pageSource = read("remote-web/client-shell/src/components/BulkDeletePage.tsx");
+const bridgeSource = read("remote-web/client-shell/src/bridge/client.ts");
+const taskRunnerSource = read("remote-web/client-shell/src/domain/doudian/taskRunner.ts");
 const workerSource = read("electron-client/src/main/database/worker.js");
 
 assert.deepEqual(deployedConfig, publicConfig, "deployed adapter must match the source adapter");
@@ -33,8 +36,14 @@ for (const key of ["bulkDeleteBatchDelete", "bulkDeleteCompleteDelete"]) {
 }
 assert.match(plans.bulkDeleteBatchDelete.referer, /\/ffa\/g\/list$/);
 assert.match(plans.bulkDeleteCompleteDelete.referer, /\/ffa\/g\/recycle$/);
+assert.equal(plans.bulkDeleteProductList.query.id_name_code, "{idNameCode}");
+assert.equal(plans.bulkDeleteProductList.query.start_time, "{startTime}");
+assert.equal(plans.bulkDeleteProductList.query.end_time, "{endTime}");
 assert.equal(policy.executeBatchSize, 100);
-assert.ok(policy.liveLookupConcurrency > 1);
+assert.equal(policy.liveLookupConcurrency, 1);
+assert.equal(policy.liveLookupBatchSize, 50);
+assert.equal(policy.maxTimeSegments, 64);
+assert.ok(policy.liveLookupBatchDelayMs >= 0);
 assert.ok(policy.maxPreviewAgeMs > 0);
 assert.ok(policy.maxProjectedIdLookupRequests > 0);
 
@@ -52,8 +61,25 @@ assert.match(bulkSource, /status === "unknown"/);
 assert.match(bulkSource, /bulk-delete-contract\.status-fields-partial-v2/);
 assert.match(bulkSource, /run\.status === "partial" && args\.allowPartialScan === true/);
 assert.match(bulkSource, /objectRecord\(item\.fieldSources\?\.stock\)\.mapped === true/);
+assert.match(bulkSource, /bulkDeleteResultPageSize = 200/);
+assert.match(bulkSource, /restoreBulkDeleteScan\(runId: string\)/);
+assert.match(bulkSource, /repositoryGetAllByPrefix<DoudianBulkDeleteCandidate>[\s\S]*pageSize: bulkDeleteResultPageSize/);
+assert.match(bulkSource, /repositoryPutMany\(bulkDeleteExecuteStore, record\.executions\.map/);
+assert.match(bulkSource, /restoreBulkDeleteExecute\(runId: string\)/);
+assert.match(bulkSource, /repositoryGetAllByPrefix<StoredBulkDeleteExecution>[\s\S]*pageSize: bulkDeleteResultPageSize/);
+assert.match(taskRunnerSource, /task\.taskType === "staleGoodsScan" \|\| task\.taskType === "bulkDeleteScan"/);
+assert.match(taskRunnerSource, /task\.taskType === "staleGoodsExecute" \|\| task\.taskType === "bulkDeleteExecute"/);
+assert.match(taskRunnerSource, /candidatesDeferred: candidates\.length > 0/);
+assert.match(taskRunnerSource, /executionsDeferred: executions\.length > 0/);
+assert.match(bridgeSource, /result\.candidatesDeferred[\s\S]*restoreBulkDeleteScan/);
+assert.match(bridgeSource, /result\.executionsDeferred[\s\S]*restoreBulkDeleteExecute/);
 
 assert.match(safetySource, /feature === "bulk-delete" && adapter\.requestPlans\?\.bulkDeleteProductList/);
+assert.match(safetySource, /bulkDeleteLiveLookupResults/);
+assert.match(contractSource, /idNameCode: ids\.join\(","\)/);
+assert.match(contractSource, /bisectBulkDeleteDateSegment/);
+assert.match(bulkSource, /range:bounds:desc/);
+assert.match(bulkSource, /segmentCount: collected\.segmentCount/);
 assert.match(safetySource, /args\.protectMode === "skipSelling"/);
 assert.match(safetySource, /Array\.from\(\{ length: concurrency \}/);
 assert.match(safetySource, /reason: "already-recycled"/);
@@ -67,6 +93,7 @@ assert.match(productStatusSource, /审核驳回/);
 const objectStoresMatch = repositorySource.match(/DOUDIAN_OBJECT_STORES\s*=\s*\[([\s\S]*?)\]\s*as const/);
 assert.ok(objectStoresMatch, "repository object store list must be declared as a literal array");
 assert.match(objectStoresMatch[1], /"bulk_delete_candidates_v1"/);
+assert.match(repositorySource, /withoutDuplicatedArray\(record, "executions", "executionCount", "bulk_delete_execute_runs_v1"\)/);
 assert.match(repositorySource, /NATIVE_BATCH_RECORD_LIMIT = 500/);
 assert.match(repositorySource, /NATIVE_BATCH_PAYLOAD_LIMIT = 4 \* 1024 \* 1024/);
 assert.match(repositorySource, /storeName !== "stores" && storeName !== "groups"/);
@@ -80,5 +107,7 @@ assert.match(pageSource, /shouldCancel: \(\) => cancelExecutionRef\.current/);
 assert.match(pageSource, /item\.status === "submitted"/);
 assert.match(pageSource, /allowPartialScan/);
 assert.match(pageSource, /"取消执行"/);
+assert.match(pageSource, /previewRows\.slice\(previewPageStartIndex, previewPageEndIndex\)/);
+assert.doesNotMatch(pageSource, /修改筛选/);
 
 console.log("BULK_DELETE_CONTRACT_OK");

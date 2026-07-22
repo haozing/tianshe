@@ -528,7 +528,7 @@ export interface NativeDataApi {
     put: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; record: T }) => Promise<NativeDataRecordPutResult<T>>;
     putMany?: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; records: T[]; omitRecords?: boolean }) => Promise<NativeDataRecordPutManyResult<T>>;
     acquireOperation?: <T extends Record<string, unknown>>(args: { operation: T; updatedAfter: string }) => Promise<{ acquired: boolean; operation: T }>;
-    claimOpportunitySubmitTask?: <T extends Record<string, unknown>>(args: { taskId: string; ownerRunId: string; leaseExpiresAt: string; now: string }) => Promise<{ claimed: boolean; reason: string; task: T | null }>;
+    claimOpportunitySubmitTask?: <T extends Record<string, unknown>>(args: { storeName: "opportunity_pipeline_submit_tasks_v2"; taskId: string; ownerRunId: string; leaseExpiresAt: string; now: string }) => Promise<{ claimed: boolean; reason: string; task: T | null }>;
     get: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; id: string }) => Promise<T | null>;
     getMany?: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; ids: string[] }) => Promise<T[]>;
     list: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; cursor?: string; limit?: number }) => Promise<CursorPage<T>>;

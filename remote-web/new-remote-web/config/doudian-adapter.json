@@ -3373,6 +3373,9 @@
         "business_type": "4",
         "not_for_sale_search_type": "1",
         "supply_status": "",
+        "id_name_code": "{idNameCode}",
+        "start_time": "{startTime}",
+        "end_time": "{endTime}",
         "keyword": "{keyword}"
       },
       "retryOnHttpError": true,
@@ -5408,6 +5411,7 @@
       "concurrency": 2,
       "pageSize": 100,
       "maxProductListPages": 20,
+      "maxTimeSegments": 64,
       "maxProductIdSearchPages": 2,
       "productIdLookupConcurrency": 2,
       "maxUnscopedProductIds": 50,
@@ -5415,7 +5419,9 @@
       "pageStart": 0,
       "executeBatchSize": 100,
       "executeBatchDelayMs": 3000,
-      "liveLookupConcurrency": 4,
+      "liveLookupConcurrency": 1,
+      "liveLookupBatchSize": 50,
+      "liveLookupBatchDelayMs": 500,
       "recycleConfirmAttempts": 5,
       "recycleConfirmDelayMs": 1000,
       "maxPreviewAgeMs": 900000,
@@ -5438,7 +5444,7 @@
         "executedStore": "已提交 {count} 个商品",
         "executeDryRun": "批量删除当前为 dry-run，没有提交平台写请求",
         "executeFailed": "批量删除执行失败",
-        "executePartial": "批量删除部分失败，{failureCount} 家店铺未成功",
+        "executePartial": "批量删除未全部成功，{failureCount} 个商品未成功",
         "executeDone": "已提交 {count} 个商品批量删除",
         "cancelled": "批量删除任务已取消"
       }

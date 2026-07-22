@@ -39,6 +39,8 @@ import {
   fetchOpportunityReportLatest,
   listOpportunityPipelineCandidatesPage,
   listOpportunityStoreCategoryLedger,
+  restoreBulkDeleteExecute,
+  restoreBulkDeleteScan,
   restoreLatestStaleGoodsScan,
   restoreStaleGoodsExecute,
   restoreStaleGoodsScan,
@@ -488,12 +490,23 @@ export async function fetchDoudianBulkDeleteProducts(args: {
     ...(args.confirmText ? { confirmText: args.confirmText } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
-  return runDoudianStoreTask({
+  const mode = args.mode || "scan";
+  const operationId = args.operationId;
+  const result = await runDoudianStoreTask({
     taskType: args.mode === "execute" ? "bulkDeleteExecute" : "bulkDeleteScan",
-    operationId: args.operationId,
+    operationId,
     metadata: { mutation: args.mode === "execute", replaceActive: true },
     payload: nextArgs
-  }, 900000) as Promise<DoudianBulkDeleteResult>;
+  }, 900000) as DoudianBulkDeleteResult;
+  if (mode === "scan" && result.candidatesDeferred) {
+    const restored = await restoreBulkDeleteScan(result.runId || operationId || "");
+    if (restored) return { ...result, ...restored, ok: result.ok, status: result.status, message: result.message, operationId: result.operationId || operationId } as DoudianBulkDeleteResult;
+  }
+  if (mode === "execute" && (result.candidatesDeferred || result.executionsDeferred)) {
+    const restored = await restoreBulkDeleteExecute(result.runId || operationId || "");
+    if (restored) return { ...result, ...restored, ok: result.ok, status: result.status, message: result.message, operationId: result.operationId || operationId } as DoudianBulkDeleteResult;
+  }
+  return result;
 }
 
 export async function fetchDoudianOpportunityReport(args: {

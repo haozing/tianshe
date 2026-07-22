@@ -162,6 +162,19 @@ test("runner data scopes are task-specific and marketing records are operation-o
   ] }), false);
   assert.equal(runnerDataAllowed(marketingContext, putChannel, { storeName: "operations", record: { id: operationId } }), false);
 
+  const opportunityContext = {
+    taskType: "opportunityPipelineSubmit",
+    allowedStoreRefs: [{ shopId: "shop-1", tenantId: "tenant-1", storeGeneration: 2 }],
+    allowedDataScopes: materializeDataScopes(TASK_DEFINITIONS.opportunityPipelineSubmit.allowedDataScopes, "opportunity-1")
+  };
+  assert.equal(runnerDataAllowed(opportunityContext, "native:data:records:claimOpportunitySubmitTask", {
+    storeName: "opportunity_pipeline_submit_tasks_v2",
+    taskId: "opportunity-1-tenant-1-shop-1-2-task-1"
+  }), true);
+  assert.equal(runnerDataAllowed(opportunityContext, "native:data:records:claimOpportunitySubmitTask", {
+    taskId: "opportunity-1-tenant-1-shop-1-2-task-1"
+  }), false);
+
   const recoveryContext = {
     allowedDataScopes: materializeDataScopes(TASK_DEFINITIONS.marketingReconcile.allowedDataScopes, operationId)
   };
@@ -202,6 +215,20 @@ test("runner data scopes are task-specific and marketing records are operation-o
   assert.equal(runnerDataAllowed(staleContext, putChannel, { storeName: "stores", record: { id: "shop-2", shopId: "shop-2" } }), false);
   assert.equal(runnerDataAllowed(staleContext, "native:data:catalog:getProductsByIds", { shopId: "shop-1", productIds: ["1"] }), true);
   assert.equal(runnerDataAllowed(staleContext, "native:data:catalog:getProductsByIds", { shopId: "shop-2", productIds: ["1"] }), false);
+
+  const bulkDeleteContext = {
+    taskType: "bulkDeleteExecute",
+    allowedStoreRefs: [{ shopId: "shop-1", tenantId: "tenant-1", storeGeneration: 2 }],
+    allowedDataScopes: materializeDataScopes(TASK_DEFINITIONS.bulkDeleteExecute.allowedDataScopes, "bulk-delete-1")
+  };
+  assert.equal(runnerDataAllowed(bulkDeleteContext, putManyChannel, {
+    storeName: "bulk_delete_execute_runs_v1",
+    records: [{ id: "bulk-delete-1:00000000" }]
+  }), true);
+  assert.equal(runnerDataAllowed(staleContext, putManyChannel, {
+    storeName: "bulk_delete_execute_runs_v1",
+    records: [{ id: "bulk-delete-1:00000000" }]
+  }), false);
 
   const importContext = {
     taskType: "fetchDoudianStores",

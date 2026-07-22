@@ -57,6 +57,7 @@ const NATIVE_BATCH_WRITE_STORES = new Set<DoudianObjectStoreName>([
   "violations_latest",
   "stale_candidates",
   "bulk_delete_candidates_v1",
+  "bulk_delete_execute_runs_v1",
   "opportunity_clue_candidates_v1",
   "opportunity_product_candidates_v1",
   "opportunity_prematch_candidates_v1",
@@ -126,6 +127,7 @@ function compactPipelineRunRecord<T extends { id: string }>(record: T): T {
 function compactRunRecordForNativeStore<T extends { id: string }>(storeName: DoudianObjectStoreName, record: T): T {
   if (storeName === "stale_scan_runs") return withoutDuplicatedArray(record, "candidates", "candidateCount", "stale_candidates");
   if (storeName === "bulk_delete_scan_runs_v1") return withoutDuplicatedArray(record, "candidates", "candidateCount", "bulk_delete_candidates_v1");
+  if (storeName === "bulk_delete_execute_runs_v1") return withoutDuplicatedArray(record, "executions", "executionCount", "bulk_delete_execute_runs_v1");
   if (storeName === "opportunity_clue_scan_runs_v1") return withoutDuplicatedArray(record, "rows", "rowCount", "opportunity_clue_candidates_v1");
   if (storeName === "opportunity_product_scan_runs_v1") return withoutDuplicatedArray(record, "products", "productCount", "opportunity_product_candidates_v1");
   if (storeName === "opportunity_prematch_runs_v1") return withoutDuplicatedArray(record, "candidates", "candidateCount", "opportunity_prematch_candidates_v1");
@@ -203,7 +205,7 @@ export async function repositoryClaimOpportunitySubmitTask<T extends Record<stri
 }) {
   const claim = requireNativeData().records.claimOpportunitySubmitTask;
   if (!claim) return null;
-  return claim<T>(args);
+  return claim<T>({ ...args, storeName: "opportunity_pipeline_submit_tasks_v2" });
 }
 
 export async function repositoryGet<T>(storeName: DoudianObjectStoreName, id: string): Promise<T | null> {

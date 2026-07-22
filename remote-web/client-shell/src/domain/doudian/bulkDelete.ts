@@ -21,6 +21,7 @@ import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestP
 import { repositoryDelete, repositoryDeleteMany, repositoryGet, repositoryGetAll, repositoryGetAllByPrefix, repositoryGetMany, repositoryPut, repositoryPutMany } from "./repository";
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
+import { bisectBulkDeleteDateSegment, bulkDeleteCreatedDate, bulkDeleteExecutionSucceeded, type BulkDeleteDateSegment } from "./bulkDeleteContract";
 import { normalizeDoudianProductStatus } from "./productStatus";
 
 interface BulkDeleteArgs {
@@ -76,12 +77,21 @@ interface ExecuteRunRecord {
   confirmText: string;
   status: string;
   dryRun: boolean;
+  candidateIds?: string[];
   executions: DoudianBulkDeleteExecution[];
   details: DoudianRunDetail[];
   summary: Record<string, number>;
   adapterVersion: string;
   scriptsVersion: string;
   requestPlanHash: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface StoredBulkDeleteExecution extends DoudianBulkDeleteExecution {
+  id: string;
+  executionId: string;
+  executeRunId: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -107,6 +117,7 @@ const bulkDeleteCandidateStore = "bulk_delete_candidates_v1" as const;
 const bulkDeleteExecuteStore = "bulk_delete_execute_runs_v1" as const;
 const bulkDeleteOperationEventStore = "bulk_delete_operation_events_v1" as const;
 const bulkDeleteContractVersion = "bulk-delete-contract.status-fields-partial-v2";
+const bulkDeleteResultPageSize = 200;
 
 function text(value: unknown) {
   return String(value || "").trim();
@@ -557,12 +568,13 @@ async function runProductListPage(payload: DoudianAdapterPayload, store: Doudian
 
 async function collectProducts(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: BulkDeleteArgs, filters: DoudianBulkDeleteFilters, sourceMode: DoudianBulkDeleteSourceMode) {
   if (args.mockProducts?.length) {
-    return { products: args.mockProducts, remoteTotal: args.mockProducts.length, truncated: false, requestOk: true, pageSize: args.mockProducts.length, maxPages: 1, sourceHealth: [], responses: {} as Record<string, RequestPlanResult> };
+    return { products: args.mockProducts, remoteTotal: args.mockProducts.length, truncated: false, requestOk: true, pageSize: args.mockProducts.length, maxPages: 1, segmented: false, segmentCount: 0, segmentBounds: null, sourceHealth: [], responses: {} as Record<string, RequestPlanResult> };
   }
   const planKey = productListPlanKey(payload.adapter);
   const pageSize = Math.max(10, Math.min(200, Math.floor(Number(args.pageSize || policyNumber(payload.adapter, "bulkDelete.pageSize", 100, 10, 200)))));
   const rangeMaxPages = Math.max(1, Math.min(50, Math.floor(Number(args.maxProductListPages || policyNumber(payload.adapter, "bulkDelete.maxProductListPages", 20, 1, 50)))));
   const idMaxPages = Math.max(1, Math.min(rangeMaxPages, policyNumber(payload.adapter, "bulkDelete.maxProductIdSearchPages", 2, 1, 10)));
+  const maxTimeSegments = policyNumber(payload.adapter, "bulkDelete.maxTimeSegments", 64, 2, 256);
   const pageStart = policyNumber(payload.adapter, "bulkDelete.pageStart", 0, 0, 1);
   const storeProductIds = sourceMode === "ids" ? productIdsForStore(filters, store) : [];
   const keywordList = sourceMode === "ids" ? storeProductIds : [filters.keyword || ""];
@@ -570,6 +582,32 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
   const products: Record<string, unknown>[] = [];
   const responses: Record<string, RequestPlanResult> = {};
   let remoteTotal = 0;
+  let truncated = false;
+  let segmented = false;
+  let segmentCount = 0;
+  let segmentBounds: { startDate: string; endDate: string } | null = null;
+  const responseOk = (response: RequestPlanResult) => requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter));
+  const parsePage = (response: RequestPlanResult) => {
+    const wrapped = { [planKey]: response.data };
+    return { items: firstArray(wrapped, listPaths(payload.adapter)).map(objectRecord), total: readTotal(wrapped, payload.adapter) };
+  };
+  const requestPage = async (key: string, context: Record<string, unknown>) => {
+    if (operationCancelled(args)) throw new Error("bulk delete operation cancelled");
+    const response = await runProductListPage(payload, store, planKey, context);
+    responses[key] = response;
+    return { response, ok: responseOk(response), ...parsePage(response) };
+  };
+  const baseContext = (page: number, segment?: BulkDeleteDateSegment, orderField?: string, sort?: string) => ({
+    page: String(page),
+    pageSize: String(pageSize),
+    keyword: filters.keyword || "",
+    idNameCode: "",
+    startTime: segment?.startDate || "",
+    endTime: segment?.endDate || "",
+    ...statusContext(filters.status),
+    ...(orderField ? { orderField } : {}),
+    ...(sort ? { sort } : {})
+  });
   if (sourceMode === "ids" && !keywordList.length) {
     return {
       products: [],
@@ -578,56 +616,132 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
       requestOk: true,
       pageSize,
       maxPages,
+      segmented,
+      segmentCount,
+      segmentBounds,
       sourceHealth: [{ key: `${planKey}:import-skip`, status: 0, ok: true, skipped: true, reason: "no-import-item-for-store" }],
       responses
     };
   }
-  let nextKeywordIndex = 0;
-  const keywordConcurrency = Math.min(keywordList.length, policyNumber(payload.adapter, "bulkDelete.productIdLookupConcurrency", 2, 1, 4));
-  async function keywordWorker() {
-    for (;;) {
-      const keywordIndex = nextKeywordIndex;
-      nextKeywordIndex += 1;
-      if (keywordIndex >= keywordList.length) return;
-      const keyword = keywordList[keywordIndex];
-      const importItem = sourceMode === "ids" ? importItemForProduct(filters, store, keyword) : null;
-      let keywordProductCount = 0;
-      for (let page = pageStart; page < pageStart + maxPages; page += 1) {
-        if (operationCancelled(args)) throw new Error("bulk delete operation cancelled");
-        const response = await runProductListPage(payload, store, planKey, {
-          page: String(page),
-          pageSize: String(pageSize),
-          keyword,
-          ...statusContext(filters.status)
-        });
-        const responseKey = `${planKey}:keyword:${keywordIndex}:page:${page}`;
-        responses[responseKey] = response;
-        const payloadForPage = { [planKey]: response.data };
-        const items = firstArray(payloadForPage, listPaths(payload.adapter));
-        products.push(...items.map((item) => ({ ...objectRecord(item), ...(importItem ? { __bulkDeleteImportItem: importItem } : {}) })));
-        keywordProductCount += items.length;
-        remoteTotal = Math.max(readTotal(payloadForPage, payload.adapter), remoteTotal);
-        if (!requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter))) break;
-        if (sourceMode !== "ids" && remoteTotal && keywordProductCount >= remoteTotal) break;
-        if (items.length < pageSize) break;
+
+  if (sourceMode === "ids") {
+    let nextKeywordIndex = 0;
+    const keywordConcurrency = Math.min(keywordList.length, policyNumber(payload.adapter, "bulkDelete.productIdLookupConcurrency", 2, 1, 4));
+    async function keywordWorker() {
+      for (;;) {
+        const keywordIndex = nextKeywordIndex;
+        nextKeywordIndex += 1;
+        if (keywordIndex >= keywordList.length) return;
+        const keyword = keywordList[keywordIndex];
+        const importItem = importItemForProduct(filters, store, keyword);
+        for (let page = pageStart; page < pageStart + maxPages; page += 1) {
+          const result = await requestPage(`${planKey}:keyword:${keywordIndex}:page:${page}`, {
+            page: String(page),
+            pageSize: String(pageSize),
+            keyword,
+            idNameCode: "",
+            startTime: "",
+            endTime: "",
+            ...statusContext(filters.status)
+          });
+          products.push(...result.items.map((item) => ({ ...item, ...(importItem ? { __bulkDeleteImportItem: importItem } : {}) })));
+          remoteTotal = Math.max(result.total, remoteTotal);
+          if (!result.ok || result.items.length < pageSize) break;
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.max(1, keywordConcurrency) }, () => keywordWorker()));
+  } else {
+    const capacity = pageSize * rangeMaxPages;
+    const initial = await requestPage(`${planKey}:range:initial:page:${pageStart}`, baseContext(pageStart));
+    remoteTotal = initial.total || initial.items.length;
+    if (initial.ok && remoteTotal <= capacity) {
+      products.push(...initial.items);
+      let fetchedCount = initial.items.length;
+      for (let page = pageStart + 1; page < pageStart + rangeMaxPages && fetchedCount < remoteTotal; page += 1) {
+        const result = await requestPage(`${planKey}:range:page:${page}`, baseContext(page));
+        products.push(...result.items);
+        fetchedCount += result.items.length;
+        if (!result.ok || result.items.length < pageSize) break;
+      }
+      truncated = remoteTotal > fetchedCount;
+    } else if (initial.ok) {
+      segmented = true;
+      const descending = await requestPage(`${planKey}:range:bounds:desc`, { ...baseContext(pageStart, undefined, "create_time", "desc"), pageSize: "1" });
+      const ascending = await requestPage(`${planKey}:range:bounds:asc`, { ...baseContext(pageStart, undefined, "create_time", "asc"), pageSize: "1" });
+      const startDate = bulkDeleteCreatedDate(readField(ascending.items[0], payload.adapter, "createdAt"));
+      const endDate = bulkDeleteCreatedDate(readField(descending.items[0], payload.adapter, "createdAt"));
+      segmentBounds = startDate && endDate && startDate <= endDate ? { startDate, endDate } : null;
+      if (!descending.ok || !ascending.ok) {
+        // The failed responses remain in the request audit and make requestOk false.
+      } else if (!segmentBounds) {
+        truncated = true;
+      } else {
+        const queue: BulkDeleteDateSegment[] = [{ ...segmentBounds, depth: 0 }];
+        const accepted: Array<{ segment: BulkDeleteDateSegment; items: Record<string, unknown>[]; total: number }> = [];
+        let requestedSegments = 0;
+        while (queue.length && !truncated) {
+          const segment = queue.shift()!;
+          requestedSegments += 1;
+          if (requestedSegments > maxTimeSegments) {
+            truncated = true;
+            break;
+          }
+          const key = `${planKey}:segment:${requestedSegments}:${segment.startDate}:${segment.endDate}`;
+          const result = await requestPage(`${key}:page:${pageStart}`, baseContext(pageStart, segment, "create_time", "desc"));
+          if (!result.ok) break;
+          const segmentTotal = result.total || result.items.length;
+          if (segmentTotal > capacity) {
+            const halves = bisectBulkDeleteDateSegment(segment);
+            if (!halves.length || requestedSegments + queue.length + halves.length > maxTimeSegments) {
+              truncated = true;
+              break;
+            }
+            queue.unshift(...halves);
+          } else {
+            accepted.push({ segment, items: result.items, total: segmentTotal });
+          }
+        }
+        segmentCount = accepted.length;
+        if (!truncated && Object.values(responses).every(responseOk)) {
+          let segmentedRemoteTotal = 0;
+          for (const [segmentIndex, entry] of accepted.entries()) {
+            segmentedRemoteTotal += entry.total;
+            products.push(...entry.items);
+            let fetchedCount = entry.items.length;
+            for (let page = pageStart + 1; page < pageStart + rangeMaxPages && fetchedCount < entry.total; page += 1) {
+              const key = `${planKey}:segment:${segmentIndex + 1}:${entry.segment.startDate}:${entry.segment.endDate}:page:${page}`;
+              const result = await requestPage(key, baseContext(page, entry.segment, "create_time", "desc"));
+              products.push(...result.items);
+              fetchedCount += result.items.length;
+              if (!result.ok || result.items.length < pageSize) break;
+            }
+            if (fetchedCount < entry.total) truncated = true;
+          }
+          remoteTotal = Math.max(remoteTotal, segmentedRemoteTotal);
+        }
       }
     }
   }
-  await Promise.all(Array.from({ length: Math.max(1, keywordConcurrency) }, () => keywordWorker()));
   const deduped = new Map<string, Record<string, unknown>>();
   products.forEach((item, index) => {
     const id = text(firstPathValue(item, fieldPaths(payload.adapter, "productId"))) || `row-${index}`;
     if (!deduped.has(id)) deduped.set(id, item);
   });
   const dedupedProducts = [...deduped.values()];
-  const effectiveRemoteTotal = remoteTotal || deduped.size;
+  const effectiveRemoteTotal = sourceMode === "ids" ? deduped.size : remoteTotal || deduped.size;
+  const allRequestsOk = Object.values(responses).length > 0 && Object.values(responses).every(responseOk);
+  if (sourceMode !== "ids" && allRequestsOk && effectiveRemoteTotal > dedupedProducts.length) truncated = true;
   return {
     products: dedupedProducts,
     remoteTotal: effectiveRemoteTotal,
-    truncated: sourceMode !== "ids" && effectiveRemoteTotal > dedupedProducts.length,
-    requestOk: Object.values(responses).length > 0 && Object.values(responses).every((response) => requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter))),
+    truncated,
+    requestOk: allRequestsOk,
     pageSize,
     maxPages,
+    segmented,
+    segmentCount,
+    segmentBounds,
     sourceHealth: Object.entries(responses).map(([key, response]) => ({
       key,
       status: response.status,
@@ -738,6 +852,9 @@ async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSumm
       truncated: collected.truncated,
       pageSize: collected.pageSize,
       maxPages: collected.maxPages,
+      segmented: collected.segmented,
+      segmentCount: collected.segmentCount,
+      segmentBounds: collected.segmentBounds,
       importItemCount: sourceMode === "ids" ? filters.importItems?.length || 0 : 0,
       storeImportItemCount: sourceMode === "ids" ? productIdsForStore(filters, store).length : 0,
       sourceHealth: collected.sourceHealth
@@ -753,7 +870,7 @@ async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSumm
     status: detail.status || (detail.ok ? "ok" : "failed"),
     ok: detail.ok,
     message: detail.message,
-    metrics: { productCount: row.productCount, matchedCount: row.matchedCount, executableCount: row.executableCount, remoteTotal: collected.remoteTotal, truncated: collected.truncated }
+    metrics: { productCount: row.productCount, matchedCount: row.matchedCount, executableCount: row.executableCount, remoteTotal: collected.remoteTotal, truncated: collected.truncated, segmented: collected.segmented, segmentCount: collected.segmentCount }
   });
   return { row, products, candidates, detail, sourceHealth: collected.sourceHealth };
 }
@@ -1173,7 +1290,9 @@ async function executeRequestStage(payload: DoudianAdapterPayload, store: Doudia
     stage,
     planKey,
     protectMode,
-    lookupConcurrency: policyNumber(payload.adapter, "bulkDelete.liveLookupConcurrency", 4, 1, 8),
+    lookupConcurrency: policyNumber(payload.adapter, "bulkDelete.liveLookupConcurrency", 1, 1, 4),
+    lookupBatchSize: policyNumber(payload.adapter, "bulkDelete.liveLookupBatchSize", 50, 1, 100),
+    lookupBatchDelayMs: policyNumber(payload.adapter, "bulkDelete.liveLookupBatchDelayMs", 500, 0, 10000),
     confirmAttempts: policyNumber(payload.adapter, "bulkDelete.recycleConfirmAttempts", 5, 1, 10),
     confirmDelayMs: policyNumber(payload.adapter, "bulkDelete.recycleConfirmDelayMs", 1000, 0, 10000),
     shouldCancel: operationArgs.shouldCancel
@@ -1186,7 +1305,7 @@ async function executeRequestStage(payload: DoudianAdapterPayload, store: Doudia
   if (!safeCandidates.length) {
     await recordExecutionMutationResults({ store, executions: rejectedExecutions.map((item) => ({ ...item, action: auditAction })), defaultAction: auditAction }).catch(() => undefined);
     return {
-      ok: rejectedExecutions.length > 0 && rejectedExecutions.every((item) => item.ok !== false),
+      ok: rejectedExecutions.length > 0 && safety.rejected.every((entry) => entry.reason === "already-recycled"),
       dryRun: false,
       executions: rejectedExecutions,
       successfulCandidates: alreadySatisfiedCandidates,
@@ -1254,7 +1373,9 @@ async function executeRequestStage(payload: DoudianAdapterPayload, store: Doudia
   }
   const allExecutions = [...rejectedExecutions, ...executions];
   await recordExecutionMutationResults({ store, executions: allExecutions.map((item) => ({ ...item, action: auditAction })), defaultAction: auditAction }).catch(() => undefined);
-  const ok = executions.length === safeCandidates.length && executions.every((item) => item.ok) && rejectedExecutions.every((item) => item.ok !== false);
+  const ok = executions.length === safeCandidates.length
+    && executions.every((item) => item.ok)
+    && safety.rejected.every((entry) => entry.reason === "already-recycled");
   return {
     ok,
     dryRun: false,
@@ -1299,8 +1420,8 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
       batchIndex: batchIndex + 1,
       status: firstStage.ok ? (firstStage.dryRun ? "dry_run" : "ok") : "failed",
       ok: firstStage.ok,
-      message: firstStage.executions.find((item) => item.ok === false)?.message || "",
-      metrics: { productCount: batch.length, successCount: firstStage.successfulCandidates.length, failedCount: firstStage.executions.filter((item) => item.ok === false).length, totalBatches: batches.length }
+      message: firstStage.executions.find((item) => !bulkDeleteExecutionSucceeded(item))?.message || "",
+      metrics: { productCount: batch.length, successCount: firstStage.successfulCandidates.length, failedCount: firstStage.executions.filter((item) => !bulkDeleteExecutionSucceeded(item)).length, totalBatches: batches.length }
     });
 
     let secondStage: Awaited<ReturnType<typeof executeRequestStage>> | null = null;
@@ -1327,8 +1448,8 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
             batchIndex: batchIndex + 1,
             status: secondStage.ok ? (secondStage.dryRun ? "dry_run" : "ok") : "failed",
             ok: secondStage.ok,
-            message: secondStage.executions.find((item) => item.ok === false)?.message || "",
-            metrics: { productCount: firstStage.successfulCandidates.length, successCount: secondStage.successfulCandidates.length, failedCount: secondStage.executions.filter((item) => item.ok === false).length, totalBatches: batches.length }
+            message: secondStage.executions.find((item) => !bulkDeleteExecutionSucceeded(item))?.message || "",
+            metrics: { productCount: firstStage.successfulCandidates.length, successCount: secondStage.successfulCandidates.length, failedCount: secondStage.executions.filter((item) => !bulkDeleteExecutionSucceeded(item)).length, totalBatches: batches.length }
           });
         }
       }
@@ -1359,19 +1480,20 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
       if (!operationCancelled(operationArgs)) await wait(batchDelayMs);
     }
   }
-  const failedCount = executions.filter((item) => item.ok === false).length;
+  const successfulCount = dryRun ? executions.length : executions.filter(bulkDeleteExecutionSucceeded).length;
+  const failedCount = executions.length - successfulCount;
   const ok = failedCount === 0;
   const message = ok
     ? dryRun
       ? policyMessage(payload.adapter, "bulkDelete.messages.executeDryRun", "Bulk delete dry-run only; no platform write request was submitted", { count: candidates.length })
-      : policyMessage(payload.adapter, "bulkDelete.messages.executedStore", "Bulk delete executed", { count: candidates.length })
-    : executions.find((item) => item.ok === false)?.message || policyMessage(payload.adapter, "bulkDelete.messages.executeFailed", "Bulk delete failed");
+      : policyMessage(payload.adapter, "bulkDelete.messages.executedStore", "Bulk delete executed", { count: successfulCount })
+    : executions.find((item) => !bulkDeleteExecutionSucceeded(item))?.message || policyMessage(payload.adapter, "bulkDelete.messages.executeFailed", "Bulk delete failed");
   return {
     executions,
     detail: {
       shopId: store.shopId,
       shopName: store.shopName,
-      status: ok ? (dryRun ? "dry_run" : "ok") : executions.some((item) => item.ok) ? "partial" : "failed",
+      status: ok ? (dryRun ? "dry_run" : "ok") : successfulCount > 0 ? "partial" : "failed",
       ok,
       message,
       reason: ok ? (dryRun ? "bulk-delete-execute-dry-run" : "") : "bulk-delete-execute-partial-or-failed",
@@ -1383,8 +1505,45 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
   };
 }
 
-async function saveExecuteRun(record: ExecuteRunRecord) {
+function storedExecution(record: ExecuteRunRecord, execution: DoudianBulkDeleteExecution, index: number): StoredBulkDeleteExecution {
+  return {
+    ...execution,
+    id: `${record.runId}:${String(index).padStart(8, "0")}`,
+    executionId: text(execution.id),
+    executeRunId: record.runId,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
+  };
+}
+
+function restoredExecution(record: StoredBulkDeleteExecution): DoudianBulkDeleteExecution {
+  const {
+    id: storageId,
+    executionId,
+    executeRunId: _executeRunId,
+    createdAt: _createdAt,
+    updatedAt: _updatedAt,
+    ...execution
+  } = record;
+  return { ...execution, id: executionId || storageId };
+}
+
+async function pruneExecuteHistory(adapter: DoudianAdapterConfig) {
+  const retention = policyNumber(adapter, "bulkDelete.scanHistoryLimit", 5, 1, 50);
+  const runs = (await repositoryGetAll<ExecuteRunRecord>(bulkDeleteExecuteStore))
+    .filter((run) => run.mode === "execute" && run.id === run.runId)
+    .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
+  for (const staleRun of runs.slice(retention)) {
+    const executions = await repositoryGetAllByPrefix<StoredBulkDeleteExecution>(bulkDeleteExecuteStore, `${staleRun.runId}:`, { pageSize: bulkDeleteResultPageSize, maxItems: 100000 }).catch(() => []);
+    await repositoryDeleteMany(bulkDeleteExecuteStore, executions.map((item) => item.id)).catch(() => 0);
+    await repositoryDelete(bulkDeleteExecuteStore, staleRun.id).catch(() => undefined);
+  }
+}
+
+async function saveExecuteRun(record: ExecuteRunRecord, adapter: DoudianAdapterConfig) {
   await repositoryPut(bulkDeleteExecuteStore, record);
+  await repositoryPutMany(bulkDeleteExecuteStore, record.executions.map((execution, index) => storedExecution(record, execution, index)));
+  await pruneExecuteHistory(adapter).catch(() => undefined);
 }
 
 async function fetchBulkDeleteScan(payload: DoudianAdapterPayload, args: BulkDeleteArgs): Promise<DoudianBulkDeleteResult> {
@@ -1561,10 +1720,10 @@ async function fetchBulkDeleteExecute(payload: DoudianAdapterPayload, args: Bulk
       if (store) executions.push(...executionFor([candidate], store, action, "cancelled", false, "bulk delete operation cancelled before batch submission", recyclePlanKey(payload.adapter), "recycle"));
     }
   }
-  const successCount = executions.filter((execution) => execution.ok && execution.status === "submitted").length;
-  const failureCount = executions.filter((execution) => execution.ok === false).length;
   const summary = executeSummary(executions);
   const dryRun = executions.length > 0 && executions.every((item) => item.status === "dry_run");
+  const successCount = dryRun ? executions.length : executions.filter(bulkDeleteExecutionSucceeded).length;
+  const failureCount = dryRun ? 0 : executions.length - successCount;
   const status = cancelled ? "cancelled" : failureCount ? (successCount ? "partial" : "failed") : "ok";
   const message = cancelled
     ? policyMessage(payload.adapter, "bulkDelete.messages.cancelled", "Bulk delete operation cancelled")
@@ -1585,6 +1744,7 @@ async function fetchBulkDeleteExecute(payload: DoudianAdapterPayload, args: Bulk
     confirmText: String(args.confirmText || ""),
     status,
     dryRun,
+    candidateIds: selected.map((candidate) => candidate.id),
     executions,
     details,
     summary,
@@ -1593,7 +1753,7 @@ async function fetchBulkDeleteExecute(payload: DoudianAdapterPayload, args: Bulk
     requestPlanHash: requestHash,
     createdAt: now,
     updatedAt: now
-  });
+  }, payload.adapter);
   return {
     ok: !cancelled && failureCount === 0,
     status,
@@ -1627,21 +1787,48 @@ export async function fetchBulkDeleteProducts(args: BulkDeleteArgs = {}): Promis
   return fetchBulkDeleteScan(payload, args);
 }
 
-export async function restoreLatestBulkDeleteScan() {
-  const runs = await repositoryGetAll<ScanRunRecord>(bulkDeleteScanStore);
-  const latest = runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
-  if (!latest) return null;
-  if (latest.candidates?.length) return latest;
-  const candidates = await repositoryGetAllByPrefix<DoudianBulkDeleteCandidate>(bulkDeleteCandidateStore, `${latest.runId}:`, { pageSize: 500, maxItems: 50000 }).catch(() => []);
+export async function restoreBulkDeleteScan(runId: string) {
+  const run = await repositoryGet<ScanRunRecord>(bulkDeleteScanStore, runId);
+  if (!run) return null;
+  if (run.candidates?.length) return run;
+  const candidates = await repositoryGetAllByPrefix<DoudianBulkDeleteCandidate>(bulkDeleteCandidateStore, `${run.runId}:`, { pageSize: bulkDeleteResultPageSize, maxItems: 100000 }).catch(() => []);
   return {
-    ...latest,
-    candidates: candidates.filter((candidate) => candidate.sourceRunId === latest.runId || candidate.sourceRunId === latest.id)
+    ...run,
+    candidates: candidates.filter((candidate) => candidate.sourceRunId === run.runId || candidate.sourceRunId === run.id)
   };
 }
 
+export async function restoreLatestBulkDeleteScan() {
+  const runs = await repositoryGetAll<ScanRunRecord>(bulkDeleteScanStore);
+  const latest = runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  return latest ? restoreBulkDeleteScan(latest.runId) : null;
+}
+
+export async function restoreBulkDeleteExecute(runId: string) {
+  const run = await repositoryGet<ExecuteRunRecord>(bulkDeleteExecuteStore, runId);
+  if (!run) return null;
+  const executions = run.executions?.length
+    ? run.executions
+    : (await repositoryGetAllByPrefix<StoredBulkDeleteExecution>(bulkDeleteExecuteStore, `${run.runId}:`, { pageSize: bulkDeleteResultPageSize, maxItems: 100000 }).catch(() => []))
+        .map(restoredExecution);
+  const candidateIds = (run.candidateIds?.length ? run.candidateIds : executions.map((execution) => text(execution.id)))
+    .map(text)
+    .filter(Boolean);
+  const storedCandidates = await repositoryGetMany<DoudianBulkDeleteCandidate>(bulkDeleteCandidateStore, candidateIds).catch(() => []);
+  const candidatesById = new Map<string, DoudianBulkDeleteCandidate>();
+  storedCandidates.forEach((candidate) => candidateKeys(candidate).forEach((key) => candidatesById.set(key, candidate)));
+  const candidates = candidateIds
+    .map((id) => candidatesById.get(id))
+    .filter((candidate): candidate is DoudianBulkDeleteCandidate => Boolean(candidate))
+    .map((candidate) => normalizeStoredCandidate(candidate, run.sourceRunId, run.action));
+  return { ...run, candidates, executions };
+}
+
 export async function restoreLatestBulkDeleteExecute() {
-  const runs = await repositoryGetAll<ExecuteRunRecord>(bulkDeleteExecuteStore);
-  return runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  const runs = (await repositoryGetAll<ExecuteRunRecord>(bulkDeleteExecuteStore))
+    .filter((run) => run.mode === "execute" && run.id === run.runId);
+  const latest = runs.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0] || null;
+  return latest ? restoreBulkDeleteExecute(latest.runId) : null;
 }
 
 export async function runDoudianBulkDeleteSelfCheck(options: { doudianAdapter?: DoudianAdapterPayload } = {}) {
