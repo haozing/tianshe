@@ -24,6 +24,7 @@ const {
   remoteIntegrityErrorDataUrl
 } = require("./security/remote-web-integrity");
 const { registerWebContentsPrincipal, revokeWebContentsPrincipal } = require("./security/web-contents-principal");
+const { applyMainWindowZoom } = require("./window/main-zoom-policy");
 
 app.commandLine.appendSwitch("ignore-certificate-errors", "true");
 if (process.env.CHIHU_ENABLE_GPU === "1") {
@@ -106,6 +107,15 @@ function createMainWindow() {
   global.mainWindow = mainWindow;
   mainWindow.setMenu(null);
   addDevShortcuts(mainWindow);
+  const windowForZoom = mainWindow;
+  windowForZoom.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame === false || isInPlace || windowForZoom.isDestroyed() || windowForZoom.webContents.isDestroyed()) return;
+    try {
+      windowForZoom.webContents.setZoomFactor(1);
+    } catch (error) {
+      console.warn("[zoom] failed to reset main zoom:", error && error.message ? error.message : error);
+    }
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -183,6 +193,11 @@ function registerMainWindowHandlers() {
     mainWindow = nextWindow;
     global.mainWindow = mainWindow;
     return { ok: true, winId: mainWindow.id };
+  });
+
+  ipcMain.handle("setMainZoom", async (event, args = {}) => {
+    const win = getMainWindow();
+    return applyMainWindowZoom({ window: win, sender: event.sender, args });
   });
 
   ipcMain.handle("minimizeWindow", async (_event, args = {}) => {

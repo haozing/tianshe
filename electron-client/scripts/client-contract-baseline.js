@@ -14,6 +14,7 @@ const baseClientMethods = [
   ["sendNotification", "send_notification"],
   ["getMainWindowInfo", "getMainWindowInfo"],
   ["resetMainWindow", "resetMainWindow"],
+  ["setMainZoom", "setMainZoom"],
   ["getAllBrowserWindowInfos", "getAllBrowserWindowInfos"],
   ["getAppInfo", "app_info"],
   ["startAutoUpdate", "startAutoUpdate"],

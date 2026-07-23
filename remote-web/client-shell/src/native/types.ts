@@ -21,6 +21,14 @@ export interface NativeWindowCommandRequest {
   timeoutMs?: number;
 }
 
+export type NativePageScale = 1 | 1.1 | 1.25;
+
+export interface NativeMainZoomResult {
+  ok: boolean;
+  factor: NativePageScale;
+  message?: string;
+}
+
 export interface NativeHttpRequest {
   taskGrantId?: string;
   partition?: string;
@@ -182,6 +190,7 @@ export interface ChihuNativeApi {
     minimize?: (args?: unknown) => Promise<unknown>;
     maximize?: (args?: unknown) => Promise<unknown>;
     close?: (args?: unknown) => Promise<unknown>;
+    setMainZoom?: (args: { factor: NativePageScale }) => Promise<NativeMainZoomResult>;
     isMaximized?: (args?: unknown) => Promise<unknown>;
     isDestroyed?: (args?: unknown) => Promise<unknown>;
   };

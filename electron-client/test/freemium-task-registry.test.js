@@ -20,6 +20,7 @@ const { taskWindowCommandScript } = require("../src/main/tasks/task-window-comma
 const { urlMatchesPrincipal } = require("../src/main/security/web-contents-principal");
 const { MAIN_WINDOW_ONLY_CHANNELS, mainWindowControlDecision } = require("../src/main/license/window-control-policy");
 const { parseVerifiedReleaseUrl, verifiedReleaseEntryUrl } = require("../src/main/security/remote-web-integrity");
+const { MAIN_ZOOM_FACTORS, applyMainWindowZoom } = require("../src/main/window/main-zoom-policy");
 
 test("task registry contains the audited free and paid boundary", () => {
   for (const taskType of ["fetchDoudianStores", "businessData", "fundsData", "violationsData", "staleGoodsScan", "staleGoodsExecute", "bulkDeleteScan", "bulkDeleteExecute"]) {
@@ -124,12 +125,38 @@ test("verified release URLs preserve the release namespace for every artifact", 
 });
 
 test("task runners cannot invoke main-window controls", () => {
-  for (const channel of ["getMainWindowInfo", "reloadHomeUrl", "resetMainWindow", "minimizeWindow", "maximizeWindow", "closeWindow", "isWindowMaximized"]) {
+  for (const channel of ["getMainWindowInfo", "reloadHomeUrl", "resetMainWindow", "minimizeWindow", "maximizeWindow", "closeWindow", "isWindowMaximized", "setMainZoom"]) {
     assert.equal(MAIN_WINDOW_ONLY_CHANNELS.has(channel), true, channel);
     assert.equal(mainWindowControlDecision("runner", channel), false, channel);
     assert.equal(mainWindowControlDecision("main", channel), true, channel);
   }
   assert.equal(mainWindowControlDecision("runner", "isWindowDestroyed"), null);
+});
+
+test("main zoom is restricted to the current main renderer and supported factors", () => {
+  assert.deepEqual([...MAIN_ZOOM_FACTORS], [1, 1.1, 1.25]);
+  const calls = [];
+  const sender = {
+    isDestroyed: () => false,
+    setZoomFactor: (factor) => calls.push(factor)
+  };
+  const window = { isDestroyed: () => false, webContents: sender };
+
+  for (const factor of [1, 1.1, 1.25]) {
+    assert.deepEqual(applyMainWindowZoom({ window, sender, args: { factor } }), { ok: true, factor });
+  }
+  assert.deepEqual(calls, [1, 1.1, 1.25]);
+
+  for (const factor of ["1.1", 0, 1.2, 2, null, NaN, Infinity]) {
+    assert.throws(() => applyMainWindowZoom({ window, sender, args: { factor } }), (error) => error.code === "ZOOM_FACTOR_INVALID");
+  }
+
+  const otherSender = { isDestroyed: () => false, setZoomFactor() {} };
+  assert.throws(() => applyMainWindowZoom({ window, sender: otherSender, args: { factor: 1.1 } }), (error) => error.code === "MAIN_WINDOW_REQUIRED");
+
+  const failingSender = { isDestroyed: () => false, setZoomFactor: () => { throw new Error("native failed"); } };
+  const failed = applyMainWindowZoom({ window: { isDestroyed: () => false, webContents: failingSender }, sender: failingSender, args: { factor: 1.1 } });
+  assert.deepEqual(failed, { ok: false, factor: 1.1, message: "native failed" });
 });
 
 test("mixed local stores keep only the audited schedule prefix free", () => {

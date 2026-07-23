@@ -5,7 +5,8 @@ const MAIN_WINDOW_ONLY_CHANNELS = new Set([
   "minimizeWindow",
   "maximizeWindow",
   "closeWindow",
-  "isWindowMaximized"
+  "isWindowMaximized",
+  "setMainZoom"
 ]);
 
 function mainWindowControlDecision(role, channel) {

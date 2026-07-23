@@ -64,6 +64,7 @@ export const defaultWorkspace: WorkspaceState = {
 };
 
 export type ReleaseChannel = "stable" | "beta";
+export type PageScale = 1 | 1.1 | 1.25;
 
 export interface ChihuPreferences {
   density: "comfortable" | "compact";
@@ -73,6 +74,7 @@ export interface ChihuPreferences {
   betaInviteVerifiedAt: string;
   betaInviteCodeHint: string;
   autoOperationLog: boolean;
+  pageScale: PageScale;
 }
 
 export const PREFERENCES_CHANGED_EVENT = "chihu:preferences-changed";
@@ -84,7 +86,8 @@ export const defaultPreferences: ChihuPreferences = {
   releaseChannel: "stable",
   betaInviteVerifiedAt: "",
   betaInviteCodeHint: "",
-  autoOperationLog: false
+  autoOperationLog: false,
+  pageScale: 1
 };
 
 export function isChihuStorageKey(key: string) {
@@ -114,6 +117,10 @@ function preferenceString<T extends string>(value: unknown, allowed: readonly T[
   return typeof value === "string" && allowed.includes(value as T) ? value as T : fallback;
 }
 
+function preferencePageScale(value: unknown): PageScale {
+  return value === 1 || value === 1.1 || value === 1.25 ? value : defaultPreferences.pageScale;
+}
+
 export function normalizePreferences(value: unknown): ChihuPreferences {
   const record = objectRecord(value);
   return {
@@ -123,7 +130,8 @@ export function normalizePreferences(value: unknown): ChihuPreferences {
     releaseChannel: preferenceString(record.releaseChannel, ["stable", "beta"], defaultPreferences.releaseChannel),
     betaInviteVerifiedAt: typeof record.betaInviteVerifiedAt === "string" ? record.betaInviteVerifiedAt : "",
     betaInviteCodeHint: typeof record.betaInviteCodeHint === "string" ? record.betaInviteCodeHint : "",
-    autoOperationLog: record.autoOperationLog === true
+    autoOperationLog: record.autoOperationLog === true,
+    pageScale: preferencePageScale(record.pageScale)
   };
 }
 

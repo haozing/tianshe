@@ -22,9 +22,11 @@ import type { LicenseStatus } from "../bridge/license";
 import type { WorkspaceState } from "../types";
 import { cn, isActiveRoute } from "../lib/utils";
 import { remoteAsset } from "../lib/assets";
-import { closeMainWindow, getDesktopVersionData, minimizeMainWindow, reloadMainWindowUrl, startDesktopUpdate, toggleMaximizeMainWindow } from "../bridge/client";
+import { closeMainWindow, getDesktopVersionData, mainZoomSupported, minimizeMainWindow, reloadMainWindowUrl, setMainZoom, startDesktopUpdate, toggleMaximizeMainWindow } from "../bridge/client";
 import { addPreferencesListener, getPreferences, hasRecentReleaseRedirect, markReleaseRedirect, releaseChannelLabel, releaseChannelToUpdateChannel, savePreferences } from "../bridge/storage";
-import type { ChihuPreferences, ReleaseChannel } from "../bridge/storage";
+import type { ChihuPreferences, PageScale, ReleaseChannel } from "../bridge/storage";
+import { applyAndPersistPageScale } from "../bridge/pageScale";
+import type { PageScaleChangeResult } from "../bridge/pageScale";
 import type { NativeUpdateVersionData } from "../native/types";
 import type { ResolvedFeatureRoute } from "../featureRoutes";
 
@@ -361,24 +363,30 @@ function VersionCheckDialog({
 }
 
 const INVITE_CODE_PATTERN = /^[A-Za-z0-9]{8}$/;
+const PAGE_SCALE_OPTIONS: PageScale[] = [1, 1.1, 1.25];
 
 function SettingsDialog({
   open,
   preferences,
   onOpenChange,
   onSaved,
-  onReloadChannel
+  onReloadChannel,
+  pageScaleSupported,
+  onPageScaleChange
 }: {
   open: boolean;
   preferences: ChihuPreferences;
   onOpenChange: (open: boolean) => void;
   onSaved: (preferences: ChihuPreferences) => void;
   onReloadChannel: (channel: ReleaseChannel) => Promise<"reloaded" | "same" | "unsupported" | "unavailable" | "error">;
+  pageScaleSupported: boolean;
+  onPageScaleChange: (scale: PageScale) => Promise<PageScaleChangeResult>;
 }) {
   const [draft, setDraft] = useState<ChihuPreferences>(preferences);
   const [inviteCode, setInviteCode] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [pageScaleBusy, setPageScaleBusy] = useState(false);
   const isBeta = draft.releaseChannel === "beta";
 
   useEffect(() => {
@@ -388,6 +396,20 @@ function SettingsDialog({
     setMessage("");
     setError("");
   }, [open]);
+
+  async function changePageScale(scale: PageScale) {
+    if (!pageScaleSupported || pageScaleBusy) return;
+    setDraft((current) => ({ ...current, pageScale: scale }));
+    setPageScaleBusy(true);
+    try {
+      const result = await onPageScaleChange(scale);
+      setDraft((current) => ({ ...current, pageScale: result.factor }));
+      if (!result.ok) setError(result.message || "页面大小设置失败");
+      else setError("");
+    } finally {
+      setPageScaleBusy(false);
+    }
+  }
 
   function persist(patch: Partial<ChihuPreferences>) {
     const next = savePreferences(patch);
@@ -448,7 +470,7 @@ function SettingsDialog({
           <div className="flex items-center justify-between gap-4 border-b border-[#edf1f6] px-5 py-4">
             <div className="min-w-0">
               <Dialog.Title className="m-0 text-[18px] font-semibold text-[#101828]">设置</Dialog.Title>
-              <Dialog.Description className="mt-1 text-[13px] leading-5 text-[#667085]">版本体验和异常排查配置</Dialog.Description>
+              <Dialog.Description className="mt-1 text-[13px] leading-5 text-[#667085]">页面显示、版本体验和异常排查配置</Dialog.Description>
             </div>
             <Dialog.Close className="grid size-8 shrink-0 place-items-center rounded-md border border-[#dbe5f2] text-[#667085] hover:bg-[#f6f8fc]" type="button" aria-label="关闭设置">
               <X className="size-[15px]" strokeWidth={2} />
@@ -456,6 +478,35 @@ function SettingsDialog({
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto px-5 py-5">
+            <section>
+              <h3 className="m-0 text-[16px] font-semibold text-[#101828]">页面显示</h3>
+              <div className="mt-4 flex items-center gap-3 max-[560px]:items-start max-[560px]:flex-col">
+                <span className="text-[14px] font-medium text-[#344054]">页面大小</span>
+                <div className="inline-flex rounded-md border border-[#dbe5f2] bg-[#f8fafc] p-0.5" role="group" aria-label="页面大小">
+                  {PAGE_SCALE_OPTIONS.map((scale) => (
+                    <button
+                      className={cn(
+                        "h-8 min-w-[76px] rounded px-3 text-[13px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45",
+                        draft.pageScale === scale ? "bg-[#3346e8] text-white shadow-sm" : "text-[#475467] hover:bg-white"
+                      )}
+                      key={scale}
+                      type="button"
+                      disabled={!pageScaleSupported || pageScaleBusy}
+                      aria-pressed={draft.pageScale === scale}
+                      onClick={() => void changePageScale(scale)}
+                    >
+                      {scale === 1 ? "标准 100%" : scale === 1.1 ? "中 110%" : "大 125%"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="m-0 mt-2 text-[13px] leading-6 text-[#667085]">
+                {pageScaleSupported ? "选择后立即生效并保存在本机，重启后继续使用当前页面大小。" : "当前客户端不支持页面缩放，升级客户端后可使用。"}
+              </p>
+            </section>
+
+            <div className="my-6 h-px bg-[#edf1f6]" />
+
             <section>
               <h3 className="m-0 text-[16px] font-semibold text-[#101828]">内测体验</h3>
               <div className="mt-4 grid grid-cols-[48px_minmax(0,234px)_auto] items-center gap-3 max-[560px]:grid-cols-1">
@@ -572,9 +623,32 @@ function ProfileMenuV2({
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [preferences, setPreferences] = useState<ChihuPreferences>(() => getPreferences());
+  const [pageScaleSupported, setPageScaleSupported] = useState(() => mainZoomSupported());
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const updateChannel = releaseChannelToUpdateChannel(preferences.releaseChannel);
+
+  useEffect(() => {
+    const supported = mainZoomSupported();
+    setPageScaleSupported(supported);
+    if (!supported) return;
+    const savedScale = getPreferences().pageScale;
+    void setMainZoom(savedScale).then((result) => {
+      if (!result.ok) return;
+    }).catch(() => undefined);
+  }, []);
+
+  async function changePageScale(scale: PageScale): Promise<PageScaleChangeResult> {
+    if (!pageScaleSupported) return { ok: false, factor: preferences.pageScale, message: "当前客户端不支持页面缩放" };
+    const update = await applyAndPersistPageScale({
+      scale,
+      previousScale: preferences.pageScale,
+      applyZoom: setMainZoom,
+      savePreferences
+    });
+    if (update.preferences) setPreferences(update.preferences);
+    return update.result;
+  }
 
   async function reloadReleaseChannel(channel: ReleaseChannel): Promise<"reloaded" | "same" | "unsupported" | "unavailable" | "error"> {
     const targetUrl = remoteUrlForReleaseChannel(channel);
@@ -944,6 +1018,8 @@ function ProfileMenuV2({
         onOpenChange={setSettingsOpen}
         onSaved={setPreferences}
         onReloadChannel={reloadReleaseChannel}
+        pageScaleSupported={pageScaleSupported}
+        onPageScaleChange={changePageScale}
       />
     </>
   );

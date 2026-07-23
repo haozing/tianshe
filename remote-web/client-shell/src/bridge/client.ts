@@ -26,7 +26,7 @@ import type {
   DoudianStoreResult,
   DoudianViolationsDataResult
 } from "../types";
-import type { NativeUpdateStartRequest, NativeUpdateVersionData, NativeUpdateVersionRequest } from "../native/types";
+import type { NativeMainZoomResult, NativePageScale, NativeUpdateStartRequest, NativeUpdateVersionData, NativeUpdateVersionRequest } from "../native/types";
 import { getChihuNative } from "../native/client";
 import {
   createStoreGroup,
@@ -120,6 +120,22 @@ export async function reloadMainWindowUrl(url?: string) {
     return true;
   }
   return false;
+}
+
+export function mainZoomSupported() {
+  const native = getChihuNative();
+  return typeof native?.windows.setMainZoom === "function" || typeof window.client?.setMainZoom === "function";
+}
+
+export async function setMainZoom(factor: NativePageScale): Promise<NativeMainZoomResult> {
+  const native = getChihuNative();
+  if (native?.windows.setMainZoom) {
+    return native.windows.setMainZoom({ factor });
+  }
+  if (typeof window.client?.setMainZoom === "function") {
+    return window.client.setMainZoom({ factor }) as Promise<NativeMainZoomResult>;
+  }
+  return { ok: false, factor, message: "main_zoom_bridge_unavailable" };
 }
 
 export async function getDesktopVersionData(args: NativeUpdateVersionRequest = {}): Promise<NativeUpdateVersionData> {

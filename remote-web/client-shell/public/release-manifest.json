@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseId": "2026.07.23.store-opportunity-stability-v1",
-  "buildTime": "2026-07-22T16:55:55.690Z",
+  "releaseId": "2026.07.23.page-scale-v1",
+  "buildTime": "2026-07-23T03:27:12.628Z",
   "entry": {
     "remoteWebOrigin": "http://chihu.facaishe.cn/remote-web/current/new-remote-web/"
   },
@@ -22,7 +22,7 @@
       "type": "remote-html",
       "cache": "no-cache",
       "required": true,
-      "sha256": "7a7f9d0c42139fb6b99646be90ec281be7637d8eba96e4419c5c169650552b64"
+      "sha256": "e4cfee425fa33ebf08274c4333594a49812052c847ed39342681829a4ed1632c"
     },
     {
       "path": "new-remote-web/bridge.js",
@@ -36,14 +36,14 @@
       "type": "remote-js",
       "cache": "short",
       "required": true,
-      "sha256": "10c06093a1e9e38e562e73cc43d3e6f3b4bc4ed861c764c710e66c186ca05d3d"
+      "sha256": "6fa2b8fe7131f3507f3e8a3e85aec12ae90bb5ca7595bdef6897d3e7b50ef653"
     },
     {
       "path": "new-remote-web/styles.css",
       "type": "remote-css",
       "cache": "short",
       "required": true,
-      "sha256": "cf2fffcacf922cfe55a49d032f100f64aa208515193be48b8abff3772ab46829"
+      "sha256": "3d2b528849b964c64064c3dee77ab7d1666dce919910a75c1ce91291eef4364d"
     },
     {
       "path": "new-remote-web/assets/chihu-app-icon.png",
@@ -71,7 +71,7 @@
       "type": "chihu-config",
       "cache": "no-cache",
       "required": true,
-      "sha256": "e248dc46a1819db32b803d44ab3064d7359946ee7ceb63c7c934d8b6c4b5543a"
+      "sha256": "fc4be5dd99a3857cddeaebd37855b75e299a930744651471e90f0770696fa388"
     },
     {
       "path": "new-remote-web/config/chihu-config.marketing-pilot.json",
@@ -141,7 +141,7 @@
     "schemaVersion": 1,
     "algorithm": "ed25519",
     "keyId": "chihu-remote-web-ed25519-2026-07",
-    "payloadSha256": "8111ab1754fb8b41cb750a32f7722f244f41be4f2b03f27b1ff115a78ceda882",
-    "value": "xNUmpQ/GYYPU7dw1GEO/+WqWz3xfhdpwaefHXBgwNapEWPjhI3GEPu2bkX9KHs1eyzihPMCyaQOODRR1UNvjCw=="
+    "payloadSha256": "8295fda4175225f9e9fc76c5f07d6a3e86585741a1364dfff57274e9d4e09d88",
+    "value": "Hc4ctZH9t8vGaA8+F+T9JHo7nXvhMJvBmy5GicjKKp/zdLHB/4oCjZWDUs9PDKWzf1QGblyL0UJrcYE52q0qDg=="
   }
 }

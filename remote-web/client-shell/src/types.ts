@@ -1409,6 +1409,7 @@ declare global {
       maximizeWindow?: (args?: unknown) => Promise<unknown>;
       closeWindow?: (args?: unknown) => Promise<unknown>;
       openWindow?: (args?: unknown) => Promise<unknown>;
+      setMainZoom?: (args?: unknown) => Promise<unknown>;
     };
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@chihu/client-shell",
-  "version": "2026.07.23-store-opportunity-stability-v1",
+  "version": "2026.07.23-page-scale-v1",
   "private": true,
   "type": "module",
   "scripts": {
