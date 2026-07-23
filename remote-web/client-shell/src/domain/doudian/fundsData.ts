@@ -46,6 +46,15 @@ const FUNDS_DATA_FIELDS = [
 
 type FundsField = typeof FUNDS_DATA_FIELDS[number];
 
+const FUNDS_TEXT_FIELDS = [
+  "accountName",
+  "accountBank",
+  "phone"
+] as const;
+
+type FundsTextField = typeof FUNDS_TEXT_FIELDS[number];
+type FundsDataField = FundsField | FundsTextField;
+
 interface FundsDataArgs {
   doudianAdapter?: DoudianAdapterPayload;
   shopIds?: string[];
@@ -91,7 +100,7 @@ interface FundsLatestRecord {
   scriptsVersion: string;
   fieldSchemaVersion: string;
   requestPlanHash: string;
-  metricUpdatedAt?: Partial<Record<FundsField, string>>;
+  metricUpdatedAt?: Partial<Record<FundsDataField, string>>;
   updatedAt: string;
 }
 
@@ -107,11 +116,12 @@ interface SourceFailure {
 }
 
 interface MetricSource {
-  value: number;
+  value: number | string;
   source: "path" | "alias" | "derived" | "none";
   available: boolean;
   path?: string;
   alias?: string;
+  planKey?: string;
   formula?: string;
   sources?: string[];
 }
@@ -272,21 +282,26 @@ function fundsDataMappings(adapter: DoudianAdapterConfig) {
   return objectRecord(responseMappings(adapter).fundsData);
 }
 
-function fundsFieldConfig(adapter: DoudianAdapterConfig, field: FundsField) {
+function fundsFieldConfig(adapter: DoudianAdapterConfig, field: FundsDataField) {
   const fields = objectRecord(fundsDataMappings(adapter).fields);
   const value = fields[field];
   if (Array.isArray(value)) return { paths: value };
   return objectRecord(value);
 }
 
-function fundsFieldPaths(adapter: DoudianAdapterConfig, field: FundsField) {
+function fundsFieldPaths(adapter: DoudianAdapterConfig, field: FundsDataField) {
   const paths = fundsFieldConfig(adapter, field).paths;
   return Array.isArray(paths) ? paths.map((item) => text(item)).filter(Boolean) : [];
 }
 
-function fundsFieldAliases(adapter: DoudianAdapterConfig, field: FundsField) {
+function fundsFieldAliases(adapter: DoudianAdapterConfig, field: FundsDataField) {
   const aliases = fundsFieldConfig(adapter, field).aliases;
   return Array.isArray(aliases) ? aliases.map((item) => text(item)).filter(Boolean) : [];
+}
+
+function fundsFieldSourcePlans(adapter: DoudianAdapterConfig, field: FundsDataField) {
+  const sourcePlans = fundsFieldConfig(adapter, field).sourcePlans;
+  return Array.isArray(sourcePlans) ? sourcePlans.map((item) => text(item)).filter(Boolean) : [];
 }
 
 function fundsFieldScale(adapter: DoudianAdapterConfig, field: FundsField) {
@@ -414,12 +429,53 @@ function readFundsMetric(payload: Record<string, unknown>, adapter: DoudianAdapt
   return { value: 0, source: { value: 0, source: "none", available: false } satisfies MetricSource };
 }
 
+function readFundsText(payload: Record<string, unknown>, adapter: DoudianAdapterConfig, field: FundsTextField) {
+  for (const path of fundsFieldPaths(adapter, field)) {
+    const value = getPathValue(payload, path);
+    if (value !== undefined && value !== null) {
+      const next = text(value);
+      return { value: next, source: { value: next, source: "path", path, available: true } satisfies MetricSource };
+    }
+  }
+  const aliases = fundsFieldAliases(adapter, field);
+  if (aliases.length) {
+    const aliasLookup = new Map<string, string>();
+    for (const alias of aliases) {
+      const normalized = normalizeAliasKey(alias);
+      if (normalized && !aliasLookup.has(normalized)) aliasLookup.set(normalized, alias);
+    }
+    const sourcePlans = fundsFieldSourcePlans(adapter, field);
+    const roots = sourcePlans.length
+      ? sourcePlans.map((planKey) => ({ planKey, value: payload[planKey] }))
+      : [{ planKey: "", value: payload }];
+    for (const root of roots) {
+      const match = findDeepByAlias(root.value, aliasLookup);
+      if (match?.value === undefined || match.value === null) continue;
+      const next = text(match.value);
+      return {
+        value: next,
+        source: {
+          value: next,
+          source: "alias",
+          alias: match.alias,
+          ...(root.planKey ? { planKey: root.planKey } : {}),
+          available: true
+        } satisfies MetricSource
+      };
+    }
+  }
+  return { value: "", source: { value: "", source: "none", available: false } satisfies MetricSource };
+}
+
 function emptyFundsDataRow(store: DoudianStoreSummary): DoudianFundsDataRow {
   return {
     shopId: store.shopId,
     shopName: store.shopName,
     group: store.groupName || "",
     status: store.status,
+    accountName: "",
+    accountBank: "",
+    phone: "",
     withdrawBalance: 0,
     balance: 0,
     frozenBalance: 0,
@@ -530,6 +586,11 @@ function buildFundsDataResult(store: DoudianStoreSummary, responses: Record<stri
   const metricSources: Record<string, MetricSource> = {};
   for (const field of FUNDS_DATA_FIELDS) {
     const metric = readFundsMetric(payload, adapter, field);
+    row[field] = metric.value;
+    metricSources[field] = metric.source;
+  }
+  for (const field of FUNDS_TEXT_FIELDS) {
+    const metric = readFundsText(payload, adapter, field);
     row[field] = metric.value;
     metricSources[field] = metric.source;
   }
@@ -911,9 +972,9 @@ async function saveFundsLatestRows(args: {
     const detail = detailById.get(row.shopId);
     const diagnostic = objectRecord(detail?.diagnostic);
     const metricSources = objectRecord(diagnostic.metricSources);
-    const metricUpdatedAt = Object.fromEntries(FUNDS_DATA_FIELDS
+    const metricUpdatedAt = Object.fromEntries([...FUNDS_DATA_FIELDS, ...FUNDS_TEXT_FIELDS]
       .filter((field) => objectRecord(metricSources[field]).available === true)
-      .map((field) => [field, detail?.attemptedAt || updatedAt])) as Partial<Record<FundsField, string>>;
+      .map((field) => [field, detail?.attemptedAt || updatedAt])) as Partial<Record<FundsDataField, string>>;
     return {
       id: latestId(row.shopId),
       shopId: row.shopId,
@@ -969,8 +1030,8 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
       message: "Mock funds data synced",
       diagnostic: {
         rowSummary: rowSummary(row),
-        metricSources: Object.fromEntries(FUNDS_DATA_FIELDS.map((field) => [field, {
-          value: Number(row[field] || 0),
+        metricSources: Object.fromEntries([...FUNDS_DATA_FIELDS, ...FUNDS_TEXT_FIELDS].map((field) => [field, {
+          value: row[field] || (FUNDS_TEXT_FIELDS.includes(field as FundsTextField) ? "" : 0),
           source: "path",
           path: "mock",
           available: true
@@ -1220,6 +1281,12 @@ export async function runDoudianFundsDataSelfCheck(options: { doudianAdapter?: D
       expected: value,
       actual: parsed.row[field]
     }));
+    const expectedText = fundsResponseFixture.expectedText as Partial<Record<FundsTextField, string>>;
+    const textCases = Object.entries(expectedText).map(([field, value]) => ({
+      field,
+      expected: value,
+      actual: parsed.row[field]
+    }));
     const attemptedAt = nowIso();
     const detail: DoudianRunDetail = {
       shopId,
@@ -1261,6 +1328,23 @@ export async function runDoudianFundsDataSelfCheck(options: { doudianAdapter?: D
     const partial = buildFundsDataResult(store, partialResponses, payload.adapter);
     const partialSourceOk = ["subsidyTotal", "commissionSubsidy", "qianchuanSubsidy"]
       .every((field) => partial.metricSources[field]?.available === false);
+    const crossSourceResponses: Record<string, RequestPlanResult> = {
+      ...fixtureResponses,
+      fundAccountList: {
+        ...fixtureResponses.fundAccountList,
+        data: {
+          ...objectRecord(fixtureResponses.fundAccountList.data),
+          account_name: "Wrong account name",
+          bank_name: "Wrong bank",
+          bank_card_mobile: "13800000000"
+        }
+      }
+    };
+    delete crossSourceResponses.fundAccountOpenInfo;
+    const crossSource = buildFundsDataResult(store, crossSourceResponses, payload.adapter);
+    const accountSourceIsolationOk = FUNDS_TEXT_FIELDS.every((field) => (
+      crossSource.row[field] === "" && crossSource.metricSources[field]?.available === false
+    ));
     const zeroOrderResponses = {
       ...fixtureResponses,
       fundBillQuery: {
@@ -1298,17 +1382,19 @@ export async function runDoudianFundsDataSelfCheck(options: { doudianAdapter?: D
     const partialLatest = await fetchFundsDataLatest({ doudianAdapter: payload, shopIds: [shopId] });
     const partialLatestDetails = Array.isArray(partialLatest.details) ? partialLatest.details : [];
     const partialCacheOk = partialLatest.rows?.[0]?.withdrawBalance === expected.withdrawBalance && partialLatestDetails[0]?.status === "partial";
-    const fixtureOk = cases.every((item) => item.actual === item.expected);
+    const fixtureOk = [...cases, ...textCases].every((item) => item.actual === item.expected);
 
     return {
-      ok: fixtureOk && partialSourceOk && zeroOrderInferenceOk && negativeRiskOk && allFailedStatusOk && mixedStatusOk && partialCacheOk && latest.rows?.[0]?.withdrawBalance === expected.withdrawBalance && moneyCases.every((item) => item.actual === item.expected),
+      ok: fixtureOk && partialSourceOk && accountSourceIsolationOk && zeroOrderInferenceOk && negativeRiskOk && allFailedStatusOk && mixedStatusOk && partialCacheOk && latest.rows?.[0]?.withdrawBalance === expected.withdrawBalance && moneyCases.every((item) => item.actual === item.expected),
       latestOk: latest.ok === true && latest.rows?.[0]?.shopId === shopId,
       datePresetOk: latest.dateRange?.datePreset === "snapshot" && dateContext.beginDate === dateContext.endDate,
       metadataOk: latest.adapterVersion === payload.adapter.version && latest.scriptsVersion === (payload.scripts?.version || "") && latest.fieldSchemaVersion === schemaVersion,
       cases: [
         ...cases,
+        ...textCases,
         ...moneyCases.map((item, index) => ({ field: `moneyText-${index + 1}`, expected: item.expected, actual: item.actual })),
         { field: "partial-source-availability", expected: true, actual: partialSourceOk },
+        { field: "account-source-isolation", expected: true, actual: accountSourceIsolationOk },
         { field: "zero-order-amount-inference", expected: true, actual: zeroOrderInferenceOk },
         { field: "negative-risk-review", expected: true, actual: negativeRiskOk },
         { field: "all-failed-status", expected: "failed", actual: allFailedStatusOk ? "failed" : "unexpected" },

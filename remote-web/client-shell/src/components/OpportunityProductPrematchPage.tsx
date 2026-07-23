@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Activity,
@@ -119,7 +119,66 @@ function formatDuration(value: number | undefined) {
   return rest ? `${hours} 小时 ${rest} 分` : `${hours} 小时`;
 }
 
-function CompactMetric({ label, value, detail, tone = "default" }: { label: string; value: string; detail: string; tone?: "default" | "blue" | "green" | "warn" }) {
+function AnimatedNumber({ value, className, compact = false }: { value: number; className?: string; compact?: boolean }) {
+  const target = Math.max(0, Math.round(Number(value) || 0));
+  const [displayed, setDisplayed] = useState(target);
+  const [phase, setPhase] = useState<"idle" | "counting" | "settled">("idle");
+  const displayedRef = useRef(displayed);
+  const fromRef = useRef(displayed);
+  const settleTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const start = displayedRef.current;
+    if (target === start) return undefined;
+    fromRef.current = start;
+    setPhase("counting");
+    const delta = target - start;
+    const duration = Math.min(1500, Math.max(420, 480 + Math.min(120, Math.abs(delta)) * 7));
+    const startedAt = performance.now();
+    let frame = 0;
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const next = Math.round(start + delta * eased);
+      if (next !== displayedRef.current) {
+        displayedRef.current = next;
+        setDisplayed(next);
+      }
+      if (progress < 1) {
+        frame = window.requestAnimationFrame(tick);
+        return;
+      }
+      displayedRef.current = target;
+      setDisplayed(target);
+      if (Math.abs(delta) > 1) {
+        setPhase("settled");
+        settleTimerRef.current = window.setTimeout(() => setPhase("idle"), 720);
+      } else {
+        setPhase("idle");
+      }
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
+    };
+  }, [target]);
+
+  const jump = Math.abs(displayed - fromRef.current);
+  return (
+    <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)} aria-live="polite">
+      <strong className={cn("block truncate font-bold leading-6 tracking-[0]", compact ? "text-[12px]" : "text-[18px]")}>{displayed.toLocaleString("zh-CN")}</strong>
+      {phase === "counting" && !compact && Math.abs(target - fromRef.current) > 1 ? (
+        <span className="opportunity-counter-ring" aria-label={`正在增长 ${jump}`}>
+          <span>{jump.toLocaleString("zh-CN")}</span>
+        </span>
+      ) : null}
+      {phase === "settled" ? <CheckCircle2 className="opportunity-counter-check size-4 shrink-0" strokeWidth={2.5} aria-label="增长完成" /> : null}
+    </span>
+  );
+}
+
+function CompactMetric({ label, value, detail, tone = "default" }: { label: string; value: number; detail?: string; tone?: "default" | "blue" | "green" | "warn" }) {
   const toneClass = {
     default: "text-[#111827]",
     blue: "text-brand-navy",
@@ -129,9 +188,9 @@ function CompactMetric({ label, value, detail, tone = "default" }: { label: stri
   return (
     <div className="min-w-[112px] rounded-md border border-[#edf1f6] bg-[#fbfcff] px-3 py-2">
       <span className="block truncate text-[11px] font-semibold text-brand-muted">{label}</span>
-      <div className="mt-0.5 flex items-baseline gap-1.5">
-        <strong className={cn("block truncate text-[18px] font-bold leading-6 tracking-[0]", toneClass)}>{value}</strong>
-        <span className="min-w-0 truncate text-[11px] font-semibold text-[#667085]">{detail}</span>
+      <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+        <AnimatedNumber value={value} className={toneClass} />
+        {detail ? <span className="min-w-0 truncate text-[11px] font-semibold text-[#667085]">{detail}</span> : null}
       </div>
     </div>
   );
@@ -360,6 +419,12 @@ function storeRangeStatusInfo(args: {
   return { label: "待同步", className: "bg-[#f2f4f7] text-[#667085]" };
 }
 
+function storeRunPriority(status: string, phase: string) {
+  if (status === "running" || status === "submitting" || ["product-scan", "category-ledger", "clue-load", "tokenize", "match", "official-validate", "submitting"].includes(phase)) return 0;
+  if (status === "queued" || phase === "submit-queued") return 1;
+  return 2;
+}
+
 function pipelineLogPriority(detail: DoudianRunDetail) {
   const status = String(detail.status || "");
   const phase = detailDiagnosticText(detail, "phase");
@@ -414,7 +479,6 @@ export function OpportunityProductPrematchPage() {
   const [recentlyDayType, setRecentlyDayType] = useState(3);
   const [loading, setLoading] = useState<"" | "stores" | "latest" | "products" | "clues" | "match" | "submit" | "pipeline">("");
   const [pipelineInFlight, setPipelineInFlight] = useState(false);
-  const [pipelineLog, setPipelineLog] = useState("等待一键提报");
   const [pipelineLogs, setPipelineLogs] = useState<PipelineLiveLog[]>(() => [{ id: 0, time: pipelineLogTime(), message: "提报通道待命 · 等待选择店铺", tone: "idle" }]);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"submit" | "autoSubmit">("submit");
@@ -431,6 +495,9 @@ export function OpportunityProductPrematchPage() {
   const categoryRequestSeqRef = useRef(0);
   const pipelineLogSeqRef = useRef(1);
   const pipelineLogViewportRef = useRef<HTMLDivElement | null>(null);
+  const pipelineHeartbeatSeqRef = useRef(0);
+  const storeRowRefs = useRef(new Map<string, HTMLLabelElement>());
+  const storeRowTopsRef = useRef(new Map<string, number>());
 
   const filters = useMemo<DoudianOpportunityFilters>(() => ({
     activeKey: activeRank,
@@ -476,13 +543,8 @@ export function OpportunityProductPrematchPage() {
   const clueTotalCount = Number(resultSummary.clueCount || clues.length);
   const productFetchedCount = Number(resultSummary.productFetchedCount || productTotalCount);
   const productRemoteTotal = Number(resultSummary.productRemoteTotal || 0);
-  const productScanTruncatedCount = Number(resultSummary.productScanTruncatedCount || 0);
   const clueFetchedUniqueCount = Number(resultSummary.clueFetchedUniqueCount || clueTotalCount);
   const clueTruncatedCategoryCount = Number(resultSummary.clueTruncatedCategoryCount || 0);
-  const validationUnknownCount = Number(resultSummary.validationUnknownCount || 0);
-  const validationBudgetExhaustedCount = Number(resultSummary.validationBudgetExhaustedCount || 0);
-  const officialWordsCount = Number(resultSummary.officialWordsCount || 0);
-  const platformAuditPendingCount = Number(resultSummary.platformAuditPendingCount || 0);
   const processedStoreCount = Number(resultSummary.processedStoreCount || 0);
   const totalStoreCount = Number(resultSummary.totalStoreCount || selectedShopIds.size);
   const autoSubmitPageCount = Math.max(1, Math.ceil(candidateSummary.totalCount / autoSubmitPageSize));
@@ -561,7 +623,8 @@ export function OpportunityProductPrematchPage() {
           quotaGap,
           estimatedSubmitDurationMs: estimatedStoreSubmitDurationMs
         };
-      });
+      })
+      .sort((left, right) => storeRunPriority(left.status, left.phase) - storeRunPriority(right.status, right.phase) || left.index - right.index);
   }, [candidateCountByShop, productCountByShop, runDetails, stores]);
 
   const categoryOptions = useMemo<StoreCategoryOption[]>(() => {
@@ -586,14 +649,10 @@ export function OpportunityProductPrematchPage() {
 
   const selectedCategoryKeys = selectedStoreCategoryKeys || [];
   const selectedCategoryCount = selectedCategoryKeys.length;
-  const liveSubmittedCount = Number(resultSummary.submittedCount || 0);
-  const liveFailedCount = Number(resultSummary.failedCount || 0);
-  const liveProcessedCount = Number(resultSummary.processedStoreCount || 0);
 
   function recordPipelineLog(message: string) {
     const normalized = String(message || "").trim();
     if (!normalized) return;
-    setPipelineLog(normalized);
     setPipelineLogs((current) => {
       if (current[current.length - 1]?.message === normalized) return current;
       const next = [...current, {
@@ -614,6 +673,38 @@ export function OpportunityProductPrematchPage() {
     const viewport = pipelineLogViewportRef.current;
     if (viewport) viewport.scrollTop = viewport.scrollHeight;
   }, [pipelineLogs]);
+
+  useEffect(() => {
+    if (!pipelineBusy) return undefined;
+    const heartbeatMessages = [
+      "队列心跳正常 · 正在接收下一批进度",
+      "店铺处理上下文已保持 · 继续推进",
+      "结果整理通道在线 · 等待新的回执",
+      "本地进度视图已刷新 · 数据持续汇总",
+      "任务仍在运行 · 正在校对处理节奏"
+    ];
+    const timer = window.setInterval(() => {
+      const message = heartbeatMessages[pipelineHeartbeatSeqRef.current % heartbeatMessages.length];
+      pipelineHeartbeatSeqRef.current += 1;
+      recordPipelineLog(message);
+    }, 720);
+    return () => window.clearInterval(timer);
+  }, [pipelineBusy]);
+
+  useLayoutEffect(() => {
+    const nextTops = new Map<string, number>();
+    storeRowRefs.current.forEach((element, shopId) => {
+      const nextTop = element.getBoundingClientRect().top;
+      nextTops.set(shopId, nextTop);
+      const previousTop = storeRowTopsRef.current.get(shopId);
+      if (previousTop === undefined || Math.abs(previousTop - nextTop) < 1) return;
+      element.animate(
+        [{ transform: `translateY(${previousTop - nextTop}px)` }, { transform: "translateY(0)" }],
+        { duration: 520, easing: "cubic-bezier(.2,.8,.2,1)" }
+      );
+    });
+    storeRowTopsRef.current = nextTops;
+  }, [storeRunRows]);
 
   useEffect(() => addDoudianProgressListener((event) => {
     const detail = event.detail;
@@ -996,19 +1087,19 @@ export function OpportunityProductPrematchPage() {
             </button>
           </div>
           <div className="grid shrink-0 grid-cols-4 gap-2 max-[980px]:grid-cols-2 max-[560px]:grid-cols-1">
-            <CompactMetric label="店铺进度" value={`${formatNumber(processedStoreCount || storeRunRows.length)} / ${formatNumber(totalStoreCount || selectedShopIds.size)}`} detail={`${selectedShopIds.size} 家已选`} tone="blue" />
+            <CompactMetric label="店铺进度" value={processedStoreCount || storeRunRows.length} detail={`/ ${formatNumber(totalStoreCount || selectedShopIds.size)}`} tone="blue" />
             <CompactMetric
-              label="已扫描商品"
-              value={productRemoteTotal ? `${formatNumber(productFetchedCount)} / ${formatNumber(productRemoteTotal)}` : formatNumber(productFetchedCount)}
-              detail={productScanTruncatedCount ? `${formatNumber(productScanTruncatedCount)} 家扫描已截断` : productFetchedCount || productRemoteTotal ? "商品扫描完整" : "等待扫描"}
+              label="商品数"
+              value={productFetchedCount}
+              detail={productRemoteTotal ? `/ ${formatNumber(productRemoteTotal)}` : undefined}
             />
             <CompactMetric
-              label="已加载商机"
-              value={formatNumber(clueFetchedUniqueCount)}
-              detail={clueTruncatedCategoryCount ? `${formatNumber(clueTruncatedCategoryCount)} 个类目已截断 · 官方词 ${formatNumber(officialWordsCount)}` : `官方词 ${formatNumber(officialWordsCount)} · 本地候选 ${formatNumber(candidateSummary.totalCount)}`}
+              label="商机数"
+              value={clueFetchedUniqueCount}
+              detail={clueTruncatedCategoryCount ? `${formatNumber(clueTruncatedCategoryCount)} 个类目截断` : undefined}
               tone="green"
             />
-            <CompactMetric label="接口已受理" value={formatNumber(candidateSummary.submittedCount)} detail={`待审核 ${formatNumber(platformAuditPendingCount)} · 官方通过 ${formatNumber(candidateSummary.eligibleCount)} · 未知 ${formatNumber(validationUnknownCount)} · 预算 ${formatNumber(validationBudgetExhaustedCount)}`} />
+            <CompactMetric label="提报数" value={candidateSummary.submittedCount} tone="green" />
           </div>
         </div>
 
@@ -1066,8 +1157,17 @@ export function OpportunityProductPrematchPage() {
                 <div className="min-h-0 flex-1 overflow-auto">
                   {storeRunRows.map((row) => {
                     const statusInfo = storeRangeStatusInfo(row);
+                    const processing = storeRunPriority(row.status, row.phase) === 0;
                     return (
-                      <label className="grid min-h-[42px] cursor-pointer grid-cols-[54px_minmax(120px,1fr)_94px_78px_64px_64px_82px] items-center border-b border-[#edf1f6] text-[12px] text-[#344054] hover:bg-[#fffaf7]" key={row.shopId}>
+                      <label
+                        ref={(element) => {
+                          if (element) storeRowRefs.current.set(row.shopId, element);
+                          else storeRowRefs.current.delete(row.shopId);
+                        }}
+                        className={cn("opportunity-store-row grid min-h-[42px] cursor-pointer grid-cols-[54px_minmax(120px,1fr)_94px_78px_64px_64px_82px] items-center border-b border-[#edf1f6] text-[12px] text-[#344054] hover:bg-[#fffaf7]", processing && "is-processing")}
+                        data-processing={processing ? "true" : "false"}
+                        key={row.shopId}
+                      >
                         <span className="flex items-center justify-center gap-1.5">
                           <input checked={selectedShopIds.has(row.shopId)} className="size-4 accent-brand-fox" type="checkbox" onChange={() => toggleStore(row.shopId)} />
                           <span className="font-semibold text-[#667085]">{row.index}</span>
@@ -1077,9 +1177,9 @@ export function OpportunityProductPrematchPage() {
                         <span className="px-2 text-center">
                           <span className={cn("inline-flex rounded-md px-2 py-0.5 text-[12px] font-semibold", statusInfo.className)} title={row.estimatedSubmitDurationMs ? `节流预计 ${formatDuration(row.estimatedSubmitDurationMs)}` : undefined}>{statusInfo.label}</span>
                         </span>
-                        <span className="px-2 text-right font-semibold text-[#475467]">{formatNumber(row.productCount)}</span>
-                        <span className="px-2 text-right font-semibold text-[#475467]">{formatNumber(row.clueCount)}</span>
-                        <span className="px-2 text-right font-semibold text-[#087443]">{formatNumber(row.submittedCount)}</span>
+                        <span className="px-2 text-right font-semibold text-[#475467]"><AnimatedNumber value={row.productCount} compact /></span>
+                        <span className="px-2 text-right font-semibold text-[#475467]"><AnimatedNumber value={row.clueCount} compact /></span>
+                        <span className="px-2 text-right font-semibold text-[#087443]"><AnimatedNumber value={row.submittedCount} compact /></span>
                       </label>
                     );
                   })}
@@ -1090,18 +1190,30 @@ export function OpportunityProductPrematchPage() {
               <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-brand-line bg-[#f6f8fb]">
                 <div className="grid h-full min-h-0 grid-rows-[auto_minmax(240px,1fr)] gap-3 overflow-auto p-3">
                   <div className="grid gap-3 rounded-md border border-[#edf1f6] bg-white p-3">
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center justify-between gap-3">
                       <strong className="text-[14px] text-brand-navy">提报设置</strong>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {pipelineBusy ? (
+                          <button className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[#ffd0d0] bg-[#fff5f5] px-2.5 text-[12px] font-semibold text-[#b42318] hover:bg-[#ffeded]" type="button" onClick={cancelPipelineSubmit} title="取消当前任务">
+                            <Square className="size-3.5" fill="currentColor" strokeWidth={2} />
+                            取消
+                          </button>
+                        ) : null}
+                        <button className={cn("opportunity-submit-button inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] font-bold text-white transition-[transform,box-shadow] hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-45", pipelineBusy ? "is-running" : "")} type="button" onClick={runPipelineSubmit} disabled={busy || pipelineBusy || !selectedShopIds.size}>
+                          {pipelineBusy ? <Loader2 className="size-4 animate-spin" strokeWidth={2.2} /> : <Send className="size-4" strokeWidth={2.2} />}
+                          {pipelineBusy ? "正在提报" : "一键提报"}
+                        </button>
+                      </div>
                     </div>
                     <div className="grid grid-cols-[180px_minmax(0,1fr)] gap-3 max-[760px]:grid-cols-1">
                       <SelectField label="上新时间" value={recentlyDayType} options={recentlyOptions} onChange={setRecentlyDayType} />
                       <div className="grid min-w-0 gap-1.5">
                         <span className="text-[13px] font-semibold text-[#475467]">店铺类目</span>
-                        <button className="flex h-9 min-w-0 items-center gap-2 rounded-md border border-[#dbe5f2] bg-[#fbfcff] px-2.5 text-left transition-colors hover:border-brand-fox" type="button" onClick={() => setCategoryDialogOpen(true)}>
-                          <FolderTree className="size-4 shrink-0 text-brand-fox" strokeWidth={2} />
+                        <button className={cn("flex h-9 min-w-0 items-center gap-2 rounded-md border px-2.5 text-left transition-colors hover:border-brand-fox", selectedCategoryCount ? "border-[#ffb08e] bg-[#fff5ef] shadow-[0_0_0_2px_rgba(255,80,32,0.08)]" : "border-[#dbe5f2] bg-[#fbfcff]")} type="button" onClick={() => setCategoryDialogOpen(true)}>
+                          <FolderTree className={cn("size-4 shrink-0", selectedCategoryCount ? "text-brand-fox" : "text-[#98a2b3]")} strokeWidth={2} />
                           <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap">
                             {categoryOptions.filter((item) => selectedCategoryKeys.includes(item.key)).map((item) => (
-                              <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[11px] font-semibold text-[#526a91]" key={item.key}>{item.label}</span>
+                              <span className="shrink-0 rounded border border-[#ffd0bc] bg-white px-1.5 py-0.5 text-[11px] font-semibold text-[#c43d13]" key={item.key}>{item.label}</span>
                             ))}
                             {!categoryOptions.length ? <span className="truncate text-[12px] font-semibold text-[#98a2b3]">暂无店铺类目</span> : null}
                           </span>
@@ -1126,57 +1238,25 @@ export function OpportunityProductPrematchPage() {
                     <MultiChoiceField label="权益" values={selectedBenefitIds} options={benefitOptions} onToggle={(value) => toggleNumberSelection(value, setSelectedBenefitIds)} onClear={() => setSelectedBenefitIds([])} />
                   </div>
 
-                  <div className={cn("opportunity-live-panel relative flex min-h-[260px] flex-col overflow-hidden rounded-md border bg-[#101a1d] text-white shadow-[0_18px_45px_rgba(16,26,29,0.22)]", pipelineBusy ? "is-running border-[#22c55e]/70" : "border-[#31464c]")}>
-                    <div className="flex min-h-[48px] shrink-0 items-center justify-between gap-3 border-b border-[#2b3d42] bg-[#142226] px-4">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className={cn("grid size-7 place-items-center rounded-md", pipelineBusy ? "bg-[#123b2c] text-[#4ade80]" : "bg-[#25343a] text-[#a7bac1]")}>
-                          <Radio className={cn("size-4", pipelineBusy && "animate-pulse")} strokeWidth={2.2} />
-                        </span>
-                        <strong className="shrink-0 text-[14px] tracking-[0] text-white">实时提报</strong>
-                        <span className="min-w-0 truncate text-[12px] font-semibold text-[#9fb2b8]" title={pipelineLog}>{pipelineLog}</span>
+                  <div className={cn("opportunity-live-panel relative flex min-h-[280px] flex-col overflow-hidden rounded-md border bg-[#101a1d] text-white shadow-[0_18px_45px_rgba(16,26,29,0.22)]", pipelineBusy ? "is-running border-[#22c55e]/70" : "border-[#31464c]")}>
+                    <div className="relative min-h-0 flex-1 overflow-hidden bg-[#0d171a]">
+                      <div className="opportunity-live-rail flex h-8 items-center gap-3 border-b border-[#26383d] px-3 text-[10px] font-bold uppercase text-[#789098]">
+                        <Activity className={cn("size-3.5", pipelineBusy && "text-[#4ade80]")} strokeWidth={2.2} />
+                        <span>LIVE EVENT STREAM</span>
+                        <span className="ml-auto">{pipelineLogs.length.toString().padStart(2, "0")} EVENTS</span>
                       </div>
-                      <div className="flex shrink-0 items-center gap-3 text-[12px] font-semibold">
-                        <span className="text-[#5ee6a8]">受理 {formatNumber(liveSubmittedCount)}</span>
-                        <span className="text-[#ff8d85]">失败 {formatNumber(liveFailedCount)}</span>
-                        <span className="text-[#f6c85f]">店铺 {formatNumber(liveProcessedCount)}/{formatNumber(totalStoreCount || selectedShopIds.size)}</span>
-                      </div>
-                    </div>
-                    <div className="grid min-h-0 flex-1 grid-cols-[210px_minmax(0,1fr)] max-[820px]:grid-cols-1">
-                      <div className="flex flex-col justify-center gap-3 border-r border-[#2b3d42] bg-[#122024] p-4 max-[820px]:border-b max-[820px]:border-r-0">
-                        <button className={cn("opportunity-submit-button inline-flex h-14 w-full items-center justify-center gap-2 rounded-md px-4 text-[16px] font-bold text-white transition-[transform,background-color,box-shadow] hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-45", pipelineBusy ? "bg-[#17864f] shadow-[0_0_28px_rgba(34,197,94,0.34)]" : "bg-brand-fox shadow-[0_0_28px_rgba(255,80,32,0.38)] hover:bg-brand-foxHover")} type="button" onClick={runPipelineSubmit} disabled={busy || pipelineBusy || !selectedShopIds.size}>
-                          {pipelineBusy ? <Loader2 className="size-5 animate-spin" strokeWidth={2.2} /> : <Send className="size-5" strokeWidth={2.2} />}
-                          {pipelineBusy ? "正在提报" : "一键提报"}
-                        </button>
-                        {pipelineBusy ? (
-                          <button className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-md border border-[#7a3434] bg-[#2a1b1c] text-[12px] font-semibold text-[#ff9b94] hover:bg-[#352022]" type="button" onClick={cancelPipelineSubmit}>
-                            <Square className="size-3.5" fill="currentColor" strokeWidth={2} />
-                            取消任务
-                          </button>
-                        ) : null}
-                        <div className="grid grid-cols-2 gap-2 text-center">
-                          <span className="rounded-md border border-[#275e47] bg-[#153326] px-2 py-2 text-[11px] font-semibold text-[#5ee6a8]">成功 {formatNumber(liveSubmittedCount)}</span>
-                          <span className="rounded-md border border-[#613635] bg-[#301f20] px-2 py-2 text-[11px] font-semibold text-[#ff8d85]">失败 {formatNumber(liveFailedCount)}</span>
-                        </div>
-                      </div>
-                      <div className="relative min-h-0 overflow-hidden bg-[#0d171a]">
-                        <div className="opportunity-live-rail flex h-7 items-center gap-3 border-b border-[#26383d] px-3 text-[10px] font-bold uppercase text-[#789098]">
-                          <Activity className={cn("size-3.5", pipelineBusy && "text-[#4ade80]")} strokeWidth={2.2} />
-                          <span>LIVE EVENT STREAM</span>
-                          <span className="ml-auto">{pipelineLogs.length.toString().padStart(2, "0")} EVENTS</span>
-                        </div>
-                        <div className="h-[calc(100%-28px)] overflow-y-auto px-3 py-2" ref={pipelineLogViewportRef}>
-                          <div className="grid gap-1.5">
-                            {pipelineLogs.map((item, index) => {
-                              const icon = item.tone === "success" ? <CheckCircle2 className="size-3.5" strokeWidth={2.2} /> : item.tone === "error" ? <XCircle className="size-3.5" strokeWidth={2.2} /> : item.tone === "running" ? <Activity className="size-3.5" strokeWidth={2.2} /> : <Radio className="size-3.5" strokeWidth={2.2} />;
-                              return (
-                                <div className={cn("opportunity-log-entry grid grid-cols-[58px_20px_minmax(0,1fr)] items-start gap-1.5 rounded px-2 py-1.5 text-[12px]", item.tone === "success" ? "bg-[#123126] text-[#6ee7ad]" : item.tone === "error" ? "bg-[#321f20] text-[#ff9b94]" : item.tone === "running" ? "bg-[#15272b] text-[#d7e7eb]" : "text-[#91a7ad]")} key={item.id} style={{ animationDelay: `${Math.min(index, 8) * 30}ms` }}>
-                                  <span className="font-mono text-[10px] text-[#6f858b]">{item.time}</span>
-                                  <span className={cn("grid size-5 place-items-center", item.tone === "success" ? "text-[#4ade80]" : item.tone === "error" ? "text-[#fb7185]" : item.tone === "running" ? "text-[#f6c85f]" : "text-[#789098]")}>{icon}</span>
-                                  <span className="min-w-0 break-words font-medium leading-5">{item.message}</span>
-                                </div>
-                              );
-                            })}
-                          </div>
+                      <div className="h-[calc(100%-32px)] overflow-y-auto px-3 py-2" ref={pipelineLogViewportRef}>
+                        <div className="grid gap-1.5">
+                          {pipelineLogs.map((item, index) => {
+                            const icon = item.tone === "success" ? <CheckCircle2 className="size-3.5" strokeWidth={2.2} /> : item.tone === "error" ? <XCircle className="size-3.5" strokeWidth={2.2} /> : item.tone === "running" ? <Activity className="size-3.5" strokeWidth={2.2} /> : <Radio className="size-3.5" strokeWidth={2.2} />;
+                            return (
+                              <div className={cn("opportunity-log-entry grid grid-cols-[58px_20px_minmax(0,1fr)] items-start gap-1.5 rounded px-2 py-1.5 text-[12px]", item.tone === "success" ? "bg-[#123126] text-[#6ee7ad]" : item.tone === "error" ? "bg-[#321f20] text-[#ff9b94]" : item.tone === "running" ? "bg-[#15272b] text-[#d7e7eb]" : "text-[#91a7ad]")} key={item.id} style={{ animationDelay: `${Math.min(index, 8) * 18}ms` }}>
+                                <span className="font-mono text-[10px] text-[#6f858b]">{item.time}</span>
+                                <span className={cn("grid size-5 place-items-center", item.tone === "success" ? "text-[#4ade80]" : item.tone === "error" ? "text-[#fb7185]" : item.tone === "running" ? "text-[#f6c85f]" : "text-[#789098]")}>{icon}</span>
+                                <span className="min-w-0 break-words font-medium leading-5">{item.message}</span>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     </div>

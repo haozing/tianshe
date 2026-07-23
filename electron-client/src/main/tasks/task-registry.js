@@ -85,7 +85,7 @@ const BUSINESS_PLANS = [
   "businessOnSaleProducts",
   "businessOfflineProducts"
 ];
-const FUNDS_PLANS = ["fundAccountList", "fundPledgeCash", "fundPledgePayable", "fundShopAwardOverview", "fundCompensateStatistics", "fundBillQuery", "fundAccountCenter", "fundShopDepositPage"];
+const FUNDS_PLANS = ["fundAccountList", "fundAccountOpenInfo", "fundPledgeCash", "fundPledgePayable", "fundShopAwardOverview", "fundCompensateStatistics", "fundBillQuery", "fundAccountCenter", "fundShopDepositPage"];
 const VIOLATION_PLANS = ["violationRiskTicketList", "violationPenaltyTicketList"];
 const STALE_SCAN_PLANS = ["staleGoodsProductList", "staleGoodsRecommendAdmit", "staleGoodsCompassDownload"];
 const STALE_EXECUTE_PLANS = [...STALE_SCAN_PLANS, "staleGoodsBatchOffline", "staleGoodsBatchDelete", "staleGoodsCompleteDelete"];

@@ -57,6 +57,7 @@
       "businessSmartActivityNewUserBonus",
       "businessOnSaleProducts",
       "businessOfflineProducts",
+      "fundAccountOpenInfo",
       "fundAccountCenter",
       "fundPledgeCash",
       "fundPledgePayable",
@@ -246,6 +247,7 @@
           "action": "collectFundsData",
           "requestPlans": [
             "fundAccountList",
+            "fundAccountOpenInfo",
             "fundPledgeCash",
             "fundPledgePayable",
             "fundShopAwardOverview",
@@ -432,6 +434,7 @@
     "businessCreditScoreLevel": "/ecology/front/shopXzg/score/level",
     "businessOnSaleProducts": "/product_diagnose/tproduct/get_diagnose_recommend_product_pool",
     "businessOfflineProducts": "/product/tproduct/list",
+    "fundAccountOpenInfo": "/ecom/merchant/queryAccountOpenInfo",
     "fundAccountCenter": "/ffa/fund-control/account-center",
     "fundPledgeCash": "/shopuser/govern/bff/api/tpledgecash/index",
     "fundPledgePayable": "/governance/shop/tpledgecash/payable/info_v2",
@@ -1349,6 +1352,48 @@
         "pendingSettleOrderAmount": 100
       },
       "fields": {
+        "accountName": {
+          "paths": [
+            "fundAccountOpenInfo.opened_info.NEW_HZ.bank_settle_card.bank_account_name",
+            "fundAccountOpenInfo.data.opened_info.NEW_HZ.bank_settle_card.bank_account_name"
+          ],
+          "sourcePlans": [
+            "fundAccountOpenInfo"
+          ],
+          "aliases": [
+            "bank_account_name",
+            "account_name"
+          ],
+          "valueType": "text"
+        },
+        "accountBank": {
+          "paths": [
+            "fundAccountOpenInfo.opened_info.NEW_HZ.bank_settle_card.bank_name",
+            "fundAccountOpenInfo.data.opened_info.NEW_HZ.bank_settle_card.bank_name"
+          ],
+          "sourcePlans": [
+            "fundAccountOpenInfo"
+          ],
+          "aliases": [
+            "bank_name",
+            "account_bank"
+          ],
+          "valueType": "text"
+        },
+        "phone": {
+          "paths": [
+            "fundAccountOpenInfo.opened_info.NEW_HZ.bank_settle_card.bank_card_mobile",
+            "fundAccountOpenInfo.data.opened_info.NEW_HZ.bank_settle_card.bank_card_mobile"
+          ],
+          "sourcePlans": [
+            "fundAccountOpenInfo"
+          ],
+          "aliases": [
+            "bank_card_mobile",
+            "phone"
+          ],
+          "valueType": "text"
+        },
         "withdrawBalance": {
           "paths": [
             "fundAccountList.data.withdraw_balance",
@@ -2799,6 +2844,34 @@
       "retryDelayMs": 1200,
       "retryBackoff": "linear"
     },
+    "fundAccountOpenInfo": {
+      "endpointKey": "fundAccountOpenInfo",
+      "method": "POST",
+      "sign": false,
+      "includeEmptySignature": false,
+      "requestMode": "platform",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Origin": "https://fxg.jinritemai.com"
+      },
+      "referer": "https://fxg.jinritemai.com/ffa/ecom/merchant/payment-settings",
+      "body": {
+        "merchant_ecom_source": "/pc/fxg",
+        "exts": {}
+      },
+      "retryOnHttpError": false,
+      "maxAttempts": 1,
+      "successPaths": [
+        "opened_info.NEW_HZ.bank_settle_card",
+        "data.opened_info.NEW_HZ.bank_settle_card"
+      ],
+      "allowMissingCode": false,
+      "failureMessages": [
+        "未登录",
+        "请登录"
+      ]
+    },
     "fundAccountCenter": {
       "endpointKey": "fundAccountCenter",
       "method": "GET",
@@ -3148,9 +3221,9 @@
         "tab": "{tab}",
         "business_type": "4",
         "not_for_sale_search_type": "1",
-                  "supply_status": "",
-                  "id_name_code": "{idNameCode}",
-                  "keyword": "{keyword}"
+        "supply_status": "",
+        "id_name_code": "{idNameCode}",
+        "keyword": "{keyword}"
       },
       "retryOnHttpError": true,
       "retryOnBusinessFailure": true,
@@ -3227,7 +3300,7 @@
         "download_scene_identity": "shop_product_list",
         "file_name": "{compassFileName}",
         "req_json_str": "{compassRequestJson}",
-        "sheet_name_list": "\u5168\u90e8"
+        "sheet_name_list": "全部"
       },
       "retryOnHttpError": true,
       "maxAttempts": 3,
@@ -3268,7 +3341,10 @@
       "retryOnBusinessFailure": false,
       "prepareRetryAttempts": 0,
       "allowMissingCode": false,
-      "successCodes": [0, "0"],
+      "successCodes": [
+        0,
+        "0"
+      ],
       "successPaths": []
     },
     "staleGoodsBatchDelete": {
@@ -3303,7 +3379,10 @@
       "retryOnBusinessFailure": false,
       "prepareRetryAttempts": 0,
       "allowMissingCode": false,
-      "successCodes": [0, "0"],
+      "successCodes": [
+        0,
+        "0"
+      ],
       "successPaths": []
     },
     "staleGoodsCompleteDelete": {
@@ -3338,7 +3417,10 @@
       "retryOnBusinessFailure": false,
       "prepareRetryAttempts": 0,
       "allowMissingCode": false,
-      "successCodes": [0, "0"],
+      "successCodes": [
+        0,
+        "0"
+      ],
       "successPaths": []
     },
     "bulkDeleteProductList": {
@@ -4001,9 +4083,15 @@
           "businessOnSaleProducts",
           "businessOfflineProducts"
         ],
-        ["businessSmartActivityCoupon"],
-        ["businessSmartActivityDirectDiscount"],
-        ["businessSmartActivityNewUserBonus"]
+        [
+          "businessSmartActivityCoupon"
+        ],
+        [
+          "businessSmartActivityDirectDiscount"
+        ],
+        [
+          "businessSmartActivityNewUserBonus"
+        ]
       ],
       "requestPlanGroupDelayMs": 500,
       "coreMetricPlans": [
@@ -4493,6 +4581,7 @@
       "concurrency": 2,
       "requestPlans": [
         "fundAccountList",
+        "fundAccountOpenInfo",
         "fundPledgeCash",
         "fundPledgePayable",
         "fundShopAwardOverview",
@@ -4507,6 +4596,9 @@
       "requestPlanGroups": [
         [
           "fundAccountList"
+        ],
+        [
+          "fundAccountOpenInfo"
         ],
         [
           "fundPledgeCash",
@@ -4526,6 +4618,7 @@
         "fundPledgePayable"
       ],
       "optionalPlans": [
+        "fundAccountOpenInfo",
         "fundShopAwardOverview",
         "fundCompensateStatistics",
         "fundBillQuery",
@@ -4551,8 +4644,32 @@
         }
       },
       "fieldSchema": {
-        "version": "2026.07.06.funds-data-fields-v4-xzb-runtime-aligned",
+        "version": "2026.07.23.funds-data-fields-v6-account-source-bound",
         "columns": [
+          {
+            "key": "accountName",
+            "label": "开户名",
+            "format": "text",
+            "group": "开户数据信息",
+            "defaultVisible": true,
+            "export": true
+          },
+          {
+            "key": "accountBank",
+            "label": "开户银行",
+            "format": "text",
+            "group": "开户数据信息",
+            "defaultVisible": true,
+            "export": true
+          },
+          {
+            "key": "phone",
+            "label": "手机号",
+            "format": "text",
+            "group": "开户数据信息",
+            "defaultVisible": true,
+            "export": true
+          },
           {
             "key": "withdrawBalance",
             "label": "可提现金额",
@@ -5652,5 +5769,8 @@
         "executeDone": "商机提报执行完成，共处理 {count} 项"
       }
     }
-  }
+  },
+  "requestPlanSteps": [
+    "fundAccountOpenInfo"
+  ]
 }

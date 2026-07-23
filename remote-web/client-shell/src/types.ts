@@ -503,6 +503,9 @@ export interface DoudianFundsDataRow {
   shopName: string;
   group?: string;
   status?: DoudianStoreStatus | string;
+  accountName: string;
+  accountBank: string;
+  phone: string;
   withdrawBalance: number;
   balance: number;
   frozenBalance: number;

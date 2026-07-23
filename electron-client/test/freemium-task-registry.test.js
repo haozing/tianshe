@@ -77,6 +77,7 @@ test("task params use a per-task top-level schema", () => {
 test("each task receives only its audited request plans", () => {
   assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.fetchDoudianStores, adapter).sort(), ["currentShop", "shopList"]);
   assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.bulkDeleteExecute, adapter).sort(), ["bulkDeleteBatchDelete", "bulkDeleteCompleteDelete", "bulkDeleteProductList"]);
+  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.fundsData, adapter).sort(), ["fundAccountCenter", "fundAccountList", "fundAccountOpenInfo", "fundBillQuery", "fundCompensateStatistics", "fundPledgeCash", "fundPledgePayable", "fundShopAwardOverview", "fundShopDepositPage"]);
   assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.violationsData, adapter).sort(), ["violationPenaltyTicketList", "violationRiskTicketList"]);
   const businessPlans = allowedPlanKeys(TASK_DEFINITIONS.businessData, adapter);
   assert.equal(businessPlans.includes("businessHomepage"), true);

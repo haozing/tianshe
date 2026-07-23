@@ -170,6 +170,7 @@ function isValidPolicies(value: unknown): boolean {
 }
 
 const FUNDS_CONTRACT_FIELDS = new Set([
+  "accountName", "accountBank", "phone",
   "withdrawBalance", "balance", "frozenBalance", "pendingSettleAmount",
   "marginBalance", "depositPayable", "refundableMargin",
   "baseMarginBalance", "baseDepositPayable", "baseRefundableMargin",
@@ -267,6 +268,7 @@ function isValidFundsContract(config: DoudianAdapterConfig) {
     if (!isOptionalStringList(rawConfig.paths) || !isOptionalStringList(rawConfig.aliases)) return false;
     if (!(rawConfig.paths.length || rawConfig.aliases.length)) return false;
     if (rawConfig.moneyText !== undefined && typeof rawConfig.moneyText !== "boolean") return false;
+    if (rawConfig.valueType !== undefined && !["number", "text"].includes(String(rawConfig.valueType))) return false;
     if (rawConfig.scale !== undefined && !(Number.isFinite(Number(rawConfig.scale)) && Number(rawConfig.scale) > 0)) return false;
   }
   if (Object.entries(scales).some(([key, value]) => !FUNDS_CONTRACT_FIELDS.has(key) || !Number.isFinite(Number(value)) || Number(value) <= 0)) return false;
@@ -289,7 +291,7 @@ function isValidFundsContract(config: DoudianAdapterConfig) {
   for (const value of [...columns, ...summaries]) {
     if (!isPlainObject(value) || !isString(value.key) || !FUNDS_CONTRACT_FIELDS.has(value.key)) return false;
     if (!isPlainObject(fields[value.key]) && !derivedKeys.has(value.key)) return false;
-    if (!isString(value.label) || !["money", "number"].includes(String(value.format || ""))) return false;
+    if (!isString(value.label) || !["money", "number", "text"].includes(String(value.format || ""))) return false;
     if (columns.includes(value)) columnKeys.push(value.key);
   }
   return new Set(columnKeys).size === columnKeys.length;

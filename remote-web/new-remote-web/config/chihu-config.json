@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.23.page-scale-v1",
+  "version": "2026.07.23.funds-account-filter-v1",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "6d4187a-dirty",
-    "buildTime": "2026-07-23T03:27:12.628Z"
+    "gitCommit": "ae07ab4-dirty",
+    "buildTime": "2026-07-23T07:49:55.779Z"
   }
 }

@@ -102,22 +102,80 @@ textarea {
   background: #f6c85f;
   box-shadow: 0 0 10px rgba(246, 200, 95, 0.65);
   content: "";
-  animation: opportunity-live-rail 2.8s ease-in-out infinite;
+  animation: opportunity-live-rail 1.65s ease-in-out infinite;
 }
 
-.opportunity-live-panel.is-running .opportunity-submit-button {
-  animation: opportunity-submit-pulse 1.8s ease-in-out infinite;
+.opportunity-submit-button {
+  background: #ff5020;
+  box-shadow: 0 8px 20px rgba(255, 80, 32, 0.28);
+}
+
+.opportunity-submit-button:hover {
+  background: #e94316;
+}
+
+.opportunity-submit-button.is-running {
+  background: linear-gradient(105deg, #ff5020 0%, #ffad0d 24%, #ff3d78 48%, #16b8a6 72%, #ff5020 100%);
+  background-size: 280% 100%;
+  box-shadow: 0 0 26px rgba(255, 80, 32, 0.42), 0 0 16px rgba(22, 184, 166, 0.24);
+  animation: opportunity-submit-flow 1.15s linear infinite, opportunity-submit-pulse 1.5s ease-in-out infinite;
 }
 
 .opportunity-log-entry {
   opacity: 0;
-  transform: translateY(8px);
-  animation: opportunity-log-enter 280ms ease-out forwards;
+  transform: translateY(6px);
+  animation: opportunity-log-enter 165ms ease-out forwards;
+}
+
+.opportunity-counter-ring {
+  position: relative;
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border-radius: 50%;
+  background: #fff7f2;
+  color: #d84315;
+  font-size: 8px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  box-shadow: inset 0 0 0 1px rgba(255, 80, 32, 0.14);
+}
+
+.opportunity-counter-ring::before {
+  position: absolute;
+  inset: 2px;
+  border: 1.5px solid rgba(255, 80, 32, 0.2);
+  border-top-color: #ff5020;
+  border-right-color: #16b8a6;
+  border-radius: 50%;
+  content: "";
+  animation: opportunity-counter-spin 520ms linear infinite;
+}
+
+.opportunity-counter-check {
+  color: #12a36d;
+  animation: opportunity-counter-check 360ms cubic-bezier(.2,.8,.2,1) both;
+}
+
+.opportunity-store-row {
+  position: relative;
+  background: #fff;
+  transition: background-color 180ms ease, box-shadow 180ms ease;
+}
+
+.opportunity-store-row.is-processing {
+  z-index: 1;
+  background: linear-gradient(90deg, #fff0e8 0%, #fff8f3 45%, #eefaf7 100%);
+  box-shadow: inset 3px 0 0 #ff5020, inset 0 0 0 1px rgba(255, 80, 32, 0.12), 0 5px 16px rgba(15, 23, 42, 0.08);
+  animation: opportunity-store-active 1.45s ease-in-out infinite;
 }
 
 @keyframes opportunity-live-scan {
   0% {
-    top: 48px;
+    top: 32px;
     opacity: 0;
   }
 
@@ -159,6 +217,41 @@ textarea {
   }
 }
 
+@keyframes opportunity-submit-flow {
+  to {
+    background-position: -280% 0;
+  }
+}
+
+@keyframes opportunity-counter-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes opportunity-counter-check {
+  from {
+    opacity: 0;
+    transform: scale(0.45);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes opportunity-store-active {
+  0%,
+  100% {
+    filter: saturate(1);
+  }
+
+  50% {
+    filter: saturate(1.24);
+  }
+}
+
 @keyframes opportunity-log-enter {
   to {
     opacity: 1;
@@ -169,8 +262,11 @@ textarea {
 @media (prefers-reduced-motion: reduce) {
   .opportunity-live-panel.is-running::after,
   .opportunity-live-rail::after,
-  .opportunity-live-panel.is-running .opportunity-submit-button,
-  .opportunity-log-entry {
+  .opportunity-submit-button.is-running,
+  .opportunity-log-entry,
+  .opportunity-counter-ring::before,
+  .opportunity-counter-check,
+  .opportunity-store-row.is-processing {
     animation: none;
     opacity: 1;
     transform: none;

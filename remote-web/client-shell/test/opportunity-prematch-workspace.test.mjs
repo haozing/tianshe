@@ -35,6 +35,22 @@ test("prematch keeps the submit action and live event stream in the open workspa
   assert.match(source, /ref=\{pipelineLogViewportRef\}/);
 });
 
+test("prematch overview uses concise animated business counters", () => {
+  assert.match(source, /label="商品数"/);
+  assert.match(source, /label="商机数"/);
+  assert.match(source, /label="提报数"/);
+  assert.match(source, /function AnimatedNumber/);
+  assert.match(source, /opportunity-counter-ring/);
+  assert.match(source, /<CompactMetric label="提报数" value=\{candidateSummary\.submittedCount\} tone="green" \/>/);
+});
+
+test("prematch moves processing stores first and keeps the category selection visible", () => {
+  assert.match(source, /function storeRunPriority/);
+  assert.match(source, /storeRunPriority\(left\.status, left\.phase\)/);
+  assert.match(source, /data-processing=\{processing \? "true" : "false"\}/);
+  assert.match(source, /border-\[#ffb08e\].*shadow-\[0_0_0_2px/);
+});
+
 test("stale category requests cannot overwrite the latest store selection", () => {
   assert.match(source, /const categoryRequestSeqRef = useRef\(0\)/);
   assert.match(source, /const requestSeq = \+\+categoryRequestSeqRef\.current/);

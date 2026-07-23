@@ -10,6 +10,7 @@ import {
   CircleDollarSign,
   CircleStop,
   Download,
+  Funnel,
   GripVertical,
   Landmark,
   Loader2,
@@ -36,7 +37,7 @@ type SortKey = string;
 type LoadState = "loading" | "ready" | "error";
 type FundsLoadState = "idle" | "loading" | "ready" | "error";
 type MetricTone = "default" | "blue" | "green" | "warning" | "danger";
-type ColumnFormat = "money" | "number";
+type ColumnFormat = "money" | "number" | "text";
 type FundsMetricState = "fresh" | "stale" | "unavailable";
 type ExportFormat = "Excel" | "CSV" | "TXT";
 
@@ -67,7 +68,13 @@ const fundsMetricKeys = [
 ] as const;
 
 type FundsMetricKey = typeof fundsMetricKeys[number];
-type FundsColumnWidths = Partial<Record<FundsMetricKey, number>>;
+const fundsTextKeys = ["accountName", "accountBank", "phone"] as const;
+type FundsTextKey = typeof fundsTextKeys[number];
+type FundsFieldKey = FundsMetricKey | FundsTextKey;
+const fundsFieldKeys = [...fundsTextKeys, ...fundsMetricKeys] as const;
+type FundsColumnWidths = Partial<Record<FundsFieldKey, number>>;
+type AccountFilterKey = "accountName" | "accountBank" | "phone";
+type AccountFilters = Record<AccountFilterKey, string>;
 
 interface StoreOption {
   id: string;
@@ -83,8 +90,11 @@ type FundsRow = {
   status: DoudianStoreStatus;
   lastMessage?: string;
   ok?: boolean;
-  metricStates: Record<FundsMetricKey, FundsMetricState>;
-  metricUpdatedAt: Record<FundsMetricKey, string>;
+  accountName: string;
+  accountBank: string;
+  phone: string;
+  metricStates: Record<FundsFieldKey, FundsMetricState>;
+  metricUpdatedAt: Record<FundsFieldKey, string>;
   dataUpdatedAt?: string;
 } & Record<FundsMetricKey, number>;
 
@@ -96,7 +106,7 @@ interface MetricItem {
 }
 
 interface DataColumn {
-  key: FundsMetricKey;
+  key: FundsFieldKey;
   label: string;
   format: ColumnFormat;
   group?: string;
@@ -139,6 +149,9 @@ const statusCopy: Record<DoudianStoreStatus, { label: string; className: string 
 };
 
 const tableColumns: DataColumn[] = [
+  { key: "accountName", label: "开户名", format: "text", group: "开户数据信息" },
+  { key: "accountBank", label: "开户银行", format: "text", group: "开户数据信息" },
+  { key: "phone", label: "手机号", format: "text", group: "开户数据信息" },
   { key: "withdrawBalance", label: "可提现金额", format: "money", group: "账户", tone: "blue" },
   { key: "balance", label: "货款总金额", format: "money", group: "账户" },
   { key: "frozenBalance", label: "应冻结金额", format: "money", group: "账户", tone: (row) => row.frozenBalance > 0 ? "danger" : undefined },
@@ -181,13 +194,20 @@ const defaultSummaryMetrics: NonNullable<RemoteFundsFieldSchema["summaryMetrics"
   { key: "pendingSettleOrders", label: "结算订单数", format: "number", detail: "待结算订单", tone: "warning" }
 ];
 const fundsMetricKeySet = new Set<string>(fundsMetricKeys);
+const fundsFieldKeySet = new Set<string>(fundsFieldKeys);
 const CURRENT_SNAPSHOT_LABEL = "当前资金快照";
 const DEFAULT_CACHE_STALE_TTL_MS = 5 * 60 * 1000;
-const columnFormatSet = new Set<string>(["money", "number"]);
+const columnFormatSet = new Set<string>(["money", "number", "text"]);
 const toneSet = new Set<string>(["default", "blue", "green", "warning", "danger"]);
 const defaultMetricColumnWidth = 112;
 const minMetricColumnWidth = 72;
 const maxMetricColumnWidth = 360;
+const emptyAccountFilters: AccountFilters = { accountName: "", accountBank: "", phone: "" };
+const accountFilterFields = [
+  { key: "accountName", label: "开户名" },
+  { key: "accountBank", label: "开户银行" },
+  { key: "phone", label: "手机号" }
+] as const satisfies ReadonlyArray<{ key: AccountFilterKey; label: string }>;
 const defaultSortOptions = [
   { key: "withdrawBalance", label: "可提现金额", direction: "desc" },
   { key: "pendingSettleAmount", label: "待结算金额", direction: "desc" },
@@ -228,12 +248,16 @@ function emptyMetrics(): Record<FundsMetricKey, number> {
   return Object.fromEntries(fundsMetricKeys.map((key) => [key, 0])) as Record<FundsMetricKey, number>;
 }
 
-function emptyMetricStates(state: FundsMetricState = "unavailable"): Record<FundsMetricKey, FundsMetricState> {
-  return Object.fromEntries(fundsMetricKeys.map((key) => [key, state])) as Record<FundsMetricKey, FundsMetricState>;
+function emptyTextFields(): Record<FundsTextKey, string> {
+  return Object.fromEntries(fundsTextKeys.map((key) => [key, ""])) as Record<FundsTextKey, string>;
 }
 
-function emptyMetricUpdatedAt(value = ""): Record<FundsMetricKey, string> {
-  return Object.fromEntries(fundsMetricKeys.map((key) => [key, value])) as Record<FundsMetricKey, string>;
+function emptyMetricStates(state: FundsMetricState = "unavailable"): Record<FundsFieldKey, FundsMetricState> {
+  return Object.fromEntries(fundsFieldKeys.map((key) => [key, state])) as Record<FundsFieldKey, FundsMetricState>;
+}
+
+function emptyMetricUpdatedAt(value = ""): Record<FundsFieldKey, string> {
+  return Object.fromEntries(fundsFieldKeys.map((key) => [key, value])) as Record<FundsFieldKey, string>;
 }
 
 function fundRiskCount(row: Record<FundsMetricKey, number>) {
@@ -261,6 +285,7 @@ function zeroFundsRow(store: StoreOption): FundsRow {
     status: store.status,
     metricStates: emptyMetricStates(),
     metricUpdatedAt: emptyMetricUpdatedAt(),
+    ...emptyTextFields(),
     ...emptyMetrics()
   };
 }
@@ -268,6 +293,8 @@ function zeroFundsRow(store: StoreOption): FundsRow {
 function fundsRowFromRemote(row: DoudianFundsDataRow, store?: StoreOption, detail?: DoudianRunDetail, previous?: FundsRow, cachedStale = false): FundsRow {
   const metrics = emptyMetrics();
   for (const key of fundsMetricKeys) metrics[key] = numberValue(row[key]);
+  const textFields = emptyTextFields();
+  for (const key of fundsTextKeys) textFields[key] = String(row[key] || "");
   const diagnostic = detailDiagnostic(detail);
   const metricSources = metricSourcesObject(diagnostic.metricSources);
   const remoteMetricUpdatedAt = stringRecord(diagnostic.metricUpdatedAt);
@@ -275,25 +302,26 @@ function fundsRowFromRemote(row: DoudianFundsDataRow, store?: StoreOption, detai
   const metricStates = emptyMetricStates();
   const metricUpdatedAt = emptyMetricUpdatedAt();
   const attemptedAt = detail?.attemptedAt || detail?.dataUpdatedAt || new Date().toISOString();
-  for (const key of fundsMetricKeys) {
+  for (const key of fundsFieldKeys) {
     const source = metricSources[key];
     const available = source
       ? source.available === true || (source.available === undefined && !!source.source && source.source !== "none")
-      : !hasSourceMetadata && metrics[key] !== 0;
+      : !hasSourceMetadata && (fundsMetricKeySet.has(key) ? metrics[key as FundsMetricKey] !== 0 : Boolean(textFields[key as FundsTextKey]));
     metricStates[key] = available ? (cachedStale ? "stale" : "fresh") : "unavailable";
     metricUpdatedAt[key] = remoteMetricUpdatedAt[key] || (available ? attemptedAt : "");
     if (metricStates[key] === "unavailable" && previous && previous.metricStates[key] !== "unavailable") {
-      metrics[key] = previous[key];
+      if (fundsMetricKeySet.has(key)) metrics[key as FundsMetricKey] = previous[key as FundsMetricKey];
+      else textFields[key as FundsTextKey] = previous[key as FundsTextKey];
       metricStates[key] = "stale";
       metricUpdatedAt[key] = previous.metricUpdatedAt[key] || previous.dataUpdatedAt || "";
     }
   }
-  const staleTimestamps = fundsMetricKeys
+  const staleTimestamps = fundsFieldKeys
     .filter((key) => metricStates[key] === "stale")
     .map((key) => metricUpdatedAt[key])
     .filter(Boolean)
     .sort();
-  const freshTimestamps = fundsMetricKeys
+  const freshTimestamps = fundsFieldKeys
     .filter((key) => metricStates[key] === "fresh")
     .map((key) => metricUpdatedAt[key])
     .filter(Boolean)
@@ -308,6 +336,7 @@ function fundsRowFromRemote(row: DoudianFundsDataRow, store?: StoreOption, detai
     metricStates,
     metricUpdatedAt,
     dataUpdatedAt: staleTimestamps[0] || freshTimestamps.at(-1) || previous?.dataUpdatedAt || detail?.dataUpdatedAt,
+    ...textFields,
     ...metrics
   };
 }
@@ -345,6 +374,9 @@ function sampleFundsRow(store: StoreOption, index: number): FundsRow {
     metricStates: emptyMetricStates("fresh"),
     metricUpdatedAt: emptyMetricUpdatedAt(new Date().toISOString()),
     dataUpdatedAt: new Date().toISOString(),
+    accountName: `样例开户名 ${index + 1}`,
+    accountBank: index === 1 ? "中国建设银行" : "中国工商银行",
+    phone: `1380000000${index + 1}`,
     ...metrics
   };
 }
@@ -356,7 +388,7 @@ function sampleFundsRows(stores: StoreOption[]) {
 function staleFundsRow(previous: FundsRow | undefined, store: StoreOption, message: string): FundsRow {
   if (!previous) return { ...zeroFundsRow(store), lastMessage: message, ok: false };
   const metricStates = emptyMetricStates();
-  for (const key of fundsMetricKeys) {
+  for (const key of fundsFieldKeys) {
     metricStates[key] = previous.metricStates[key] === "unavailable" ? "unavailable" : "stale";
   }
   return {
@@ -374,11 +406,11 @@ function staleFundsRow(previous: FundsRow | undefined, store: StoreOption, messa
 function normalizeRemoteColumns(schema?: RemoteFundsFieldSchema): DataColumn[] {
   const remoteColumns = Array.isArray(schema?.columns) ? schema.columns : [];
   const columns = remoteColumns
-    .filter((column) => fundsMetricKeySet.has(String(column.key || "")) && columnFormatSet.has(String(column.format || "")) && column.label)
+    .filter((column) => fundsFieldKeySet.has(String(column.key || "")) && columnFormatSet.has(String(column.format || "")) && column.label)
     .map((column) => {
       const fallback = tableColumns.find((item) => item.key === column.key);
       return {
-        key: column.key as FundsMetricKey,
+        key: column.key as FundsFieldKey,
         label: String(column.label),
         format: column.format as ColumnFormat,
         group: column.group ? String(column.group) : undefined,
@@ -439,18 +471,18 @@ function fundsColumnWidthsStorageKey(schemaVersion?: string) {
 
 function visibleColumnKeySet(schemaColumns: DataColumn[], schemaVersion?: string) {
   const saved = storageGet<string[]>(fundsColumnStorageKey(schemaVersion), []);
-  const valid = saved.filter((key) => fundsMetricKeySet.has(key));
+  const valid = saved.filter((key) => fundsFieldKeySet.has(key));
   const initial = valid.length ? valid : schemaColumns.filter((column) => column.defaultVisible !== false).map((column) => column.key);
   return new Set(initial.length ? initial : defaultColumnKeys);
 }
 
 function normalizeColumnOrder(schemaColumns: DataColumn[], preferredOrder: readonly string[]) {
   const schemaKeys = schemaColumns.map((column) => column.key);
-  const schemaKeySet = new Set<FundsMetricKey>(schemaKeys);
-  const seen = new Set<FundsMetricKey>();
-  const orderedKeys = preferredOrder.filter((key): key is FundsMetricKey => {
-    if (!fundsMetricKeySet.has(key) || !schemaKeySet.has(key as FundsMetricKey) || seen.has(key as FundsMetricKey)) return false;
-    seen.add(key as FundsMetricKey);
+  const schemaKeySet = new Set<FundsFieldKey>(schemaKeys);
+  const seen = new Set<FundsFieldKey>();
+  const orderedKeys = preferredOrder.filter((key): key is FundsFieldKey => {
+    if (!fundsFieldKeySet.has(key) || !schemaKeySet.has(key as FundsFieldKey) || seen.has(key as FundsFieldKey)) return false;
+    seen.add(key as FundsFieldKey);
     return true;
   });
   return [...orderedKeys, ...schemaKeys.filter((key) => !seen.has(key))];
@@ -463,6 +495,13 @@ function savedColumnOrder(schemaColumns: DataColumn[], schemaVersion?: string) {
 
 function clampColumnWidth(width: number) {
   return Math.min(maxMetricColumnWidth, Math.max(minMetricColumnWidth, Math.round(width)));
+}
+
+function defaultColumnWidth(key: FundsFieldKey) {
+  if (key === "accountName") return 140;
+  if (key === "accountBank") return 160;
+  if (key === "phone") return 128;
+  return defaultMetricColumnWidth;
 }
 
 function normalizeColumnWidths(schemaColumns: DataColumn[], widths: unknown): FundsColumnWidths {
@@ -486,8 +525,10 @@ function formatNumber(value: number) {
   return value.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 }
 
-function formatColumnValue(value: number, format: ColumnFormat) {
-  return format === "money" ? formatMoney(value) : formatNumber(value);
+function formatColumnValue(value: number | string, format: ColumnFormat) {
+  if (format === "text") return String(value || "-");
+  const number = typeof value === "number" ? value : numberValue(value);
+  return format === "money" ? formatMoney(number) : formatNumber(number);
 }
 
 function aggregateRows(rows: FundsRow[]) {
@@ -678,13 +719,31 @@ function NativeSelect<T extends string>({
   );
 }
 
+function normalizedAccountFilterValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function buildAccountFilterOptions(rows: FundsRow[], filters: AccountFilters = emptyAccountFilters) {
+  return accountFilterFields.reduce<Record<AccountFilterKey, string[]>>((result, field) => {
+    const values = rows
+      .filter((row) => accountFilterFields.every(({ key }) => (
+        key === field.key
+        || !normalizedAccountFilterValue(filters[key])
+        || normalizedAccountFilterValue(row[key]) === normalizedAccountFilterValue(filters[key])
+      )))
+      .map((row) => normalizedAccountFilterValue(row[field.key]))
+      .filter(Boolean);
+    result[field.key] = [...new Set(values)].sort((left, right) => left.localeCompare(right, "zh-CN", { numeric: true }));
+    return result;
+  }, { accountName: [], accountBank: [], phone: [] });
+}
+
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function isDevPreviewRuntime() {
-  const meta = import.meta as ImportMeta & { env?: { DEV?: boolean } };
-  return meta.env?.DEV === true;
+  return import.meta.env.DEV === true;
 }
 
 export function FundsDataPage() {
@@ -694,6 +753,9 @@ export function FundsDataPage() {
   const [stores, setStores] = useState<StoreOption[]>(() => previewMode ? sampleStores : []);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(previewMode ? sampleStores.map((store) => store.id) : []));
   const [query, setQuery] = useState("");
+  const [accountFilterOpen, setAccountFilterOpen] = useState(false);
+  const [accountFilterDraft, setAccountFilterDraft] = useState<AccountFilters>(emptyAccountFilters);
+  const [accountFilters, setAccountFilters] = useState<AccountFilters>(emptyAccountFilters);
   const [sortKey, setSortKey] = useState<SortKey>("可提现金额");
   const [loadState, setLoadState] = useState<LoadState>(() => previewMode ? "ready" : "loading");
   const [loadMessage, setLoadMessage] = useState("");
@@ -711,18 +773,18 @@ export function FundsDataPage() {
   const [activeOperationId, setActiveOperationId] = useState("");
   const [fieldSchema, setFieldSchema] = useState<RemoteFundsFieldSchema>({});
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<Set<string>>(() => visibleColumnKeySet(tableColumns));
-  const [columnOrder, setColumnOrder] = useState<FundsMetricKey[]>(() => savedColumnOrder(tableColumns));
+  const [columnOrder, setColumnOrder] = useState<FundsFieldKey[]>(() => savedColumnOrder(tableColumns));
   const [columnWidths, setColumnWidths] = useState<FundsColumnWidths>(() => savedColumnWidths(tableColumns));
   const [columnPanelOpen, setColumnPanelOpen] = useState(false);
-  const [draggedColumnKey, setDraggedColumnKey] = useState<FundsMetricKey | null>(null);
-  const [dragOverColumnKey, setDragOverColumnKey] = useState<FundsMetricKey | null>(null);
-  const [resizingColumnKey, setResizingColumnKey] = useState<FundsMetricKey | null>(null);
+  const [draggedColumnKey, setDraggedColumnKey] = useState<FundsFieldKey | null>(null);
+  const [dragOverColumnKey, setDragOverColumnKey] = useState<FundsFieldKey | null>(null);
+  const [resizingColumnKey, setResizingColumnKey] = useState<FundsFieldKey | null>(null);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [adapterVersion, setAdapterVersion] = useState("");
   const [fieldSchemaVersion, setFieldSchemaVersion] = useState("");
   const [exportFormat, setExportFormat] = useState<ExportFormat>("Excel");
   const [cacheStaleTtlMs, setCacheStaleTtlMs] = useState(DEFAULT_CACHE_STALE_TTL_MS);
-  const columnResizeState = useRef<{ key: FundsMetricKey; pointerId: number; startX: number; startWidth: number } | null>(null);
+  const columnResizeState = useRef<{ key: FundsFieldKey; pointerId: number; startX: number; startWidth: number } | null>(null);
 
   function commitFundsRows(rows: FundsRow[]) {
     fundsRowsRef.current = rows;
@@ -1008,8 +1070,50 @@ export function FundsDataPage() {
 
   const sortOptions = useMemo(() => normalizeRemoteSortOptions(fieldSchema), [fieldSchema]);
   const selectedSort = sortOptions.find((option) => option.label === sortKey) || sortOptions[0];
+  const accountFilterRows = useMemo(
+    () => fundsRows.filter((row) => selectedIds.has(row.shopId)),
+    [fundsRows, selectedIds]
+  );
+  const availableAccountFilterOptions = useMemo(
+    () => buildAccountFilterOptions(accountFilterRows),
+    [accountFilterRows]
+  );
+  const accountFilterOptions = useMemo(
+    () => buildAccountFilterOptions(accountFilterRows, accountFilterDraft),
+    [accountFilterDraft, accountFilterRows]
+  );
+
+  useEffect(() => {
+    const sanitizeFilters = (current: AccountFilters) => {
+      const next = { ...current };
+      let changed = false;
+      for (const { key } of accountFilterFields) {
+        const value = normalizedAccountFilterValue(next[key]);
+        if (value && !availableAccountFilterOptions[key].includes(value)) {
+          next[key] = "";
+          changed = true;
+        }
+      }
+      const activeFilters = accountFilterFields.filter(({ key }) => normalizedAccountFilterValue(next[key]));
+      if (activeFilters.length && !accountFilterRows.some((row) => activeFilters.every(({ key }) => (
+        normalizedAccountFilterValue(row[key]) === normalizedAccountFilterValue(next[key])
+      )))) {
+        return emptyAccountFilters;
+      }
+      return changed ? next : current;
+    };
+
+    setAccountFilters(sanitizeFilters);
+    setAccountFilterDraft(sanitizeFilters);
+  }, [accountFilterRows, availableAccountFilterOptions]);
+
   const selectedRows = useMemo(() => {
-    const rows = fundsRows.filter((row) => selectedIds.has(row.shopId));
+    const activeFilters = Object.entries(accountFilters).filter((entry): entry is [AccountFilterKey, string] => Boolean(entry[1].trim()));
+    const rows = fundsRows.filter((row) => (
+      selectedIds.has(row.shopId) && activeFilters.every(([key, value]) => (
+        normalizedAccountFilterValue(row[key]) === normalizedAccountFilterValue(value)
+      ))
+    ));
     const key = selectedSort?.key || "withdrawBalance";
     const direction = selectedSort?.direction === "asc" ? 1 : -1;
     return rows.sort((left, right) => {
@@ -1017,7 +1121,9 @@ export function FundsDataPage() {
       const rightValue = Number(right[key] || 0);
       return (leftValue - rightValue) * direction;
     });
-  }, [fundsRows, selectedIds, selectedSort?.direction, selectedSort?.key]);
+  }, [accountFilters, fundsRows, selectedIds, selectedSort?.direction, selectedSort?.key]);
+  const activeAccountFilterCount = Object.values(accountFilters).filter((value) => value.trim()).length;
+  const hasAccountFilterOptions = accountFilterFields.some(({ key }) => availableAccountFilterOptions[key].length > 0);
 
   const schemaColumns = useMemo(() => normalizeRemoteColumns(fieldSchema), [fieldSchema]);
   const schemaVersion = fieldSchema.version || fieldSchemaVersion;
@@ -1033,7 +1139,7 @@ export function FundsDataPage() {
     return next.length ? next : orderedSchemaColumns;
   }, [orderedSchemaColumns, visibleColumnKeys]);
   const shopColumnWidth = 174;
-  const tableMinWidth = Math.max(1120, shopColumnWidth + visibleColumns.reduce((total, column) => total + (columnWidths[column.key] || defaultMetricColumnWidth), 0));
+  const tableMinWidth = Math.max(1120, shopColumnWidth + visibleColumns.reduce((total, column) => total + (columnWidths[column.key] || defaultColumnWidth(column.key)), 0));
   const summarySchema = useMemo(() => normalizeRemoteSummary(fieldSchema), [fieldSchema]);
   const aggregate = useMemo(() => aggregateRows(selectedRows), [selectedRows]);
   const { totals, freshCounts, staleCounts } = aggregate;
@@ -1043,25 +1149,6 @@ export function FundsDataPage() {
   const onlineSelectedCount = selectedRows.filter((row) => row.status === "online").length;
   const failedDetailCount = fundsDetails.filter((detail) => detail.ok === false).length;
   const staleStoreCount = selectedRows.filter((row) => fundsMetricKeys.some((key) => row.metricStates[key] === "stale")).length;
-  const globalFundsFailure = fundsState === "error" && fundsDetails.length === 0 && Boolean(fundsMessage);
-  const unavailableStoreCount = globalFundsFailure
-    ? 0
-    : selectedRows.filter((row) => fundsMetricKeys.some((key) => row.metricStates[key] === "unavailable")).length;
-  const metricLabelByKey = new Map<FundsMetricKey, string>(tableColumns.map((column) => [column.key, column.label]));
-  schemaColumns.forEach((column) => metricLabelByKey.set(column.key, column.label));
-  const unavailableMetricDetails = (globalFundsFailure ? [] : fundsMetricKeys).map((key) => ({
-    key,
-    label: metricLabelByKey.get(key) || key,
-    storeCount: selectedRows.filter((row) => row.metricStates[key] === "unavailable").length
-  })).filter((item) => item.storeCount > 0);
-  const unavailableMetricNames = unavailableMetricDetails.map((item) => item.label);
-  const unavailableMetricLead = unavailableMetricNames[0] || "未知指标";
-  const unavailableWarningTitle = unavailableStoreCount
-    ? `${unavailableStoreCount} 家不可用：${unavailableMetricLead}${unavailableMetricNames.length > 1 ? `等 ${unavailableMetricNames.length} 项` : ""}`
-    : "";
-  const unavailableWarningDetail = unavailableMetricDetails.length
-    ? `不可用指标：${unavailableMetricDetails.map((item) => `${item.label}（${item.storeCount} 家）`).join("、")}。页面以 -- 显示，不计为零。`
-    : "";
   const dataTimestamps = selectedRows.map((row) => Date.parse(row.dataUpdatedAt || "")).filter(Number.isFinite).sort((left, right) => left - right);
   const displayedDataAt = dataTimestamps.length ? new Date(staleStoreCount ? dataTimestamps[0] : dataTimestamps.at(-1) || dataTimestamps[0]) : null;
   const selectedRowsAllUnavailable = fundsState === "ready" && selectedRows.length > 0 && selectedRows.every((row) => !fundsRowHasKnownMetric(row));
@@ -1072,18 +1159,14 @@ export function FundsDataPage() {
       ? `${staleStoreCount} 家正在显示历史有效值`
     : selectedRowsAllUnavailable && !previewMode
       ? `${selectedRows.length} 家未命中资金指标`
-      : riskStoreCount
-        ? `${riskStoreCount} 家存在资金事项`
-        : "";
+      : "";
   const fundsWarningDetail = failedDetailCount
     ? "本次获取失败，已保留最近成功数据；请确认登录态后重试。"
     : staleStoreCount
       ? "部分来源本次未取得数据，金额保留为最近成功值，数据时间见单元格提示。"
     : selectedRowsAllUnavailable && !previewMode
       ? "资金桥接或字段映射尚未返回可展示的金额。"
-      : riskStoreCount
-        ? "存在冻结、待缴保证金、负保证金余额或非零赔付动账，请复核平台账单。"
-        : "";
+      : "";
 
   const metrics: MetricItem[] = summarySchema.map((item) => {
     const key = item.key as FundsMetricKey;
@@ -1125,7 +1208,7 @@ export function FundsDataPage() {
   const summaryVisibleMetrics = summaryExpanded ? metrics : metrics.slice(0, 8);
   const summaryHiddenCount = Math.max(0, metrics.length - 8);
 
-  function toggleColumn(key: FundsMetricKey) {
+  function toggleColumn(key: FundsFieldKey) {
     setVisibleColumnKeys((current) => {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
@@ -1136,7 +1219,7 @@ export function FundsDataPage() {
     });
   }
 
-  function updateColumnOrder(update: (current: FundsMetricKey[]) => FundsMetricKey[]) {
+  function updateColumnOrder(update: (current: FundsFieldKey[]) => FundsFieldKey[]) {
     setColumnOrder((current) => {
       const next = update(normalizeColumnOrder(schemaColumns, current));
       storageSet(columnOrderStorageKey, next);
@@ -1144,7 +1227,7 @@ export function FundsDataPage() {
     });
   }
 
-  function moveColumn(key: FundsMetricKey, offset: -1 | 1) {
+  function moveColumn(key: FundsFieldKey, offset: -1 | 1) {
     updateColumnOrder((current) => {
       const fromIndex = current.indexOf(key);
       const toIndex = fromIndex + offset;
@@ -1155,7 +1238,7 @@ export function FundsDataPage() {
     });
   }
 
-  function reorderColumn(sourceKey: FundsMetricKey, targetKey: FundsMetricKey) {
+  function reorderColumn(sourceKey: FundsFieldKey, targetKey: FundsFieldKey) {
     if (sourceKey === targetKey) return;
     updateColumnOrder((current) => {
       const fromIndex = current.indexOf(sourceKey);
@@ -1168,7 +1251,7 @@ export function FundsDataPage() {
     });
   }
 
-  function updateColumnWidth(key: FundsMetricKey, width: number) {
+  function updateColumnWidth(key: FundsFieldKey, width: number) {
     setColumnWidths((current) => {
       const next = { ...current, [key]: clampColumnWidth(width) };
       storageSet(columnWidthsStorageKey, next);
@@ -1176,7 +1259,7 @@ export function FundsDataPage() {
     });
   }
 
-  function resetColumnWidth(key: FundsMetricKey) {
+  function resetColumnWidth(key: FundsFieldKey) {
     setColumnWidths((current) => {
       const next = { ...current };
       delete next[key];
@@ -1185,7 +1268,7 @@ export function FundsDataPage() {
     });
   }
 
-  function startColumnResize(event: React.PointerEvent<HTMLSpanElement>, key: FundsMetricKey) {
+  function startColumnResize(event: React.PointerEvent<HTMLSpanElement>, key: FundsFieldKey) {
     if (event.button !== 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -1193,7 +1276,7 @@ export function FundsDataPage() {
       key,
       pointerId: event.pointerId,
       startX: event.clientX,
-      startWidth: columnWidths[key] || defaultMetricColumnWidth
+      startWidth: columnWidths[key] || defaultColumnWidth(key)
     };
     setResizingColumnKey(key);
   }
@@ -1212,10 +1295,10 @@ export function FundsDataPage() {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   }
 
-  function resizeColumnByKeyboard(event: React.KeyboardEvent<HTMLSpanElement>, key: FundsMetricKey) {
+  function resizeColumnByKeyboard(event: React.KeyboardEvent<HTMLSpanElement>, key: FundsFieldKey) {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
-    updateColumnWidth(key, (columnWidths[key] || defaultMetricColumnWidth) + (event.key === "ArrowLeft" ? -8 : 8));
+    updateColumnWidth(key, (columnWidths[key] || defaultColumnWidth(key)) + (event.key === "ArrowLeft" ? -8 : 8));
   }
 
   function resetColumns() {
@@ -1364,34 +1447,47 @@ export function FundsDataPage() {
                   <span className="truncate">{fundsWarningTitle}</span>
                 </span>
               ) : null}
-              {fundsState !== "loading" && unavailableStoreCount ? (
-                <div className="group relative min-w-0 shrink-0">
-                  <span
-                    className="inline-flex h-6 max-w-[360px] items-center gap-1 rounded-md border border-[#ffdca8] bg-[#fff7e8] px-2 text-[12px] font-semibold text-[#b54708] outline-none focus-visible:ring-2 focus-visible:ring-brand-fox/30"
-                    tabIndex={0}
-                    aria-label={unavailableWarningDetail}
-                  >
-                    <ShieldAlert className="size-[13px] shrink-0" strokeWidth={2} />
-                    <span className="truncate">{unavailableWarningTitle}</span>
-                  </span>
-                  <div className="pointer-events-none invisible absolute left-0 top-[30px] z-50 w-[min(420px,calc(100vw-32px))] rounded-md border border-[#ffdca8] bg-white p-3 text-[#344054] opacity-0 shadow-[0_12px_28px_rgba(15,23,42,0.14)] transition-opacity group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:visible group-focus-within:opacity-100" role="tooltip">
-                    <div className="mb-2 flex items-center justify-between gap-3 text-[12px] font-semibold">
-                      <span>不可用指标</span>
-                      <span className="text-[#b54708]">{unavailableMetricDetails.length} 项</span>
-                    </div>
-                    <div className="max-h-[240px] divide-y divide-[#edf1f6] overflow-y-auto">
-                      {unavailableMetricDetails.map((item) => (
-                        <div className="flex min-h-8 items-center justify-between gap-4 py-1.5 text-[12px]" key={item.key}>
-                          <span className="min-w-0 truncate" title={item.label}>{item.label}</span>
-                          <span className="shrink-0 text-[#b54708]">{item.storeCount} 家</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              <div className="relative">
+                <button
+                  className={cn("inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] disabled:cursor-not-allowed disabled:bg-[#f8fafc] disabled:text-[#98a2b3]", accountFilterOpen || activeAccountFilterCount ? "border-brand-fox bg-brand-foxSoft text-brand-navy" : "")}
+                  type="button"
+                  disabled={!hasAccountFilterOptions && !activeAccountFilterCount}
+                  onClick={() => setAccountFilterOpen((open) => !open)}
+                >
+                  <Funnel className="size-[14px]" strokeWidth={2} />
+                  开户筛选{activeAccountFilterCount ? ` ${activeAccountFilterCount}` : ""}
+                </button>
+                {accountFilterOpen ? (
+                  <div className="absolute right-0 top-10 z-50 w-[300px] rounded-md border border-[#dbe5f2] bg-white p-3 shadow-[0_12px_28px_rgba(15,23,42,0.14)]">
+                    <div className="grid gap-2.5">
+                      {accountFilterFields.map(({ key, label }) => (
+                        <label className="grid grid-cols-[64px_minmax(0,1fr)] items-center gap-2 text-[12px] text-[#344054]" key={key}>
+                          <span>{label}</span>
+                          <span className="relative inline-flex h-8 min-w-0 items-center rounded-md border border-[#dbe5f2] bg-white focus-within:border-brand-fox has-[:disabled]:bg-[#f8fafc]">
+                            <select
+                              aria-label={`${label}筛选`}
+                              className="h-full min-w-0 w-full appearance-none rounded-md bg-transparent px-2.5 pr-7 outline-none disabled:cursor-not-allowed disabled:text-[#98a2b3]"
+                              disabled={!availableAccountFilterOptions[key].length}
+                              value={accountFilterDraft[key]}
+                              onChange={(event) => setAccountFilterDraft((current) => ({ ...current, [key]: event.target.value }))}
+                            >
+                              <option value="">{availableAccountFilterOptions[key].length ? `全部${label}` : `暂无${label}`}</option>
+                              {accountFilterOptions[key].map((option) => <option key={option} value={option}>{option}</option>)}
+                            </select>
+                            <ChevronDown className="pointer-events-none absolute right-2.5 size-[13px] text-[#667085]" strokeWidth={2} />
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="mt-3 flex justify-end gap-2 border-t border-[#edf1f6] pt-3">
+                      <button className="h-7 px-2.5 text-[12px] font-semibold text-[#667085]" type="button" onClick={() => { setAccountFilterDraft(emptyAccountFilters); setAccountFilters(emptyAccountFilters); }}>清空</button>
+                      <button className="h-7 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white" type="button" onClick={() => { setAccountFilters(accountFilterDraft); setAccountFilterOpen(false); }}>筛选</button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
               <NativeSelect value={sortKey} options={sortOptions.map((option) => option.label)} onChange={setSortKey} />
               <button className={cn("inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]", columnPanelOpen ? "bg-brand-foxSoft text-brand-navy" : "")} type="button" onClick={() => setColumnPanelOpen((open) => !open)}>
                 <SlidersHorizontal className="size-[14px]" strokeWidth={2} />
@@ -1424,8 +1520,8 @@ export function FundsDataPage() {
                       }}
                       onDrop={(event) => {
                         event.preventDefault();
-                        const sourceKey = (event.dataTransfer.getData("text/plain") || draggedColumnKey) as FundsMetricKey;
-                        if (fundsMetricKeySet.has(sourceKey)) reorderColumn(sourceKey, column.key);
+                        const sourceKey = (event.dataTransfer.getData("text/plain") || draggedColumnKey) as FundsFieldKey;
+                        if (fundsFieldKeySet.has(sourceKey)) reorderColumn(sourceKey, column.key);
                         setDraggedColumnKey(null);
                         setDragOverColumnKey(null);
                       }}
@@ -1465,7 +1561,7 @@ export function FundsDataPage() {
             <table className="table-fixed border-separate border-spacing-0 text-left text-[12px]" style={{ width: tableMinWidth, minWidth: tableMinWidth }}>
               <colgroup>
                 <col style={{ width: shopColumnWidth }} />
-                {visibleColumns.map((column) => <col key={column.key} style={{ width: columnWidths[column.key] || defaultMetricColumnWidth }} />)}
+                {visibleColumns.map((column) => <col key={column.key} style={{ width: columnWidths[column.key] || defaultColumnWidth(column.key) }} />)}
               </colgroup>
               <thead className="sticky top-0 z-20 bg-[#fbfcff] text-[#344054] shadow-[inset_0_-1px_0_#e6ebf3]">
                 <tr className="h-10">
@@ -1483,7 +1579,7 @@ export function FundsDataPage() {
                         aria-orientation="vertical"
                         aria-valuemin={minMetricColumnWidth}
                         aria-valuemax={maxMetricColumnWidth}
-                        aria-valuenow={columnWidths[column.key] || defaultMetricColumnWidth}
+                        aria-valuenow={columnWidths[column.key] || defaultColumnWidth(column.key)}
                         tabIndex={0}
                         title={`调整 ${column.label} 列宽`}
                         onDoubleClick={() => resetColumnWidth(column.key)}
@@ -1519,10 +1615,7 @@ export function FundsDataPage() {
                           {metricState === "unavailable" ? (
                             <span className="text-[#98a2b3]">--</span>
                           ) : (
-                            <span className="inline-flex items-center gap-1.5">
-                              <span>{formatColumnValue(row[column.key], column.format)}</span>
-                              {metricState === "stale" ? <span className="rounded-sm bg-[#fff1d6] px-1 text-[10px] font-semibold text-[#b54708]">旧</span> : null}
-                            </span>
+                            <span>{formatColumnValue(row[column.key], column.format)}</span>
                           )}
                         </td>
                       );
@@ -1537,7 +1630,13 @@ export function FundsDataPage() {
                           {fundsState === "loading" ? <Loader2 className="size-7 animate-spin" strokeWidth={2.2} /> : <CircleDollarSign className="size-7" strokeWidth={2.2} />}
                         </span>
                         <strong className="text-[14px] text-[#344054]">{fundsState === "loading" ? "正在获取" : "暂无数据"}</strong>
-                        <span className="text-[13px] leading-6">{fundsState === "loading" ? (fundsProgress || "正在读取资金数据") : "请从左侧选择店铺"}</span>
+                        <span className="text-[13px] leading-6">
+                          {fundsState === "loading"
+                            ? (fundsProgress || "正在读取资金数据")
+                            : activeAccountFilterCount
+                              ? "暂无匹配开户信息的店铺"
+                              : "请从左侧选择店铺"}
+                        </span>
                       </div>
                     </td>
                   </tr>
@@ -1547,11 +1646,10 @@ export function FundsDataPage() {
           </div>
 
           <div className="flex items-center justify-between gap-3 border-t border-[#edf1f6] px-4 text-[12px] text-[#667085]">
-            <span className="min-w-0 truncate" title={[fundsWarningDetail, unavailableWarningDetail, fundsMessage].filter(Boolean).join(" ")}>
+            <span className="min-w-0 truncate" title={[fundsWarningDetail, fundsMessage].filter(Boolean).join(" ")}>
               共 {selectedRows.length} 家店铺，最近获取 {lastSyncAt ? lastSyncAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }) : "暂无"}
               {displayedDataAt ? `，数据截至 ${displayedDataAt.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}` : ""}
               {fundsWarningTitle ? `，${fundsWarningTitle}` : ""}
-              {unavailableWarningTitle ? `，${unavailableWarningTitle}` : ""}
             </span>
             <span className="inline-flex items-center gap-2">
               <Banknote className="size-[14px]" strokeWidth={2} />

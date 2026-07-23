@@ -19,6 +19,10 @@ test("funds adapters preserve the verified XZB endpoints and preflight order", a
     const policy = adapter.policies.fundsData;
 
     assert.equal(adapter.endpoints.fundAccountList, "/settlement/account/getAccountList?_s=fe&req_source=dou_dian_pc");
+    assert.equal(adapter.endpoints.fundAccountOpenInfo, "/ecom/merchant/queryAccountOpenInfo");
+    assert.equal(adapter.requestPlans.fundAccountOpenInfo.method, "POST");
+    assert.equal(adapter.requestPlans.fundAccountOpenInfo.referer, "https://fxg.jinritemai.com/ffa/ecom/merchant/payment-settings");
+    assert.deepEqual(adapter.requestPlans.fundAccountOpenInfo.body, { merchant_ecom_source: "/pc/fxg", exts: {} });
     assert.equal(adapter.endpoints.fundPledgeCash, "/shopuser/govern/bff/api/tpledgecash/index");
     assert.equal(adapter.endpoints.fundPledgePayable, "/governance/shop/tpledgecash/payable/info_v2");
     assert.equal(adapter.requestPlans.fundShopAwardOverview.method, "POST");
@@ -30,11 +34,33 @@ test("funds adapters preserve the verified XZB endpoints and preflight order", a
     assert.deepEqual(policy.preflightPlans, ["fundAccountList"]);
     assert.deepEqual(policy.requestPlanGroups, [
       ["fundAccountList"],
+      ["fundAccountOpenInfo"],
       ["fundPledgeCash", "fundPledgePayable"],
       ["fundShopAwardOverview", "fundCompensateStatistics", "fundBillQuery"]
     ]);
     assert.deepEqual(policy.requiredPlans, ["fundAccountList", "fundPledgeCash", "fundPledgePayable"]);
     assert.deepEqual(policy.criticalPlans, ["fundAccountList", "fundPledgeCash", "fundPledgePayable"]);
+    assert.equal(policy.optionalPlans.includes("fundAccountOpenInfo"), true);
+    assert.deepEqual(adapter.responseMappings.fundsData.fields.accountName.paths, [
+      "fundAccountOpenInfo.opened_info.NEW_HZ.bank_settle_card.bank_account_name",
+      "fundAccountOpenInfo.data.opened_info.NEW_HZ.bank_settle_card.bank_account_name"
+    ]);
+    assert.deepEqual(adapter.responseMappings.fundsData.fields.accountName.sourcePlans, ["fundAccountOpenInfo"]);
+    assert.deepEqual(adapter.responseMappings.fundsData.fields.accountBank.paths, [
+      "fundAccountOpenInfo.opened_info.NEW_HZ.bank_settle_card.bank_name",
+      "fundAccountOpenInfo.data.opened_info.NEW_HZ.bank_settle_card.bank_name"
+    ]);
+    assert.deepEqual(adapter.responseMappings.fundsData.fields.accountBank.sourcePlans, ["fundAccountOpenInfo"]);
+    assert.deepEqual(adapter.responseMappings.fundsData.fields.phone.paths, [
+      "fundAccountOpenInfo.opened_info.NEW_HZ.bank_settle_card.bank_card_mobile",
+      "fundAccountOpenInfo.data.opened_info.NEW_HZ.bank_settle_card.bank_card_mobile"
+    ]);
+    assert.deepEqual(adapter.responseMappings.fundsData.fields.phone.sourcePlans, ["fundAccountOpenInfo"]);
+    assert.deepEqual(policy.fieldSchema.columns.slice(0, 3).map(({ key, label, format }) => ({ key, label, format })), [
+      { key: "accountName", label: "开户名", format: "text" },
+      { key: "accountBank", label: "开户银行", format: "text" },
+      { key: "phone", label: "手机号", format: "text" }
+    ]);
   }
 });
 
@@ -48,10 +74,34 @@ test("funds cache cleanup does not require runtime metadata access", async () =>
   assert.match(source, /preflightFailed[\s\S]*break;/);
 });
 
-test("global funds task failures are not reported as per-store unavailable results", async () => {
+test("funds page does not display risk or unavailable status badges", async () => {
   const source = await readFile(fundsPageUrl, "utf8");
 
-  assert.match(source, /const globalFundsFailure = fundsState === "error" && fundsDetails\.length === 0/);
-  assert.match(source, /const unavailableStoreCount = globalFundsFailure\s*\? 0/);
+  assert.match(source, /key: "accountName", label: "开户名", format: "text"/);
+  assert.match(source, /key: "accountBank", label: "开户银行", format: "text"/);
+  assert.match(source, /key: "phone", label: "手机号", format: "text"/);
+  assert.match(source, />\s*开户筛选/);
+  assert.match(source, /暂无匹配开户信息的店铺/);
+  assert.match(source, /format === "text"/);
+  assert.doesNotMatch(source, /家存在资金事项/);
+  assert.doesNotMatch(source, /家不可用/);
+  assert.doesNotMatch(source, />不可用指标</);
+  assert.doesNotMatch(source, />旧</);
   assert.match(source, /setFundsMessage\(`资金任务执行失败：\$\{errorMessage\}`\)/);
+});
+
+test("funds account filters are selectable options built from cached rows", async () => {
+  const source = await readFile(fundsPageUrl, "utf8");
+  const filterStart = source.indexOf("开户筛选");
+  const filterEnd = source.indexOf("<NativeSelect", filterStart);
+  const filterSource = source.slice(filterStart, filterEnd);
+
+  assert.match(source, /function buildAccountFilterOptions\(rows: FundsRow\[\]/);
+  assert.match(source, /return import\.meta\.env\.DEV === true/);
+  assert.match(source, /const accountFilterRows = useMemo\([\s\S]*fundsRows\.filter\(\(row\) => selectedIds\.has\(row\.shopId\)\)/);
+  assert.match(source, /\[\.\.\.new Set\(values\)\]\.sort/);
+  assert.match(filterSource, /<select/);
+  assert.match(filterSource, /`全部\$\{label\}`/);
+  assert.match(filterSource, /disabled=\{!availableAccountFilterOptions\[key\]\.length\}/);
+  assert.doesNotMatch(filterSource, /<input/);
 });

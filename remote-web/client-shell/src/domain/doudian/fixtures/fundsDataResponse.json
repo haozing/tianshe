@@ -1,5 +1,17 @@
 {
   "responses": {
+    "fundAccountOpenInfo": {
+      "code": 0,
+      "opened_info": {
+        "NEW_HZ": {
+          "bank_settle_card": {
+            "bank_account_name": "测试开户名",
+            "bank_name": "测试银行",
+            "bank_card_mobile": "13800000000"
+          }
+        }
+      }
+    },
     "fundAccountList": {
       "code": 0,
       "data": {
@@ -52,6 +64,11 @@
       "aggregation_res": { "total_unsettled_amount": 98765 },
       "total": 9
     }
+  },
+  "expectedText": {
+    "accountName": "测试开户名",
+    "accountBank": "测试银行",
+    "phone": "13800000000"
   },
   "expected": {
     "withdrawBalance": 123.45,
