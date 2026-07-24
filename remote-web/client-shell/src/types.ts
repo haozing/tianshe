@@ -401,6 +401,11 @@ export interface DoudianOpportunityFavoriteRecommendReason {
   label?: string;
 }
 
+export interface DoudianOpportunityFavoriteCategoryPlan {
+  category: DoudianOpportunityFavoriteCategory;
+  limit: number;
+}
+
 export interface DoudianOpportunityFavoriteQueryMode {
   id: "trading-high" | "growth-fast" | "competition-low" | string;
   label?: string;
@@ -425,6 +430,13 @@ export interface DoudianOpportunityAutoFavoriteRow {
   diagnostic?: Record<string, unknown>;
 }
 
+export interface DoudianOpportunityAutoFavoriteProgress {
+  row: DoudianOpportunityAutoFavoriteRow;
+  completed: number;
+  progress: number;
+  message: string;
+}
+
 export interface DoudianOpportunityAutoFavoritesResult extends DoudianStoreResult {
   rows?: DoudianOpportunityAutoFavoriteRow[];
   successCount?: number;
@@ -433,6 +445,76 @@ export interface DoudianOpportunityAutoFavoritesResult extends DoudianStoreResul
   quotaExhaustedCount?: number;
   candidateCount?: number;
   filters?: DoudianOpportunityAutoFavoriteFilters;
+}
+
+export interface DoudianOpportunityFavoriteTag {
+  id: string | number;
+  name: string;
+}
+
+export interface DoudianOpportunityFavoriteRecord {
+  tenantId?: string;
+  shopId: string;
+  shopName: string;
+  storeGeneration?: number;
+  taskId: string;
+  clueId: string;
+  clueName: string;
+  categoryId?: string;
+  categoryName: string;
+  categoryPath: string[];
+  labels: DoudianOpportunityFavoriteTag[];
+  benefits: DoudianOpportunityFavoriteTag[];
+  taskStatus: number;
+  clueStatus: number;
+  beginTime?: number;
+  endTime?: number;
+  submittedProductCount: number;
+  priceMin?: number;
+  priceMax?: number;
+  pictureUrl?: string;
+}
+
+export interface DoudianOpportunityFavoriteRecordsResult extends DoudianStoreResult {
+  rows: DoudianOpportunityFavoriteRecord[];
+  total: number;
+  totalKnown: boolean;
+  current: number;
+  pageSize: number;
+  hasMore: boolean;
+  cancelSupported: boolean;
+}
+
+export interface DoudianOpportunityFavoriteRecordsProgress {
+  storeRef: DoudianStoreIdentityRef;
+  rows: DoudianOpportunityFavoriteRecord[];
+  total: number;
+  totalKnown: boolean;
+  loaded: number;
+  current: number;
+  pageSize: number;
+  hasMore: boolean;
+  cancelSupported: boolean;
+}
+
+export interface DoudianOpportunityFavoriteCancelRow {
+  tenantId?: string;
+  shopId: string;
+  shopName: string;
+  storeGeneration?: number;
+  taskId: string;
+  status: "success" | "failed" | "cancelled" | string;
+  ok: boolean;
+  message: string;
+  httpStatus?: number;
+  attemptedAt: string;
+}
+
+export interface DoudianOpportunityFavoriteCancelResult extends DoudianStoreResult {
+  rows: DoudianOpportunityFavoriteCancelRow[];
+  successCount: number;
+  failureCount: number;
+  cancelledCount: number;
 }
 
 export interface DoudianBusinessDataRow {
@@ -967,9 +1049,11 @@ export interface DoudianOpportunityFilters {
 
 export interface DoudianOpportunityAutoFavoriteFilters {
   categories: DoudianOpportunityFavoriteCategory[];
+  categoryPlans?: DoudianOpportunityFavoriteCategoryPlan[];
   sortFields: DoudianOpportunityFavoriteSortField[];
   queryModes?: DoudianOpportunityFavoriteQueryMode[];
   recommendReasons?: DoudianOpportunityFavoriteRecommendReason[];
+  benefitIds?: number[];
   perStoreLimit?: number;
   pageSize?: number;
   maxPagesPerQuery?: number;

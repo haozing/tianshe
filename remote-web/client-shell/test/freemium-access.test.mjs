@@ -9,7 +9,7 @@ const routeSource = await readFile(fileURLToPath(new URL("../src/featureRoutes.t
 
 test("every feature route declares an explicit access tier", () => {
   const routeRows = routeSource.split("\n").filter((line) => line.includes("route:") && line.includes("parentRoute:"));
-  assert.ok(routeRows.length >= 12);
+  assert.ok(routeRows.length >= 11);
   for (const row of routeRows) assert.match(row, /accessTier: "(?:free|paid)"/);
 });
 
@@ -18,7 +18,7 @@ test("free route whitelist and paid route families remain exact", () => {
     assert.match(routeSource, new RegExp(`route: "${route.replace(/\//g, "\\/")}"[^\n]+accessTier: "free"`));
   }
   const paidRows = routeSource.split("\n").filter((line) => /route: "\/(?:opportunities|marketing)\//.test(line));
-  assert.ok(paidRows.length >= 6);
+  assert.ok(paidRows.length >= 5);
   for (const row of paidRows) assert.match(row, /accessTier: "paid"/);
   assert.match(routeSource, /SYSTEM_FREE_ROUTES = \["\/system\/diagnostics"\]/);
 });

@@ -683,6 +683,7 @@ function ProfileMenuV2({
       } else if (hasDesktopUpdate(data)) {
         setUpdateState("available");
         setUpdateMessage(`发现新版本 ${versionText(data, "latest")}，可以下载更新包并重启安装。`);
+        setVersionDialogOpen(true);
       } else {
         setUpdateState("current");
         setUpdateMessage("当前已是最新桌面本体版本。");

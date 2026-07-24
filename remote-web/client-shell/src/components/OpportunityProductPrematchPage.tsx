@@ -13,6 +13,7 @@ import {
   Search,
   Send,
   Square,
+  Timer,
   X,
   XCircle
 } from "lucide-react";
@@ -88,6 +89,7 @@ const recentlyOptions: Option<number>[] = [
 
 const autoSubmitPageSize = 100;
 const defaultDailySubmitTarget = 1000;
+const pipelineSnapshotRefreshIntervalMs = 3000;
 const storePhaseLabels: Record<string, string> = {
   "product-scan": "同步商品",
   "category-ledger": "类目整理",
@@ -174,6 +176,102 @@ function AnimatedNumber({ value, className, compact = false }: { value: number; 
         </span>
       ) : null}
       {phase === "settled" ? <CheckCircle2 className="opportunity-counter-check size-4 shrink-0" strokeWidth={2.5} aria-label="增长完成" /> : null}
+    </span>
+  );
+}
+
+function SubmissionCount({ value, waiting }: { value: number; waiting: boolean }) {
+  const target = Math.max(0, Math.round(Number(value) || 0));
+  const [displayed, setDisplayed] = useState(target);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [phase, setPhase] = useState<"idle" | "timing" | "success">("idle");
+  const [successSequence, setSuccessSequence] = useState(0);
+  const displayedRef = useRef(displayed);
+  const targetRef = useRef(target);
+  const waitingRef = useRef(waiting);
+  const elapsedTimerRef = useRef<number | null>(null);
+  const successTimerRef = useRef<number | null>(null);
+
+  targetRef.current = target;
+  waitingRef.current = waiting;
+
+  function stopTiming() {
+    if (elapsedTimerRef.current !== null) {
+      window.clearInterval(elapsedTimerRef.current);
+      elapsedTimerRef.current = null;
+    }
+  }
+
+  function startTiming() {
+    if (elapsedTimerRef.current !== null || successTimerRef.current !== null) return;
+    const startedAt = Date.now();
+    setElapsedSeconds(0);
+    setPhase("timing");
+    elapsedTimerRef.current = window.setInterval(() => {
+      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    }, 1000);
+  }
+
+  function playNextSuccess() {
+    stopTiming();
+    setPhase("success");
+    setSuccessSequence((current) => current + 1);
+    successTimerRef.current = window.setTimeout(() => {
+      const next = Math.min(targetRef.current, displayedRef.current + 1);
+      displayedRef.current = next;
+      setDisplayed(next);
+      setElapsedSeconds(0);
+      successTimerRef.current = null;
+      if (targetRef.current > next) {
+        setPhase("idle");
+        successTimerRef.current = window.setTimeout(() => {
+          successTimerRef.current = null;
+          playNextSuccess();
+        }, 120);
+      } else if (waitingRef.current) {
+        startTiming();
+      } else {
+        setPhase("idle");
+      }
+    }, 720);
+  }
+
+  useEffect(() => {
+    if (target < displayedRef.current) {
+      stopTiming();
+      if (successTimerRef.current !== null) window.clearTimeout(successTimerRef.current);
+      successTimerRef.current = null;
+      displayedRef.current = target;
+      setDisplayed(target);
+      setElapsedSeconds(0);
+      setPhase(waiting ? "timing" : "idle");
+      if (waiting) startTiming();
+      return;
+    }
+    if (target > displayedRef.current && successTimerRef.current === null) playNextSuccess();
+  }, [target]);
+
+  useEffect(() => {
+    if (successTimerRef.current !== null || targetRef.current > displayedRef.current) return;
+    if (waiting) {
+      startTiming();
+    } else {
+      stopTiming();
+      setElapsedSeconds(0);
+      setPhase("idle");
+    }
+  }, [waiting]);
+
+  useEffect(() => () => {
+    stopTiming();
+    if (successTimerRef.current !== null) window.clearTimeout(successTimerRef.current);
+  }, []);
+
+  return (
+    <span className="inline-flex min-w-[84px] items-center justify-end gap-1.5" aria-live="polite" aria-label={phase === "timing" ? `提报数 ${displayed}，等待下一条已计时 ${elapsedSeconds} 秒` : phase === "success" ? `第 ${displayed + 1} 条提报成功` : `提报数 ${displayed}`}>
+      <AnimatedNumber value={displayed} compact />
+      {phase === "timing" ? <span className="inline-flex whitespace-nowrap font-mono text-[10px] font-bold text-[#b54708]"><Timer className="mr-0.5 size-3" strokeWidth={2.2} />{elapsedSeconds}s</span> : null}
+      {phase === "success" ? <span className="opportunity-submit-success inline-flex items-center gap-0.5 whitespace-nowrap text-[10px] font-bold text-[#087443]" key={successSequence}><CheckCircle2 className="size-3.5" strokeWidth={2.6} />成功</span> : null}
     </span>
   );
 }
@@ -327,13 +425,25 @@ function CategorySelectionDialog({ open, options, selectedKeys, busy, onOpenChan
 
 function pipelineLogTone(message: string): PipelineLiveLog["tone"] {
   if (/失败|错误|取消失败/.test(message)) return "error";
-  if (/完成|成功|已受理/.test(message)) return "success";
+  if (/完成|成功|已提报|提报数/.test(message)) return "success";
   if (/等待|待命|已取消/.test(message)) return "idle";
   return "running";
 }
 
 function pipelineLogTime() {
-  return new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
+
+function pipelineProgressLog(message: string, shopName?: string) {
+  const normalized = String(message || "").replace(/^\d+%\s*[·•-]?\s*/, "").trim();
+  const prefix = shopName ? `${shopName}：` : "";
+  if (/^(提报模式|获取商品名称|获取商机|提报商机|提报接口)：/.test(normalized)) return `${prefix}${normalized}`;
+  if (/商机提报处理中/.test(normalized)) return `${prefix}提报商机：${normalized.replace("商机提报处理中", "处理中")}`;
+  if (/商品/.test(normalized) && /获取|同步/.test(normalized)) return `${prefix}获取商品名称：${normalized}`;
+  if (/商机/.test(normalized) && /获取|同步/.test(normalized)) return `${prefix}获取商机：${normalized}`;
+  return `${prefix}${normalized}`;
 }
 
 export function reconcileStoreCategorySelection(availableKeys: string[], selectedKeys: string[] | null) {
@@ -367,31 +477,6 @@ function detailDiagnosticNumber(detail: DoudianRunDetail | undefined, key: strin
 function detailDiagnosticText(detail: DoudianRunDetail | undefined, key: string) {
   const diagnostic = (detail?.diagnostic && typeof detail.diagnostic === "object" ? detail.diagnostic : {}) as Record<string, unknown>;
   return String(diagnostic[key] || "").trim();
-}
-
-function submitStatusInfo(item: DoudianOpportunityPrematchCandidate) {
-  const status = String(item.submitStatus || item.status || "");
-  if (item.auditStatus === "approved") return { label: "平台审核通过", className: "bg-[#eafaf0] text-[#087443]" };
-  if (item.auditStatus === "rejected") return { label: "平台审核驳回", className: "bg-[#fff1ef] text-[#b42318]" };
-  if (item.submittedAt || status === "accepted" || status === "submitted") return { label: "接口已受理", className: "bg-[#eafaf0] text-[#087443]" };
-  if (item.validationStatus === "budget_exhausted") return { label: "校验预算已耗尽", className: "bg-[#fff7e8] text-[#b54708]" };
-  if (item.validationStatus === "unknown") return { label: "校验结果未知", className: "bg-[#fff7e8] text-[#b54708]" };
-  if (item.validationStatus === "rejected" && ["title_anchor_missing", "official_words_not_matched"].includes(String(item.validationReason || ""))) return { label: "核心词不符", className: "bg-[#fff1ef] text-[#b42318]" };
-  if (item.validationStatus === "rejected" && item.validationReason === "official_goods_absent") return { label: "官方范围不包含", className: "bg-[#fff1ef] text-[#b42318]" };
-  if (item.validationStatus === "rejected") return { label: "官方校验拒绝", className: "bg-[#fff1ef] text-[#b42318]" };
-  if (item.validationStatus === "pending") return { label: "待官方校验", className: "bg-[#eef4ff] text-[#175cd3]" };
-  if (item.validationStatus === "verified" && status !== "queued") return { label: "官方校验通过", className: "bg-[#eafaf0] text-[#087443]" };
-  if (item.validationStatus === "not_started" && ["not_queued", "fallback"].includes(status)) return { label: "待官方校验", className: "bg-[#eef4ff] text-[#175cd3]" };
-  if (status === "failed") return { label: "失败", className: "bg-[#fff1ef] text-[#b42318]" };
-  if (status === "unknown") return { label: "结果待确认", className: "bg-[#fff7e8] text-[#b54708]" };
-  if (status === "quota_exhausted") return { label: "今日额度已满", className: "bg-[#fff7e8] text-[#b54708]" };
-  if (status === "sending" || status === "submitting") return { label: "提交中", className: "bg-[#eef4ff] text-[#175cd3]" };
-  if (status === "skipped") return { label: "跳过", className: "bg-[#fff7e8] text-[#b54708]" };
-  if (status === "queued") return { label: item.validationStatus === "verified" ? "官方校验通过" : "待官方校验", className: "bg-brand-foxSoft text-brand-fox" };
-  if (status === "cancelled") return { label: "已取消", className: "bg-[#f2f4f7] text-[#667085]" };
-  if (item.alternative || status === "alternative") return { label: "备选", className: "bg-[#eef4ff] text-[#175cd3]" };
-  if (item.eligible && status === "ready") return { label: item.validationStatus === "verified" ? "官方校验通过" : "待官方校验", className: "bg-brand-foxSoft text-brand-fox" };
-  return { label: status || "--", className: "bg-[#f2f4f7] text-[#667085]" };
 }
 
 function storeRangeStatusInfo(args: {
@@ -452,7 +537,7 @@ function pipelineSnapshotLog(details: DoudianRunDetail[], summary: Record<string
   const safetySkippedCount = Number(summary.safetySkippedCount || 0);
   const productCount = Number(summary.productCount || 0);
   const clueCount = Number(summary.clueCount || 0);
-  if (submittedCount || failedCount || safetySkippedCount) return `提报完成：接口受理 ${formatNumber(submittedCount)} · 失败 ${formatNumber(failedCount)} · 安全跳过 ${formatNumber(safetySkippedCount)}`;
+  if (submittedCount || failedCount || safetySkippedCount) return `提报完成：提报数 ${formatNumber(submittedCount)} · 失败 ${formatNumber(failedCount)} · 安全跳过 ${formatNumber(safetySkippedCount)}`;
   if (Number(summary.officialValidationObserveMode || 0)) return `官方校验观察完成：通过 ${formatNumber(summary.officialVerifiedCount)} · 未知 ${formatNumber(summary.validationUnknownCount)} · 未执行平台写入`;
   if (Number(summary.officialValidationDisabledMode || 0)) return "官方校验已停用，未执行平台写入";
   if (productCount || clueCount) return `已同步：商品 ${formatNumber(productCount)} · 商机 ${formatNumber(clueCount)}`;
@@ -677,11 +762,11 @@ export function OpportunityProductPrematchPage() {
   useEffect(() => {
     if (!pipelineBusy) return undefined;
     const heartbeatMessages = [
-      "队列心跳正常 · 正在接收下一批进度",
-      "店铺处理上下文已保持 · 继续推进",
-      "结果整理通道在线 · 等待新的回执",
-      "本地进度视图已刷新 · 数据持续汇总",
-      "任务仍在运行 · 正在校对处理节奏"
+      "提报模式：自动匹配，正在等待下一批回执",
+      "获取商品名称：正在读取当前店铺商品",
+      "获取商机：正在同步平台商机词",
+      "提报商机：已进入请求队列，等待平台响应",
+      "提报接口：继续校对提交结果"
     ];
     const timer = window.setInterval(() => {
       const message = heartbeatMessages[pipelineHeartbeatSeqRef.current % heartbeatMessages.length];
@@ -712,9 +797,9 @@ export function OpportunityProductPrematchPage() {
     if (!activePipelineOperationIdRef.current || detail.operationId !== activePipelineOperationIdRef.current) return;
     if (detail.status === "running") {
       setPipelineInFlight(true);
-      recordPipelineLog(`${Math.round(Number(detail.progress || 0))}% · ${detail.store?.shopName ? `${detail.store.shopName} · ` : ""}${detail.message || "一键提报处理中"}`);
+      recordPipelineLog(`${pipelineProgressLog(detail.message || "一键提报处理中", detail.store?.shopName)} · 进度 ${Math.round(Number(detail.progress || 0))}%`);
       const now = Date.now();
-      if (now - lastPipelineSnapshotRefreshRef.current >= 10000) {
+      if (now - lastPipelineSnapshotRefreshRef.current >= pipelineSnapshotRefreshIntervalMs) {
         lastPipelineSnapshotRefreshRef.current = now;
         void restorePipelineRun(activePipelineOperationIdRef.current, { silent: true, includeCandidates: false, updatePipelineLog: true, summaryOnly: true });
       }
@@ -747,7 +832,7 @@ export function OpportunityProductPrematchPage() {
       if (cancelled) return;
       lastPipelineSnapshotRefreshRef.current = Date.now();
       void restorePipelineRun(runId, { silent: true, includeCandidates: false, updatePipelineLog: true, summaryOnly: true });
-    }, 10000);
+    }, pipelineSnapshotRefreshIntervalMs);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -834,7 +919,7 @@ export function OpportunityProductPrematchPage() {
     }
     setCandidatePageLoading(true);
     try {
-      const page = await listDoudianOpportunityCandidatesPage({ runId: id, cursor, pageSize: autoSubmitPageSize });
+      const page = await listDoudianOpportunityCandidatesPage({ runId: id, cursor, pageSize: autoSubmitPageSize, onlyRequested: true });
       const activeIdentityKeys = new Set(activeStores.map((store) => storeIdentityKey(store)));
       const items = (page.items || []).filter((item) => item.storeGeneration && activeIdentityKeys.has(storeIdentityKey({
         tenantId: item.tenantId || "local-user",
@@ -1023,7 +1108,9 @@ export function OpportunityProductPrematchPage() {
     setCandidateHasMore(false);
     setRunDetails([]);
     setResultSummary({});
-    recordPipelineLog("0% · 一键提报已启动，正在创建后台任务");
+    recordPipelineLog(`店铺范围：已选择 ${selectedShopIds.size} 家店铺`);
+    recordPipelineLog("提报模式：自动匹配商品与商机词");
+    recordPipelineLog("一键提报：任务已启动，正在创建后台任务");
     activePipelineOperationIdRef.current = operationId;
     const promise = runDoudianOpportunityPipelineTask({
       shopIds: Array.from(selectedShopIds),
@@ -1040,7 +1127,7 @@ export function OpportunityProductPrematchPage() {
         recordPipelineLog("已连接到运行中的商机提报任务");
         void restorePipelineRun(activeOperationId, { silent: true, includeCandidates: false, updatePipelineLog: true, summaryOnly: true, restoreConfiguration: true });
       } else {
-        recordPipelineLog("0% · 后台任务已创建，等待扫描店铺");
+        recordPipelineLog("后台任务已创建：等待扫描店铺");
       }
     }).catch((error) => {
       console.error("商机提报任务启动失败", error);
@@ -1145,26 +1232,27 @@ export function OpportunityProductPrematchPage() {
                     })}
                   </div>
                 ) : null}
-                <div className="grid min-h-[38px] shrink-0 grid-cols-[54px_minmax(120px,1fr)_94px_78px_64px_64px_82px] items-center border-b border-[#edf1f6] bg-[#fbfcff] text-[12px] font-semibold text-[#667085]">
+                <div className="grid min-h-[38px] shrink-0 grid-cols-[54px_minmax(120px,1fr)_94px_78px_64px_64px_108px] items-center border-b border-[#edf1f6] bg-[#fbfcff] text-[12px] font-semibold text-[#667085]">
                   <span className="text-center">序号</span>
                   <span className="px-3">店铺名称</span>
                   <span className="px-2">分组名</span>
                   <span className="text-center">状态</span>
                   <span className="px-2 text-right">商品数</span>
                   <span className="px-2 text-right">商机数</span>
-                  <span className="px-2 text-right">接口受理</span>
+                  <span className="px-2 text-right">提报数</span>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
                   {storeRunRows.map((row) => {
                     const statusInfo = storeRangeStatusInfo(row);
                     const processing = storeRunPriority(row.status, row.phase) === 0;
+                    const waitingForNextSubmission = row.phase === "submitting" && (row.status === "running" || row.status === "submitting");
                     return (
                       <label
                         ref={(element) => {
                           if (element) storeRowRefs.current.set(row.shopId, element);
                           else storeRowRefs.current.delete(row.shopId);
                         }}
-                        className={cn("opportunity-store-row grid min-h-[42px] cursor-pointer grid-cols-[54px_minmax(120px,1fr)_94px_78px_64px_64px_82px] items-center border-b border-[#edf1f6] text-[12px] text-[#344054] hover:bg-[#fffaf7]", processing && "is-processing")}
+                        className={cn("opportunity-store-row grid min-h-[42px] cursor-pointer grid-cols-[54px_minmax(120px,1fr)_94px_78px_64px_64px_108px] items-center border-b border-[#edf1f6] text-[12px] text-[#344054] hover:bg-[#fffaf7]", processing && "is-processing")}
                         data-processing={processing ? "true" : "false"}
                         key={row.shopId}
                       >
@@ -1179,7 +1267,7 @@ export function OpportunityProductPrematchPage() {
                         </span>
                         <span className="px-2 text-right font-semibold text-[#475467]"><AnimatedNumber value={row.productCount} compact /></span>
                         <span className="px-2 text-right font-semibold text-[#475467]"><AnimatedNumber value={row.clueCount} compact /></span>
-                        <span className="px-2 text-right font-semibold text-[#087443]"><AnimatedNumber value={row.submittedCount} compact /></span>
+                        <span className="px-2 text-right font-semibold text-[#087443]"><SubmissionCount value={row.submittedCount} waiting={waitingForNextSubmission} /></span>
                       </label>
                     );
                   })}
@@ -1250,8 +1338,8 @@ export function OpportunityProductPrematchPage() {
                           {pipelineLogs.map((item, index) => {
                             const icon = item.tone === "success" ? <CheckCircle2 className="size-3.5" strokeWidth={2.2} /> : item.tone === "error" ? <XCircle className="size-3.5" strokeWidth={2.2} /> : item.tone === "running" ? <Activity className="size-3.5" strokeWidth={2.2} /> : <Radio className="size-3.5" strokeWidth={2.2} />;
                             return (
-                              <div className={cn("opportunity-log-entry grid grid-cols-[58px_20px_minmax(0,1fr)] items-start gap-1.5 rounded px-2 py-1.5 text-[12px]", item.tone === "success" ? "bg-[#123126] text-[#6ee7ad]" : item.tone === "error" ? "bg-[#321f20] text-[#ff9b94]" : item.tone === "running" ? "bg-[#15272b] text-[#d7e7eb]" : "text-[#91a7ad]")} key={item.id} style={{ animationDelay: `${Math.min(index, 8) * 18}ms` }}>
-                                <span className="font-mono text-[10px] text-[#6f858b]">{item.time}</span>
+                              <div className={cn("opportunity-log-entry grid grid-cols-[150px_20px_minmax(0,1fr)] items-start gap-1.5 rounded px-2 py-1.5 text-[12px]", item.tone === "success" ? "bg-[#123126] text-[#6ee7ad]" : item.tone === "error" ? "bg-[#321f20] text-[#ff9b94]" : item.tone === "running" ? "bg-[#15272b] text-[#d7e7eb]" : "text-[#91a7ad]")} key={item.id} style={{ animationDelay: `${Math.min(index, 8) * 18}ms` }}>
+                                <span className="whitespace-nowrap font-mono text-[10px] text-[#6f858b]">{item.time}---</span>
                                 <span className={cn("grid size-5 place-items-center", item.tone === "success" ? "text-[#4ade80]" : item.tone === "error" ? "text-[#fb7185]" : item.tone === "running" ? "text-[#f6c85f]" : "text-[#789098]")}>{icon}</span>
                                 <span className="min-w-0 break-words font-medium leading-5">{item.message}</span>
                               </div>
@@ -1269,7 +1357,7 @@ export function OpportunityProductPrematchPage() {
             <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-brand-line bg-white">
               <div className="flex min-h-[48px] shrink-0 items-center justify-between gap-3 border-b border-[#edf1f6] px-4 max-[760px]:flex-col max-[760px]:items-start max-[760px]:py-2">
                 <div className="min-w-0">
-                  <strong className="block text-[15px] text-brand-navy">自动提报商品与商机词</strong>
+                  <strong className="block text-[15px] text-brand-navy">已请求提报商品与商机词</strong>
                   <span className="mt-1 block truncate text-[12px] font-semibold text-[#667085]">
                     共 {formatNumber(candidateSummary.totalCount)} 条，每页 {formatNumber(autoSubmitPageSize)} 条，当前 {formatNumber(autoSubmitPageFrom)}-{formatNumber(autoSubmitPageTo)}
                   </span>
@@ -1309,12 +1397,10 @@ export function OpportunityProductPrematchPage() {
                         <th className="w-[170px] border-b border-[#edf1f6] px-3 py-2.5">店铺</th>
                         <th className="w-[260px] border-b border-[#edf1f6] px-3 py-2.5">匹配商机</th>
                         <th className="border-b border-[#edf1f6] px-3 py-2.5">命中证据</th>
-                        <th className="w-[130px] border-b border-[#edf1f6] px-3 py-2.5">状态</th>
                       </tr>
                     </thead>
                     <tbody className="text-[13px]">
                       {autoSubmitItems.map((item) => {
-                        const status = submitStatusInfo(item);
                         const matchedTokens = uniqueText([...(item.matchedTokens || []), ...(item.matchedWords || [])]).slice(0, 8);
                         const clueWords = uniqueText(item.clueWords || []).filter((word) => !matchedTokens.includes(word)).slice(0, 6);
                         const strongCount = item.strongMatchedTokens?.length || 0;
@@ -1347,10 +1433,6 @@ export function OpportunityProductPrematchPage() {
                                 命中 {formatNumber(evidenceCount)} 个词 · {item.fullClueNameMatched ? "完整匹配" : "部分匹配"}
                               </span>
                             </td>
-                            <td className="border-b border-[#edf1f6] px-3 py-3 align-top">
-                              <span className={cn("inline-flex rounded-md px-2 py-1 text-[12px] font-semibold", status.className)}>{status.label}</span>
-                              {item.skipReason ? <span className="mt-1 block truncate text-[12px] text-[#b54708]" title={item.skipReason}>{item.skipReason}</span> : null}
-                            </td>
                           </tr>
                         );
                       })}
@@ -1360,7 +1442,7 @@ export function OpportunityProductPrematchPage() {
                   <div className="grid h-full min-h-[260px] place-items-center p-6 text-center">
                     <div>
                       <strong className="block text-[15px] text-[#101828]">暂无自动提报商品</strong>
-                      <span className="mt-1 block text-[12px] text-[#667085]">运行一键提报后会在这里展示商品和商机词。</span>
+                      <span className="mt-1 block text-[12px] text-[#667085]">运行一键提报后会在这里展示已发起请求的商品和商机词。</span>
                     </div>
                   </div>
                 )}

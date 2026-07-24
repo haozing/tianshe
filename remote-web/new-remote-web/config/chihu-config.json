@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.23.funds-account-filter-v1",
+  "version": "2026.07.24.opportunity-submit-concurrency-v1",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "ae07ab4-dirty",
-    "buildTime": "2026-07-23T07:49:55.779Z"
+    "gitCommit": "f8937d7-dirty",
+    "buildTime": "2026-07-23T23:39:38.305Z"
   }
 }

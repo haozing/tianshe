@@ -4661,6 +4661,7 @@ function submitBody(clue: DoudianOpportunityClueRow, products: DoudianOpportunit
 
 function transientSubmitMessage(message: string, response?: RequestPlanResult) {
   const status = Number(response?.status || 0);
+  if (status === 429) return true;
   if (submitFrequencyLimitedMessage(message, response)) return false;
   return !message || status === 429 || status === 502 || status === 504 || message.includes("频繁") || message.includes("系统") || message.includes("network");
 }
@@ -4708,6 +4709,10 @@ function submitLeaseExpiresAt(adapter: DoudianAdapterConfig) {
 
 function submitWorkerBatchSize(adapter: DoudianAdapterConfig) {
   return policyNumber(adapter, "opportunityReport.submitBatchSize", submitBatchSizeFallback, 1, 100);
+}
+
+function submitTaskConcurrency(adapter: DoudianAdapterConfig) {
+  return policyNumber(adapter, "opportunityReport.submitTaskConcurrency", 2, 1, 4);
 }
 
 function estimateSubmitGroups(candidates: DoudianOpportunityPrematchCandidate[], adapter: DoudianAdapterConfig) {
@@ -4775,27 +4780,129 @@ async function submitWithRetry(
   body: Record<string, unknown>,
   shouldCancel?: () => boolean,
   beginMutation?: () => void,
-  endMutation?: () => void
+  endMutation?: () => void,
+  trace?: {
+    runId?: string;
+    sourceRunId?: string;
+    clueId?: string;
+    productIds?: string[];
+  }
 ) {
   const planKey = "opportunitySubmitClue";
-  const retryLimit = policyNumber(payload.adapter, "opportunityReport.submitRetryLimit", 1, 1, 3);
-  const retryDelay = policyNumber(payload.adapter, "opportunityReport.submitRetryDelayMs", 5900, 0, 30000);
+  const retryLimit = policyNumber(payload.adapter, "opportunityReport.submitRetryLimit", 3, 1, 3);
+  const retryDelay = policyNumber(payload.adapter, "opportunityReport.submitRetryDelayMs", 10000, 0, 30000);
+  const clueId = text(trace?.clueId || body.clue_id);
+  const productIds = uniqueText(trace?.productIds || (Array.isArray(body.products)
+    ? body.products.map((item) => text(objectRecord(item).product_id))
+    : []));
   let response: RequestPlanResult | undefined;
   let attemptCount = 0;
   for (let attempt = 0; attempt < retryLimit; attempt += 1) {
     assertNotCancelled(shouldCancel);
+    const attemptStartedAt = Date.now();
+    await reportDoudianDiagnostic({
+      category: "opportunity-pipeline",
+      event: "submit-attempt-started",
+      runId: trace?.runId,
+      sourceRunId: trace?.sourceRunId,
+      shopId: store.shopId,
+      shopName: store.shopName,
+      clueId,
+      productIds,
+      outerAttempt: attempt + 1,
+      outerAttemptLimit: retryLimit,
+      requestPlanMaxAttempts: 1,
+      startedAt: new Date(attemptStartedAt).toISOString()
+    }, true);
     response = await runDoudianRequestPlan(payload, {
       partition: store.partition,
       planKey,
       context: bodyContext(body),
       shouldCancel,
       beginMutation,
-      endMutation
+      endMutation,
+      maxAttempts: 1
     });
-    attemptCount += Math.max(1, Math.floor(Number(response.attemptCount || 1)));
+    const requestAttemptCount = Math.max(1, Math.floor(Number(response.attemptCount || 1)));
+    attemptCount += requestAttemptCount;
     const message = responseMessage(response);
-    if (submitResponseOk(response) || !transientSubmitMessage(message, response)) break;
-    if (attempt < retryLimit - 1 && retryDelay) await cancellableWait(retryDelay, shouldCancel);
+    const accepted = submitResponseOk(response);
+    const retryable = !accepted && transientSubmitMessage(message, response);
+    const status = Number(response.status || 0);
+    await reportDoudianDiagnostic({
+      category: "opportunity-pipeline",
+      event: "submit-attempt-finished",
+      runId: trace?.runId,
+      sourceRunId: trace?.sourceRunId,
+      shopId: store.shopId,
+      shopName: store.shopName,
+      clueId,
+      productIds,
+      outerAttempt: attempt + 1,
+      outerAttemptLimit: retryLimit,
+      requestAttemptCount,
+      totalRequestAttemptCount: attemptCount,
+      status,
+      accepted,
+      retryable,
+      message,
+      durationMs: Math.max(0, Date.now() - attemptStartedAt)
+    }, true);
+    if (accepted || !retryable) break;
+    if (attempt < retryLimit - 1 && retryDelay) {
+      const waitDetail = {
+        shopName: store.shopName,
+        clueId,
+        productIds,
+        status,
+        outerAttempt: attempt + 1,
+        nextOuterAttempt: attempt + 2,
+        outerAttemptLimit: retryLimit,
+        waitMs: retryDelay,
+        totalRequestAttemptCount: attemptCount,
+        rateLimitScope: "store-only-test",
+        otherStoreWorkersBlocked: false
+      };
+      if (trace?.runId) {
+        await writePipelineEvent({
+          runId: trace.runId,
+          shopId: store.shopId,
+          level: "warn",
+          event: "pipeline-submit-retry-waiting",
+          message: status === 429
+            ? `HTTP 429 received; store ${store.shopName || store.shopId} waits ${retryDelay / 1000}s before retry; other store workers are not blocked`
+            : `Submit request failed; store ${store.shopName || store.shopId} waits ${retryDelay / 1000}s before retry`,
+          detail: waitDetail
+        }).catch(() => undefined);
+      }
+      await reportDoudianDiagnostic({
+        category: "opportunity-pipeline",
+        event: "submit-retry-wait-started",
+        runId: trace?.runId,
+        sourceRunId: trace?.sourceRunId,
+        shopId: store.shopId,
+        ...waitDetail
+      }, true);
+      await cancellableWait(retryDelay, shouldCancel);
+      if (trace?.runId) {
+        await writePipelineEvent({
+          runId: trace.runId,
+          shopId: store.shopId,
+          level: "info",
+          event: "pipeline-submit-retry-resumed",
+          message: `Retry wait finished for store ${store.shopName || store.shopId}; starting attempt ${attempt + 2}/${retryLimit}`,
+          detail: waitDetail
+        }).catch(() => undefined);
+      }
+      await reportDoudianDiagnostic({
+        category: "opportunity-pipeline",
+        event: "submit-retry-wait-finished",
+        runId: trace?.runId,
+        sourceRunId: trace?.sourceRunId,
+        shopId: store.shopId,
+        ...waitDetail
+      }, true);
+    }
   }
   return { response, attemptCount };
 }
@@ -5129,7 +5236,13 @@ async function submitProductsForClue(args: {
         submitBody(args.clue, batch, args.store, args.module),
         args.shouldCancel,
         args.beginMutation,
-        args.endMutation
+        args.endMutation,
+        {
+          runId: args.runId,
+          sourceRunId: args.sourceRunId,
+          clueId: args.clue.clueId,
+          productIds: batch.map((product) => product.productId)
+        }
       );
       const response = submitResult.response;
       const remoteCode = responseCode(response);
@@ -6250,12 +6363,16 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
     const ledger = await listStoreLedger();
     const stores = ledger.stores || [];
     const scopedRunId = text(args.runId || args.operationId || args.sourceRunId);
+    const taskConcurrency = submitTaskConcurrency(payload.adapter);
     const workerId = `${scopedRunId || "global"}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     void reportDoudianDiagnostic({
       category: "opportunity-pipeline",
       event: "submit-worker-started",
       runId: scopedRunId,
-      workerId
+      workerId,
+      taskConcurrency,
+      rateLimitIsolation: "store-only-test",
+      otherStoreTasksContinueOnRateLimit: true
     }, true);
     let processed = 0;
     while (true) {
@@ -6270,9 +6387,21 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
       if (!tasks.length) break;
       const activeKeys = new Set<string>();
       let processedThisPass = 0;
-      for (let task of tasks) {
-      if (activeKeys.has(task.concurrencyKey)) continue;
-      activeKeys.add(task.concurrencyKey);
+      const selectedTasks: PipelineSubmitTaskRecord[] = [];
+      for (const candidateTask of tasks) {
+        if (activeKeys.has(candidateTask.concurrencyKey)) continue;
+        activeKeys.add(candidateTask.concurrencyKey);
+        selectedTasks.push(candidateTask);
+      }
+      if (!selectedTasks.length) break;
+      const slotCount = Math.min(taskConcurrency, selectedTasks.length);
+      let nextTaskIndex = 0;
+      const runWorkerSlot = async (workerSlot: number) => {
+      while (true) {
+      const initialTask = selectedTasks[nextTaskIndex];
+      nextTaskIndex += 1;
+      if (!initialTask) return;
+      let task = initialTask;
       const startedAt = nowIso();
       const leaseExpiresAt = submitLeaseExpiresAt(payload.adapter);
       const claimed = await repositoryClaimOpportunitySubmitTask<PipelineSubmitTaskRecord & Record<string, unknown>>({
@@ -6309,8 +6438,31 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
         taskId: task.id,
         shopId: task.shopId,
         candidateCount: taskCandidates.length,
-        workerId
+        workerId,
+        workerSlot,
+        taskConcurrency,
+        activeStoreTaskCount: slotCount,
+        queuedStoreTaskCount: selectedTasks.length
       }, true);
+      await writePipelineEvent({
+        runId: task.runId,
+        storeRunId: task.storeRunId,
+        shopId: task.shopId,
+        level: "info",
+        event: "pipeline-submit-task-dispatched",
+        message: `Store ${task.shopName || task.shopId} started in worker slot ${workerSlot}/${taskConcurrency}`,
+        detail: {
+          taskId: task.id,
+          workerId,
+          workerSlot,
+          taskConcurrency,
+          activeStoreTaskCount: slotCount,
+          queuedStoreTaskCount: selectedTasks.length,
+          candidateCount: taskCandidates.length,
+          rateLimitIsolation: "store-only-test",
+          otherStoreTasksContinueOnRateLimit: slotCount > 1
+        }
+      }).catch(() => undefined);
       const updatedCandidates: DoudianOpportunityPrematchCandidate[] = [];
       const executions: DoudianOpportunityExecution[] = [];
       let submittedCount = Number(task.submittedCount || 0);
@@ -6764,7 +6916,12 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
               blockedProductIds.add(batchCandidate.productId);
               for (const productId of productIdsFromSubmitMessage(failureMessage)) blockedProductIds.add(productId);
             }
-            const finalRateLimited = candidateExecutions.some(isFinalRateLimitedExecution);
+            const rateLimitedExecutions = candidateExecutions.filter(isFinalRateLimitedExecution);
+            const finalRateLimited = rateLimitedExecutions.length > 0;
+            const remoteHttpStatuses = uniqueText(candidateExecutions.map((item) => text(objectRecord(item.diagnostic).remoteHttpStatus)));
+            const submitAttemptCount = candidateExecutions.reduce((maximum, item) => (
+              Math.max(maximum, Math.max(0, Math.floor(Number(objectRecord(item.diagnostic).submitAttemptCount || 0))))
+            ), 0);
             if (!submitThrottleReason && stopStoreOnSubmitFrequency(payload.adapter) && ((failureMessage && submitFrequencyLimitedMessage(failureMessage)) || finalRateLimited)) {
               submitThrottleReason = finalRateLimited ? "HTTP 429 重试后仍被限流，已停止本店后续提报" : failureMessage || "商机中心提交触发频控，已停止本店后续提报";
               await writePipelineEvent({
@@ -6780,9 +6937,45 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
                   clueId: batchCandidate.clueId,
                   dailyAttemptUsed: used,
                   dailyAttemptLimit: limit,
-                  submitBatchSize: batchCandidates.length
+                  submitBatchSize: batchCandidates.length,
+                  remoteHttpStatuses,
+                  submitAttemptCount,
+                  retryLimit: policyNumber(payload.adapter, "opportunityReport.submitRetryLimit", 3, 1, 3),
+                  retryDelayMs: policyNumber(payload.adapter, "opportunityReport.submitRetryDelayMs", 10000, 0, 30000),
+                  requestPlanMaxAttempts: 1,
+                  workerId,
+                  workerSlot,
+                  taskConcurrency,
+                  activeStoreTaskCount: slotCount,
+                  queuedStoreTaskCount: selectedTasks.length,
+                  otherActiveStoreSlots: Math.max(0, slotCount - 1),
+                  rateLimitScope: "store-only-test",
+                  stoppedStoreOnly: true,
+                  globalCooldownAfterFinalRateLimit: false,
+                  otherStoreTasksContinue: slotCount > 1
                 }
               }).catch(() => undefined);
+              await reportDoudianDiagnostic({
+                category: "opportunity-pipeline",
+                event: "store-rate-limit-isolated",
+                runId: task.runId,
+                storeRunId: task.storeRunId,
+                shopId: task.shopId,
+                shopName: task.shopName,
+                candidateId: batchCandidate.id,
+                productId: batchCandidate.productId,
+                clueId: batchCandidate.clueId,
+                remoteHttpStatuses,
+                submitAttemptCount,
+                workerId,
+                workerSlot,
+                taskConcurrency,
+                activeStoreTaskCount: slotCount,
+                queuedStoreTaskCount: selectedTasks.length,
+                rateLimitScope: "store-only-test",
+                stoppedStoreOnly: true,
+                otherStoreTasksContinue: slotCount > 1
+              }, true);
             }
             if (submitted) submittedCount += 1;
             if (failed) failedCount += 1;
@@ -7037,6 +7230,8 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
       processed += 1;
       processedThisPass += 1;
       }
+      };
+      await Promise.all(Array.from({ length: slotCount }, (_, slotIndex) => runWorkerSlot(slotIndex + 1)));
       if (!processedThisPass) break;
     }
     void reportDoudianDiagnostic({
@@ -7044,7 +7239,8 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
       event: "submit-worker-finished",
       runId: scopedRunId,
       workerId,
-      processed
+      processed,
+      taskConcurrency
     }, true);
     return { ok: true, processed };
 }
@@ -8196,11 +8392,33 @@ export async function listOpportunityPipelineCandidatesPage(args: {
   runId?: string;
   cursor?: string | null;
   pageSize?: number;
+  onlyRequested?: boolean;
 } = {}): Promise<DoudianOpportunityCandidatePage> {
   const runId = text(args.runId);
   const pageSize = Math.max(1, Math.min(200, Math.floor(Number(args.pageSize || 100))));
   if (!runId) {
     return { runId: "", items: [], nextCursor: null, hasMore: false, pageSize, totalCount: 0, loadedCount: 0 };
+  }
+  if (args.onlyRequested === true) {
+    const candidates = await repositoryGetAllByPrefix<DoudianOpportunityPrematchCandidate>(
+      pipelineCandidateStore,
+      pipelineRunRecordPrefix(runId),
+      { pageSize: 500, maxItems: 100000 }
+    ).catch(() => []);
+    const requestedCandidates = candidates.filter((candidate) => Boolean(text(candidate.submitAttemptId)));
+    const cursorText = text(args.cursor);
+    const cursorOffset = cursorText.startsWith("requested:") ? Math.max(0, Math.floor(Number(cursorText.slice("requested:".length)) || 0)) : 0;
+    const items = requestedCandidates.slice(cursorOffset, cursorOffset + pageSize);
+    const nextOffset = cursorOffset + items.length;
+    return {
+      runId,
+      items,
+      nextCursor: nextOffset < requestedCandidates.length ? `requested:${nextOffset}` : null,
+      hasMore: nextOffset < requestedCandidates.length,
+      pageSize,
+      totalCount: requestedCandidates.length,
+      loadedCount: items.length
+    };
   }
   const [run, page] = await Promise.all([
     repositoryGet<PipelineRunRecord>(pipelineRunStore, runId).catch(() => null),

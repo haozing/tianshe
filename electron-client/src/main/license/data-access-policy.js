@@ -3,6 +3,8 @@ const PAID_TASK_TYPES = new Set([
   "opportunityReportAction",
   "opportunityPipelineSubmit",
   "opportunityAutoFavorites",
+  "opportunityFavoriteRecords",
+  "opportunityFavoriteCancel",
   "opportunityFavoritesClearInvalid",
   "opportunityFavoriteCategories",
   "marketingTask",

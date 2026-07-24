@@ -139,7 +139,9 @@ const TASK_PARAM_KEYS = Object.freeze({
   opportunityReportAction: keys("mode", "shopIds", "filters", "matchRules", "submitMode", "goodsMatchType", "matchMode", "titleMatchMode", "titleUpdatePosition", "clueIds", "productIds", "candidateIds", "sourceRunId", "productRunId", "clueRunId", "matchRunId", "dailyAttemptLimit", "skipSubmittedClueCategory", "skipSubmittedClue", "skipSubmittedProductInSameClue", "dryRun", "pageSize", "maxPages", "includeCandidates"),
   opportunityFavoriteCategories: keys("mode", "shopIds", "storeRefs"),
   opportunityPipelineSubmit: keys("mode", "shopIds", "filters", "matchRules", "submitMode", "goodsMatchType", "matchMode", "titleMatchMode", "titleUpdatePosition", "skipSubmittedClueCategory", "skipSubmittedClue", "skipSubmittedProductInSameClue"),
-  opportunityAutoFavorites: keys("mode", "shopIds", "storeRefs", "favoriteFilters", "filters", "dryRun"),
+  opportunityAutoFavorites: keys("mode", "shopIds", "storeRefs", "favoriteFilters", "filters", "storeFilters", "dryRun"),
+  opportunityFavoriteRecords: keys("shopIds", "storeRefs", "taskStatus", "pageSize", "startPage", "maxPages"),
+  opportunityFavoriteCancel: keys("shopIds", "storeRefs", "taskIds"),
   opportunityFavoritesClearInvalid: keys("shopIds", "storeRefs"),
   marketingTask: keys("feature", "action", "stores", "context"),
   marketingReconcile: keys("sourceOperationId"),
@@ -162,6 +164,8 @@ const TASK_DEFINITIONS = Object.freeze({
   opportunityFavoriteCategories: definition("paid", false, ["opportunityCategoryList"], STORE_LEDGER_READ_SCOPES),
   opportunityPipelineSubmit: definition("paid", true, OPPORTUNITY_SUBMIT_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(OPPORTUNITY_DATA_STORES, ["read", "write", "delete"]), ...OPPORTUNITY_RUNTIME_SCOPES, ...CATALOG_IDENTITY_SCOPES, ...OPPORTUNITY_ATTEMPT_SCOPES]),
   opportunityAutoFavorites: definition("paid", true, ["opportunityClueRealtimeList", "opportunityCategoryList", "opportunityCollectClue"], [...STORE_LEDGER_READ_SCOPES, ...STORE_ASSERT_SCOPE]),
+  opportunityFavoriteRecords: definition("paid", false, ["opportunityFavoriteAutoSubmitPage"], STORE_LEDGER_READ_SCOPES),
+  opportunityFavoriteCancel: definition("paid", true, ["opportunityFavoriteCancel"], [...STORE_LEDGER_READ_SCOPES, ...STORE_ASSERT_SCOPE]),
   opportunityFavoritesClearInvalid: definition("paid", true, ["currentShop", "opportunityFavoriteClearInvalid"], [...STORE_LEDGER_READ_SCOPES, ...STORE_ASSERT_SCOPE]),
   marketingTask: definition("paid", "dynamic", (params) => marketingPolicy(params).plans, [
     ...marketingRecordScopes(["read", "write"]),
@@ -265,7 +269,7 @@ function validateTaskParams(taskType, value) {
     if (!allowedKeys?.has(key)) throw paramsError(`params.${key} is not allowed for ${taskType}`);
   }
   const params = structuredClone(value);
-  for (const key of ["shopIds", "repairShopIds", "repairShopNames", "candidateIds", "clueIds", "productIds"]) validateStringArray(params, key);
+  for (const key of ["shopIds", "repairShopIds", "repairShopNames", "candidateIds", "clueIds", "productIds", "taskIds"]) validateStringArray(params, key);
   const mode = String(params.mode || "");
   if (taskType === "fetchDoudianStores" && mode && !["import", "discover", "login_selected", "discard_discovery"].includes(mode)) throw paramsError("fetchDoudianStores mode is invalid");
   if (taskType === "fetchDoudianStores" && ["login_selected", "discard_discovery"].includes(mode) && !/^[A-Za-z0-9._:-]{1,200}$/.test(String(params.sourceOperationId || ""))) throw paramsError("fetchDoudianStores sourceOperationId is invalid");

@@ -3,6 +3,7 @@ const MUTATION_TASK_TYPES = new Set([
   "staleGoodsExecute",
   "opportunityPipelineSubmit",
   "opportunityFavoritesClearInvalid",
+  "opportunityFavoriteCancel",
   "opportunityAutoFavorites"
 ]);
 const MARKETING_READ_ACTIONS = new Set(["load_products", "list", "detail"]);

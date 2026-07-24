@@ -12,6 +12,8 @@ import type {
   DoudianOpportunityMatchRules,
   DoudianOpportunityFavoritesResult,
   DoudianOpportunityFavoriteCategory,
+  DoudianOpportunityFavoriteRecordsResult,
+  DoudianOpportunityFavoriteCancelResult,
   DoudianOpportunityAutoFavoriteFilters,
   DoudianOpportunityAutoFavoritesResult,
   DoudianOpportunityPrematchMode,
@@ -45,6 +47,7 @@ import {
   restoreStaleGoodsExecute,
   restoreStaleGoodsScan,
   fetchViolationsDataLatest,
+  cancelOpportunityFavoriteRecords,
   listStoreLedger,
   openStoreWindow,
   startDoudianTask,
@@ -646,11 +649,71 @@ export async function fetchDoudianFavoriteCategories(args: {
   }, 300000) as Promise<{ ok: boolean; status?: string; message?: string; categories: DoudianOpportunityFavoriteCategory[] }>;
 }
 
+export async function fetchDoudianOpportunityFavoriteRecords(args: {
+  shopIds?: string[];
+  storeRefs?: DoudianStoreIdentityRef[];
+  taskStatus?: number;
+  pageSize?: number;
+  startPage?: number;
+  maxPages?: number;
+  onStarted?: (operationId: string) => void;
+  forceAdapter?: boolean;
+} = {}): Promise<DoudianOpportunityFavoriteRecordsResult> {
+  const nextArgs = await withDoudianAdapter({
+    shopIds: args.shopIds || [],
+    storeRefs: args.storeRefs || [],
+    taskStatus: args.taskStatus ?? 1,
+    pageSize: args.pageSize || 24,
+    ...(Number(args.startPage || 1) > 1 ? { startPage: Math.floor(Number(args.startPage)) } : {}),
+    maxPages: args.maxPages || 100
+  }, { force: args.forceAdapter === true });
+  return runDoudianStoreTask({
+    taskType: "opportunityFavoriteRecords",
+    metadata: { mutation: false, replaceActive: true },
+    payload: nextArgs
+  }, 900000, args.onStarted) as Promise<DoudianOpportunityFavoriteRecordsResult>;
+}
+
+export async function cancelDoudianOpportunityFavorites(args: {
+  shopIds?: string[];
+  storeRefs?: DoudianStoreIdentityRef[];
+  taskIds?: Array<string | number>;
+  operationId?: string;
+  forceAdapter?: boolean;
+} = {}): Promise<DoudianOpportunityFavoriteCancelResult> {
+  const nextArgs = await withDoudianAdapter({
+    shopIds: args.shopIds || [],
+    storeRefs: args.storeRefs || [],
+    taskIds: (args.taskIds || []).map(String).filter(Boolean),
+    ...(args.operationId ? { operationId: args.operationId } : {})
+  }, { force: args.forceAdapter === true });
+  const policy = nextArgs.doudianAdapter.adapter.policies as Record<string, unknown>;
+  const favoritesPolicy = (policy.opportunityFavorites || {}) as Record<string, unknown>;
+  const planKey = String(favoritesPolicy.cancelRequestPlan || "opportunityFavoriteCancel");
+  const dedupeKey = JSON.stringify({
+    storeRefs: (args.storeRefs || []).map((ref) => `${ref.tenantId}::${ref.shopId}::${ref.storeGeneration}`).sort(),
+    taskIds: [...(args.taskIds || [])].map(String).sort(),
+    planKey,
+    adapterVersion: nextArgs.doudianAdapter.adapter.version || ""
+  });
+  const timeoutMs = Math.max(300000, Math.max(1, args.taskIds?.length || 1) * 30000);
+  return runDoudianStoreTask({
+    taskType: "opportunityFavoriteCancel",
+    operationId: args.operationId,
+    adapterVersion: nextArgs.doudianAdapter.adapter.version,
+    ruleVersion: nextArgs.doudianAdapter.scripts?.version || "",
+    metadata: { mutation: true, replaceActive: true, dedupeKey, action: "cancel-favorite" },
+    payload: nextArgs
+  }, timeoutMs) as Promise<DoudianOpportunityFavoriteCancelResult>;
+}
+
 export async function runDoudianOpportunityAutoFavorites(args: {
   shopIds?: string[];
   storeRefs?: DoudianStoreIdentityRef[];
   filters?: DoudianOpportunityAutoFavoriteFilters;
+  storeFilters?: Record<string, DoudianOpportunityAutoFavoriteFilters>;
   operationId?: string;
+  onStarted?: (operationId: string) => void;
   forceAdapter?: boolean;
   dryRun?: boolean;
 } = {}): Promise<DoudianOpportunityAutoFavoritesResult> {
@@ -659,6 +722,7 @@ export async function runDoudianOpportunityAutoFavorites(args: {
     shopIds: args.shopIds || [],
     storeRefs: args.storeRefs || [],
     ...(args.filters ? { favoriteFilters: args.filters } : {}),
+    ...(args.storeFilters ? { storeFilters: args.storeFilters } : {}),
     ...(args.dryRun ? { dryRun: true } : {}),
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
@@ -666,11 +730,13 @@ export async function runDoudianOpportunityAutoFavorites(args: {
     shopIds: [...(args.shopIds || [])].sort(),
     storeRefs: (args.storeRefs || []).map((ref) => `${ref.tenantId}::${ref.shopId}::${ref.storeGeneration}`).sort(),
     filters: args.filters || {},
+    storeFilters: args.storeFilters || {},
     adapterVersion: nextArgs.doudianAdapter.adapter.version || ""
   });
   const policy = nextArgs.doudianAdapter.adapter.policies as Record<string, unknown>;
   const autoCollect = ((policy.opportunityFavorites as Record<string, unknown> | undefined)?.autoCollect || {}) as Record<string, unknown>;
-  const requestedLimit = Number(args.filters?.perStoreLimit ?? autoCollect.perStoreLimit ?? 1000);
+  const configuredStoreLimits = Object.values(args.storeFilters || {}).map((filters) => Number(filters.perStoreLimit || filters.categoryPlans?.reduce((sum, item) => sum + Number(item.limit || 0), 0) || 0));
+  const requestedLimit = Math.max(Number(args.filters?.perStoreLimit ?? 0), ...configuredStoreLimits, Number(autoCollect.perStoreLimit ?? 1000));
   const perStoreLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(1000, Math.floor(requestedLimit))) : 1000;
   const configuredDelay = Number(autoCollect.collectDelayMs ?? 1200);
   const collectDelayMs = Number.isFinite(configuredDelay) ? Math.max(0, configuredDelay) : 1200;
@@ -689,9 +755,10 @@ export async function runDoudianOpportunityAutoFavorites(args: {
     },
     payload: {
       ...nextArgs,
-      filters: args.filters || {}
+      filters: args.filters || {},
+      storeFilters: args.storeFilters || {}
     }
-  }, timeoutMs) as Promise<DoudianOpportunityAutoFavoritesResult>;
+  }, timeoutMs, args.onStarted) as Promise<DoudianOpportunityAutoFavoritesResult>;
 }
 
 export async function runDoudianOpportunityPipelineTask(args: {
@@ -787,11 +854,13 @@ export async function listDoudianOpportunityCandidatesPage(args: {
   runId?: string;
   cursor?: string | null;
   pageSize?: number;
+  onlyRequested?: boolean;
 } = {}): Promise<DoudianOpportunityCandidatePage> {
   return listOpportunityPipelineCandidatesPage({
     runId: args.runId || "",
     cursor: args.cursor || null,
-    pageSize: args.pageSize
+    pageSize: args.pageSize,
+    onlyRequested: args.onlyRequested === true
   });
 }
 

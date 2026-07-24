@@ -44,6 +44,32 @@ test("prematch overview uses concise animated business counters", () => {
   assert.match(source, /<CompactMetric label="提报数" value=\{candidateSummary\.submittedCount\} tone="green" \/>/);
 });
 
+test("prematch times the next submission and increments after the success effect", () => {
+  assert.match(source, /<span className="px-2 text-right">提报数<\/span>/);
+  assert.match(source, /function SubmissionCount/);
+  assert.match(source, /等待下一条已计时/);
+  assert.match(source, /phase === "success"/);
+  assert.match(source, /opportunity-submit-success/);
+  assert.match(source, /displayedRef\.current \+ 1/);
+  assert.match(source, /waitingForNextSubmission/);
+  assert.doesNotMatch(source, /倒计时/);
+  assert.doesNotMatch(source, /接口受理/);
+});
+
+test("auto submit list only loads requested candidates and hides status", () => {
+  assert.match(source, /onlyRequested: true/);
+  assert.match(domainSource, /requestedCandidates = candidates\.filter\(\(candidate\) => Boolean\(text\(candidate\.submitAttemptId\)\)\)/);
+  assert.match(source, /已请求提报商品与商机词/);
+  assert.doesNotMatch(source, /<th[^>]*>状态<\/th>/);
+});
+
+test("live stream formats screenshot-style timestamped operation strings", () => {
+  assert.match(source, /getFullYear\(\)/);
+  assert.match(source, /item\.time\}---/);
+  assert.match(source, /获取商品名称/);
+  assert.match(source, /提报商机/);
+});
+
 test("prematch moves processing stores first and keeps the category selection visible", () => {
   assert.match(source, /function storeRunPriority/);
   assert.match(source, /storeRunPriority\(left\.status, left\.phase\)/);

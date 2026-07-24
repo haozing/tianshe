@@ -1,6 +1,8 @@
 import type {
   DoudianAdapterPayload,
   DoudianOpportunityFavoriteCleanupRow,
+  DoudianOpportunityFavoriteCancelResult,
+  DoudianOpportunityFavoriteCancelRow,
   DoudianOpportunityFavoritesResult,
   DoudianRunDetail,
   DoudianStoreIdentityRef,
@@ -103,7 +105,7 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker:
 }
 
 function responseMessage(response: RequestPlanResult | undefined) {
-  return text(firstPathValue(response?.data, ["message", "msg", "error_message", "errorMessage"])) || text(response?.error);
+  return text(firstPathValue(response?.data, ["message", "msg", "error_message", "errorMessage", "base_resp.status_message", "data.base_resp.status_message"])) || text(response?.error);
 }
 
 function auditMessage(value: unknown) {
@@ -331,5 +333,99 @@ export async function clearInvalidOpportunityFavorites(args: OpportunityFavorite
     cancelledCount,
     stores: ledger.stores || [],
     groups: ledger.groups || []
+  };
+}
+
+interface OpportunityFavoriteCancelArgs extends OpportunityFavoritesArgs {
+  taskIds?: Array<string | number>;
+  beginMutation?: () => void;
+  endMutation?: () => void;
+}
+
+function cancelRow(store: DoudianStoreSummary, taskId: string, status: DoudianOpportunityFavoriteCancelRow["status"], message: string, httpStatus?: number): DoudianOpportunityFavoriteCancelRow {
+  return {
+    ...storeIdentityRef(store),
+    shopName: store.shopName,
+    taskId,
+    status,
+    ok: status === "success",
+    message,
+    httpStatus,
+    attemptedAt: nowIso()
+  };
+}
+
+export async function cancelOpportunityFavoriteRecords(args: OpportunityFavoriteCancelArgs): Promise<DoudianOpportunityFavoriteCancelResult> {
+  if (!args.doudianAdapter?.adapter) throw new Error("doudian adapter payload missing");
+  const taskIds = Array.from(new Set((args.taskIds || []).map((value) => text(value)).filter(Boolean)));
+  const ledger = await listStoreLedger();
+  const store = args.storeRefs?.length
+    ? args.storeRefs.map((ref) => (ledger.stores || []).find((item) => storeIdentityKey(item) === storeIdentityKey(ref))).find((item): item is DoudianStoreSummary => Boolean(item))
+    : (ledger.stores || []).find((item) => !(args.shopIds || []).length || (args.shopIds || []).includes(item.shopId));
+  if (!store) return { ...ledger, ok: false, status: "no-store", message: "请先选择可用店铺", rows: [], successCount: 0, failureCount: 0, cancelledCount: 0 };
+  if (!taskIds.length) return { ...ledger, ok: false, status: "no-selection", message: "请先选择要取消的收藏", rows: [], successCount: 0, failureCount: 0, cancelledCount: 0 };
+
+  const adapter = args.doudianAdapter.adapter;
+  const planKey = policyText(adapter, "opportunityFavorites.cancelRequestPlan", "opportunityFavoriteCancel");
+  const rows: DoudianOpportunityFavoriteCancelRow[] = [];
+  try {
+    await assertMutationStoreActive(store);
+    const currentShop = await runDoudianRequestPlan(args.doudianAdapter, {
+      partition: store.partition,
+      planKey: "currentShop",
+      context: { shopId: store.shopId, shopName: store.shopName },
+      trackWindow: args.trackWindow,
+      shouldCancel: args.isCancelled
+    });
+    if (!currentShop.ok) throw new Error(responseMessage(currentShop) || "店铺登录态校验失败");
+    const activeShop = currentShopState(currentShop, adapter, store, "opportunityFavorites");
+    if (!activeShop.ok) throw new Error(activeShop.message || "当前抖店与目标店铺不一致");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ...ledger, ok: false, status: "failed", message, rows: taskIds.map((taskId) => cancelRow(store, taskId, "failed", message)), successCount: 0, failureCount: taskIds.length, cancelledCount: 0 };
+  }
+
+  for (const [index, taskId] of taskIds.entries()) {
+    if (args.isCancelled?.()) {
+      rows.push(...taskIds.slice(index).map((pending) => cancelRow(store, pending, "cancelled", "取消任务已停止")));
+      break;
+    }
+    const numericTaskId = Number(taskId);
+    const body = { auto_submit_task_id: Number.isSafeInteger(numericTaskId) ? numericTaskId : taskId };
+    dispatchDoudianProgress({ operationId: args.operationId, taskType: "opportunityFavoriteCancel", status: "running", progress: Math.round((index / taskIds.length) * 100), message: `${store.shopName}: 正在取消收藏 ${index + 1}/${taskIds.length}` });
+    let response: RequestPlanResult | undefined;
+    try {
+      args.beginMutation?.();
+      response = await runDoudianRequestPlan(args.doudianAdapter, {
+        partition: store.partition,
+        planKey,
+        context: { body, bodyJson: JSON.stringify(body) },
+        trackWindow: args.trackWindow,
+        shouldCancel: args.isCancelled
+      });
+      const ok = requestPlanResponseOk(response, adapter, planKey);
+      rows.push(cancelRow(store, taskId, ok ? "success" : "failed", responseMessage(response) || (ok ? "收藏已取消" : "取消收藏失败"), response.status));
+    } catch (error) {
+      rows.push(cancelRow(store, taskId, "failed", error instanceof Error ? error.message : String(error), response?.status));
+    } finally {
+      args.endMutation?.();
+    }
+    if (index + 1 < taskIds.length && !args.isCancelled?.()) await new Promise((resolve) => window.setTimeout(resolve, 500));
+  }
+  const successCount = rows.filter((row) => row.status === "success").length;
+  const failureCount = rows.filter((row) => row.status === "failed").length;
+  const cancelledCount = rows.filter((row) => row.status === "cancelled").length;
+  const status = successCount === taskIds.length ? "ok" : successCount ? "partial" : cancelledCount === taskIds.length ? "cancelled" : "failed";
+  dispatchDoudianProgress({ operationId: args.operationId, taskType: "opportunityFavoriteCancel", status: status === "ok" ? "succeeded" : status === "cancelled" ? "cancelled" : status === "partial" ? "partial" : "failed", progress: 100, message: `已取消 ${successCount} 个收藏` });
+  return {
+    ...ledger,
+    ok: status === "ok",
+    status,
+    message: status === "ok" ? `已取消 ${successCount} 个收藏` : `已取消 ${successCount} 个，失败 ${failureCount} 个${cancelledCount ? `，停止 ${cancelledCount} 个` : ""}`,
+    operationId: args.operationId,
+    rows,
+    successCount,
+    failureCount,
+    cancelledCount
   };
 }

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "contractVersion": "doudian-adapter.v1",
   "platform": "doudian",
-  "version": "2026.07.21.remote-adapter-stale-goods-real-execution-v1-marketing-write-v1",
+  "version": "2026.07.23.opportunity-favorites-per-store-v2-marketing-write-v1",
   "source": "remote-web",
   "capabilities": {
     "actions": [
@@ -84,6 +84,8 @@
       "opportunityClueGoodsList",
       "opportunityProductList",
       "opportunityCollectClue",
+      "opportunityFavoriteAutoSubmitPage",
+      "opportunityFavoriteCancel",
       "opportunityFavoriteClearInvalid"
     ],
     "unknownActionPolicy": "fail",
@@ -493,6 +495,8 @@
     "opportunityClueGoodsList": "/api/commop/business_chance_center/product/list",
     "opportunityProductList": "/product/tproduct/list",
     "opportunityCollectClue": "/api/commop/business_chance_center/clue/auto_submit/open",
+    "opportunityFavoriteAutoSubmitPage": "/api/commop/business_chance_center/clue/auto_submit/page",
+    "opportunityFavoriteCancel": "/api/commop/business_chance_center/clue/auto_submit/close",
     "opportunityFavoriteClearInvalid": "/api/commop/business_chance_center/clue/collect/clear",
     "marketingAvailableProducts": "/marketing/activity/v1/query_available_product_v2",
     "marketingLimitedTimeList": "/marketing/promotion/v1/listFlashWithTimeLimit",
@@ -4400,11 +4404,11 @@
         "Origin": "https://fxg.jinritemai.com"
       },
       "body": "{bodyJson}",
-      "retryOnHttpError": true,
-      "maxAttempts": 3,
-      "retryDelayMs": 1200,
-      "retryBackoff": "exponential",
-      "retryJitterMs": 1000,
+      "retryOnHttpError": false,
+      "maxAttempts": 1,
+      "retryDelayMs": 10000,
+      "retryBackoff": "fixed",
+      "retryJitterMs": 0,
       "allowMissingCode": true,
       "successCodes": [
         0,
@@ -4631,6 +4635,107 @@
       ],
       "successPaths": [],
       "allowSuccessCodeOnly": true,
+      "failureMessages": [
+        "未登录",
+        "请登录",
+        "环境存在风险",
+        "访问过于频繁",
+        "操作太频繁",
+        "风控",
+        "滑块",
+        "验证"
+      ]
+    },
+    "opportunityFavoriteAutoSubmitPage": {
+      "endpointKey": "opportunityFavoriteAutoSubmitPage",
+      "method": "POST",
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter/Records?activeTab=auto_sign_up",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "prepareBeforeRequest": true,
+      "prepareWaitMs": 1500,
+      "signQuery": "",
+      "signBody": "{bodyJson}",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,th;q=0.8,en;q=0.7",
+        "Content-Type": "application/json",
+        "Origin": "https://fxg.jinritemai.com"
+      },
+      "body": "{bodyJson}",
+      "retryOnHttpError": false,
+      "retryOnBusinessFailure": false,
+      "maxAttempts": 1,
+      "successCodes": [
+        0,
+        "0",
+        200,
+        "200"
+      ],
+      "successPaths": [
+        "base_resp.status_code",
+        "data.base_resp.status_code"
+      ],
+      "failureMessages": [
+        "未登录",
+        "请登录",
+        "环境存在风险",
+        "访问过于频繁"
+      ]
+    },
+    "opportunityFavoriteCancel": {
+      "endpointKey": "opportunityFavoriteCancel",
+      "method": "POST",
+      "mutation": true,
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter/Records?activeTab=auto_sign_up",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "prepareBeforeRequest": true,
+      "prepareWaitMs": 1500,
+      "signQuery": "",
+      "signBody": "{bodyJson}",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,th;q=0.8,en;q=0.7",
+        "Content-Type": "application/json",
+        "Origin": "https://fxg.jinritemai.com"
+      },
+      "body": "{bodyJson}",
+      "retryOnHttpError": false,
+      "retryOnBusinessFailure": false,
+      "maxAttempts": 1,
+      "successCodes": [
+        0,
+        "0",
+        200,
+        "200"
+      ],
+      "successPaths": [
+        "base_resp.status_code",
+        "data.base_resp.status_code"
+      ],
       "failureMessages": [
         "未登录",
         "请登录",
@@ -7253,6 +7358,8 @@
       "concurrency": 2,
       "matchById": true,
       "matchByName": true,
+      "recordsRequestPlan": "opportunityFavoriteAutoSubmitPage",
+      "cancelRequestPlan": "opportunityFavoriteCancel",
       "clearInvalidRequestPlan": "opportunityFavoriteClearInvalid",
       "autoCollect": {
         "clueListRequestPlan": "opportunityClueRealtimeList",
@@ -7305,8 +7412,9 @@
       "submitBatchDelayMs": 10000,
       "submitCandidateDelayMs": 10000,
       "submitCandidateJitterMs": 2500,
-      "submitRetryLimit": 1,
-      "submitRetryDelayMs": 5900,
+      "submitRetryLimit": 3,
+      "submitRetryDelayMs": 10000,
+      "submitTaskConcurrency": 2,
       "stopStoreOnSubmitFrequency": true,
       "maxSubmitCandidatesPerStore": 1000,
       "fallbackOnlyAfterPrimaryFailure": true,

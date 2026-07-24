@@ -5,7 +5,6 @@ import { BusinessDataPage } from "./components/BusinessDataPage";
 import { BulkDeletePage } from "./components/BulkDeletePage";
 import { FundsDataPage } from "./components/FundsDataPage";
 import { OpportunityAutoFavoritesPage } from "./components/OpportunityAutoFavoritesPage";
-import { OpportunityFavoritesPage } from "./components/OpportunityFavoritesPage";
 import { OpportunityProductPrematchPage } from "./components/OpportunityProductPrematchPage";
 import { SlowMovingCleanupPage } from "./components/SlowMovingCleanupPage";
 import { StoreManagementPage } from "./components/StoreManagementPage";
@@ -46,8 +45,7 @@ export const featureRoutes: FeatureRouteDefinition[] = [
   { route: "/stores/funds", parentRoute: "/stores", accessTier: "free", navigation: { topLabel: "店铺管理", label: "资金数据", icon: CircleDollarSign, topOrder: 10, order: 30 }, component: FundsDataPage, overflow: "hidden", homeEntry: { title: "资金数据", description: "查看余额、结算和保证金状态。" } },
   { route: "/warnings", parentRoute: "/warnings", accessTier: "free", navigation: { topLabel: "预警/违规", label: "违规管理", icon: ShieldAlert, topOrder: 20, order: 10 }, component: ViolationsPage, overflow: "hidden", homeEntry: { title: "违规处理", description: "集中处理处罚、申诉和整改事项。" } },
   { route: "/opportunities/product-prematch", aliases: ["/opportunities"], parentRoute: "/opportunities", accessTier: "paid", navigation: { topLabel: "商机中心", label: "商机提报", icon: Target, topOrder: 30, order: 10 }, component: OpportunityProductPrematchPage, overflow: "hidden", homeEntry: { title: "商机提报", description: "扫描商品并推进多店商机提报。" } },
-  { route: "/opportunities/favorites", parentRoute: "/opportunities", accessTier: "paid", navigation: { topLabel: "商机中心", label: "自动收藏商机", icon: Bookmark, topOrder: 30, order: 20 }, component: OpportunityAutoFavoritesPage, overflow: "hidden" },
-  { route: "/opportunities/favorites/cleanup", parentRoute: "/opportunities", accessTier: "paid", navigation: { topLabel: "商机中心", label: "清理失效收藏", icon: Trash2, topOrder: 30, order: 30 }, component: OpportunityFavoritesPage, overflow: "hidden" },
+  { route: "/opportunities/favorites", parentRoute: "/opportunities", accessTier: "paid", navigation: { topLabel: "商机中心", label: "商机收藏", icon: Bookmark, topOrder: 30, order: 20 }, component: OpportunityAutoFavoritesPage, overflow: "hidden" },
   { route: "/products/slow-moving", aliases: ["/products"], parentRoute: "/products", accessTier: "free", navigation: { topLabel: "商品管理", label: "清理滞销", icon: ShoppingBag, topOrder: 40, order: 10 }, component: SlowMovingCleanupPage, overflow: "hidden", homeEntry: { title: "商品清理", description: "识别滞销商品并生成清理任务。" } },
   { route: "/products/bulk-delete", parentRoute: "/products", accessTier: "free", navigation: { topLabel: "商品管理", label: "批量删除", icon: Trash2, topOrder: 40, order: 20 }, component: BulkDeletePage, overflow: "hidden" },
   { route: "/marketing/limited-time", parentRoute: "/marketing", accessTier: "paid", featureKey: "marketingLimitedTime", adapterFeature: "limited_time", navigation: { topLabel: "活动营销", label: "限时限量购", icon: Timer, topOrder: 50, order: 10 }, component: LimitedTimePage, overflow: "hidden", homeEntry: { title: "限时限量购", description: "查询商品资格并管理限时限量活动。" } },

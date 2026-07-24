@@ -202,7 +202,9 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
       progress: message.progress,
       message: message.message,
       store: message.store,
-      business: message.business
+      business: message.business,
+      favoriteRecords: message.favoriteRecords,
+      autoFavorite: message.autoFavorite
     });
     return;
   }

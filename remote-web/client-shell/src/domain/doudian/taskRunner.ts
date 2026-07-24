@@ -8,8 +8,9 @@ import { runFetchDoudianStoresTask } from "./storeImport";
 import { runProductCatalogSyncTask } from "./productCatalog";
 import { runRefreshDoudianStoreStatusTask } from "./storeStatus";
 import { cancelOpportunityPipelineSubmitTask, runOpportunityPipelineSubmitTask } from "./opportunityReport";
-import { clearInvalidOpportunityFavorites } from "./opportunityFavorites";
+import { cancelOpportunityFavoriteRecords, clearInvalidOpportunityFavorites } from "./opportunityFavorites";
 import { runOpportunityAutoFavorites } from "./opportunityAutoFavorites";
+import { fetchOpportunityFavoriteRecords } from "./opportunityFavoriteRecords";
 import { fetchBusinessData } from "./businessData";
 import { fetchFundsData } from "./fundsData";
 import { fetchViolationsData } from "./violationsData";
@@ -23,6 +24,7 @@ import { reconcileMarketingOperation } from "./marketing/reconcile";
 import { loadConfig } from "../../bridge/config";
 import { loadDoudianAdapterPayload } from "../../bridge/doudianAdapter";
 import { getChihuNative } from "../../native/client";
+import type { DoudianOpportunityAutoFavoriteProgress, DoudianOpportunityFavoriteRecordsProgress } from "../../types";
 import { listStoreLedger } from "./storeGroups";
 
 interface RunningTask {
@@ -40,18 +42,18 @@ interface RunningTask {
 
 const runningTasks = new Map<string, RunningTask>();
 
-type RunnerChannel = { postMessage: (message: DoudianTaskMessage) => void };
+type RunnerChannel = { postMessage: (message: DoudianTaskMessage) => Promise<void> };
 
 function createRunnerChannel(): RunnerChannel {
   return {
-    postMessage(message) {
-      void getChihuNative()?.tasks?.report(message);
+    async postMessage(message) {
+      await getChihuNative()?.tasks?.report(message);
     }
   };
 }
 
 function post(channel: RunnerChannel, message: DoudianTaskMessage) {
-  channel.postMessage(message);
+  return channel.postMessage(message);
 }
 
 function channelResult(task: DoudianTaskRequest, result: unknown) {
@@ -283,6 +285,23 @@ async function runDomainTask(channel: RunnerChannel, operationId: string, task: 
       result = await fetchOpportunityFavoriteCategories({
         ...payload
       } as unknown as Parameters<typeof fetchOpportunityFavoriteCategories>[0]);
+    } else if (task.taskType === "opportunityFavoriteRecords") {
+      result = await fetchOpportunityFavoriteRecords({
+        ...payload,
+        onPage: async (detail: DoudianOpportunityFavoriteRecordsProgress) => {
+          const total = Number(detail.total || 0);
+          const progress = detail.totalKnown && total > 0
+            ? Math.min(99, Math.max(1, Math.round((detail.loaded / total) * 100)))
+            : Math.min(99, Math.max(1, detail.current));
+          await post(channel, {
+            type: "task:progress",
+            operationId,
+            progress,
+            message: `已获取 ${detail.loaded} 个收藏商机词${total ? ` / 共 ${total}` : ""}`,
+            favoriteRecords: detail
+          });
+        }
+      } as unknown as Parameters<typeof fetchOpportunityFavoriteRecords>[0]);
     } else if (task.taskType === "marketingReconcile") {
       result = await reconcileMarketingOperation(operationId);
     } else if (task.taskType === "opportunityPipelineSubmit") {
@@ -299,9 +318,22 @@ async function runDomainTask(channel: RunnerChannel, operationId: string, task: 
       result = await clearInvalidOpportunityFavorites({
         ...payload
       } as unknown as Parameters<typeof clearInvalidOpportunityFavorites>[0]);
+    } else if (task.taskType === "opportunityFavoriteCancel") {
+      result = await cancelOpportunityFavoriteRecords({
+        ...payload
+      } as unknown as Parameters<typeof cancelOpportunityFavoriteRecords>[0]);
     } else if (task.taskType === "opportunityAutoFavorites") {
       result = await runOpportunityAutoFavorites({
-        ...payload
+        ...payload,
+        onRow: async (detail: DoudianOpportunityAutoFavoriteProgress) => {
+          await post(channel, {
+            type: "task:progress",
+            operationId,
+            progress: detail.progress,
+            message: detail.message,
+            autoFavorite: detail
+          });
+        }
       } as unknown as Parameters<typeof runOpportunityAutoFavorites>[0]);
     } else if (task.taskType === "marketingTask") {
       result = await runMarketingTask(payload as unknown as Parameters<typeof runMarketingTask>[0]);

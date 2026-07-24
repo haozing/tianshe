@@ -2,6 +2,7 @@ import type {
   DoudianAdapterConfig,
   DoudianAdapterPayload,
   DoudianOpportunityAutoFavoriteFilters,
+  DoudianOpportunityAutoFavoriteProgress,
   DoudianOpportunityAutoFavoriteRow,
   DoudianOpportunityAutoFavoritesResult,
   DoudianOpportunityFavoriteCategory,
@@ -31,8 +32,10 @@ interface AutoFavoriteArgs {
   shopIds?: string[];
   storeRefs?: DoudianStoreIdentityRef[];
   filters?: DoudianOpportunityAutoFavoriteFilters;
+  storeFilters?: Record<string, DoudianOpportunityAutoFavoriteFilters>;
   operationId?: string;
   dryRun?: boolean;
+  onRow?: (detail: DoudianOpportunityAutoFavoriteProgress) => Promise<void> | void;
   isCancelled?: () => boolean;
   trackWindow?: (winId: number) => void;
 }
@@ -186,6 +189,7 @@ function buildClueSearchBody(args: {
   category?: DoudianOpportunityFavoriteCategory;
   sortField: DoudianOpportunityFavoriteSortField;
   recommendReasons: DoudianOpportunityAutoFavoriteFilters["recommendReasons"];
+  benefitIds: DoudianOpportunityAutoFavoriteFilters["benefitIds"];
   page: number;
   pageSize: number;
 }) {
@@ -194,6 +198,10 @@ function buildClueSearchBody(args: {
     show_new_supply_link: true,
     include_hot_sales_products: true,
     sort: { sort_direction: 1, sort_field: args.sortField },
+    tag_id_list: (args.recommendReasons || []).map((item) => Number(item.id)).filter(Number.isFinite),
+    profit_id_list: (args.benefitIds || []).map(Number).filter(Number.isFinite),
+    benefit_crowd_group: [],
+    benefit_content_type: [],
     ...(args.recommendReasons?.length ? {
       recommend_reason_list: args.recommendReasons.map((item) => ({ id: text(item.id), type: Number(item.type || 1) }))
     } : {}),
@@ -285,7 +293,9 @@ async function waitBetweenCollects(args: AutoFavoriteArgs, delayMs = DEFAULT_COL
 }
 
 async function loadStoreCandidates(args: AutoFavoriteArgs, store: DoudianStoreSummary, filters: DoudianOpportunityAutoFavoriteFilters, storeIndex: number, storeCount: number) {
-  const categories = filters.categories?.length ? filters.categories : [undefined];
+  const categories = filters.categoryPlans?.length
+    ? filters.categoryPlans.map((item) => item.category)
+    : filters.categories?.length ? filters.categories : [undefined];
   const sortFields = Array.from(new Set((filters.sortFields || ["TRADING_AMOUNT"]).map(text).filter(Boolean)));
   const configuredModes = autoCollectPolicyModes(args.doudianAdapter!.adapter);
   const queryModes = filters.queryModes?.length
@@ -298,19 +308,27 @@ async function loadStoreCandidates(args: AutoFavoriteArgs, store: DoudianStoreSu
   const pageSize = boundedInteger(filters.pageSize, configuredPageSize, 1, 100);
   const maxPages = boundedInteger(filters.maxPagesPerQuery, configuredMaxPages, 1, 100);
   const targetCandidateCount = boundedInteger(filters.perStoreLimit, DEFAULT_PER_STORE_LIMIT, 1, DEFAULT_PER_STORE_LIMIT);
+  const categoryLimits = new Map((filters.categoryPlans || []).map((item) => [
+    `${item.category.key}:${item.category.id}`,
+    boundedInteger(item.limit, targetCandidateCount, 1, DEFAULT_PER_STORE_LIMIT)
+  ]));
   const byClueId = new Map<string, FavoriteCandidate>();
   const sourceFailures: Array<{ message: string; status: number; terminal: boolean }> = [];
   let firstSeenOrder = 0;
   let queryCount = 0;
   const totalQueries = Math.max(1, categories.length * queryModes.length);
-  const hasEnoughCandidates = () => Array.from(byClueId.values()).filter((candidate) => !candidate.autoSubmitId).length >= targetCandidateCount;
+  const hasEnoughCandidates = (category: DoudianOpportunityFavoriteCategory | undefined) => {
+    const key = category ? `${category.key}:${category.id}` : "all";
+    const target = categoryLimits.get(key) || targetCandidateCount;
+    return Array.from(byClueId.values()).filter((candidate) => !candidate.autoSubmitId && candidate.sourceCategories.has(key)).length >= target;
+  };
   outer: for (const category of categories) {
     for (const mode of queryModes) {
       queryCount += 1;
       let remoteTotal = 0;
       for (let page = 1; page <= maxPages; page += 1) {
         if (args.isCancelled?.()) return { candidates: [...byClueId.values()], cancelled: true, sourceFailures };
-        const body = buildClueSearchBody({ category, sortField: mode.sortField, recommendReasons: mode.recommendReasons || filters.recommendReasons, page, pageSize });
+        const body = buildClueSearchBody({ category, sortField: mode.sortField, recommendReasons: mode.recommendReasons || filters.recommendReasons, benefitIds: filters.benefitIds, page, pageSize });
         const response = await runDoudianRequestPlan(args.doudianAdapter!, {
           partition: store.partition,
           planKey: autoCollectPolicyText(args.doudianAdapter!.adapter, "clueListRequestPlan", CLUE_LIST_PLAN),
@@ -333,12 +351,51 @@ async function loadStoreCandidates(args: AutoFavoriteArgs, store: DoudianStoreSu
           if (candidate) byClueId.set(candidate.clueId, mergeCandidate(byClueId.get(candidate.clueId), candidate));
         });
         progress(args, ((storeIndex + (queryCount - 1 + page / Math.max(1, maxPages)) / totalQueries) / storeCount) * 55, `${store.shopName}: 正在获取商机候选`);
-        if (hasEnoughCandidates() || !rows.length || (remoteTotal > 0 && page * pageSize >= remoteTotal)) break;
+        if (hasEnoughCandidates(category) || !rows.length || (remoteTotal > 0 && page * pageSize >= remoteTotal)) break;
       }
-      if (hasEnoughCandidates()) break outer;
+      if (hasEnoughCandidates(category)) break;
     }
   }
   return { candidates: [...byClueId.values()], cancelled: false, sourceFailures };
+}
+
+function normalizeFavoriteFilters(input: DoudianOpportunityAutoFavoriteFilters | undefined, configuredLimit: number): DoudianOpportunityAutoFavoriteFilters {
+  const categoryPlans = (input?.categoryPlans || [])
+    .filter((item) => item?.category?.id)
+    .map((item) => ({ category: item.category, limit: boundedInteger(item.limit, 100, 1, configuredLimit) }));
+  const categories = categoryPlans.length ? categoryPlans.map((item) => item.category) : input?.categories || [];
+  const requestedLimit = categoryPlans.length
+    ? categoryPlans.reduce((sum, item) => sum + item.limit, 0)
+    : input?.perStoreLimit;
+  return {
+    categories,
+    categoryPlans,
+    sortFields: Array.from(new Set((input?.sortFields || ["TRADING_AMOUNT"]).map(text).filter(Boolean))),
+    queryModes: input?.queryModes || [],
+    recommendReasons: input?.recommendReasons || [],
+    benefitIds: Array.from(new Set((input?.benefitIds || []).map(Number).filter(Number.isFinite))),
+    perStoreLimit: boundedInteger(requestedLimit, configuredLimit, 1, configuredLimit),
+    pageSize: input?.pageSize,
+    maxPagesPerQuery: input?.maxPagesPerQuery
+  };
+}
+
+function selectCandidatesByCategoryPlans(candidates: FavoriteCandidate[], filters: DoudianOpportunityAutoFavoriteFilters) {
+  const available = candidates.filter((candidate) => !candidate.autoSubmitId);
+  if (!filters.categoryPlans?.length) return available.slice(0, filters.perStoreLimit);
+  const selected = new Map<string, FavoriteCandidate>();
+  for (const plan of filters.categoryPlans) {
+    const categoryKey = `${plan.category.key}:${plan.category.id}`;
+    let count = 0;
+    for (const candidate of available) {
+      if (selected.has(candidate.clueId) || !candidate.sourceCategories.has(categoryKey)) continue;
+      selected.set(candidate.clueId, candidate);
+      count += 1;
+      if (count >= plan.limit || selected.size >= Number(filters.perStoreLimit || DEFAULT_PER_STORE_LIMIT)) break;
+    }
+    if (selected.size >= Number(filters.perStoreLimit || DEFAULT_PER_STORE_LIMIT)) break;
+  }
+  return [...selected.values()];
 }
 
 function executionRow(store: DoudianStoreSummary, candidate: FavoriteCandidate | undefined, status: DoudianOpportunityAutoFavoriteRow["status"], ok: boolean, message: string, response?: RequestPlanResult, diagnostic: Record<string, unknown> = {}, planKey = COLLECT_PLAN): DoudianOpportunityAutoFavoriteRow {
@@ -358,6 +415,17 @@ function executionRow(store: DoudianStoreSummary, candidate: FavoriteCandidate |
     attemptedAt: new Date().toISOString(),
     diagnostic
   };
+}
+
+async function appendExecutionRow(args: AutoFavoriteArgs, rows: DoudianOpportunityAutoFavoriteRow[], row: DoudianOpportunityAutoFavoriteRow, progressValue: number, message?: string) {
+  rows.push(row);
+  const normalizedProgress = Math.max(0, Math.min(100, Math.round(progressValue)));
+  await args.onRow?.({
+    row,
+    completed: rows.length,
+    progress: normalizedProgress,
+    message: message || `${row.shopName}: ${row.clueName || row.message}`
+  });
 }
 
 export async function fetchOpportunityFavoriteCategories(args: { doudianAdapter: DoudianAdapterPayload; shopIds?: string[]; storeRefs?: DoudianStoreIdentityRef[] }) {
@@ -391,45 +459,44 @@ export async function runOpportunityAutoFavorites(args: AutoFavoriteArgs): Promi
     : (ledger.stores || []).filter((store) => !(args.shopIds || []).length || args.shopIds?.includes(store.shopId));
   const missingRefs = requestedRefs.filter((ref) => !byIdentity.has(storeIdentityKey(ref)));
   const configuredLimit = boundedInteger(autoCollectPolicyNumber(args.doudianAdapter.adapter, "perStoreLimit", DEFAULT_PER_STORE_LIMIT), DEFAULT_PER_STORE_LIMIT, 1, DEFAULT_PER_STORE_LIMIT);
-  const filters: DoudianOpportunityAutoFavoriteFilters = {
-    categories: args.filters?.categories || [],
-    sortFields: Array.from(new Set((args.filters?.sortFields || ["TRADING_AMOUNT"]).map(text).filter(Boolean))),
-    queryModes: args.filters?.queryModes || [],
-    recommendReasons: args.filters?.recommendReasons || [],
-    perStoreLimit: boundedInteger(args.filters?.perStoreLimit, configuredLimit, 1, configuredLimit),
-    pageSize: args.filters?.pageSize,
-    maxPagesPerQuery: args.filters?.maxPagesPerQuery
-  };
+  const filters = normalizeFavoriteFilters(args.filters, configuredLimit);
   if (!stores.length && !missingRefs.length) return { ...ledger, ok: false, status: "no-store", message: "请先选择店铺", rows: [], filters };
   const rows: DoudianOpportunityAutoFavoriteRow[] = [];
   const details: DoudianRunDetail[] = [];
   for (const ref of missingRefs) {
-    rows.push({ tenantId: ref.tenantId, shopId: ref.shopId, shopName: ref.shopId, storeGeneration: ref.storeGeneration, status: "failed", ok: false, message: "店铺已被删除或重新登录，请刷新店铺列表后重试", attemptedAt: new Date().toISOString(), diagnostic: { reason: "store-identity-missing" } });
+    await appendExecutionRow(args, rows, { tenantId: ref.tenantId, shopId: ref.shopId, shopName: ref.shopId, storeGeneration: ref.storeGeneration, status: "failed", ok: false, message: "店铺已被删除或重新登录，请刷新店铺列表后重试", attemptedAt: new Date().toISOString(), diagnostic: { reason: "store-identity-missing" } }, 0);
   }
   let candidateCount = 0;
   for (const [storeIndex, store] of stores.entries()) {
     if (args.isCancelled?.()) break;
     const startedAt = Date.now();
+    const storeBaseProgress = 55 + (storeIndex / Math.max(1, stores.length)) * 45;
     const active = await assertMutationStoreActive(store);
     if (active.ok === false) {
-      rows.push(executionRow(store, undefined, "failed", false, "店铺状态已变化，已停止收藏", undefined, { reason: "store-inactive" }));
+      await appendExecutionRow(args, rows, executionRow(store, undefined, "failed", false, "店铺状态已变化，已停止收藏", undefined, { reason: "store-inactive" }), storeBaseProgress);
       details.push({ shopId: store.shopId, shopName: store.shopName, status: "failed", ok: false, message: "店铺状态已变化，已停止收藏", reason: "store-inactive", diagnostic: { candidateCount: 0 } });
       continue;
     }
-    const candidateResult = await loadStoreCandidates(args, store, filters, storeIndex, stores.length);
+    const storeFilters = normalizeFavoriteFilters(args.storeFilters?.[storeIdentityKey(store)] || filters, configuredLimit);
+    if (!storeFilters.categoryPlans?.length && !storeFilters.categories.length) {
+      await appendExecutionRow(args, rows, executionRow(store, undefined, "failed", false, "该店铺尚未添加收藏类目", undefined, { reason: "store-category-plan-missing" }), storeBaseProgress);
+      details.push({ shopId: store.shopId, shopName: store.shopName, status: "failed", ok: false, message: "该店铺尚未添加收藏类目", reason: "store-category-plan-missing", diagnostic: { candidateCount: 0 } });
+      continue;
+    }
+    const candidateResult = await loadStoreCandidates(args, store, storeFilters, storeIndex, stores.length);
     const allRanked = rankCandidates(candidateResult.candidates);
     const alreadyCollectedCount = allRanked.filter((candidate) => candidate.autoSubmitId).length;
-    const ranked = allRanked.filter((candidate) => !candidate.autoSubmitId).slice(0, filters.perStoreLimit);
+    const ranked = selectCandidatesByCategoryPlans(allRanked, storeFilters);
     candidateCount += allRanked.length;
     let collected = 0;
     let skipped = 0;
     let failed = 0;
     let quotaExhausted = false;
     for (const failure of candidateResult.sourceFailures) {
-      rows.push(executionRow(store, undefined, "failed", false, failure.message, undefined, { reason: "candidate-query-failed", terminal: failure.terminal, httpStatus: failure.status }));
+      await appendExecutionRow(args, rows, executionRow(store, undefined, "failed", false, failure.message, undefined, { reason: "candidate-query-failed", terminal: failure.terminal, httpStatus: failure.status }), storeBaseProgress);
     }
     if (candidateResult.cancelled) {
-      rows.push(executionRow(store, undefined, "cancelled", false, "任务已取消"));
+      await appendExecutionRow(args, rows, executionRow(store, undefined, "cancelled", false, "任务已取消"), storeBaseProgress);
       details.push({ shopId: store.shopId, shopName: store.shopName, status: "cancelled", ok: false, message: "任务已取消", reason: "cancelled", diagnostic: { candidateCount: ranked.length } });
       break;
     }
@@ -439,19 +506,25 @@ export async function runOpportunityAutoFavorites(args: AutoFavoriteArgs): Promi
     }
     const collectPlan = autoCollectPolicyText(args.doudianAdapter.adapter, "collectRequestPlan", COLLECT_PLAN);
     let terminalFailure = false;
+    const publishCandidateRow = async (row: DoudianOpportunityAutoFavoriteRow, processed: number) => {
+      const progressValue = 55 + ((storeIndex + processed / Math.max(1, ranked.length)) / stores.length) * 45;
+      const progressMessage = `${store.shopName}: 已处理 ${processed}/${ranked.length} · ${row.clueName || row.message}`;
+      await appendExecutionRow(args, rows, row, progressValue, progressMessage);
+      progress(args, progressValue, progressMessage);
+    };
     for (const candidate of ranked) {
       if (args.isCancelled?.()) {
-        rows.push(executionRow(store, candidate, "cancelled", false, "任务已取消"));
+        await publishCandidateRow(executionRow(store, candidate, "cancelled", false, "任务已取消"), collected + skipped + failed);
         break;
       }
       if (candidate.autoSubmitId) {
         skipped += 1;
-        rows.push(executionRow(store, candidate, "skipped", true, "该店铺已收藏该商机", undefined, { alreadyCollected: true }));
+        await publishCandidateRow(executionRow(store, candidate, "skipped", true, "该店铺已收藏该商机", undefined, { alreadyCollected: true }), collected + skipped + failed);
         continue;
       }
       if (args.dryRun) {
         skipped += 1;
-        rows.push(executionRow(store, candidate, "skipped", true, "dry-run：未提交收藏请求", undefined, { dryRun: true }));
+        await publishCandidateRow(executionRow(store, candidate, "skipped", true, "dry-run：未提交收藏请求", undefined, { dryRun: true }), collected + skipped + failed);
         continue;
       }
       const body = {
@@ -473,17 +546,16 @@ export async function runOpportunityAutoFavorites(args: AutoFavoriteArgs): Promi
       const message = responseMessage(response) || (requestOk ? "商机已加入收藏" : "商机收藏失败");
       if (isFavoriteQuotaMessage(message)) {
         quotaExhausted = true;
-        rows.push(executionRow(store, candidate, "quota_exhausted", true, "该店铺已达到收藏商机上限", response, { favoriteQuotaReached: true }, collectPlan));
+        await publishCandidateRow(executionRow(store, candidate, "quota_exhausted", true, "该店铺已达到收藏商机上限", response, { favoriteQuotaReached: true }, collectPlan), collected + skipped + failed + 1);
         break;
       } else if (requestOk) {
         collected += 1;
-        rows.push(executionRow(store, candidate, "collected", true, "商机已加入收藏", response, {}, collectPlan));
+        await publishCandidateRow(executionRow(store, candidate, "collected", true, "商机已加入收藏", response, {}, collectPlan), collected + skipped + failed);
       } else {
         failed += 1;
-        rows.push(executionRow(store, candidate, "failed", false, message, response, {}, collectPlan));
+        await publishCandidateRow(executionRow(store, candidate, "failed", false, message, response, {}, collectPlan), collected + skipped + failed);
         terminalFailure = isTerminalFavoriteFailure(message);
       }
-      progress(args, 55 + ((storeIndex + (collected + skipped + failed) / Math.max(1, ranked.length)) / stores.length) * 45, `${store.shopName}: 已处理 ${collected + skipped + failed}/${ranked.length}`);
       if (terminalFailure) break;
       if (!args.isCancelled?.() && collected + skipped + failed < ranked.length) {
         await waitBetweenCollects(args, autoCollectPolicyNumber(args.doudianAdapter.adapter, "collectDelayMs", DEFAULT_COLLECT_DELAY_MS));

@@ -43,3 +43,30 @@ test("pipeline worker waits for the active worker and stale runners are not rest
   assert.match(domain, /beginMutation:\s*args\.beginMutation,[\s\S]*endMutation:\s*args\.endMutation/);
   assert.match(bridge, /runnerAlive === true/);
 });
+
+test("submit worker uses two store slots and isolates rate limits by store", async () => {
+  const [domain, adapterText, marketingAdapterText] = await Promise.all([
+    readFile(new URL("../src/domain/doudian/opportunityReport.ts", import.meta.url), "utf8"),
+    readFile(new URL("../public/config/doudian-adapter.json", import.meta.url), "utf8"),
+    readFile(new URL("../public/config/doudian-adapter.marketing-pilot.json", import.meta.url), "utf8")
+  ]);
+  const adapters = [JSON.parse(adapterText), JSON.parse(marketingAdapterText)];
+
+  for (const adapter of adapters) {
+    const policy = adapter.policies.opportunityReport;
+    const requestPlan = adapter.requestPlans.opportunitySubmitClue;
+    assert.equal(policy.submitTaskConcurrency, 2);
+    assert.equal(policy.submitRetryLimit, 3);
+    assert.equal(policy.submitRetryDelayMs, 10_000);
+    assert.equal(policy.stopStoreOnSubmitFrequency, true);
+    assert.equal(requestPlan.retryOnHttpError, false);
+    assert.equal(requestPlan.maxAttempts, 1);
+  }
+  assert.match(domain, /const runWorkerSlot = async \(workerSlot: number\)/);
+  assert.match(domain, /Promise\.all\(Array\.from\(\{ length: slotCount \}/);
+  assert.match(domain, /maxAttempts:\s*1/);
+  assert.match(domain, /pipeline-submit-retry-waiting/);
+  assert.match(domain, /otherStoreTasksContinue:\s*slotCount > 1/);
+  assert.match(domain, /otherStoreWorkersBlocked:\s*false/);
+  assert.match(domain, /rateLimitScope:\s*"store-only-test"/);
+});

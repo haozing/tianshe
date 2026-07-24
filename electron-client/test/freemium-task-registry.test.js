@@ -26,7 +26,7 @@ test("task registry contains the audited free and paid boundary", () => {
   for (const taskType of ["fetchDoudianStores", "businessData", "fundsData", "violationsData", "staleGoodsScan", "staleGoodsExecute", "bulkDeleteScan", "bulkDeleteExecute"]) {
     assert.equal(TASK_DEFINITIONS[taskType]?.accessTier, "free", taskType);
   }
-  for (const taskType of ["opportunityReportScan", "opportunityReportAction", "opportunityFavoriteCategories", "opportunityPipelineSubmit", "opportunityAutoFavorites", "opportunityFavoritesClearInvalid", "marketingTask"]) {
+  for (const taskType of ["opportunityReportScan", "opportunityReportAction", "opportunityFavoriteCategories", "opportunityPipelineSubmit", "opportunityAutoFavorites", "opportunityFavoriteRecords", "opportunityFavoriteCancel", "opportunityFavoritesClearInvalid", "marketingTask"]) {
     assert.equal(TASK_DEFINITIONS[taskType]?.accessTier, "paid", taskType);
   }
   assert.equal(TASK_DEFINITIONS.marketingReconcile.accessTier, "recovery");
@@ -65,6 +65,24 @@ test("task-specific modes fail closed", () => {
   assert.throws(() => validateTaskParams("bulkDeleteExecute", { mode: "scan" }), /mode must be execute/);
   assert.throws(() => validateTaskParams("opportunityReportScan", { mode: "collect" }), /mode is invalid/);
   assert.throws(() => validateTaskParams("notRegistered", {}), (error) => error.code === "TASK_TYPE_DENIED");
+});
+
+test("opportunity favorites tasks expose only their audited parameters and plans", () => {
+  assert.doesNotThrow(() => validateTaskParams("opportunityAutoFavorites", {
+    mode: "opportunity-auto-favorites",
+    shopIds: ["shop-1"],
+    storeFilters: { "tenant-1::shop-1::1": { categoryPlans: [] } }
+  }));
+  assert.throws(() => validateTaskParams("opportunityAutoFavorites", { storeFilters: {}, url: "https://example.test" }), /controlled by the main process|not allowed/);
+  assert.deepEqual(validateTaskParams("opportunityFavoriteRecords", {
+    shopIds: ["shop-1"],
+    taskStatus: 1,
+    pageSize: 24,
+    startPage: 2,
+    maxPages: 10
+  }), { shopIds: ["shop-1"], taskStatus: 1, pageSize: 24, startPage: 2, maxPages: 10 });
+  assert.deepEqual(validateTaskParams("opportunityFavoriteCancel", { taskIds: ["470537806"] }), { taskIds: ["470537806"] });
+  assert.throws(() => validateTaskParams("opportunityFavoriteCancel", { taskIds: [470537806] }), /bounded string array/);
 });
 
 test("task params use a per-task top-level schema", () => {
