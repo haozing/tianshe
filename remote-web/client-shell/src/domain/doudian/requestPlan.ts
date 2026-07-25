@@ -69,6 +69,7 @@ export function requestPlanResponseOk(response: RequestPlanResult | undefined, a
   if (responseMatches(response, failureMessages)) return false;
 
   const successPaths = arrayText(plan.successPaths);
+  const successStatusPaths = arrayText(plan.successStatusPaths);
   const code = firstPathValue(response.data, ["code", "st", "status_code", "statusCode", "errno"]);
   const successCodes = [
     ...arrayText(mappings.successCodes),
@@ -76,6 +77,11 @@ export function requestPlanResponseOk(response: RequestPlanResult | undefined, a
   ];
   const codeMatches = code != null && successCodes.length > 0 && successCodes.includes(String(code));
   if (codeMatches && plan.allowSuccessCodeOnly === true) return true;
+  if (successStatusPaths.length) {
+    const statusCode = firstPathValue(response.data, successStatusPaths);
+    if (statusCode === undefined || statusCode === null || statusCode === "") return false;
+    if (successCodes.length && !successCodes.includes(String(statusCode))) return false;
+  }
   if (successPaths.length && !successPaths.some((path) => getPathValue(response.data, path) !== undefined)) return false;
   if (code != null && successCodes.length) return codeMatches;
 

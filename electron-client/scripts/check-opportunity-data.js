@@ -155,11 +155,15 @@ async function main() {
     });
     const count = await request("opportunityAttempts.count", { businessDate: "2026-07-15", shopId: "shop-1" });
     const dedupe = await request("opportunityAttempts.listDedupeKeys");
+    const shopDedupe = await request("opportunityAttempts.listDedupeKeys", { shopIds: ["shop-1"] });
+    const otherShopDedupe = await request("opportunityAttempts.listDedupeKeys", { shopIds: ["shop-2"] });
     const matchedDedupe = await request("opportunityAttempts.findDedupeKeys", {
       relationKeys: ["shop-1::clue-1::product-1", "shop-1::clue-2::product-2"]
     });
     assert.equal(count.count, 2);
     assert.deepEqual(dedupe.relationKeys, ["shop-1::clue-1::product-1"]);
+    assert.deepEqual(shopDedupe.relationKeys, ["shop-1::clue-1::product-1"]);
+    assert.deepEqual(otherShopDedupe.relationKeys, []);
     assert.deepEqual(matchedDedupe.relationKeys, ["shop-1::clue-1::product-1"]);
     await request("stores.upsertIdentity", { platform: "doudian", tenantId: "local-user", shopId: "shop-1", storeGeneration: 1, identityContractVersion: "opportunity-check" });
     await request("catalog.recordMutationResults", {

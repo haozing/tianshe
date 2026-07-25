@@ -32,6 +32,7 @@ import { businessDateDaysAgo, businessDateKey } from "./businessDate";
 import { reportDoudianDiagnostic } from "./diagnosticLog";
 import {
   candidateExecutionState,
+  isAlreadySubmittedOpportunityMessage,
   isFinalRateLimitedExecution,
   isProductClueLimitMessage,
   isRemoteSubmittedExecution,
@@ -42,6 +43,7 @@ import {
 import {
   AhoTokenMatcher,
   ANCHOR_RULE_VERSION,
+  boundedProductCandidateLimit,
   compareCandidatesByEvidence,
   createMatchDiagnostics,
   createTokenQualityMap,
@@ -54,10 +56,13 @@ import {
   matchDiagnosticsSummary,
   mergeMatchDiagnostics,
   productCandidateKey,
+  rankCandidatesAfterFiltering,
   scoreAhoTokenMatch,
   type TokenQuality
 } from "./opportunity/matching";
 import {
+  clueCoverageSatisfiesPolicy,
+  evaluateClueScanCoverage,
   evaluateInputScanCoverage,
   officialDecisionAllowsWrite,
   officialEnforcementReady,
@@ -72,9 +77,13 @@ import {
   type OfficialValidationPolicy,
   type OfficialWordsSemantics
 } from "./opportunity/officialValidation";
+import { SUBMIT_HISTORY_CLUE_CAPACITY, evaluateSubmitHistoryPageCoverage, isSubmitHistoryBusinessSuccess, parseSubmitHistorySnapshot, submitHistoryCapacityFacts, submitHistoryInitialStart, submitHistoryRemoteUpdatedAtWatermark, submitHistoryWindows } from "./opportunity/submitHistory";
 import { isUnresolvedSubmitState, logicalSubmitAttemptId, recoverUnresolvedSubmitCandidate } from "./opportunity/submitRecovery.ts";
 import { activeSubmitTasksForRun, submitWorkerProgress } from "./opportunity/submitWorkerState.ts";
-import { pipelineDiagnosticsBlockCompletion, pipelineSubmitResultMessage } from "./opportunity/pipelineResult.ts";
+import { responseHeaderText, submitRetryWaitMs } from "./opportunity/submitRetryPolicy.ts";
+import { pipelineDiagnosticsBlockCompletion, pipelineInputCoverageAllowsWrite, pipelineSubmitResultMessage, pipelineTaskCoverageGate } from "./opportunity/pipelineResult.ts";
+import { aggregateCategoryDemands, mapConcurrentOrdered } from "./opportunity/pipelinePreparation.ts";
+import { evaluateSharedCacheProbe, resolvePipelineCacheScope } from "./opportunity/pipelineCachePolicy.ts";
 
 const clueScanStore = "opportunity_clue_scan_runs_v1" as const;
 const clueCandidateStore = "opportunity_clue_candidates_v1" as const;
@@ -95,13 +104,16 @@ const clueWordCacheShardStore = "opportunity_clue_word_cache_shards_v2" as const
 const officialClueWordsCacheStore = "opportunity_official_clue_words_cache_v1" as const;
 const officialClueGoodsCacheStore = "opportunity_official_clue_goods_cache_v1" as const;
 const officialClueGoodsCacheShardStore = "opportunity_official_clue_goods_cache_shards_v1" as const;
+const submitHistoryRecordStore = "opportunity_submit_history_records_v1" as const;
+const submitHistorySyncStore = "opportunity_submit_history_sync_v1" as const;
+const submitHistoryProductIndexStore = "opportunity_submit_history_product_indexes_v1" as const;
 const pipelineCandidateStore = "opportunity_pipeline_candidates_v2" as const;
 const pipelineSubmitTaskStore = "opportunity_pipeline_submit_tasks_v2" as const;
 const pipelineOperationEventStore = "opportunity_pipeline_operation_events_v2" as const;
 
 const defaultActiveKey = "11,MATCH_DEGREE";
 const submitBatchSizeFallback = 10;
-const inputCoverageVersion = "opportunity-input-coverage-v1";
+const inputCoverageVersion = "opportunity-input-coverage-v3";
 const latestPipelineCandidatePreviewLimit = 200;
 const productCategoryIdFallbackPaths = [
   "category_id",
@@ -123,6 +135,7 @@ const productCategoryIdFallbackPaths = [
 ];
 let pipelineSubmitWorkerTail: Promise<unknown> = Promise.resolve();
 const cancelledPipelineRunIds = new Set<string>();
+const clueCacheLoadFlights = new Map<string, Promise<unknown>>();
 
 interface OpportunityArgs {
   doudianAdapter?: DoudianAdapterPayload;
@@ -317,9 +330,19 @@ interface PipelineStoreRunRecord extends PipelineStoreIdentity {
   id: string;
   runId: string;
   status: string;
-  phase: "product-scan" | "category-ledger" | "clue-load" | "tokenize" | "match" | "submit-queued" | "official-validate" | "submitting" | "finished";
+  phase: "product-scan" | "submit-history-sync" | "category-ledger" | "clue-load" | "tokenize" | "match" | "submit-queued" | "official-validate" | "submitting" | "finished";
   inputCoverage?: PipelineInputCoverage;
   productCount: number;
+  benefitProductCount?: number;
+  benefitAcquiredExposure?: number;
+  benefitEstimatedExposure?: number;
+  benefitAcquiredExposureParsedCount?: number;
+  benefitAcquiredExposureUnparsedCount?: number;
+  benefitEstimatedExposureParsedCount?: number;
+  benefitEstimatedExposureUnparsedCount?: number;
+  benefitSubmitRecordCount?: number;
+  benefitAssociatedClueCount?: number;
+  benefitSaturatedProductCount?: number;
   currentCategoryCount: number;
   effectiveCategoryCount: number;
   clueCount: number;
@@ -434,6 +457,9 @@ interface PipelineSubmitTaskRecord extends PipelineStoreIdentity {
   validationPolicyVersion?: string;
   officialContractVersion?: string;
   inputCoverageStatus?: "complete" | "partial_coverage" | "failed";
+  productComplete?: boolean;
+  benefitComplete?: boolean;
+  clueCoverageSatisfied?: boolean;
   remoteRequestCount?: number;
   startedAt?: string;
   leaseExpiresAt?: string;
@@ -463,6 +489,7 @@ interface ClueCacheRecord extends PipelineStoreIdentity {
   adapterVersion: string;
   cacheScope: "shop" | "global";
   scopeId: string;
+  generation: string;
   shardCount: number;
   rowCount: number;
   remoteTotal: number;
@@ -473,7 +500,7 @@ interface ClueCacheRecord extends PipelineStoreIdentity {
   sourceHealth: Array<Record<string, unknown>>;
   sourceShopId: string;
   shopScoped: boolean;
-  clueWordsSource: "realtime" | "clueWordsApi" | "mixed";
+  clueWordsSource: "realtime" | "clueWordsApi" | "mixed" | "local-clue-fields";
   clueWordsRequestHash: string;
   expiresAt: string;
   createdAt: string;
@@ -487,6 +514,7 @@ interface ClueCacheShardRecord {
   filterHash: string;
   cacheScope: "shop" | "global";
   scopeId: string;
+  generation: string;
   shardNo: number;
   rows: DoudianOpportunityClueRow[];
   rowCount: number;
@@ -506,6 +534,8 @@ interface ClueWordCacheRecord {
   shardCount: number;
   tokenCount: number;
   clueCount: number;
+  clueIdsHash: string;
+  generation: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -515,6 +545,7 @@ interface ClueWordCacheShardRecord {
   wordCacheKey: string;
   clueCacheKey: string;
   shardNo: number;
+  generation: string;
   tokens: string[];
   tokenToClueIds: Record<string, string[]>;
   clueTokens: Record<string, string[]>;
@@ -529,6 +560,24 @@ interface TokenIndex {
   tokens: string[];
   tokenToClueIds: Record<string, string[]>;
   clueTokens: Record<string, string[]>;
+}
+
+interface ClueCategoryLoadResult {
+  cacheKey: string;
+  cacheScope: "shop" | "global";
+  scopeId: string;
+  rows: DoudianOpportunityClueRow[];
+  sourceHealth: Array<Record<string, unknown>>;
+  remoteTotal: number;
+  remoteTotalKnown: boolean;
+  scanStatus: "complete" | "truncated" | "failed";
+  fetchedPages: number;
+  nextPage?: number;
+  cacheHit: boolean;
+  ok: boolean;
+  coverageSatisfied: boolean;
+  skipReason?: string;
+  cacheScopeDowngraded?: boolean;
 }
 
 function text(value: unknown) {
@@ -607,7 +656,9 @@ interface OfficialClueWordsCacheRecord extends PipelineStoreIdentity {
 interface OfficialClueGoodsCacheRecord extends PipelineStoreIdentity {
   id: string;
   result: Omit<OfficialClueGoodsResult, "productIds">;
+  generation: string;
   shardCount: number;
+  rowCount: number;
   expiresAt: string;
   createdAt: string;
   updatedAt: string;
@@ -616,6 +667,7 @@ interface OfficialClueGoodsCacheRecord extends PipelineStoreIdentity {
 interface OfficialClueGoodsCacheShardRecord {
   id: string;
   cacheKey: string;
+  generation: string;
   shardNo: number;
   productIds: string[];
   createdAt: string;
@@ -726,30 +778,11 @@ function firstArray(root: unknown, paths: string[]) {
   return [];
 }
 
-type OfficialValidationMode = "disabled" | "observe" | "enforce" | "legacy";
+type OfficialValidationMode = "disabled" | "local" | "observe" | "enforce" | "legacy";
 
 function officialValidationMode(adapter: DoudianAdapterConfig): OfficialValidationMode {
-  const configured = policyText(adapter, "opportunityReport.officialValidationMode", "disabled").toLocaleLowerCase();
-  if (configured === "off" || configured === "disabled") return "disabled";
-  if (configured === "shadow" || configured === "observe") return "observe";
-  if (configured === "enforce") {
-    const baselineVerified = policyBoolean(adapter, "opportunityReport.officialValidationBaselineVerified", false);
-    const anchorMode = policyText(adapter, "opportunityReport.anchorEnforcementMode", "observe");
-    return officialEnforcementReady({
-      baselineVerified,
-      wordsSemantics: officialWordsSemantics(adapter),
-      goodsContractMode: officialGoodsContractMode(adapter),
-      anchorEnforcementMode: anchorMode === "enforce_high_confidence" ? "enforce_high_confidence" : "observe"
-    })
-      ? "enforce"
-      : "observe";
-  }
-  if (configured === "legacy") {
-    const explicitlyAllowed = policyBoolean(adapter, "opportunityReport.allowLegacyValidationMode", false);
-    const expiresAt = Date.parse(policyText(adapter, "opportunityReport.legacyValidationModeExpiresAt", ""));
-    return explicitlyAllowed && Number.isFinite(expiresAt) && expiresAt > Date.now() ? "legacy" : "disabled";
-  }
-  return "disabled";
+  void adapter;
+  return "local";
 }
 
 function officialWordsSemantics(adapter: DoudianAdapterConfig): OfficialWordsSemantics {
@@ -825,6 +858,129 @@ function readNumber(record: unknown, adapter: DoudianAdapterConfig, field: strin
   return value === undefined ? fallback : value / fieldScale(adapter, field);
 }
 
+interface BenefitProductIndexRecord extends PipelineStoreIdentity {
+  id: string;
+  productId: string;
+  associatedClueIds: string[];
+  associatedClueCount: number;
+  remainingClueCapacity: number;
+  submissionRecordIds: string[];
+  sourceRecordCount: number;
+  saturatedByRemoteError?: boolean;
+  acquiredProfitIds: number[];
+  unacquiredProfitIds: number[];
+  acquiredExposure: number | null;
+  estimatedExposure: number | null;
+  sourceStatus: "complete" | "truncated" | "failed";
+  sourceRemoteTotal?: number;
+  fetchedAt: string;
+  updatedAt: string;
+}
+
+interface SubmitHistoryRecord extends PipelineStoreIdentity {
+  id: string;
+  remoteRecordId: string;
+  productId: string;
+  productTitle: string;
+  clueId: string;
+  clueName: string;
+  clueChannel: string;
+  submitTimeMs: number;
+  auditTimeMs: number | null;
+  remoteUpdatedAtMs: number;
+  auditStatus: string;
+  appealStatus: string;
+  isAutoSubmitted: boolean;
+  raw: Record<string, unknown>;
+  fetchedAt: string;
+  updatedAt: string;
+}
+
+interface SubmitHistorySyncRecord extends PipelineStoreIdentity {
+  id: string;
+  initialized: boolean;
+  status: "complete" | "truncated" | "failed";
+  initialStartEpochSeconds: number;
+  initialCursorStartEpochSeconds: number;
+  watermarkMs: number;
+  remoteUpdatedAtWatermarkMs?: number;
+  recordCount: number;
+  lastMode: "initial" | "incremental";
+  lastSuccessfulSyncAt?: string;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface BenefitProductOverview {
+  productCount: number;
+  acquiredExposure: number;
+  estimatedExposure: number;
+  acquiredExposureParsedCount: number;
+  acquiredExposureUnparsedCount: number;
+  estimatedExposureParsedCount: number;
+  estimatedExposureUnparsedCount: number;
+  recordCount: number;
+  associatedClueCount: number;
+  saturatedProductCount: number;
+  unparsedProductIds: string[];
+}
+
+function summarizeBenefitProducts(records: BenefitProductIndexRecord[]): BenefitProductOverview {
+  const overview: BenefitProductOverview = {
+    productCount: records.length,
+    acquiredExposure: 0,
+    estimatedExposure: 0,
+    acquiredExposureParsedCount: 0,
+    acquiredExposureUnparsedCount: 0,
+    estimatedExposureParsedCount: 0,
+    estimatedExposureUnparsedCount: 0,
+    recordCount: 0,
+    associatedClueCount: 0,
+    saturatedProductCount: 0,
+    unparsedProductIds: []
+  };
+  for (const record of records) {
+    if (record.acquiredExposure === null) overview.acquiredExposureUnparsedCount += 1;
+    else {
+      overview.acquiredExposure += record.acquiredExposure;
+      overview.acquiredExposureParsedCount += 1;
+    }
+    if (record.estimatedExposure === null) overview.estimatedExposureUnparsedCount += 1;
+    else {
+      overview.estimatedExposure += record.estimatedExposure;
+      overview.estimatedExposureParsedCount += 1;
+    }
+    overview.recordCount += record.sourceRecordCount;
+    overview.associatedClueCount += record.associatedClueCount;
+    if (record.remainingClueCapacity <= 0) overview.saturatedProductCount += 1;
+    if ((record.acquiredExposure === null || record.estimatedExposure === null) && overview.unparsedProductIds.length < 20) {
+      overview.unparsedProductIds.push(record.productId);
+    }
+  }
+  return overview;
+}
+
+function rawMappedId(record: Record<string, unknown>, adapter: DoudianAdapterConfig, field: string, fallbackPaths: string[]) {
+  return readText(record, adapter, field, "", fallbackPaths);
+}
+
+const CLUE_ID_PATHS = [
+  "clue_detail.clue_id",
+  "clue_detail.clueId",
+  "clueDetail.clue_id",
+  "clueDetail.clueId",
+  "detail.clue_id",
+  "detail.clueId",
+  "clue_id",
+  "clueId",
+  "id"
+];
+
+function rawClueId(record: Record<string, unknown>, adapter: DoudianAdapterConfig) {
+  return rawMappedId(record, adapter, "clueId", CLUE_ID_PATHS);
+}
+
 function compactDiagnosticValue(value: unknown, depth = 0): unknown {
   if (value == null || typeof value === "number" || typeof value === "boolean") return value;
   if (typeof value === "string") return value.length > 180 ? `${value.slice(0, 180)}...` : value;
@@ -835,6 +991,42 @@ function compactDiagnosticValue(value: unknown, depth = 0): unknown {
     return Object.fromEntries(entries.map(([key, next]) => [key, compactDiagnosticValue(next, depth + 1)]));
   }
   return text(value).slice(0, 180);
+}
+
+function diagnosticValueShape(value: unknown, depth = 0): unknown {
+  if (value === null) return { type: "null" };
+  if (Array.isArray(value)) {
+    return {
+      type: "array",
+      length: value.length,
+      itemShape: value.length && depth < 3 ? diagnosticValueShape(value[0], depth + 1) : undefined
+    };
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).slice(0, 64);
+    return {
+      type: "object",
+      keys: entries.map(([key]) => key).sort(),
+      fields: depth < 3
+        ? Object.fromEntries(entries.map(([key, next]) => [key, diagnosticValueShape(next, depth + 1)]))
+        : undefined
+    };
+  }
+  return {
+    type: typeof value,
+    ...(typeof value === "string" ? { length: value.length } : {})
+  };
+}
+
+function benefitSchemaSample(row: Record<string, unknown>) {
+  const associationHints = Object.fromEntries(Object.entries(row)
+    .filter(([key]) => /clue|chance|opportun|associate|relation|linked|submit|count|num|total/i.test(key))
+    .slice(0, 32)
+    .map(([key, value]) => [key, compactDiagnosticValue(value)]));
+  return {
+    shape: diagnosticValueShape(row),
+    associationHints
+  };
 }
 
 function diagnosticPathLooksUseful(path: string) {
@@ -1058,7 +1250,7 @@ function normalizeClue(store: DoudianStoreSummary, raw: Record<string, unknown>,
   const detail = objectRecord(raw.clue_detail || raw.clueDetail || raw.detail || raw);
   const indicator = objectRecord(raw.clue_indicator || raw.clueIndicator || raw.indicator);
   const autoSubmit = objectRecord(raw.auto_submit_task || raw.autoSubmitTask);
-  const clueId = text(detail.clue_id || detail.clueId || raw.clue_id || raw.clueId || detail.id);
+  const clueId = rawClueId(raw, adapter);
   if (!clueId) return null;
   const categoryPath = categoryPathNames(detail.category_path || detail.categoryPath);
   const depth = Math.max(1, Math.min(4, categoryPath.length || 1));
@@ -1245,7 +1437,7 @@ function stableHash(value: unknown) {
 }
 
 function requestPlanHash(adapter: DoudianAdapterConfig) {
-  const planKeys = ["opportunityClueRealtimeList", "opportunityClueWords", "opportunityClueGoodsList", "opportunitySubmitClue", "opportunityProductList"];
+  const planKeys = ["opportunityClueRealtimeList", "opportunitySubmitHistoryList", "opportunitySubmitClue", "opportunityProductList"];
   return stableHash({
     adapterVersion: adapter.version || "",
     fieldSchemaVersion: policyText(adapter, "opportunityReport.fieldSchemaVersion", ""),
@@ -1268,7 +1460,13 @@ function requestPlanHash(adapter: DoudianAdapterConfig) {
       maxCluePages: policy(adapter, "opportunityReport.maxCluePages"),
       productPageSize: policy(adapter, "opportunityReport.productPageSize"),
       maxProductListPages: policy(adapter, "opportunityReport.maxProductListPages"),
-      enableRemoteClueWords: policy(adapter, "opportunityReport.enableRemoteClueWords")
+      enableRemoteClueWords: policy(adapter, "opportunityReport.enableRemoteClueWords"),
+      submitHistoryPageSize: policy(adapter, "opportunityReport.submitHistoryPageSize"),
+      maxSubmitHistoryPagesPerWindow: policy(adapter, "opportunityReport.maxSubmitHistoryPagesPerWindow"),
+      submitHistoryWindowDays: policy(adapter, "opportunityReport.submitHistoryWindowDays"),
+      submitHistoryInitialLookbackDays: policy(adapter, "opportunityReport.submitHistoryInitialLookbackDays"),
+      submitHistoryIncrementalOverlapSeconds: policy(adapter, "opportunityReport.submitHistoryIncrementalOverlapSeconds"),
+      submitHistoryPageDelayMs: policy(adapter, "opportunityReport.submitHistoryPageDelayMs")
     }
   });
 }
@@ -1285,15 +1483,18 @@ function normalizedClueFilter(filters: DoudianOpportunityFilters = {}, adapter: 
     recentlyDayType: Number(filters.recentlyDayType ?? 3),
     clueBrandExists: filters.clueBrandExists === undefined ? null : filters.clueBrandExists,
     cluePage: Number(filters.cluePage || 2),
+    clueCoveragePages: Math.max(1, Math.min(200, Math.floor(Number(filters.clueCoveragePages || policyNumber(adapter, "opportunityReport.clueCoveragePages", 5, 1, 200))))),
     pageSize: Math.max(10, Math.min(100, Math.floor(Number(filters.pageSize || policyNumber(adapter, "opportunityReport.cluePageSize", 72, 10, 100))))),
-    maxPages: Math.max(1, Math.min(10, Math.floor(Number(filters.maxPages || filters.cluePage || policyNumber(adapter, "opportunityReport.maxCluePages", 2, 1, 10))))),
+    maxPages: Math.max(1, Math.min(200, Math.floor(Number(filters.maxPages || policyNumber(adapter, "opportunityReport.maxCluePages", 200, 1, 200))))),
     sortField: sortField || "MATCH_DEGREE",
     sortDirection: 1
   };
 }
 
 function stableFilterHash(filters: DoudianOpportunityFilters = {}, adapter: DoudianAdapterConfig) {
-  return stableHash(normalizedClueFilter(filters, adapter));
+  const normalized = normalizedClueFilter(filters, adapter);
+  const { clueCoveragePages: _coveragePages, maxPages: _maxPages, ...platformFilter } = normalized;
+  return stableHash(platformFilter);
 }
 
 function stableMatchRulesHash(args: OpportunityArgs) {
@@ -1313,13 +1514,12 @@ function stableMatchRulesHash(args: OpportunityArgs) {
 
 function assertOpportunityPipelineContract(adapter: DoudianAdapterConfig) {
   const missing: string[] = [];
-  const validationMode = officialValidationMode(adapter);
   const requiredPlans = [
     "opportunityProductList",
-    "opportunityClueRealtimeList"
+    "opportunitySubmitHistoryList",
+    "opportunityClueRealtimeList",
+    "opportunitySubmitClue"
   ];
-  if (validationMode === "observe" || validationMode === "enforce") requiredPlans.push("opportunityClueWords", "opportunityClueGoodsList");
-  if (validationMode === "enforce" || validationMode === "legacy") requiredPlans.push("opportunitySubmitClue");
   for (const planKey of requiredPlans) {
     const plan = objectRecord(adapter.requestPlans?.[planKey]);
     const endpointKey = text(plan.endpointKey || planKey);
@@ -1329,21 +1529,15 @@ function assertOpportunityPipelineContract(adapter: DoudianAdapterConfig) {
   const requiredListMappings: Array<[string, string[]]> = [
     ["clueListPaths", ["opportunityClueRealtimeList.data", "opportunityClueRealtimeList.data.data", "opportunityClueRealtimeList.list"]],
     ["productListPaths", ["opportunityProductList.data", "opportunityProductList.data.list", "opportunityProductList.list"]],
-    ["productTotalPaths", ["opportunityProductList.data.total", "opportunityProductList.total"]]
+    ["productTotalPaths", ["opportunityProductList.data.total", "opportunityProductList.total"]],
+    ["submitHistoryListPaths", ["opportunitySubmitHistoryList.data", "opportunitySubmitHistoryList.data.list"]],
+    ["submitHistoryTotalPaths", ["opportunitySubmitHistoryList.total", "opportunitySubmitHistoryList.data.total"]]
   ];
-  if (validationMode === "observe" || validationMode === "enforce") {
-    requiredListMappings.push(
-      ["clueGoodsListPaths", ["opportunityClueGoodsList.data", "opportunityClueGoodsList.data.data", "opportunityClueGoodsList.data.list"]],
-      ["clueGoodsTotalPaths", ["opportunityClueGoodsList.data.total", "opportunityClueGoodsList.total"]]
-    );
-  }
   for (const [key, fallback] of requiredListMappings) {
     if (!mappingArray(adapter, key, fallback).length) missing.push(`responseMappings.opportunityReport.${key}`);
   }
-  if ((validationMode === "observe" || validationMode === "enforce") && !mappingArray(adapter, "clueWordPaths", ["data.data", "data", "data.words", "data.list", "words", "list"]).length) {
-    missing.push("responseMappings.opportunityReport.clueWordPaths");
-  }
   const requiredFields: Array<[string, string[]]> = [
+    ["clueId", CLUE_ID_PATHS],
     ["productId", ["product_id", "productId", "goods_id", "goodsId", "id"]],
     ["title", ["title", "name", "product_name", "productName", "goods_name"]],
     ["productCategoryId", productCategoryIdFallbackPaths],
@@ -1440,14 +1634,26 @@ function productListContext(filters: DoudianOpportunityFilters = {}, page: numbe
 async function scanCluesForStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: OpportunityArgs, runId: string, index: number, total: number) {
   const planKey = "opportunityClueRealtimeList";
   const pageSize = policyNumber(payload.adapter, "opportunityReport.cluePageSize", 72, 10, 100);
-  const maxPages = Math.max(1, Math.min(10, Math.floor(Number(args.maxPages || args.filters?.maxPages || args.filters?.cluePage || policyNumber(payload.adapter, "opportunityReport.maxCluePages", 2, 1, 10)))));
+  const maxPages = Math.max(1, Math.min(200, Math.floor(Number(args.maxPages || args.filters?.maxPages || policyNumber(payload.adapter, "opportunityReport.maxCluePages", 200, 1, 200)))));
   const rawRows: Record<string, unknown>[] = [];
+  const rowById = new Map<string, Record<string, unknown>>();
   const responses: Record<string, RequestPlanResult> = {};
   const sourceHealth: Array<Record<string, unknown>> = [];
   let remoteTotal = 0;
+  let remoteTotalKnown = false;
+  let fetchedPages = 0;
+  let lastPageRowCount: number | undefined;
+  let missingIdCount = 0;
+  let duplicatePage = false;
+  let totalZeroWithRows = false;
 
   if (args.mockClues?.length) {
-    rawRows.push(...args.mockClues);
+    for (const row of args.mockClues) {
+      const id = rawClueId(row, payload.adapter);
+      if (!id) missingIdCount += 1;
+      else if (rowById.has(id)) duplicatePage = true;
+      else rowById.set(id, row);
+    }
   } else {
     for (let page = 1; page <= maxPages; page += 1) {
       const body = buildClueSearchBody(args.filters, page, pageSize);
@@ -1459,17 +1665,71 @@ async function scanCluesForStore(payload: DoudianAdapterPayload, store: DoudianS
         "opportunityClueRealtimeList.data",
         "opportunityClueRealtimeList.data.data"
       ])).map(objectRecord);
-      rawRows.push(...rows);
-      remoteTotal = readTotal(wrapped, payload.adapter, "clueTotalPaths") || remoteTotal;
+      fetchedPages += 1;
+      lastPageRowCount = rows.length;
+      let pageNew = 0;
+      let pageMissingIdCount = 0;
+      let missingIdSample: unknown;
+      for (const row of rows) {
+        const clueId = rawClueId(row, payload.adapter);
+        if (!clueId) {
+          missingIdCount += 1;
+          pageMissingIdCount += 1;
+          missingIdSample ??= diagnosticValueShape(row);
+        }
+        else if (rowById.has(clueId)) duplicatePage = true;
+        else {
+          rowById.set(clueId, row);
+          pageNew += 1;
+        }
+      }
+      const pageRemoteTotal = readOptionalTotal(wrapped, payload.adapter, "clueTotalPaths");
+      if (pageRemoteTotal !== undefined) {
+        remoteTotal = pageRemoteTotal;
+        remoteTotalKnown = true;
+      }
+      if (remoteTotalKnown && remoteTotal === 0 && rows.length > 0) totalZeroWithRows = true;
       const ok = planOk(response, payload.adapter, planKey);
-      sourceHealth.push({ key: responseKey, status: response.status, ok, count: rows.length });
+      sourceHealth.push({
+        key: responseKey,
+        status: response.status,
+        ok,
+        count: rows.length,
+        uniqueCount: rowById.size,
+        pageNew,
+        missingIdCount: pageMissingIdCount,
+        missingIdSample
+      });
       if (!ok || !rows.length) break;
-      if (remoteTotal && rawRows.length >= remoteTotal) break;
+      if (remoteTotalKnown && rowById.size >= remoteTotal) break;
+      if (!pageNew) break;
     }
   }
 
+  rawRows.push(...rowById.values());
   const rows = rawRows.map((row, rowIndex) => normalizeClue(store, row, payload.adapter, runId, rowIndex)).filter((row): row is DoudianOpportunityClueRow => Boolean(row));
-  const ok = args.mockClues?.length ? true : sourceHealth.length > 0 && sourceHealth.every((item) => item.ok === true);
+  if (args.mockClues?.length) {
+    remoteTotal = args.mockClues.length;
+    remoteTotalKnown = true;
+    fetchedPages = 1;
+    lastPageRowCount = args.mockClues.length;
+    sourceHealth.push({ key: `${planKey}:mock`, status: 200, ok: true, count: args.mockClues.length, uniqueCount: rowById.size });
+  }
+  const coverage = evaluateInputScanCoverage({
+    requestFailed: !sourceHealth.length || sourceHealth.some((item) => item.ok !== true),
+    schemaMismatch: missingIdCount > 0 || (rawRows.length > 0 && rows.length !== rawRows.length),
+    fetchedCount: rows.length,
+    uniqueFetchedCount: rowById.size,
+    remoteTotal: remoteTotalKnown ? remoteTotal : undefined,
+    remoteTotalKnown,
+    fetchedPages,
+    maxPages,
+    pageSize,
+    lastPageRowCount,
+    duplicatePage,
+    totalZeroWithRows
+  });
+  const ok = coverage.status !== "failed";
   const detail: DoudianRunDetail = {
     shopId: store.shopId,
     shopName: store.shopName,
@@ -1482,13 +1742,16 @@ async function scanCluesForStore(payload: DoudianAdapterPayload, store: DoudianS
     category: ok ? "" : "api",
     diagnostic: {
       remoteTotal,
+      remoteTotalKnown,
+      scanStatus: coverage.status,
+      fetchedPages,
       rowCount: rows.length,
       sourceHealth
     },
     index,
     total
   };
-  return { rows, detail, sourceHealth, remoteTotal };
+  return { rows, detail, sourceHealth, remoteTotal, remoteTotalKnown, scanStatus: coverage.status, fetchedPages, nextPage: coverage.nextPage };
 }
 
 async function scanProductsForStore(
@@ -1503,17 +1766,27 @@ async function scanProductsForStore(
 ) {
   const planKey = "opportunityProductList";
   const pageSize = Math.max(10, Math.min(200, Math.floor(Number(args.pageSize || args.filters?.pageSize || policyNumber(payload.adapter, "opportunityReport.productPageSize", 100, 10, 200)))));
-  const maxPages = Math.max(1, Math.min(50, Math.floor(Number(args.maxPages || args.filters?.maxPages || policyNumber(payload.adapter, "opportunityReport.maxProductListPages", 10, 1, 50)))));
+  const maxPages = Math.max(1, Math.min(500, Math.floor(Number(args.maxPages || args.filters?.maxPages || policyNumber(payload.adapter, "opportunityReport.maxProductListPages", 100, 1, 500)))));
   const pageStart = policyNumber(payload.adapter, "opportunityReport.productPageStart", 0, 0, 1);
   const rawRows: Record<string, unknown>[] = [];
+  const rowById = new Map<string, Record<string, unknown>>();
   const sourceHealth: Array<Record<string, unknown>> = [];
   let remoteTotal = 0;
   let remoteTotalKnown = false;
   let fetchedPages = 0;
   let lastPageRowCount: number | undefined;
+  let missingIdCount = 0;
+  let duplicateIdCount = 0;
+  let duplicatePage = false;
+  let totalZeroWithRows = false;
 
   if (args.mockProducts?.length) {
-    rawRows.push(...args.mockProducts);
+    for (const row of args.mockProducts) {
+      const productId = rawMappedId(row, payload.adapter, "productId", ["product_id", "productId", "goods_id", "goodsId", "id"]);
+      if (!productId) missingIdCount += 1;
+      else if (rowById.has(productId)) duplicatePage = true;
+      else rowById.set(productId, row);
+    }
     remoteTotal = args.mockProducts.length;
     remoteTotalKnown = true;
     fetchedPages = 1;
@@ -1521,8 +1794,10 @@ async function scanProductsForStore(
     sourceHealth.push({ key: `${planKey}:mock`, status: 200, ok: true, count: args.mockProducts.length });
   } else {
     for (let page = pageStart; page < pageStart + maxPages; page += 1) {
+      const shouldCancel = () => pipelineCancelled(args);
+      assertNotCancelled(shouldCancel);
       const context = productListContext(args.filters, page, pageSize, categoryLeafId);
-      const response = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context });
+      const response = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context, shouldCancel });
       const responseKey = page === pageStart ? planKey : `${planKey}:page:${page}`;
       const wrapped = { [planKey]: response.data };
       const rows = firstArray(wrapped, mappingArray(payload.adapter, "productListPaths", [
@@ -1532,19 +1807,31 @@ async function scanProductsForStore(
       ])).map(objectRecord);
       fetchedPages += 1;
       lastPageRowCount = rows.length;
-      rawRows.push(...rows);
+      let pageNew = 0;
+      for (const row of rows) {
+        const productId = rawMappedId(row, payload.adapter, "productId", ["product_id", "productId", "goods_id", "goodsId", "id"]);
+        if (!productId) missingIdCount += 1;
+        else if (rowById.has(productId)) duplicatePage = true;
+        else {
+          rowById.set(productId, row);
+          pageNew += 1;
+        }
+      }
       const pageRemoteTotal = readOptionalTotal(wrapped, payload.adapter, "productTotalPaths");
       if (pageRemoteTotal !== undefined) {
         remoteTotal = pageRemoteTotal;
         remoteTotalKnown = true;
       }
+      if (remoteTotalKnown && remoteTotal === 0 && rows.length > 0) totalZeroWithRows = true;
       const ok = planOk(response, payload.adapter, planKey);
-      sourceHealth.push({ key: responseKey, status: response.status, ok, count: rows.length });
+      sourceHealth.push({ key: responseKey, status: response.status, ok, count: rows.length, uniqueCount: rowById.size, pageNew });
       if (!ok || !rows.length) break;
-      if (remoteTotalKnown && rawRows.length >= remoteTotal) break;
+      if (remoteTotalKnown && rowById.size >= remoteTotal) break;
+      if (!pageNew) break;
     }
   }
 
+  rawRows.push(...rowById.values());
   const products = rawRows
     .map((row, rowIndex) => normalizeProduct(store, row, payload.adapter, runId, rowIndex, extra))
     .filter((row): row is DoudianOpportunityProductRow => Boolean(row));
@@ -1560,17 +1847,20 @@ async function scanProductsForStore(
     });
   }
   const requestFailed = !sourceHealth.length || sourceHealth.some((item) => item.ok !== true);
-  const schemaMismatch = rawRows.length > 0 && products.length !== rawRows.length;
+  const schemaMismatch = missingIdCount > 0 || (rawRows.length > 0 && products.length !== rawRows.length);
   const coverageResult = evaluateInputScanCoverage({
     requestFailed,
     schemaMismatch,
     fetchedCount: products.length,
+    uniqueFetchedCount: rowById.size,
     remoteTotal: remoteTotalKnown ? remoteTotal : undefined,
     remoteTotalKnown,
     fetchedPages,
     maxPages,
     pageSize,
-    lastPageRowCount
+    lastPageRowCount,
+    duplicatePage,
+    totalZeroWithRows
   });
   const productScanStatus = coverageResult.status;
   const ok = productScanStatus !== "failed";
@@ -1606,6 +1896,436 @@ async function scanProductsForStore(
     fetchedPages,
     nextPage: productScanStatus === "truncated" ? pageStart + fetchedPages : undefined
   };
+}
+
+function submitHistoryListBody(window: { startEpochSeconds: number; endEpochSeconds: number }, page: number, pageSize: number) {
+  return {
+    condition: {
+      clue_channel: "",
+      item_info: "",
+      gmt_start_time: window.startEpochSeconds,
+      gmt_end_time: window.endEpochSeconds,
+      status_list: [0, 1, 2, 3, 4, 5, 6]
+    },
+    page: { current: page, page_size: pageSize }
+  };
+}
+
+function submitHistoryResponseOk(response: RequestPlanResult, adapter: DoudianAdapterConfig, planKey: string) {
+  if (!planOk(response, adapter, planKey)) return false;
+  return isSubmitHistoryBusinessSuccess(response.data);
+}
+
+function submitHistoryRecordId(identity: PipelineStoreIdentity, remoteRecordId: string) {
+  return `${storeScopeId(identity)}-record-${encodeURIComponent(remoteRecordId)}`;
+}
+
+function normalizeSubmitHistoryRecord(identity: PipelineStoreIdentity, raw: Record<string, unknown>, fetchedAt: string): SubmitHistoryRecord | null {
+  const snapshot = parseSubmitHistorySnapshot(raw);
+  if (!snapshot) return null;
+  return {
+    id: submitHistoryRecordId(identity, snapshot.remoteRecordId),
+    ...identity,
+    ...snapshot,
+    raw,
+    fetchedAt,
+    updatedAt: fetchedAt
+  } satisfies SubmitHistoryRecord;
+}
+
+async function mergeSubmitHistoryIndexes(
+  identity: PipelineStoreIdentity,
+  records: SubmitHistoryRecord[],
+  previousRecords: SubmitHistoryRecord[] = []
+) {
+  if (!records.length) return;
+  const prefix = `${storeScopeId(identity)}-`;
+  const existing = await repositoryGetAllByPrefix<BenefitProductIndexRecord>(submitHistoryProductIndexStore, prefix, { pageSize: 500, maxItems: 500000 }).catch(() => []);
+  const byProduct = new Map(existing.map((record) => [record.productId, record]));
+  const touched = new Map<string, BenefitProductIndexRecord>();
+  for (const record of records) {
+    const current = touched.get(record.productId) || byProduct.get(record.productId) || {
+      id: `${prefix}product-${encodeURIComponent(record.productId)}`,
+      ...identity,
+      productId: record.productId,
+      associatedClueIds: [],
+      associatedClueCount: 0,
+      remainingClueCapacity: SUBMIT_HISTORY_CLUE_CAPACITY,
+      submissionRecordIds: [],
+      sourceRecordCount: 0,
+      acquiredProfitIds: [],
+      unacquiredProfitIds: [],
+      acquiredExposure: 0,
+      estimatedExposure: 0,
+      sourceStatus: "complete" as const,
+      fetchedAt: record.fetchedAt,
+      updatedAt: record.updatedAt
+    } satisfies BenefitProductIndexRecord;
+    const clueIds = new Set(current.associatedClueIds || []);
+    clueIds.add(record.clueId);
+    const recordIds = new Set(current.submissionRecordIds || []);
+    recordIds.add(record.remoteRecordId);
+    const associatedClueIds = Array.from(clueIds);
+    const capacity = submitHistoryCapacityFacts(associatedClueIds, recordIds, current.saturatedByRemoteError === true);
+    touched.set(record.productId, {
+      ...current,
+      associatedClueIds,
+      associatedClueCount: associatedClueIds.length,
+      remainingClueCapacity: capacity.remainingClueCapacity,
+      submissionRecordIds: Array.from(recordIds),
+      sourceRecordCount: recordIds.size,
+      updatedAt: record.updatedAt
+    });
+  }
+
+  const incomingByRemoteId = new Map(records.map((record) => [record.remoteRecordId, record]));
+  const previousByRemoteId = new Map(previousRecords.map((record) => [record.remoteRecordId, record]));
+  const changedProductIds = new Set<string>();
+  for (const record of records) {
+    const previousRecord = previousByRemoteId.get(record.remoteRecordId);
+    if (!previousRecord) continue;
+    if (previousRecord.productId !== record.productId || previousRecord.clueId !== record.clueId) {
+      changedProductIds.add(previousRecord.productId);
+      changedProductIds.add(record.productId);
+    }
+  }
+
+  const deleteIndexIds: string[] = [];
+  for (const productId of changedProductIds) {
+    const current = touched.get(productId) || byProduct.get(productId);
+    if (!current) continue;
+    const remoteRecordIds = uniqueText([
+      ...(current.submissionRecordIds || []),
+      ...records.filter((record) => record.productId === productId).map((record) => record.remoteRecordId)
+    ]);
+    const persisted = remoteRecordIds.length
+      ? await repositoryGetMany<SubmitHistoryRecord>(
+          submitHistoryRecordStore,
+          remoteRecordIds.map((remoteRecordId) => submitHistoryRecordId(identity, remoteRecordId))
+        ).catch(() => [])
+      : [];
+    const afterByRemoteId = new Map(persisted.map((record) => [record.remoteRecordId, record]));
+    const beforeByRemoteId = new Map(afterByRemoteId);
+    for (const remoteRecordId of incomingByRemoteId.keys()) {
+      const previousRecord = previousByRemoteId.get(remoteRecordId);
+      if (previousRecord) beforeByRemoteId.set(remoteRecordId, previousRecord);
+      else beforeByRemoteId.delete(remoteRecordId);
+    }
+    const backedClueIdsBefore = new Set(Array.from(beforeByRemoteId.values())
+      .filter((record) => record.productId === productId)
+      .map((record) => record.clueId));
+    const optimisticClueIds = (current.associatedClueIds || []).filter((clueId) => !backedClueIdsBefore.has(clueId));
+    const currentRecords = Array.from(afterByRemoteId.values()).filter((record) => record.productId === productId);
+    const associatedClueIds = uniqueText([...optimisticClueIds, ...currentRecords.map((record) => record.clueId)]);
+    const submissionRecordIds = uniqueText(currentRecords.map((record) => record.remoteRecordId));
+    if (!associatedClueIds.length && !submissionRecordIds.length && current.saturatedByRemoteError !== true) {
+      touched.delete(productId);
+      deleteIndexIds.push(current.id);
+      continue;
+    }
+    const capacity = submitHistoryCapacityFacts(associatedClueIds, submissionRecordIds, current.saturatedByRemoteError === true);
+    touched.set(productId, {
+      ...current,
+      associatedClueIds,
+      associatedClueCount: associatedClueIds.length,
+      remainingClueCapacity: capacity.remainingClueCapacity,
+      submissionRecordIds,
+      sourceRecordCount: submissionRecordIds.length,
+      updatedAt: records.find((record) => record.productId === productId)?.updatedAt || current.updatedAt
+    });
+  }
+  await repositoryPutMany(submitHistoryProductIndexStore, Array.from(touched.values()), { concurrency: 2 });
+  if (deleteIndexIds.length) await repositoryDeleteMany(submitHistoryProductIndexStore, deleteIndexIds);
+}
+
+async function fetchSubmitHistoryWindow(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: OpportunityArgs, window: { startEpochSeconds: number; endEpochSeconds: number }) {
+  const planKey = "opportunitySubmitHistoryList";
+  const pageSize = policyNumber(payload.adapter, "opportunityReport.submitHistoryPageSize", 100, 10, 200);
+  const maxPages = policyNumber(payload.adapter, "opportunityReport.maxSubmitHistoryPagesPerWindow", 1000, 1, 2000);
+  const pageDelayMs = policyNumber(payload.adapter, "opportunityReport.submitHistoryPageDelayMs", 150, 0, 5000);
+  const rowsById = new Map<string, Record<string, unknown>>();
+  const sourceHealth: Array<Record<string, unknown>> = [];
+  let remoteTotal = 0;
+  let remoteTotalKnown = false;
+  let fetchedPages = 0;
+  let requestFailed = false;
+  let schemaMismatch = false;
+  let schemaMismatchCount = 0;
+  let rawRowCount = 0;
+  let duplicateRecordCount = 0;
+  let duplicatePage = false;
+  let totalZeroWithRows = false;
+  let endReached = false;
+  const schemaSamples: Array<Record<string, unknown>> = [];
+  for (let page = 1; page <= maxPages; page += 1) {
+    const shouldCancel = () => pipelineCancelled(args);
+    assertNotCancelled(shouldCancel);
+    const body = submitHistoryListBody(window, page, pageSize);
+    try {
+      const response = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context: bodyContext(body), shouldCancel });
+      const wrapped = { [planKey]: response.data };
+      const rows = firstArray(wrapped, mappingArray(payload.adapter, "submitHistoryListPaths", [
+        "opportunitySubmitHistoryList.data",
+        "opportunitySubmitHistoryList.data.list",
+        "opportunitySubmitHistoryList.list"
+      ])).map(objectRecord);
+      rawRowCount += rows.length;
+      fetchedPages += 1;
+      const pageTotal = readOptionalTotal(wrapped, payload.adapter, "submitHistoryTotalPaths");
+      if (pageTotal !== undefined) {
+        remoteTotal = Math.max(remoteTotal, pageTotal);
+        remoteTotalKnown = true;
+      }
+      if (pageTotal === 0 && rows.length) totalZeroWithRows = true;
+      let pageNew = 0;
+      for (const row of rows) {
+        const snapshot = parseSubmitHistorySnapshot(row);
+        if (!snapshot) {
+          schemaMismatch = true;
+          schemaMismatchCount += 1;
+          if (schemaSamples.length < 5) schemaSamples.push({ page, shape: diagnosticValueShape(row) });
+          continue;
+        }
+        if (rowsById.has(snapshot.remoteRecordId)) {
+          duplicateRecordCount += 1;
+        } else {
+          rowsById.set(snapshot.remoteRecordId, row);
+          pageNew += 1;
+        }
+      }
+      if (rows.length > 0 && pageNew === 0) duplicatePage = true;
+      const ok = submitHistoryResponseOk(response, payload.adapter, planKey);
+      sourceHealth.push({ key: page === 1 ? planKey : `${planKey}:page:${page}`, status: response.status, ok, count: rows.length, uniqueCount: rowsById.size, pageNew, duplicateRecordCount, pageTotal });
+      if (!ok || !rows.length && remoteTotalKnown && rowsById.size < remoteTotal) {
+        requestFailed = true;
+        break;
+      }
+      if (!rows.length || (remoteTotalKnown && rowsById.size >= remoteTotal) || (!remoteTotalKnown && rows.length < pageSize)) {
+        endReached = true;
+        break;
+      }
+      if (!pageNew) {
+        requestFailed = true;
+        break;
+      }
+      if (pageDelayMs > 0) await cancellableWait(pageDelayMs, shouldCancel);
+    } catch (error) {
+      requestFailed = true;
+      sourceHealth.push({ key: page === 1 ? planKey : `${planKey}:page:${page}`, status: 0, ok: false, error: error instanceof Error ? error.message : String(error) });
+      break;
+    }
+  }
+  const status = evaluateSubmitHistoryPageCoverage({
+    requestFailed: requestFailed || !sourceHealth.length || sourceHealth.some((item) => item.ok !== true),
+    schemaMismatch,
+    duplicatePage,
+    totalZeroWithRows,
+    endReached,
+    fetchedPages,
+    maxPages
+  });
+  const fetchedAt = nowIso();
+  const records = Array.from(rowsById.values())
+    .map((row) => normalizeSubmitHistoryRecord(normalizePipelineStoreIdentity(store), row, fetchedAt))
+    .filter((record): record is SubmitHistoryRecord => Boolean(record));
+  const normalizedRecords = records.length === rowsById.size;
+  const finalStatus = normalizedRecords ? status : "failed" as const;
+  return {
+    status: finalStatus,
+    records,
+    sourceHealth: [...sourceHealth, { key: "opportunitySubmitHistorySchema", ok: !schemaMismatch && normalizedRecords, rawRowCount, parsedRecordCount: records.length, schemaMismatchCount, schemaSamples }],
+    remoteTotal,
+    remoteTotalKnown,
+    fetchedPages,
+    diagnostic: { status: finalStatus, window, rawRowCount, parsedRecordCount: records.length, remoteTotal: remoteTotalKnown ? remoteTotal : undefined, remoteTotalKnown, endReached, requestFailed, schemaMismatch, schemaMismatchCount, duplicatePage, duplicateRecordCount, totalZeroWithRows }
+  };
+}
+
+async function scanBenefitProductsForStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: OpportunityArgs) {
+  const identity = normalizePipelineStoreIdentity(store);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const initialLookbackDays = policyNumber(payload.adapter, "opportunityReport.submitHistoryInitialLookbackDays", 30, 1, 3650);
+  const initialStart = submitHistoryInitialStart(nowSeconds, initialLookbackDays);
+  const windowDays = policyNumber(payload.adapter, "opportunityReport.submitHistoryWindowDays", 31, 1, 366);
+  const overlapSeconds = policyNumber(payload.adapter, "opportunityReport.submitHistoryIncrementalOverlapSeconds", 86400, 0, 31 * 86400);
+  const syncId = `${storeScopeId(identity)}-sync`;
+  const previous = await repositoryGet<SubmitHistorySyncRecord>(submitHistorySyncStore, syncId).catch(() => null);
+  const isInitial = !previous || !previous.initialized;
+  const startEpochSeconds = isInitial
+    ? Math.max(initialStart, previous?.initialCursorStartEpochSeconds || initialStart)
+    : Math.max(initialStart, Math.floor(previous.watermarkMs / 1000) - overlapSeconds);
+  const windows = submitHistoryWindows(startEpochSeconds, nowSeconds, windowDays);
+  let recordCount = previous?.recordCount || 0;
+  let fetchedPages = 0;
+  let remoteTotal = 0;
+  let remoteTotalKnown = false;
+  let remoteUpdatedAtWatermarkMs = Math.max(0, Number(previous?.remoteUpdatedAtWatermarkMs || 0));
+  const sourceHealth: Array<Record<string, unknown>> = [];
+  for (const window of windows) {
+    const result = await fetchSubmitHistoryWindow(payload, store, args, window);
+    fetchedPages += result.fetchedPages;
+    remoteTotal += result.remoteTotal;
+    remoteTotalKnown ||= result.remoteTotalKnown;
+    const evidenceByKey = new Map<string, Record<string, unknown>>();
+    for (const item of [result.sourceHealth[0], ...result.sourceHealth.filter((entry) => entry.ok === false), ...result.sourceHealth.slice(-5)]) {
+      if (item) evidenceByKey.set(text(item.key), item);
+    }
+    const windowDiagnostic = { ...result.diagnostic, mode: isInitial ? "initial" : "incremental", requestEvidence: Array.from(evidenceByKey.values()) };
+    sourceHealth.push(windowDiagnostic);
+    await reportDoudianDiagnostic({ category: "opportunity-pipeline", event: "submit-history-window", runId: args.runId || args.operationId, shopId: identity.shopId, ...windowDiagnostic }, true).catch(() => undefined);
+    if (result.status !== "complete") {
+      const failedAt = nowIso();
+      await repositoryPut(submitHistorySyncStore, {
+        id: syncId,
+        ...identity,
+        initialized: previous?.initialized === true,
+        status: result.status,
+        initialStartEpochSeconds: initialStart,
+        initialCursorStartEpochSeconds: isInitial ? window.startEpochSeconds : startEpochSeconds,
+        watermarkMs: previous?.watermarkMs || 0,
+        remoteUpdatedAtWatermarkMs,
+        recordCount,
+        lastMode: isInitial ? "initial" : "incremental",
+        lastError: "submit history window incomplete",
+        createdAt: previous?.createdAt || failedAt,
+        updatedAt: failedAt
+      } satisfies SubmitHistorySyncRecord).catch(() => undefined);
+      const diagnosticRunId = text(args.runId || args.operationId);
+      if (diagnosticRunId) await writePipelineEvent({ runId: diagnosticRunId, shopId: identity.shopId, level: "error", event: "pipeline-submit-history-incomplete", message: "submit history sync incomplete", detail: { ...result.diagnostic, sourceHealth } }).catch(() => undefined);
+      const index = await loadBenefitIndexForStore(identity);
+      const records = Array.from(index.values());
+      return { status: "failed" as const, records, overview: summarizeBenefitProducts(records), sourceHealth, remoteTotal, remoteTotalKnown, fetchedPages, nextPage: undefined };
+    }
+    remoteUpdatedAtWatermarkMs = submitHistoryRemoteUpdatedAtWatermark(result.records, remoteUpdatedAtWatermarkMs);
+    const recordIds = result.records.map((record) => record.id);
+    const previousRecords = await repositoryGetMany<SubmitHistoryRecord>(submitHistoryRecordStore, recordIds).catch(() => []);
+    const existingIds = new Set(previousRecords.map((record) => record.id));
+    if (result.records.length) {
+      await repositoryPutMany(submitHistoryRecordStore, result.records, { concurrency: 2 });
+      await mergeSubmitHistoryIndexes(identity, result.records, previousRecords);
+    }
+    recordCount += result.records.filter((record) => !existingIds.has(record.id)).length;
+    const nextCursor = window.endEpochSeconds + 1;
+    if (isInitial) {
+      const checkpointAt = nowIso();
+      await repositoryPut(submitHistorySyncStore, {
+        id: syncId,
+        ...identity,
+        initialized: false,
+        status: "truncated",
+        initialStartEpochSeconds: initialStart,
+        initialCursorStartEpochSeconds: nextCursor,
+        watermarkMs: previous?.watermarkMs || 0,
+        remoteUpdatedAtWatermarkMs,
+        recordCount,
+        lastMode: "initial",
+        createdAt: previous?.createdAt || checkpointAt,
+        updatedAt: checkpointAt
+      } satisfies SubmitHistorySyncRecord);
+    }
+  }
+  const persistedRecordCount = await repositoryGetAllByPrefix<SubmitHistoryRecord>(submitHistoryRecordStore, `${storeScopeId(identity)}-`, { pageSize: 500, maxItems: 500000 })
+    .then((items) => items.length)
+    .catch(() => recordCount);
+  recordCount = persistedRecordCount;
+  const finishedAt = nowIso();
+  await repositoryPut(submitHistorySyncStore, {
+    id: syncId,
+    ...identity,
+    initialized: true,
+    status: "complete",
+    initialStartEpochSeconds: initialStart,
+    initialCursorStartEpochSeconds: nowSeconds + 1,
+    watermarkMs: nowSeconds * 1000,
+    remoteUpdatedAtWatermarkMs,
+    recordCount,
+    lastMode: isInitial ? "initial" : "incremental",
+    lastSuccessfulSyncAt: finishedAt,
+    createdAt: previous?.createdAt || finishedAt,
+    updatedAt: finishedAt
+  } satisfies SubmitHistorySyncRecord);
+  const index = await loadBenefitIndexForStore(identity);
+  const records = Array.from(index.values());
+  const overview = summarizeBenefitProducts(records);
+  await reportDoudianDiagnostic({ category: "opportunity-pipeline", event: "submit-history-sync-complete", runId: args.runId || args.operationId, shopId: identity.shopId, mode: isInitial ? "initial" : "incremental", recordCount, fetchedPages, remoteTotal: remoteTotalKnown ? remoteTotal : undefined, queryWatermarkMs: nowSeconds * 1000, remoteUpdatedAtWatermarkMs, sourceHealth }, true).catch(() => undefined);
+  return { status: "complete" as const, records, overview, sourceHealth, remoteTotal, remoteTotalKnown, fetchedPages, nextPage: undefined };
+}
+
+async function loadBenefitIndexForStore(identity: PipelineStoreIdentity) {
+  const prefix = `${storeScopeId(identity)}-`;
+  const records = await repositoryGetAllByPrefix<BenefitProductIndexRecord>(submitHistoryProductIndexStore, prefix, { pageSize: 500, maxItems: 500000 }).catch(() => []);
+  return new Map(records.map((record) => [record.productId, record]));
+}
+
+async function updateBenefitIndexAfterAssociation(identity: PipelineStoreIdentity, productId: string, clueId: string) {
+  const id = `${storeScopeId(identity)}-product-${encodeURIComponent(productId)}`;
+  const current = await repositoryGet<BenefitProductIndexRecord>(submitHistoryProductIndexStore, id).catch(() => null);
+  if (!productId || !clueId) return;
+  const base = current || {
+    id,
+    ...identity,
+    productId,
+    associatedClueIds: [],
+    associatedClueCount: 0,
+    remainingClueCapacity: SUBMIT_HISTORY_CLUE_CAPACITY,
+    submissionRecordIds: [],
+    sourceRecordCount: 0,
+    acquiredProfitIds: [],
+    unacquiredProfitIds: [],
+    acquiredExposure: 0,
+    estimatedExposure: 0,
+    sourceStatus: "complete" as const,
+    fetchedAt: nowIso(),
+    updatedAt: nowIso()
+  } satisfies BenefitProductIndexRecord;
+  const currentClueIds = base.associatedClueIds || [];
+  const currentSourceRecordCount = Number(base.sourceRecordCount || 0);
+  if (currentClueIds.includes(clueId)) return;
+  const associatedClueIds = [...currentClueIds, clueId];
+  await repositoryPut(submitHistoryProductIndexStore, {
+    ...base,
+    associatedClueIds,
+    associatedClueCount: associatedClueIds.length,
+    remainingClueCapacity: Math.max(0, SUBMIT_HISTORY_CLUE_CAPACITY - Math.max(associatedClueIds.length, currentSourceRecordCount)),
+    updatedAt: nowIso()
+  });
+}
+
+async function markBenefitIndexSaturated(identity: PipelineStoreIdentity, productId: string, clueId?: string) {
+  const id = `${storeScopeId(identity)}-product-${encodeURIComponent(productId)}`;
+  const current = await repositoryGet<BenefitProductIndexRecord>(submitHistoryProductIndexStore, id).catch(() => null);
+  if (!productId) return;
+  const base = current || {
+    id,
+    ...identity,
+    productId,
+    associatedClueIds: [],
+    associatedClueCount: 0,
+    remainingClueCapacity: SUBMIT_HISTORY_CLUE_CAPACITY,
+    submissionRecordIds: [],
+    sourceRecordCount: 0,
+    acquiredProfitIds: [],
+    unacquiredProfitIds: [],
+    acquiredExposure: 0,
+    estimatedExposure: 0,
+    sourceStatus: "complete" as const,
+    fetchedAt: nowIso(),
+    updatedAt: nowIso()
+  } satisfies BenefitProductIndexRecord;
+  const currentClueIds = base.associatedClueIds || [];
+  const currentSourceRecordCount = Number(base.sourceRecordCount || 0);
+  const associatedClueIds = clueId && !currentClueIds.includes(clueId)
+    ? [...currentClueIds, clueId]
+    : currentClueIds;
+  await repositoryPut(submitHistoryProductIndexStore, {
+    ...base,
+    associatedClueIds,
+    associatedClueCount: Math.max(SUBMIT_HISTORY_CLUE_CAPACITY, base.associatedClueCount || 0, associatedClueIds.length),
+    sourceRecordCount: Math.max(SUBMIT_HISTORY_CLUE_CAPACITY, currentSourceRecordCount),
+    remainingClueCapacity: 0,
+    saturatedByRemoteError: true,
+    updatedAt: nowIso()
+  });
 }
 
 function extractCurrentStoreCategories(products: DoudianOpportunityProductRow[]) {
@@ -1647,14 +2367,8 @@ function storeScopeId(identity: PipelineStoreIdentity) {
   return `${identity.tenantId}-${identity.shopId}-${identity.storeGeneration}`;
 }
 
-function pipelineCacheScope(adapter: DoudianAdapterConfig): "shop" | "global" {
-  const requested = policyText(adapter, "opportunityReport.pipelineCacheScope", "shop").toLocaleLowerCase();
-  const globalEnabled = policyBoolean(adapter, "opportunityReport.enableGlobalPipelineCache", false);
-  return requested === "global" && globalEnabled ? "global" : "shop";
-}
-
 function pipelineScopeId(cacheScope: "shop" | "global", identity: PipelineStoreIdentity) {
-  return cacheScope === "global" ? "global" : storeScopeId(identity);
+  return cacheScope === "global" ? `tenant:${identity.tenantId}` : storeScopeId(identity);
 }
 
 function storeRunId(runId: string, identity: PipelineStoreIdentity) {
@@ -1807,8 +2521,8 @@ function clueCacheKey(args: {
   return stableHash(["clue-v3-coverage", args.cacheScope, args.scopeId, args.adapterVersion, args.requestPlanHash, args.categoryKey, args.filterHash].join("|"));
 }
 
-function wordCacheKey(clueCacheKeyValue: string, tokenizerVersion: string, stopwordVersion: string) {
-  return `${clueCacheKeyValue}::${stableHash(["word-v2", clueCacheKeyValue, tokenizerVersion, stopwordVersion].join("|"))}`;
+function wordCacheKey(clueCacheKeyValue: string, tokenizerVersion: string, stopwordVersion: string, clueIdsHash: string) {
+  return `${clueCacheKeyValue}::${stableHash(["word-v3", clueCacheKeyValue, tokenizerVersion, stopwordVersion, clueIdsHash].join("|"))}`;
 }
 
 async function loadOpportunityMutationSummary(runId: string): Promise<OpportunityMutationSummary | null> {
@@ -1850,6 +2564,7 @@ async function updateSubmitTaskFromWorker(
 }
 
 const opportunityRetentionMetaId = "opportunity-retention-v1";
+const officialValidationCacheRemovalMetaId = "opportunity-official-validation-cache-removed-v1";
 
 function expiredHistoryRecords<T extends { id: string; createdAt?: string; updatedAt?: string; status?: string }>(records: T[], cutoffMs: number, maxRecords: number) {
   const terminal = records
@@ -1870,8 +2585,22 @@ async function deleteStoreRecordsByPrefix(storeName: Parameters<typeof repositor
   }
 }
 
+async function removeLegacyOfficialValidationCaches() {
+  const migration = await repositoryGet<{ id: string }>("runtime_meta", officialValidationCacheRemovalMetaId).catch(() => null);
+  if (migration) return;
+  const [wordCaches, goodsCaches] = await Promise.all([
+    repositoryGetAll<OfficialClueWordsCacheRecord>(officialClueWordsCacheStore).catch(() => []),
+    repositoryGetAll<OfficialClueGoodsCacheRecord>(officialClueGoodsCacheStore).catch(() => [])
+  ]);
+  for (const cache of goodsCaches) await deleteStoreRecordsByPrefix(officialClueGoodsCacheShardStore, `${cache.id}-`);
+  if (wordCaches.length) await repositoryDeleteMany(officialClueWordsCacheStore, wordCaches.map((cache) => cache.id));
+  if (goodsCaches.length) await repositoryDeleteMany(officialClueGoodsCacheStore, goodsCaches.map((cache) => cache.id));
+  await repositoryPut("runtime_meta", { id: officialValidationCacheRemovalMetaId, removedAt: nowIso() });
+}
+
 async function cleanupOpportunityData(adapter: DoudianAdapterConfig) {
   await ensureStructuredSubmitAttempts();
+  await removeLegacyOfficialValidationCaches();
   const meta = await repositoryGet<{ id: string; cleanedAt?: string }>("runtime_meta", opportunityRetentionMetaId).catch(() => null);
   const cleanedAtMs = Date.parse(String(meta?.cleanedAt || ""));
   if (Number.isFinite(cleanedAtMs) && Date.now() - cleanedAtMs < 24 * 60 * 60 * 1000) return;
@@ -1879,7 +2608,7 @@ async function cleanupOpportunityData(adapter: DoudianAdapterConfig) {
   const retentionDays = policyNumber(adapter, "opportunityReport.historyRetentionDays", 30, 1, 3650);
   const maxRuns = policyNumber(adapter, "opportunityReport.maxHistoryRuns", 200, 10, 5000);
   const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-  const [pipelineRuns, pipelineTasks, clueRuns, productRuns, prematchRuns, executeRuns, clueCaches, wordCaches, officialWordCaches, officialGoodsCaches] = await Promise.all([
+  const [pipelineRuns, pipelineTasks, clueRuns, productRuns, prematchRuns, executeRuns, clueCaches, wordCaches] = await Promise.all([
     repositoryGetAll<PipelineRunRecord>(pipelineRunStore).catch(() => []),
     repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []),
     repositoryGetAll<ClueScanRunRecord>(clueScanStore).catch(() => []),
@@ -1887,9 +2616,7 @@ async function cleanupOpportunityData(adapter: DoudianAdapterConfig) {
     repositoryGetAll<PrematchRunRecord>(prematchRunStore).catch(() => []),
     repositoryGetAll<ExecuteRunRecord>(opportunityExecuteStore).catch(() => []),
     repositoryGetAll<ClueCacheRecord>(clueCacheStore).catch(() => []),
-    repositoryGetAll<ClueWordCacheRecord>(clueWordCacheStore).catch(() => []),
-    repositoryGetAll<OfficialClueWordsCacheRecord>(officialClueWordsCacheStore).catch(() => []),
-    repositoryGetAll<OfficialClueGoodsCacheRecord>(officialClueGoodsCacheStore).catch(() => [])
+    repositoryGetAll<ClueWordCacheRecord>(clueWordCacheStore).catch(() => [])
   ]);
 
   const stalePipelineRuns = expiredHistoryRecords(pipelineRuns, cutoffMs, maxRuns);
@@ -1945,11 +2672,8 @@ async function cleanupOpportunityData(adapter: DoudianAdapterConfig) {
   for (const cache of staleWordCaches) await deleteStoreRecordsByPrefix(clueWordCacheShardStore, `${cache.id}-`);
   if (staleClueCaches.length) await repositoryDeleteMany(clueCacheStore, staleClueCaches.map((cache) => cache.id));
   if (staleWordCaches.length) await repositoryDeleteMany(clueWordCacheStore, staleWordCaches.map((cache) => cache.id));
-  const staleOfficialWordCaches = officialWordCaches.filter((cache) => cache.expiresAt <= now || Date.parse(cache.updatedAt || cache.createdAt) < cutoffMs);
-  const staleOfficialGoodsCaches = officialGoodsCaches.filter((cache) => cache.expiresAt <= now || Date.parse(cache.updatedAt || cache.createdAt) < cutoffMs);
-  for (const cache of staleOfficialGoodsCaches) await deleteStoreRecordsByPrefix(officialClueGoodsCacheShardStore, `${cache.id}-`);
-  if (staleOfficialWordCaches.length) await repositoryDeleteMany(officialClueWordsCacheStore, staleOfficialWordCaches.map((cache) => cache.id));
-  if (staleOfficialGoodsCaches.length) await repositoryDeleteMany(officialClueGoodsCacheStore, staleOfficialGoodsCaches.map((cache) => cache.id));
+  // Submission history is a durable reconciliation source. It must not be
+  // deleted by the short-lived opportunity run retention policy.
 
   await getNativeData()?.opportunityAttempts?.cleanup({
     failedRetentionDays: policyNumber(adapter, "opportunityReport.failedAttemptRetentionDays", 90, 1, 3650)
@@ -2009,10 +2733,32 @@ function materializeCachedClue(row: DoudianOpportunityClueRow, store: DoudianSto
   };
 }
 
-async function loadClueCacheRows(cacheKey: string, store: DoudianStoreSummary, runId: string) {
-  const shards = (await repositoryGetAllByPrefix<ClueCacheShardRecord>(clueCacheShardStore, `${cacheKey}-`, { pageSize: 500, maxItems: 10000 }).catch(() => []))
+async function loadClueCacheRows(cache: ClueCacheRecord, store: DoudianStoreSummary, runId: string) {
+  if (!cache.generation
+    || !Number.isInteger(Number(cache.shardCount))
+    || Number(cache.shardCount) < 0
+    || !Number.isInteger(Number(cache.rowCount))
+    || Number(cache.rowCount) < 0) return null;
+  const shards = (await repositoryGetAllByPrefix<ClueCacheShardRecord>(clueCacheShardStore, `${cache.id}-`, { pageSize: 500, maxItems: 10000 }).catch(() => []))
+    .filter((shard) => shard.generation && shard.generation === cache.generation)
     .sort((left, right) => left.shardNo - right.shardNo);
-  return shards.flatMap((shard) => shard.rows || []).map((row, index) => materializeCachedClue(row, store, runId, index));
+  const expectedShardNos = Array.from({ length: Math.max(0, Number(cache.shardCount || 0)) }, (_, index) => index + 1);
+  const actualShardNos = shards.map((shard) => shard.shardNo);
+  const invalidShard = shards.some((shard) => {
+    const rows = Array.isArray(shard.rows) ? shard.rows : [];
+    return shard.clueCacheKey !== cache.id
+      || shard.categoryKey !== cache.categoryKey
+      || shard.cacheScope !== cache.cacheScope
+      || shard.scopeId !== cache.scopeId
+      || !Number.isInteger(Number(shard.rowCount))
+      || Number(shard.rowCount) !== rows.length;
+  });
+  const rowCount = shards.reduce((sum, shard) => sum + Number(shard.rowCount || 0), 0);
+  if (invalidShard || shards.length !== Number(cache.shardCount || 0) || rowCount !== Number(cache.rowCount || 0) || expectedShardNos.some((value, index) => actualShardNos[index] !== value)) return null;
+  const rows = shards.flatMap((shard) => shard.rows || []);
+  const uniqueClueIds = new Set(rows.map((row) => text(row.clueId)).filter(Boolean));
+  if (uniqueClueIds.size !== rows.length || (cache.scanStatus === "complete" && cache.remoteTotalKnown && Number(cache.remoteTotal || 0) > rows.length)) return null;
+  return rows.map((row, index) => materializeCachedClue(row, store, runId, index));
 }
 
 function sourceHealthComplete(sourceHealth: Array<Record<string, unknown>> = []) {
@@ -2045,26 +2791,56 @@ async function fetchCluesForCategory(args: {
   category: StoreCategorySummary;
   dryRun?: boolean;
   mockClues?: Array<Record<string, unknown>>;
+  requestedPages?: number;
+  pageBudgetSatisfiesCoverage?: boolean;
+  startPage?: number;
+  existingRows?: DoudianOpportunityClueRow[];
+  existingRemoteTotal?: number;
+  existingRemoteTotalKnown?: boolean;
 }) {
   const planKey = "opportunityClueRealtimeList";
   const normalized = normalizedClueFilter(args.filters, args.payload.adapter);
   const pageSize = normalized.pageSize;
-  const maxPages = normalized.maxPages;
+  const requestedPages = Math.max(1, Math.floor(Number(args.requestedPages || normalized.maxPages)));
+  const startPage = Math.max(1, Math.floor(Number(args.startPage || 1)));
+  const maxPages = requestedPages;
   const rawRows: Record<string, unknown>[] = [];
+  const rowById = new Map<string, Record<string, unknown>>();
   const sourceHealth: Array<Record<string, unknown>> = [];
-  let remoteTotal = 0;
-  let remoteTotalKnown = false;
+  let remoteTotal = Number(args.existingRemoteTotal || 0);
+  let remoteTotalKnown = args.existingRemoteTotalKnown === true;
   let fetchedPages = 0;
   let lastPageRowCount: number | undefined;
+  let missingIdCount = 0;
+  let duplicateIdCount = 0;
+  let duplicatePage = false;
+  let totalZeroWithRows = false;
+  for (const existing of args.existingRows || []) {
+    const clueId = text(existing.clueId);
+    if (clueId) rowById.set(clueId, existing as unknown as Record<string, unknown>);
+  }
   if (args.mockClues?.length) {
-    rawRows.push(...args.mockClues);
+    let pageNew = 0;
+    let pageDuplicateCount = 0;
+    for (const row of args.mockClues) {
+      const clueId = rawClueId(row, args.payload.adapter);
+      if (!clueId) missingIdCount += 1;
+      else if (rowById.has(clueId)) {
+        duplicateIdCount += 1;
+        pageDuplicateCount += 1;
+      } else {
+        rowById.set(clueId, row);
+        pageNew += 1;
+      }
+    }
+    duplicatePage = args.mockClues.length > 0 && pageNew === 0 && pageDuplicateCount > 0;
     remoteTotal = args.mockClues.length;
     remoteTotalKnown = true;
     fetchedPages = 1;
     lastPageRowCount = args.mockClues.length;
     sourceHealth.push({ key: `${planKey}:${args.category.categoryKey}:mock`, status: 200, ok: true, count: args.mockClues.length, categoryKey: args.category.categoryKey });
   } else {
-    for (let page = 1; page <= maxPages; page += 1) {
+    for (let page = startPage; page <= maxPages; page += 1) {
     const body = buildClueSearchBody(filtersForStoreCategory(args.filters, args.category), page, pageSize);
     const response = await runDoudianRequestPlan(args.payload, { partition: args.store.partition, planKey, context: bodyContext(body) });
     const responseKey = page === 1 ? `${planKey}:${args.category.categoryKey}` : `${planKey}:${args.category.categoryKey}:page:${page}`;
@@ -2076,31 +2852,80 @@ async function fetchCluesForCategory(args: {
     ])).map(objectRecord);
     fetchedPages += 1;
     lastPageRowCount = rows.length;
-    rawRows.push(...rows);
+    let pageNew = 0;
+    let pageDuplicateCount = 0;
+    let pageMissingIdCount = 0;
+    let missingIdSample: unknown;
+    for (const row of rows) {
+      const clueId = rawClueId(row, args.payload.adapter);
+      if (!clueId) {
+        missingIdCount += 1;
+        pageMissingIdCount += 1;
+        missingIdSample ??= diagnosticValueShape(row);
+      } else if (rowById.has(clueId)) {
+        duplicateIdCount += 1;
+        pageDuplicateCount += 1;
+      }
+      else {
+        rowById.set(clueId, row);
+        pageNew += 1;
+      }
+    }
     const pageRemoteTotal = readOptionalTotal(wrapped, args.payload.adapter, "clueTotalPaths");
     if (pageRemoteTotal !== undefined) {
       remoteTotal = pageRemoteTotal;
       remoteTotalKnown = true;
     }
+    if (remoteTotalKnown && remoteTotal === 0 && rows.length > 0) totalZeroWithRows = true;
     const ok = planOk(response, args.payload.adapter, planKey);
-    sourceHealth.push({ key: responseKey, status: response.status, ok, count: rows.length, categoryKey: args.category.categoryKey });
+    const noNewPage = rows.length > 0 && pageNew === 0;
+    if (noNewPage && pageDuplicateCount > 0 && pageMissingIdCount === 0) duplicatePage = true;
+    sourceHealth.push({
+      key: responseKey,
+      status: response.status,
+      ok,
+      count: rows.length,
+      uniqueCount: rowById.size,
+      pageNew,
+      duplicateCount: pageDuplicateCount,
+      missingIdCount: pageMissingIdCount,
+      missingIdSample,
+      duplicatePage: noNewPage && pageDuplicateCount > 0 && pageMissingIdCount === 0,
+      remoteTotal: remoteTotalKnown ? remoteTotal : undefined,
+      categoryKey: args.category.categoryKey
+    });
     if (!ok || !rows.length) break;
-    if (remoteTotalKnown && rawRows.length >= remoteTotal) break;
+    if (remoteTotalKnown && rowById.size >= remoteTotal) break;
+    if (!pageNew) break;
     }
   }
+  rawRows.push(...rowById.values());
   const rows = rawRows
     .map((row, rowIndex) => normalizeClue(args.store, row, args.payload.adapter, args.runId, rowIndex))
     .filter((row): row is DoudianOpportunityClueRow => Boolean(row));
-  const coverage = evaluateInputScanCoverage({
+  const totalFetchedPages = Math.max(0, startPage - 1) + fetchedPages;
+  const coverage = evaluateClueScanCoverage({
     requestFailed: !sourceHealth.length || sourceHealth.some((item) => item.ok !== true),
-    schemaMismatch: rawRows.length > 0 && rows.length !== rawRows.length,
+    schemaMismatch: missingIdCount > 0 || (rawRows.length > 0 && rows.length !== rawRows.length),
     fetchedCount: rows.length,
+    uniqueFetchedCount: rowById.size,
     remoteTotal: remoteTotalKnown ? remoteTotal : undefined,
     remoteTotalKnown,
-    fetchedPages,
-    maxPages,
+    fetchedPages: totalFetchedPages,
+    maxPages: requestedPages,
     pageSize,
-    lastPageRowCount
+    lastPageRowCount,
+    duplicatePage,
+    totalZeroWithRows
+  }, {
+    requestedPages,
+    pageBudgetSatisfiesCoverage: args.pageBudgetSatisfiesCoverage
+  });
+  const coverageSatisfied = clueCoverageSatisfiesPolicy({
+    status: coverage.status,
+    fetchedPages: totalFetchedPages,
+    requestedPages,
+    pageBudgetSatisfiesCoverage: args.pageBudgetSatisfiesCoverage
   });
   return {
     rows: mergeClues(rows),
@@ -2108,12 +2933,78 @@ async function fetchCluesForCategory(args: {
     remoteTotal,
     remoteTotalKnown,
     scanStatus: coverage.status,
-    fetchedPages,
-    nextPage: coverage.status === "truncated" ? fetchedPages + 1 : undefined
+    fetchedPages: totalFetchedPages,
+    nextPage: coverage.status === "truncated" ? totalFetchedPages + 1 : undefined,
+    coverageSatisfied,
+    duplicateIdCount,
+    missingIdCount,
+    duplicatePage,
+    totalZeroWithRows
   };
 }
 
-async function loadCluesByCategoryWithCache(args: {
+async function probeSharedClueCache(args: {
+  payload: DoudianAdapterPayload;
+  store: DoudianStoreSummary;
+  filters: DoudianOpportunityFilters;
+  category: StoreCategorySummary;
+  cachedRows: DoudianOpportunityClueRow[];
+  cachedRemoteTotal: number;
+  cachedRemoteTotalKnown: boolean;
+}) {
+  const planKey = "opportunityClueRealtimeList";
+  const pageSize = normalizedClueFilter(args.filters, args.payload.adapter).pageSize;
+  const body = buildClueSearchBody(filtersForStoreCategory(args.filters, args.category), 1, pageSize);
+  try {
+    const response = await runDoudianRequestPlan(args.payload, {
+      partition: args.store.partition,
+      planKey,
+      context: bodyContext(body),
+      maxAttempts: 1
+    });
+    const wrapped = { [planKey]: response.data };
+    const rawRows = firstArray(wrapped, mappingArray(args.payload.adapter, "clueListPaths", [
+      "opportunityClueRealtimeList.data",
+      "opportunityClueRealtimeList.data.data",
+      "opportunityClueRealtimeList.list"
+    ])).map(objectRecord);
+    const probeIds = rawRows.map((row) => rawClueId(row, args.payload.adapter)).filter(Boolean);
+    const cachedIds = args.cachedRows.slice(0, pageSize).map((row) => text(row.clueId)).filter(Boolean);
+    const remoteTotal = readOptionalTotal(wrapped, args.payload.adapter, "clueTotalPaths");
+    const probeEvaluation = evaluateSharedCacheProbe({
+      cachedIds,
+      probeIds,
+      cachedRemoteTotal: args.cachedRemoteTotal,
+      cachedRemoteTotalKnown: args.cachedRemoteTotalKnown,
+      probeRemoteTotal: remoteTotal
+    });
+    const totalMatches = probeEvaluation.totalMatches;
+    const fingerprintMatches = probeIds.length === rawRows.length && probeEvaluation.fingerprintMatches;
+    const ok = planOk(response, args.payload.adapter, planKey) && totalMatches && fingerprintMatches;
+    return {
+      key: `shared-cache-probe:${cacheCategoryKey(args.category)}`,
+      status: response.status,
+      ok,
+      totalMatches,
+      fingerprintMatches,
+      cachedRemoteTotal: args.cachedRemoteTotalKnown ? args.cachedRemoteTotal : null,
+      probeRemoteTotal: remoteTotal ?? null,
+      cachedFingerprint: stableHash([...cachedIds].sort()),
+      probeFingerprint: stableHash([...probeIds].sort()),
+      sourceShopId: args.store.shopId
+    };
+  } catch (error) {
+    return {
+      key: `shared-cache-probe:${cacheCategoryKey(args.category)}`,
+      status: 0,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      sourceShopId: args.store.shopId
+    };
+  }
+}
+
+async function loadCluesByCategoryWithCacheCore(args: {
   payload: DoudianAdapterPayload;
   store: DoudianStoreSummary;
   identity: PipelineStoreIdentity;
@@ -2122,12 +3013,20 @@ async function loadCluesByCategoryWithCache(args: {
   category: StoreCategorySummary;
   dryRun?: boolean;
   mockClues?: Array<Record<string, unknown>>;
-}) {
+  requestedPages?: number;
+  pageBudgetSatisfiesCoverage?: boolean;
+  cacheScopeOverride?: "shop" | "global";
+}): Promise<ClueCategoryLoadResult> {
   const categoryKey = cacheCategoryKey(args.category);
-  const cacheScope = pipelineCacheScope(args.payload.adapter);
+  const requestedCacheScope = args.cacheScopeOverride || policyText(args.payload.adapter, "opportunityReport.pipelineCacheScope", "shop");
+  const cacheScope = resolvePipelineCacheScope(
+    requestedCacheScope,
+    args.cacheScopeOverride === "shop" ? false : policyBoolean(args.payload.adapter, "opportunityReport.enableGlobalPipelineCache", false),
+    args.identity.tenantId
+  );
   const scopeId = pipelineScopeId(cacheScope, args.identity);
   if (!categoryKey) {
-    return { cacheKey: "", cacheScope, scopeId, rows: [] as DoudianOpportunityClueRow[], sourceHealth: [], remoteTotal: 0, remoteTotalKnown: false, scanStatus: "failed" as const, fetchedPages: 0, cacheHit: false, ok: true, skipReason: "missing-category-id" };
+    return { cacheKey: "", cacheScope, scopeId, rows: [] as DoudianOpportunityClueRow[], sourceHealth: [], remoteTotal: 0, remoteTotalKnown: false, scanStatus: "failed" as const, fetchedPages: 0, cacheHit: false, ok: true, coverageSatisfied: false, skipReason: "missing-category-id" };
   }
   const filterHash = stableFilterHash(args.filters, args.payload.adapter);
   const planHash = requestPlanHash(args.payload.adapter);
@@ -2141,25 +3040,72 @@ async function loadCluesByCategoryWithCache(args: {
   });
   const now = nowIso();
   const cached = await repositoryGet<ClueCacheRecord>(clueCacheStore, key).catch(() => null);
+  const requestedPages = Math.max(1, Math.floor(Number(args.requestedPages || normalizedClueFilter(args.filters, args.payload.adapter).maxPages)));
+  const cachedValid = Boolean(cached && (!cached.expiresAt || String(cached.expiresAt) > now));
+  const cachedRows = cachedValid && cached
+    ? await loadClueCacheRows(cached, args.store, args.runId)
+    : null;
+  const cacheProbeHealth: Array<Record<string, unknown>> = [];
+  if (cached
+    && cachedRows
+    && cacheScope === "global"
+    && cached.sourceShopId
+    && cached.sourceShopId !== args.identity.shopId
+    && !args.mockClues?.length) {
+    const probe = await probeSharedClueCache({
+      payload: args.payload,
+      store: args.store,
+      filters: args.filters,
+      category: args.category,
+      cachedRows,
+      cachedRemoteTotal: cached.remoteTotal,
+      cachedRemoteTotalKnown: cached.remoteTotalKnown === true
+    });
+    cacheProbeHealth.push(probe);
+    if (probe.ok !== true) {
+      const downgraded = await loadCluesByCategoryWithCacheCore({ ...args, cacheScopeOverride: "shop" });
+      return { ...downgraded, sourceHealth: [...cacheProbeHealth, ...downgraded.sourceHealth], cacheScopeDowngraded: true };
+    }
+  }
   if (cached && (!cached.expiresAt || String(cached.expiresAt) > now)) {
-    const cachedRows = await loadClueCacheRows(key, args.store, args.runId);
     const allowEmptyCacheHit = policyBoolean(args.payload.adapter, "opportunityReport.allowEmptyClueCacheHit", false);
-    if (!sourceHealthFailed(cached.sourceHealth) && (cachedRows.length || allowEmptyCacheHit)) {
+    const cacheCoverageSatisfied = cached.scanStatus === "complete"
+      || (args.pageBudgetSatisfiesCoverage === true && cached.scanStatus === "truncated" && Number(cached.fetchedPages || 0) >= requestedPages);
+    if (cachedRows && cacheCoverageSatisfied && !sourceHealthFailed(cached.sourceHealth) && (cachedRows.length || allowEmptyCacheHit)) {
       return {
         cacheKey: key,
         cacheScope,
         scopeId,
         rows: cachedRows,
-        sourceHealth: [{ key: "opportunityClueCache", ok: true, cacheHit: true, categoryKey, cacheScope, scopeId, rowCount: cachedRows.length }],
+        sourceHealth: [...cacheProbeHealth, { key: "opportunityClueCache", ok: true, cacheHit: true, categoryKey, cacheScope, scopeId, rowCount: cachedRows.length }],
         remoteTotal: cached.remoteTotal,
         remoteTotalKnown: cached.remoteTotalKnown === true,
         scanStatus: cached.scanStatus || "complete",
         fetchedPages: Number(cached.fetchedPages || 0),
         nextPage: cached.nextPage,
         cacheHit: true,
-        ok: true
+        ok: true,
+        coverageSatisfied: true
       };
     }
+  }
+
+  if (cachedRows && cached?.scanStatus === "truncated" && Number(cached.fetchedPages || 0) >= requestedPages && !sourceHealthFailed(cached.sourceHealth)) {
+    return {
+      cacheKey: key,
+      cacheScope,
+      scopeId,
+      rows: cachedRows,
+      sourceHealth: [...cacheProbeHealth, { key: "opportunityClueCache", ok: true, cacheHit: true, categoryKey, cacheScope, scopeId, rowCount: cachedRows.length }],
+      remoteTotal: cached.remoteTotal,
+      remoteTotalKnown: cached.remoteTotalKnown === true,
+      scanStatus: "truncated" as const,
+      fetchedPages: Number(cached.fetchedPages || 0),
+      nextPage: cached.nextPage,
+      cacheHit: true,
+      ok: true,
+      coverageSatisfied: false
+    };
   }
 
   const fetched = await fetchCluesForCategory({
@@ -2169,11 +3115,18 @@ async function loadCluesByCategoryWithCache(args: {
     filters: args.filters,
     category: args.category,
     dryRun: args.dryRun,
-    mockClues: args.mockClues
+    mockClues: args.mockClues,
+    requestedPages,
+    pageBudgetSatisfiesCoverage: args.pageBudgetSatisfiesCoverage,
+    startPage: cached && cachedRows && cached.scanStatus === "truncated" ? Math.max(1, Number(cached.nextPage || Number(cached.fetchedPages || 0) + 1)) : 1,
+    existingRows: cachedRows || [],
+    existingRemoteTotal: cached?.remoteTotal,
+    existingRemoteTotalKnown: cached?.remoteTotalKnown === true
   });
+  const fetchedSourceHealth = [...cacheProbeHealth, ...fetched.sourceHealth];
   const fetchedSourceOk = fetched.scanStatus !== "failed" && (args.mockClues?.length ? true : sourceHealthComplete(fetched.sourceHealth));
   if (!fetchedSourceOk) {
-    return { cacheKey: key, cacheScope, scopeId, rows: [], sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, remoteTotalKnown: fetched.remoteTotalKnown, scanStatus: "failed" as const, fetchedPages: fetched.fetchedPages, cacheHit: false, ok: false };
+    return { cacheKey: key, cacheScope, scopeId, rows: [], sourceHealth: fetchedSourceHealth, remoteTotal: fetched.remoteTotal, remoteTotalKnown: fetched.remoteTotalKnown, scanStatus: "failed" as const, fetchedPages: fetched.fetchedPages, cacheHit: false, ok: false, coverageSatisfied: false };
   }
   const rows: DoudianOpportunityClueRow[] = [];
   for (const [index, clue] of fetched.rows.entries()) {
@@ -2187,19 +3140,18 @@ async function loadCluesByCategoryWithCache(args: {
   }
   const allowEmptyCacheWrite = policyBoolean(args.payload.adapter, "opportunityReport.allowEmptyClueCacheWrite", false);
   if (!rows.length && !allowEmptyCacheWrite) {
-    return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, remoteTotalKnown: fetched.remoteTotalKnown, scanStatus: fetched.scanStatus, fetchedPages: fetched.fetchedPages, nextPage: fetched.nextPage, cacheHit: false, ok: true };
-  }
-  if (fetched.scanStatus !== "complete") {
-    return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, remoteTotalKnown: fetched.remoteTotalKnown, scanStatus: fetched.scanStatus, fetchedPages: fetched.fetchedPages, nextPage: fetched.nextPage, cacheHit: false, ok: true };
+    return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetchedSourceHealth, remoteTotal: fetched.remoteTotal, remoteTotalKnown: fetched.remoteTotalKnown, scanStatus: fetched.scanStatus, fetchedPages: fetched.fetchedPages, nextPage: fetched.nextPage, cacheHit: false, ok: true, coverageSatisfied: fetched.coverageSatisfied };
   }
   const cacheRows = rows.map(cacheableClueRow);
+  const generation = `${Date.now()}-${stableHash(`${key}:${rows.map((row) => row.clueId).sort().join(",")}`)}`;
   const shards = chunk(cacheRows, 100).map((items, index) => ({
-    id: `${key}-${index + 1}`,
+    id: `${key}-${generation}-${index + 1}`,
     clueCacheKey: key,
     categoryKey,
     filterHash,
     cacheScope,
     scopeId,
+    generation,
     shardNo: index + 1,
     rows: items,
     rowCount: items.length,
@@ -2207,6 +3159,7 @@ async function loadCluesByCategoryWithCache(args: {
     updatedAt: now
   } satisfies ClueCacheShardRecord));
   const ttlHours = policyNumber(args.payload.adapter, "opportunityReport.clueCacheTtlHours", 24, 1, 168);
+  await repositoryPutMany(clueCacheShardStore, shards, { concurrency: 2 });
   await repositoryPut(clueCacheStore, {
     id: key,
     ...args.identity,
@@ -2216,6 +3169,7 @@ async function loadCluesByCategoryWithCache(args: {
     adapterVersion: args.payload.adapter.version || "",
     cacheScope,
     scopeId,
+    generation,
     shardCount: shards.length,
     rowCount: rows.length,
     remoteTotal: fetched.remoteTotal,
@@ -2223,21 +3177,56 @@ async function loadCluesByCategoryWithCache(args: {
     scanStatus: fetched.scanStatus,
     fetchedPages: fetched.fetchedPages,
     nextPage: fetched.nextPage,
-    sourceHealth: fetched.sourceHealth,
+    sourceHealth: fetchedSourceHealth,
     sourceShopId: args.identity.shopId,
     shopScoped: cacheScope === "shop",
-    clueWordsSource: "realtime",
+    clueWordsSource: "local-clue-fields",
     clueWordsRequestHash: stableHash({
       adapterVersion: args.payload.adapter.version || "",
-      plan: args.payload.adapter.requestPlans?.opportunityClueWords || {},
-      endpoint: args.payload.adapter.endpoints?.[text(objectRecord(args.payload.adapter.requestPlans?.opportunityClueWords).endpointKey || "opportunityClueWords")] || ""
+      sources: ["clueWords", "name", "shortName", "recommendList", "profitInfoList"]
     }),
     expiresAt: new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString(),
     createdAt: now,
     updatedAt: now
   } satisfies ClueCacheRecord);
-  await repositoryPutMany(clueCacheShardStore, shards, { concurrency: 2 });
-  return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetched.sourceHealth, remoteTotal: fetched.remoteTotal, remoteTotalKnown: fetched.remoteTotalKnown, scanStatus: fetched.scanStatus, fetchedPages: fetched.fetchedPages, nextPage: fetched.nextPage, cacheHit: false, ok: true };
+  const staleShardIds = (await repositoryGetAllByPrefix<ClueCacheShardRecord>(clueCacheShardStore, `${key}-`, { pageSize: 500, maxItems: 10000 }).catch(() => []))
+    .filter((shard) => shard.generation !== generation)
+    .map((shard) => shard.id);
+  if (staleShardIds.length) await repositoryDeleteMany(clueCacheShardStore, staleShardIds).catch(() => undefined);
+  return { cacheKey: key, cacheScope, scopeId, rows, sourceHealth: fetchedSourceHealth, remoteTotal: fetched.remoteTotal, remoteTotalKnown: fetched.remoteTotalKnown, scanStatus: fetched.scanStatus, fetchedPages: fetched.fetchedPages, nextPage: fetched.nextPage, cacheHit: false, ok: true, coverageSatisfied: fetched.coverageSatisfied };
+}
+
+async function loadCluesByCategoryWithCache(args: Parameters<typeof loadCluesByCategoryWithCacheCore>[0]): Promise<ClueCategoryLoadResult> {
+  const categoryKey = cacheCategoryKey(args.category);
+  if (!categoryKey) return loadCluesByCategoryWithCacheCore(args);
+  const requestedScope = args.cacheScopeOverride || policyText(args.payload.adapter, "opportunityReport.pipelineCacheScope", "shop");
+  const cacheScope = resolvePipelineCacheScope(
+    requestedScope,
+    args.cacheScopeOverride === "shop" ? false : policyBoolean(args.payload.adapter, "opportunityReport.enableGlobalPipelineCache", false),
+    args.identity.tenantId
+  );
+  const scopeId = pipelineScopeId(cacheScope, args.identity);
+  const flightKey = clueCacheKey({
+    cacheScope,
+    scopeId,
+    adapterVersion: args.payload.adapter.version || "",
+    requestPlanHash: requestPlanHash(args.payload.adapter),
+    categoryKey,
+    filterHash: stableFilterHash(args.filters, args.payload.adapter)
+  });
+  const activeFlight = clueCacheLoadFlights.get(flightKey);
+  if (activeFlight) {
+    await activeFlight.catch(() => undefined);
+    return loadCluesByCategoryWithCacheCore(args);
+  }
+  const load = loadCluesByCategoryWithCacheCore(args);
+  const tracked = load.then(() => undefined, () => undefined);
+  clueCacheLoadFlights.set(flightKey, tracked);
+  try {
+    return await load;
+  } finally {
+    if (clueCacheLoadFlights.get(flightKey) === tracked) clueCacheLoadFlights.delete(flightKey);
+  }
 }
 
 function clueTokenSources(clue: DoudianOpportunityClueRow) {
@@ -2278,17 +3267,30 @@ async function segmentTextsWithNative(
 
 async function loadTokenIndexFromCache(wordCacheKeyValue: string): Promise<TokenIndex | null> {
   const record = await repositoryGet<ClueWordCacheRecord>(clueWordCacheStore, wordCacheKeyValue).catch(() => null);
-  if (!record) return null;
+  if (!record
+    || !record.generation
+    || !record.clueCacheKey
+    || !Number.isInteger(Number(record.shardCount))
+    || Number(record.shardCount) < 0
+    || !Number.isInteger(Number(record.tokenCount))
+    || Number(record.tokenCount) < 0
+    || !Number.isInteger(Number(record.clueCount))
+    || Number(record.clueCount) < 0) return null;
   const shards = (await repositoryGetAllByPrefix<ClueWordCacheShardRecord>(clueWordCacheShardStore, `${wordCacheKeyValue}-`, { pageSize: 500, maxItems: 10000 }).catch(() => []))
+    .filter((shard) => shard.generation && shard.generation === record.generation)
     .sort((left, right) => left.shardNo - right.shardNo);
+  const expectedShardNos = Array.from({ length: Math.max(0, Number(record.shardCount || 0)) }, (_, index) => index + 1);
+  if (shards.length !== Number(record.shardCount || 0) || expectedShardNos.some((value, index) => shards[index]?.shardNo !== value)) return null;
   const tokenToClueIds: Record<string, string[]> = {};
   const clueTokens: Record<string, string[]> = {};
   const tokens: string[] = [];
+  if (shards.some((shard) => shard.wordCacheKey !== record.id || shard.clueCacheKey !== record.clueCacheKey)) return null;
   for (const shard of shards) {
     for (const token of shard.tokens || []) tokens.push(token);
     Object.assign(tokenToClueIds, shard.tokenToClueIds || {});
     Object.assign(clueTokens, shard.clueTokens || {});
   }
+  if (uniqueText(tokens).length !== Number(record.tokenCount || 0) || Object.keys(clueTokens).length !== Number(record.clueCount || 0)) return null;
   return {
     wordCacheKey: wordCacheKeyValue,
     tokenizerVersion: record.tokenizerVersion,
@@ -2308,7 +3310,9 @@ async function tokenizeCluesWithCache(args: {
   scopeId: string;
   allowTokenizerFallback?: boolean;
 }) {
+  const clueIdsHash = stableHash(args.clues.map((clue) => clue.clueId).sort());
   const existing = (await repositoryGetAllByPrefix<ClueWordCacheRecord>(clueWordCacheStore, `${args.clueCacheKey}::`, { pageSize: 20, maxItems: 100 }).catch(() => []))
+    .filter((record) => record.clueIdsHash === clueIdsHash)
     .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0];
   if (existing) {
     const cached = await loadTokenIndexFromCache(existing.id);
@@ -2341,7 +3345,7 @@ async function tokenizeCluesWithCache(args: {
   }
   const tokens = Array.from(tokenToClueIds.keys()).sort();
   const tokenIndex: TokenIndex = {
-    wordCacheKey: wordCacheKey(args.clueCacheKey, segmented.tokenizerVersion, segmented.stopwordVersion),
+    wordCacheKey: wordCacheKey(args.clueCacheKey, segmented.tokenizerVersion, segmented.stopwordVersion, clueIdsHash),
     tokenizerVersion: segmented.tokenizerVersion,
     stopwordVersion: segmented.stopwordVersion,
     tokens,
@@ -2349,6 +3353,7 @@ async function tokenizeCluesWithCache(args: {
     clueTokens
   };
   const now = nowIso();
+  const generation = `${Date.now()}-${stableHash(`${tokenIndex.wordCacheKey}:${clueIdsHash}`)}`;
   const tokenShards = chunk(tokens, 500);
   const shards = tokenShards.map((tokenList, index) => {
     const shardTokenToClueIds = Object.fromEntries(tokenList.map((token) => [token, tokenIndex.tokenToClueIds[token] || []]));
@@ -2356,10 +3361,11 @@ async function tokenizeCluesWithCache(args: {
     const clueIdsInShard = new Set(Object.values(shardTokenToClueIds).flat());
     for (const clueId of clueIdsInShard) shardClueTokens[clueId] = tokenIndex.clueTokens[clueId] || [];
     return {
-      id: `${tokenIndex.wordCacheKey}-${index + 1}`,
+      id: `${tokenIndex.wordCacheKey}-${generation}-${index + 1}`,
       wordCacheKey: tokenIndex.wordCacheKey,
       clueCacheKey: args.clueCacheKey,
       shardNo: index + 1,
+      generation,
       tokens: tokenList,
       tokenToClueIds: shardTokenToClueIds,
       clueTokens: shardClueTokens,
@@ -2367,6 +3373,7 @@ async function tokenizeCluesWithCache(args: {
       updatedAt: now
     } satisfies ClueWordCacheShardRecord;
   });
+  await repositoryPutMany(clueWordCacheShardStore, shards, { concurrency: 2 });
   await repositoryPut(clueWordCacheStore, {
     id: tokenIndex.wordCacheKey,
     clueCacheKey: args.clueCacheKey,
@@ -2379,10 +3386,15 @@ async function tokenizeCluesWithCache(args: {
     shardCount: shards.length,
     tokenCount: tokens.length,
     clueCount: Object.keys(clueTokens).length,
+    clueIdsHash,
+    generation,
     createdAt: now,
     updatedAt: now
   } satisfies ClueWordCacheRecord);
-  await repositoryPutMany(clueWordCacheShardStore, shards, { concurrency: 2 });
+  const staleShardIds = (await repositoryGetAllByPrefix<ClueWordCacheShardRecord>(clueWordCacheShardStore, `${tokenIndex.wordCacheKey}-`, { pageSize: 500, maxItems: 10000 }).catch(() => []))
+    .filter((shard) => shard.generation !== generation)
+    .map((shard) => shard.id);
+  if (staleShardIds.length) await repositoryDeleteMany(clueWordCacheShardStore, staleShardIds).catch(() => undefined);
   return tokenIndex;
 }
 
@@ -2411,6 +3423,22 @@ function tokenWeight(tokenQuality: Map<string, TokenQuality>, token: string) {
   return tokenQuality.get(token)?.finalWeight || 1;
 }
 
+function candidateHistorySkipReason(args: {
+  opportunityArgs: OpportunityArgs;
+  dedupeIndex: SubmitDedupeIndex;
+  benefitIndex: Map<string, BenefitProductIndexRecord>;
+}, candidate: { shopId: string; productId: string; clueId: string; clueLastCategoryId?: string }) {
+  const benefit = args.benefitIndex.get(candidate.productId);
+  const submittedSkipReason = shouldSkipSubmittedCandidate(args.opportunityArgs, args.dedupeIndex, candidate);
+  const submissionCount = benefit ? Math.max(benefit.sourceRecordCount || 0, benefit.associatedClueCount) : 0;
+  const benefitSkipReason = benefit && (benefit.saturatedByRemoteError === true || submissionCount >= SUBMIT_HISTORY_CLUE_CAPACITY)
+    ? `报名记录预检：商品已提交 ${submissionCount}/${SUBMIT_HISTORY_CLUE_CAPACITY} 次，提前排除`
+    : benefit && (benefit.associatedClueIds || []).includes(candidate.clueId)
+      ? "报名记录预检：商品此前已提交该商机，提前排除重复提报"
+      : "";
+  return submittedSkipReason || benefitSkipReason;
+}
+
 function matchCategoryProductsByAhoTokens(args: {
   adapter: DoudianAdapterConfig;
   runId: string;
@@ -2425,6 +3453,8 @@ function matchCategoryProductsByAhoTokens(args: {
   minWeightHitRatio: number;
   genericTokenDfRatio: number;
   topKPerProduct: number;
+  dedupeIndex: SubmitDedupeIndex;
+  benefitIndex: Map<string, BenefitProductIndexRecord>;
   matchRulesHash: string;
   opportunityArgs: OpportunityArgs;
 }) {
@@ -2475,6 +3505,12 @@ function matchCategoryProductsByAhoTokens(args: {
     for (const [clueId, tokenSet] of matchedByClue.entries()) {
       const clue = clueById.get(clueId);
       if (!clue) continue;
+      if (candidateHistorySkipReason(args, {
+        shopId: product.shopId,
+        productId: product.productId,
+        clueId: clue.clueId,
+        clueLastCategoryId: clue.lastCategoryId
+      })) continue;
       const clueTokens = uniqueText(args.tokenIndex.clueTokens[clueId] || []);
       const clueEvidenceGroups = groupEvidenceTerms(clueTokens);
       const clueTokenCount = clueTokens.length;
@@ -2576,7 +3612,6 @@ function matchCategoryProductsByAhoTokens(args: {
         anchorRuleVersion: ANCHOR_RULE_VERSION,
         anchorConfidence: anchorEvidence.confidence,
         matchStatus: "local_candidate",
-        validationStatus: "not_started",
         submitStatus: "not_queued",
         auditStatus: "not_started",
         fullClueNameMatched,
@@ -2614,6 +3649,7 @@ function markProductRanks(args: {
   topKPerProduct: number;
   opportunityArgs: OpportunityArgs;
   dedupeIndex: SubmitDedupeIndex;
+  benefitIndex: Map<string, BenefitProductIndexRecord>;
 }) {
   const grouped = new Map<string, DoudianOpportunityPrematchCandidate[]>();
   for (const candidate of args.candidates) {
@@ -2624,27 +3660,42 @@ function markProductRanks(args: {
   }
   const ranked: DoudianOpportunityPrematchCandidate[] = [];
   for (const list of grouped.values()) {
-    const sorted = list.sort(compareCandidatesByEvidence).slice(0, args.topKPerProduct);
-    sorted.forEach((candidate, index) => {
-      const rankForProduct = index + 1;
-      const submittedSkipReason = shouldSkipSubmittedCandidate(args.opportunityArgs, args.dedupeIndex, {
-        shopId: candidate.shopId,
-        clueId: candidate.clueId,
-        productId: candidate.productId,
-        clueLastCategoryId: candidate.clueLastCategoryId
-      });
-      const skipped = Boolean(submittedSkipReason);
+    const filtered = rankCandidatesAfterFiltering(list, {
+      limit: args.topKPerProduct,
+      skipReason: (candidate) => {
+        const historySkipReason = candidateHistorySkipReason({
+          opportunityArgs: args.opportunityArgs,
+          dedupeIndex: args.dedupeIndex,
+          benefitIndex: args.benefitIndex
+        }, {
+          shopId: candidate.shopId,
+          clueId: candidate.clueId,
+          productId: candidate.productId,
+          clueLastCategoryId: candidate.clueLastCategoryId
+        });
+        return historySkipReason || candidate.skipReason || "";
+      }
+    });
+    filtered.ranked.forEach(({ candidate, rankForProduct }) => {
       const alternative = rankForProduct > 1;
       ranked.push({
         ...candidate,
         rankForProduct,
         alternative,
-        eligible: !alternative && !skipped,
-        estimatedCost: alternative || skipped ? 0 : 1,
-        status: skipped ? "skipped" : alternative ? "alternative" : "ready",
-        skipReason: submittedSkipReason || candidate.skipReason
+        eligible: !alternative,
+        estimatedCost: alternative ? 0 : 1,
+        status: alternative ? "alternative" : "ready",
+        skipReason: undefined
       });
     });
+    ranked.push(...filtered.skipped.map(({ candidate, skipReason }) => ({
+      ...candidate,
+      eligible: false,
+      estimatedCost: 0,
+      status: "skipped" as const,
+      submitStatus: "skipped" as const,
+      skipReason
+    })));
   }
   return ranked.sort(compareCandidatesByEvidence);
 }
@@ -2773,8 +3824,21 @@ async function enqueueStoreSubmit(args: {
   candidates: DoudianOpportunityPrematchCandidate[];
   snapshotVersion: string;
   inputCoverage: PipelineInputCoverage;
-  candidateDepthMax: number;
+  candidateLimitPerProduct: number;
 }) {
+  const writeCoverageComplete = pipelineInputCoverageAllowsWrite(args.inputCoverage);
+  if (!writeCoverageComplete) {
+    const blockedCandidates = args.candidates.map((candidate) => ({
+      ...candidate,
+      eligible: false,
+      estimatedCost: 0,
+      status: "skipped" as const,
+      submitStatus: "skipped" as const,
+      skipReason: candidate.skipReason || "input_coverage_not_complete"
+    }));
+    if (blockedCandidates.length) await repositoryPutMany(pipelineCandidateStore, blockedCandidates, { concurrency: 2 });
+    return null;
+  }
   const readyCandidates = args.candidates
     .filter((item) => item.eligible && item.status === "ready")
     .sort(compareSubmitQueueCandidates);
@@ -2785,7 +3849,7 @@ async function enqueueStoreSubmit(args: {
     .sort(compareSubmitQueueCandidates)
     .filter((item) => {
       const current = fallbackCountByProduct.get(item.productId) || 0;
-      if (current >= Math.max(0, args.candidateDepthMax - 1)) return false;
+      if (current >= Math.max(0, args.candidateLimitPerProduct - 1)) return false;
       fallbackCountByProduct.set(item.productId, current + 1);
       return true;
     });
@@ -2813,11 +3877,14 @@ async function enqueueStoreSubmit(args: {
     candidateCount: candidateIds.length,
     candidateIdsHash: stableHash([...candidateIds].sort()),
     snapshotVersion: args.snapshotVersion,
-    inputCoverageStatus: args.inputCoverage.productScanStatus === "complete" && args.inputCoverage.clueScanStatus === "complete"
+    inputCoverageStatus: writeCoverageComplete
       ? "complete"
-      : args.inputCoverage.productScanStatus === "failed" || args.inputCoverage.clueScanStatus === "failed"
+      : args.inputCoverage.productScanStatus === "failed" || args.inputCoverage.benefitScanStatus === "failed" || args.inputCoverage.clueScanStatus === "failed"
         ? "failed"
         : "partial_coverage",
+    productComplete: args.inputCoverage.productScanStatus === "complete",
+    benefitComplete: args.inputCoverage.benefitScanStatus === "complete",
+    clueCoverageSatisfied: args.inputCoverage.clueCoverageSatisfied,
     primaryCandidateCount: readyCandidates.filter((item) => item.submitPriority !== "fallback").length,
     fallbackCandidateCount: fallbackCandidates.length + readyCandidates.filter((item) => item.submitPriority === "fallback").length,
     submittedCount: 0,
@@ -2999,13 +4066,18 @@ async function refreshPipelineRunSummary(runId: string) {
   const runningCount =
     scopedTasks.filter((item) => ["preparing", "ready", "queued", "running"].includes(item.status)).length +
     scopedStoreRuns.filter((item) => item.status === "queued" || item.status === "running").length;
-  const inputCoveragePartialCount = scopedStoreRuns.filter((item) => item.inputCoverage && (item.inputCoverage.productScanStatus !== "complete" || item.inputCoverage.clueScanStatus !== "complete")).length;
-  const validationPartialCount = scopedTasks.filter((item) => item.validationStatus === "partial" || item.validationStatus === "failed").length;
+  const inputCoveragePartialCount = scopedStoreRuns.filter((item) => item.inputCoverage && (
+    item.inputCoverage.productScanStatus !== "complete"
+    || item.inputCoverage.benefitScanStatus !== "complete"
+    || item.inputCoverage.clueCoverageSatisfied !== true
+  )).length;
+  const productIncompleteCount = scopedStoreRuns.filter((item) => item.inputCoverage?.productScanStatus !== "complete").length;
+  const benefitIncompleteCount = scopedStoreRuns.filter((item) => item.inputCoverage?.benefitScanStatus !== "complete").length;
+  const clueCoverageUnsatisfiedCount = scopedStoreRuns.filter((item) => item.inputCoverage?.clueCoverageSatisfied !== true).length;
   const diagnosticsBlockCompletion = pipelineDiagnosticsBlockCompletion({
-    inputCoverageReportMode: Number(run.summary?.inputCoverageReportMode || 0) === 1,
-    inputCoveragePartialCount,
-    officialValidationEnforceMode: Number(run.summary?.officialValidationEnforceMode || 0) === 1,
-    validationPartialCount
+    productIncompleteCount,
+    benefitIncompleteCount,
+    clueCoverageUnsatisfiedCount
   });
   const status: PipelineRunRecord["status"] = run.status === "cancelled"
     ? "cancelled"
@@ -3030,6 +4102,21 @@ async function refreshPipelineRunSummary(runId: string) {
     productRemoteTotal: scopedStoreRuns.reduce((sum, item) => sum + Number(item.inputCoverage?.productRemoteTotal || 0), 0),
     productRemoteTotalKnownStoreCount: scopedStoreRuns.filter((item) => item.inputCoverage?.productRemoteTotalKnown).length,
     productScanTruncatedCount: scopedStoreRuns.filter((item) => item.inputCoverage?.productScanStatus === "truncated").length,
+    benefitProductCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.benefitProductCount || 0), 0),
+    benefitAcquiredExposure: scopedStoreRuns.reduce((sum, item) => sum + Number(item.benefitAcquiredExposure || 0), 0),
+    benefitEstimatedExposure: scopedStoreRuns.reduce((sum, item) => sum + Number(item.benefitEstimatedExposure || 0), 0),
+    benefitAcquiredExposureParsedCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.benefitAcquiredExposureParsedCount || 0), 0),
+    benefitAcquiredExposureUnparsedCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.benefitAcquiredExposureUnparsedCount || 0), 0),
+    benefitEstimatedExposureParsedCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.benefitEstimatedExposureParsedCount || 0), 0),
+    benefitEstimatedExposureUnparsedCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.benefitEstimatedExposureUnparsedCount || 0), 0),
+    benefitSubmitRecordCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.benefitSubmitRecordCount || 0), 0),
+    benefitAssociatedClueCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.benefitAssociatedClueCount || 0), 0),
+    benefitSaturatedProductCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.benefitSaturatedProductCount || 0), 0),
+    benefitFetchedUniqueProductCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.inputCoverage?.benefitFetchedUniqueProductCount || 0), 0),
+    benefitRemoteTotal: scopedStoreRuns.reduce((sum, item) => sum + Number(item.inputCoverage?.benefitRemoteTotal || 0), 0),
+    benefitRemoteTotalKnownStoreCount: scopedStoreRuns.filter((item) => item.inputCoverage?.benefitRemoteTotalKnown).length,
+    benefitScanTruncatedCount: scopedStoreRuns.filter((item) => item.inputCoverage?.benefitScanStatus === "truncated").length,
+    clueCoverageSatisfiedStoreCount: scopedStoreRuns.filter((item) => item.inputCoverage?.clueCoverageSatisfied === true).length,
     clueFetchedUniqueCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.inputCoverage?.clueFetchedUniqueCount || 0), 0),
     clueTruncatedCategoryCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.inputCoverage?.clueTruncatedCategoryCount || 0), 0),
     inputCoveragePartialCount,
@@ -3071,13 +4158,6 @@ async function refreshPipelineRunSummary(runId: string) {
     cancelledCount,
     unknownCount,
     remoteRequestCount,
-    officialWordsRequestCount: scopedTasks.reduce((sum, item) => sum + Number(item.officialWordsRequestCount || 0), 0),
-    officialWordsCount: scopedTasks.reduce((sum, item) => sum + Number(item.officialWordsCount || 0), 0),
-    officialGoodsRequestCount: scopedTasks.reduce((sum, item) => sum + Number(item.officialGoodsRequestCount || 0), 0),
-    officialVerifiedCount: scopedTasks.reduce((sum, item) => sum + Number(item.officialVerifiedCount || 0), 0),
-    officialRejectedCount: scopedTasks.reduce((sum, item) => sum + Number(item.officialRejectedCount || 0), 0),
-    validationUnknownCount: scopedTasks.reduce((sum, item) => sum + Number(item.validationUnknownCount || 0), 0),
-    validationBudgetExhaustedCount: scopedTasks.reduce((sum, item) => sum + Number(item.validationBudgetExhaustedCount || 0), 0),
     estimatedSubmitGroupCount,
     estimatedSubmitDurationMs,
     mutationReconciled: hasMutationSummary ? 1 : 0,
@@ -3240,19 +4320,6 @@ function dailyAttemptLimit(args: OpportunityArgs, adapter: DoudianAdapterConfig)
   return Math.min(configured, policyNumber(adapter, "opportunityReport.canaryDailyAttemptLimit", 10, 1, 1000));
 }
 
-function dynamicTopKPerProduct(args: {
-  configuredTopK?: number;
-  quotaRemaining: number;
-  productCount: number;
-  maxTopK?: number;
-}) {
-  const configured = Math.max(1, Math.floor(Number(args.configuredTopK || 1)));
-  const productCount = Math.max(1, Math.floor(Number(args.productCount || 1)));
-  const requiredForQuota = Math.ceil(Math.max(0, Number(args.quotaRemaining || 0)) / productCount);
-  const maxTopK = Math.max(1, Math.floor(Number(args.maxTopK || 1000)));
-  return Math.max(1, Math.min(maxTopK, Math.max(configured, requiredForQuota || 1)));
-}
-
 function relationKey(value: { shopId?: string; clueId?: string; productId?: string }) {
   return [value.shopId, value.clueId, value.productId].map(text).join("::");
 }
@@ -3273,7 +4340,7 @@ interface SubmitDedupeIndex {
 
 function submittedForDedupe(value: { ok?: boolean; status?: string; stage?: string; planKey?: string; diagnostic?: Record<string, unknown> }) {
   const status = text(value.status).toLocaleLowerCase();
-  if (status === "accepted" || status === "confirmed") return true;
+  if (status === "accepted" || status === "confirmed" || status === "already_submitted") return true;
   return isRemoteSubmittedExecution(value);
 }
 
@@ -3324,7 +4391,7 @@ function logicalSubmitAttemptRecord(args: {
   id: string;
   runId: string;
   candidate: DoudianOpportunityPrematchCandidate;
-  status: "sending" | "accepted" | "failed" | "unknown" | "cancelled";
+  status: "sending" | "accepted" | "already_submitted" | "failed" | "unknown" | "cancelled";
   message: string;
 }) {
   return {
@@ -3421,14 +4488,20 @@ async function submitAttemptCountForShop(shopId: string, date = todayKey()) {
   return attempts.filter((item) => item.date === date && item.shopId === shopId).length;
 }
 
-async function submittedDedupeIndex(values: Array<{ shopId?: string; clueId?: string; productId?: string; clueLastCategoryId?: string }> = []): Promise<SubmitDedupeIndex> {
-  if (!values.length) return { relationKeys: new Set(), clueKeys: new Set(), clueCategoryKeys: new Set() };
+async function submittedDedupeIndex(
+  values: Array<{ shopId?: string; clueId?: string; productId?: string; clueLastCategoryId?: string }> = [],
+  shopIds: string[] = []
+): Promise<SubmitDedupeIndex> {
+  const targetShopIds = new Set(shopIds.map(text).filter(Boolean));
   if (await ensureStructuredSubmitAttempts()) {
-    const keys = await getNativeData()!.opportunityAttempts!.findDedupeKeys({
-      relationKeys: uniqueText(values.map(relationKey)),
-      clueKeys: uniqueText(values.map(clueKey)),
-      clueCategoryKeys: uniqueText(values.filter((item) => item.clueLastCategoryId).map(clueCategoryKey))
-    });
+    const attempts = getNativeData()!.opportunityAttempts!;
+    const keys = values.length
+      ? await attempts.findDedupeKeys({
+          relationKeys: uniqueText(values.map(relationKey)),
+          clueKeys: uniqueText(values.map(clueKey)),
+          clueCategoryKeys: uniqueText(values.filter((item) => item.clueLastCategoryId).map(clueCategoryKey))
+        })
+      : await attempts.listDedupeKeys({ shopIds: Array.from(targetShopIds) });
     return {
       relationKeys: new Set(keys.relationKeys || []),
       clueKeys: new Set(keys.clueKeys || []),
@@ -3440,6 +4513,7 @@ async function submittedDedupeIndex(values: Array<{ shopId?: string; clueId?: st
   const clueCategoryKeys = new Set<string>();
   const attempts = await repositoryGetAll<SubmitAttemptRecord>(submitAttemptStore).catch(() => []);
   attempts.forEach((item) => {
+    if (targetShopIds.size && !targetShopIds.has(text(item.shopId))) return;
     if (!submittedForDedupe(item)) return;
     relationKeys.add(relationKey(item));
     clueKeys.add(clueKey(item));
@@ -3448,6 +4522,7 @@ async function submittedDedupeIndex(values: Array<{ shopId?: string; clueId?: st
   const runs = await repositoryGetAll<ExecuteRunRecord>(opportunityExecuteStore).catch(() => []);
   for (const run of runs) {
     for (const item of run.executions || []) {
+      if (targetShopIds.size && !targetShopIds.has(text(item.shopId))) continue;
       if (item.stage === "submit" && item.planKey === "opportunitySubmitClue" && submittedForDedupe(item)) {
         relationKeys.add(relationKey(item));
         clueKeys.add(clueKey(item));
@@ -4302,13 +5377,31 @@ async function queryOfficialClueWords(args: {
 
 async function loadOfficialGoodsCache(cacheKey: string) {
   const cached = await repositoryGet<OfficialClueGoodsCacheRecord>(officialClueGoodsCacheStore, cacheKey).catch(() => null);
-  if (!cached || cached.expiresAt <= nowIso()) return null;
+  if (!cached
+    || !cached.generation
+    || !cached.expiresAt
+    || cached.expiresAt <= nowIso()
+    || !Number.isInteger(Number(cached.shardCount))
+    || Number(cached.shardCount) < 0
+    || !Number.isInteger(Number(cached.rowCount))
+    || Number(cached.rowCount) < 0) return null;
   const shards = (await repositoryGetAllByPrefix<OfficialClueGoodsCacheShardRecord>(officialClueGoodsCacheShardStore, `${cacheKey}-`, { pageSize: 100, maxItems: 10000 }).catch(() => []))
+    .filter((shard) => shard.generation && shard.generation === cached.generation)
     .sort((left, right) => left.shardNo - right.shardNo);
-  if (shards.length !== cached.shardCount) return null;
+  const expectedShardNos = Array.from({ length: Math.max(0, Number(cached.shardCount || 0)) }, (_, index) => index + 1);
+  const invalidShard = shards.some((shard) => !Array.isArray(shard.productIds)
+    || shard.cacheKey !== cacheKey
+    || shard.generation !== cached.generation);
+  const rowCount = shards.reduce((sum, shard) => sum + (shard.productIds?.length || 0), 0);
+  if (invalidShard
+    || shards.length !== Number(cached.shardCount || 0)
+    || rowCount !== Number(cached.rowCount || 0)
+    || expectedShardNos.some((value, index) => shards[index]?.shardNo !== value)) return null;
+  const productIds = shards.flatMap((shard) => shard.productIds || []);
+  if (new Set(productIds).size !== productIds.length) return null;
   return {
     ...cached.result,
-    productIds: uniqueText(shards.flatMap((shard) => shard.productIds || [])),
+    productIds: uniqueText(productIds),
     cacheHit: true,
     requestCount: 0
   } satisfies OfficialClueGoodsResult;
@@ -4347,6 +5440,9 @@ async function queryOfficialClueGoods(args: {
   let lastPageRowCount: number | undefined;
   let requestFailed = false;
   let schemaMismatch = false;
+  let duplicatePage = false;
+  let totalZeroWithRows = false;
+  const uniqueProductIds = new Set<string>();
   let message = "";
   const mock = args.opportunityArgs?.mockOfficialProductsByClue;
   const hasMock = Boolean(mock && Object.prototype.hasOwnProperty.call(mock, args.clue.clueId));
@@ -4362,6 +5458,10 @@ async function queryOfficialClueGoods(args: {
       .filter((row): row is DoudianOpportunityProductRow => Boolean(row));
     const matched = normalized.filter((row) => officialProductMatchesClueCategory(row, args.clue));
     matchedRowCount = matched.length;
+    for (const row of normalized) {
+      if (uniqueProductIds.has(row.productId)) duplicatePage = true;
+      else uniqueProductIds.add(row.productId);
+    }
     productIds.push(...matched.map((row) => row.productId));
     schemaMismatch = rows.length > 0 && normalized.length !== rows.length;
     responseHashes.push(stableHash(rows));
@@ -4463,6 +5563,7 @@ async function queryOfficialClueGoods(args: {
           remoteTotal = mapped.remoteTotal;
           remoteTotalKnown = true;
         }
+        if (remoteTotalKnown && remoteTotal === 0 && rows.length) totalZeroWithRows = true;
         const normalized = rows
           .map((row, index) => normalizeProduct(args.store, row, args.payload.adapter, args.runId, fetchedRowCount - rows.length + index, { matchedClueId: args.clue.clueId, matchedClueName: args.clue.name, status: "matched" }))
           .filter((row): row is DoudianOpportunityProductRow => Boolean(row));
@@ -4478,6 +5579,10 @@ async function queryOfficialClueGoods(args: {
           message = "official goods category contract mismatch";
           stopPaging = true;
           break;
+        }
+        for (const row of normalized) {
+          if (uniqueProductIds.has(row.productId)) duplicatePage = true;
+          else uniqueProductIds.add(row.productId);
         }
         matchedRowCount += matched.length;
         productIds.push(...matched.map((row) => row.productId));
@@ -4498,13 +5603,16 @@ async function queryOfficialClueGoods(args: {
     requestFailed,
     schemaMismatch,
     fetchedCount: fetchedRowCount,
+    uniqueFetchedCount: uniqueProductIds.size,
     remoteTotal: remoteTotalKnown ? remoteTotal : undefined,
     remoteTotalKnown,
     fetchedPages,
     maxPages,
     pageSize,
     lastPageRowCount,
-    limitReached: requestCount >= requestBudget
+    limitReached: requestCount >= requestBudget,
+    duplicatePage,
+    totalZeroWithRows
   });
   const status: OfficialClueGoodsResult["status"] = schemaMismatch
     ? "schema_mismatch"
@@ -4539,25 +5647,40 @@ async function queryOfficialClueGoods(args: {
     const now = nowIso();
     const ttlPath = result.productIds.length ? "opportunityReport.officialGoodsCacheTtlMinutes" : "opportunityReport.officialEmptyGoodsCacheTtlMinutes";
     const ttlMinutes = policyNumber(args.payload.adapter, ttlPath, result.productIds.length ? 15 : 5, 1, 360);
+    const generation = `${Date.now()}-${stableHash(`${cacheKey}:${result.productIds.join(",")}`)}`;
     const shards = chunk(result.productIds, 250).map((ids, index) => ({
-      id: `${cacheKey}-${index + 1}`,
+      id: `${cacheKey}-${generation}-${index + 1}`,
       cacheKey,
+      generation,
       shardNo: index + 1,
       productIds: ids,
       createdAt: now,
       updatedAt: now
     } satisfies OfficialClueGoodsCacheShardRecord));
     const { productIds: _productIds, ...cacheResult } = result;
-    await repositoryPut(officialClueGoodsCacheStore, {
-      id: cacheKey,
-      ...identity,
-      result: cacheResult,
-      shardCount: shards.length,
-      expiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString(),
-      createdAt: now,
-      updatedAt: now
-    } satisfies OfficialClueGoodsCacheRecord).catch(() => undefined);
-    if (shards.length) await repositoryPutMany(officialClueGoodsCacheShardStore, shards, { concurrency: 2 }).catch(() => undefined);
+    try {
+      // Publish the manifest only after every shard is durable. A failed write
+      // leaves the previous generation active and makes the partial generation
+      // unreachable to readers.
+      await repositoryPutMany(officialClueGoodsCacheShardStore, shards, { concurrency: 2 });
+      await repositoryPut(officialClueGoodsCacheStore, {
+        id: cacheKey,
+        ...identity,
+        result: cacheResult,
+        generation,
+        shardCount: shards.length,
+        rowCount: result.productIds.length,
+        expiresAt: new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString(),
+        createdAt: now,
+        updatedAt: now
+      } satisfies OfficialClueGoodsCacheRecord);
+      const staleShardIds = (await repositoryGetAllByPrefix<OfficialClueGoodsCacheShardRecord>(officialClueGoodsCacheShardStore, `${cacheKey}-`, { pageSize: 100, maxItems: 10000 }).catch(() => []))
+        .filter((shard) => shard.generation !== generation)
+        .map((shard) => shard.id);
+      if (staleShardIds.length) await repositoryDeleteMany(officialClueGoodsCacheShardStore, staleShardIds).catch(() => undefined);
+    } catch {
+      // Keep the previous manifest when shard or manifest persistence fails.
+    }
   }
   return { ...result, cacheKey };
 }
@@ -4829,6 +5952,13 @@ async function submitWithRetry(
     const accepted = submitResponseOk(response);
     const retryable = !accepted && transientSubmitMessage(message, response);
     const status = Number(response.status || 0);
+    const retryAfterMs = response ? submitRetryWaitMs({
+      baseDelayMs: retryDelay,
+      attemptIndex: attempt,
+      status,
+      headers: response.headers,
+      jitterMs: status === 429 ? Math.floor(Math.random() * 5001) : 0
+    }) : 0;
     await reportDoudianDiagnostic({
       category: "opportunity-pipeline",
       event: "submit-attempt-finished",
@@ -4846,10 +5976,13 @@ async function submitWithRetry(
       accepted,
       retryable,
       message,
+      responseError: text(response.error).slice(0, 300),
+      responseContentType: responseHeaderText(response.headers, "content-type"),
+      responseRetryAfter: responseHeaderText(response.headers, "retry-after"),
       durationMs: Math.max(0, Date.now() - attemptStartedAt)
     }, true);
     if (accepted || !retryable) break;
-    if (attempt < retryLimit - 1 && retryDelay) {
+    if (attempt < retryLimit - 1 && retryAfterMs) {
       const waitDetail = {
         shopName: store.shopName,
         clueId,
@@ -4858,9 +5991,9 @@ async function submitWithRetry(
         outerAttempt: attempt + 1,
         nextOuterAttempt: attempt + 2,
         outerAttemptLimit: retryLimit,
-        waitMs: retryDelay,
+        waitMs: retryAfterMs,
         totalRequestAttemptCount: attemptCount,
-        rateLimitScope: "store-only-test",
+        rateLimitScope: "store-only",
         otherStoreWorkersBlocked: false
       };
       if (trace?.runId) {
@@ -4870,8 +6003,8 @@ async function submitWithRetry(
           level: "warn",
           event: "pipeline-submit-retry-waiting",
           message: status === 429
-            ? `HTTP 429 received; store ${store.shopName || store.shopId} waits ${retryDelay / 1000}s before retry; other store workers are not blocked`
-            : `Submit request failed; store ${store.shopName || store.shopId} waits ${retryDelay / 1000}s before retry`,
+            ? `HTTP 429 received; store ${store.shopName || store.shopId} waits ${Math.ceil(retryAfterMs / 1000)}s before retry; other store workers are not blocked`
+            : `Submit request failed; store ${store.shopName || store.shopId} waits ${Math.ceil(retryAfterMs / 1000)}s before retry`,
           detail: waitDetail
         }).catch(() => undefined);
       }
@@ -4883,7 +6016,7 @@ async function submitWithRetry(
         shopId: store.shopId,
         ...waitDetail
       }, true);
-      await cancellableWait(retryDelay, shouldCancel);
+      await cancellableWait(retryAfterMs, shouldCancel);
       if (trace?.runId) {
         await writePipelineEvent({
           runId: trace.runId,
@@ -6078,12 +7211,9 @@ async function validateTaskCandidatesOfficially(args: {
   const startedAt = nowIso();
   const startedMs = Date.now();
   const mode = officialValidationMode(args.payload.adapter);
-  const inputCoverageMode = policyText(args.payload.adapter, "opportunityReport.inputCoverageMode", "enforce") === "report"
-    ? "report"
-    : "enforce";
-  const writeEnabled = officialWriteAllowed(mode, args.task.inputCoverageStatus, inputCoverageMode);
-  const inputCoverageAllowsWrite = args.task.inputCoverageStatus === "complete"
-    || (inputCoverageMode === "report" && args.task.inputCoverageStatus === "partial_coverage");
+  const coverageGate = pipelineTaskCoverageGate(args.task);
+  const writeEnabled = officialWriteAllowed(mode, coverageGate);
+  const inputCoverageAllowsWrite = officialWriteAllowed("local", coverageGate);
   const validationPolicy = officialValidationPolicy(args.payload.adapter);
   const contractVersion = stableHash({
     words: policyText(args.payload.adapter, "opportunityReport.officialWordsContractVersion", "official-words-contract-unverified-v1"),
@@ -6125,6 +7255,46 @@ async function validateTaskCandidatesOfficially(args: {
       wordsRequestCount: 0, officialWordCount: 0, goodsRequestCount: 0, cacheHitCount: 0, verifiedCount: 0, rejectedCount: 0,
       unknownCount: 0, budgetExhaustedCount: 0, distinctGroupCount: 0, skippedCount: candidates.length,
       durationMs: Date.now() - startedMs, policyVersion: validationPolicy.version, contractVersion
+    };
+  }
+  if (mode === "local") {
+    const candidates = args.candidates.map((candidate) => writeEnabled
+      ? {
+          ...candidate,
+          validationStatus: "not_started" as const,
+          validationReason: undefined,
+          submitStatus: candidate.submitStatus,
+          skipReason: candidate.skipReason
+        }
+      : {
+          ...candidate,
+          eligible: false,
+          estimatedCost: 0,
+          status: "skipped" as const,
+          validationStatus: "not_started" as const,
+          validationReason: "input_coverage_not_complete",
+          submitStatus: "skipped" as const,
+          skipReason: "input_coverage_not_complete"
+        });
+    return {
+      candidates,
+      writeEnabled,
+      status: "not_started",
+      startedAt,
+      finishedAt: nowIso(),
+      wordsRequestCount: 0,
+      officialWordCount: 0,
+      goodsRequestCount: 0,
+      cacheHitCount: 0,
+      verifiedCount: 0,
+      rejectedCount: 0,
+      unknownCount: 0,
+      budgetExhaustedCount: 0,
+      distinctGroupCount: 0,
+      skippedCount: writeEnabled ? 0 : candidates.length,
+      durationMs: Date.now() - startedMs,
+      policyVersion: validationPolicy.version,
+      contractVersion
     };
   }
   const reusableSnapshot = Boolean(
@@ -6473,16 +7643,6 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
       let cancelledCount = Number(task.cancelledCount || 0);
       let unknownCount = Number(task.unknownCount || 0);
       let remoteRequestCount = Number(task.remoteRequestCount || 0);
-      let officialWordsRequestCount = Number(task.officialWordsRequestCount || 0);
-      let officialWordsCount = Number(task.officialWordsCount || 0);
-      let officialGoodsRequestCount = Number(task.officialGoodsRequestCount || 0);
-      let officialVerifiedCount = Number(task.officialVerifiedCount || 0);
-      let officialRejectedCount = Number(task.officialRejectedCount || 0);
-      let validationUnknownCount = Number(task.validationUnknownCount || 0);
-      let validationBudgetExhaustedCount = Number(task.validationBudgetExhaustedCount || 0);
-      let officialValidationCacheHitCount = 0;
-      let officialValidationDurationMs = 0;
-      let distinctValidationGroupCount = 0;
       let submitThrottleReason = "";
       let quotaExhaustedReason = "";
       let cancelledDuringTask = false;
@@ -6548,58 +7708,24 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
           await persistSubmitAttemptRecords(recoveredUnknownAttempts);
         }
         const shouldCancelSubmit = () => cancelledPipelineRunIds.has(task.runId) || args.isCancelled?.() === true;
-        await updatePipelineStoreRunProgress(task.storeRunId, { status: "running", phase: "official-validate" }).catch(() => null);
-        if (!args.dryRun) await assertMutationStoreActive(store);
-        if (!task.validationFinishedAt) {
-          const validationStartedAt = nowIso();
-          taskCandidates = taskCandidates.map((candidate) => {
-            const submitState = text(candidate.submitStatus || candidate.status);
-            if (["accepted", "submitted", "sending", "unknown", "failed", "cancelled", "quota_exhausted"].includes(submitState)) return candidate;
-            return { ...candidate, validationStatus: "pending", validationReason: undefined };
-          });
-          await repositoryPutMany(pipelineCandidateStore, taskCandidates, { concurrency: 2 });
-          await updateSubmitTaskFromWorker(task, workerId, {
-            status: "running",
-            validationStatus: "pending",
-            validationStartedAt
-          });
-        }
-        const validation = await validateTaskCandidatesOfficially({
-          payload,
-          store,
-          task,
-          candidates: taskCandidates,
-          opportunityArgs: args,
-          shouldCancel: shouldCancelSubmit
-        });
-        taskCandidates = validation.candidates;
-        officialWordsRequestCount = validation.wordsRequestCount;
-        officialWordsCount = validation.officialWordCount;
-        officialGoodsRequestCount = validation.goodsRequestCount;
-        officialVerifiedCount = validation.verifiedCount;
-        officialRejectedCount = validation.rejectedCount;
-        validationUnknownCount = validation.unknownCount;
-        validationBudgetExhaustedCount = validation.budgetExhaustedCount;
-        officialValidationCacheHitCount = validation.cacheHitCount;
-        officialValidationDurationMs = validation.durationMs;
-        distinctValidationGroupCount = validation.distinctGroupCount;
-        skippedCount += validation.skippedCount;
-        await repositoryPutMany(pipelineCandidateStore, taskCandidates, { concurrency: 2 });
-        await updateSubmitTaskFromWorker(task, workerId, {
+        await updatePipelineStoreRunProgress(task.storeRunId, {
           status: "running",
-          validationStatus: validation.status,
-          validationStartedAt: validation.startedAt,
-          validationFinishedAt: validation.finishedAt,
-          officialWordsRequestCount,
-          officialWordsCount,
-          officialGoodsRequestCount,
-          officialVerifiedCount,
-          officialRejectedCount,
-          validationUnknownCount,
-          validationBudgetExhaustedCount,
-          validationPolicyVersion: validation.policyVersion,
-          officialContractVersion: validation.contractVersion
-        });
+          phase: "submitting"
+        }).catch(() => null);
+        if (!args.dryRun) await assertMutationStoreActive(store);
+        const coverageAllowsWrite = officialWriteAllowed("local", pipelineTaskCoverageGate(task));
+        if (!coverageAllowsWrite) {
+          taskCandidates = taskCandidates.map((candidate) => ({
+            ...candidate,
+            eligible: false,
+            estimatedCost: 0,
+            status: "skipped" as const,
+            submitStatus: "skipped" as const,
+            skipReason: "input_coverage_not_complete"
+          }));
+          skippedCount += taskCandidates.length;
+          await repositoryPutMany(pipelineCandidateStore, taskCandidates, { concurrency: 2 });
+        }
         const limit = dailyAttemptLimit(args, payload.adapter);
         let used = await submitAttemptCountForShop(store.shopId);
         const dedupeIndex = await submittedDedupeIndex(taskCandidates);
@@ -6619,19 +7745,9 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             failedCount,
             safetySkippedCount,
             quotaExhaustedCount,
-            cancelledCount,
+          cancelledCount,
           unknownCount,
           remoteRequestCount,
-          officialWordsRequestCount,
-          officialWordsCount,
-          officialGoodsRequestCount,
-          officialVerifiedCount,
-          officialRejectedCount,
-          validationUnknownCount,
-          validationBudgetExhaustedCount,
-          officialValidationCacheHitCount,
-          officialValidationDurationMs,
-          distinctValidationGroupCount,
           quotaAttemptCount: used,
             quotaRemainingAfterSubmit: Math.max(0, limit - used)
           }).catch(() => null);
@@ -6899,6 +8015,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             }));
             executions.push(...decoratedExecutions);
             const { failed, failureMessage, submitted, safetySkipped, unknown } = candidateExecutionState(candidateExecutions);
+            const alreadySubmitted = Boolean(failed && failureMessage && isAlreadySubmittedOpportunityMessage(failureMessage));
             const dailyQuotaExhausted = Boolean(failureMessage && isStoreDailyQuotaMessage(failureMessage));
             if (dailyQuotaExhausted && !quotaExhaustedReason) {
               quotaExhaustedReason = normalizedSubmitMessage(failureMessage) || "已达店铺今日商机提报上限";
@@ -6914,7 +8031,23 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             }
             if (!dailyQuotaExhausted && failureMessage && isProductClueLimitMessage(failureMessage)) {
               blockedProductIds.add(batchCandidate.productId);
-              for (const productId of productIdsFromSubmitMessage(failureMessage)) blockedProductIds.add(productId);
+              const saturatedProductIds = new Set([batchCandidate.productId, ...productIdsFromSubmitMessage(failureMessage)]);
+              for (const productId of saturatedProductIds) {
+                blockedProductIds.add(productId);
+                await markBenefitIndexSaturated(
+                  { tenantId: task.tenantId, shopId: task.shopId, shopName: task.shopName, storeGeneration: task.storeGeneration },
+                  productId,
+                  productId === batchCandidate.productId ? batchCandidate.clueId : undefined
+                );
+              }
+            }
+            if (submitted || alreadySubmitted) {
+              await updateBenefitIndexAfterAssociation(
+                { tenantId: task.tenantId, shopId: task.shopId, shopName: task.shopName, storeGeneration: task.storeGeneration },
+                batchCandidate.productId,
+                batchCandidate.clueId
+              );
+              dedupeIndex.relationKeys.add(relationKey(batchCandidate));
             }
             const rateLimitedExecutions = candidateExecutions.filter(isFinalRateLimitedExecution);
             const finalRateLimited = rateLimitedExecutions.length > 0;
@@ -6978,31 +8111,31 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
               }, true);
             }
             if (submitted) submittedCount += 1;
-            if (failed) failedCount += 1;
+            if (failed && !alreadySubmitted) failedCount += 1;
             if (safetySkipped) safetySkippedCount += 1;
             if (unknown) unknownCount += 1;
-            if (!submitted && !failed) skippedCount += 1;
+            if (alreadySubmitted || (!submitted && !failed)) skippedCount += 1;
             if (isFallback && submitted) fallbackEligibleProductIds.delete(batchCandidate.productId);
-            if (allowPostSubmitFallback && !isFallback && failed && !unknown && !dailyQuotaExhausted && !submitThrottleReason) fallbackEligibleProductIds.add(batchCandidate.productId);
+            if (allowPostSubmitFallback && !isFallback && failed && !alreadySubmitted && !unknown && !dailyQuotaExhausted && !submitThrottleReason) fallbackEligibleProductIds.add(batchCandidate.productId);
             const logicalAttemptId = candidateAttemptIds.get(batchCandidate.id) || batchCandidate.submitAttemptId;
             if (logicalAttemptId) {
               await persistSubmitAttemptRecords([logicalSubmitAttemptRecord({
                 id: logicalAttemptId,
                 runId: task.runId,
                 candidate: batchCandidate,
-                status: submitted ? "accepted" : unknown ? "unknown" : failed ? "failed" : "unknown",
-                message: submitted ? "submit request accepted" : failureMessage || "submit result unresolved"
+                status: submitted ? "accepted" : alreadySubmitted ? "already_submitted" : unknown ? "unknown" : failed ? "failed" : "unknown",
+                message: submitted ? "submit request accepted" : alreadySubmitted ? "platform reports product already submitted for this clue" : failureMessage || "submit result unresolved"
               })], attempts <= 0);
             }
             resolvedBatchCandidates.push({
               ...batchCandidate,
               eligible: false,
               estimatedCost: 0,
-              status: submitted ? "submitted" : unknown ? "unknown" : failed ? "failed" : "skipped",
-              submitStatus: submitted ? "accepted" : unknown ? "unknown" : failed ? "failed" : "skipped",
+              status: submitted ? "submitted" : alreadySubmitted ? "skipped" : unknown ? "unknown" : failed ? "failed" : "skipped",
+              submitStatus: submitted ? "accepted" : alreadySubmitted ? "skipped" : unknown ? "unknown" : failed ? "failed" : "skipped",
               auditStatus: submitted ? "pending" : batchCandidate.auditStatus,
               submitAttemptId: logicalAttemptId,
-              skipReason: failed ? failureMessage : batchCandidate.skipReason,
+              skipReason: alreadySubmitted ? "报名记录索引已回写：商品此前已提交该商机" : failed ? failureMessage : batchCandidate.skipReason,
               submittedAt: submitted ? nowIso() : undefined
             });
           }
@@ -7040,15 +8173,12 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
         }
         if (updatedCandidates.length) await repositoryPutMany(pipelineCandidateStore, updatedCandidates, { concurrency: 2 });
         cancelledDuringTask = cancelledDuringTask || await submitTaskIsCancelled(task, args);
-        const validationBlocksCompletion = officialValidationMode(payload.adapter) === "enforce"
-          && Boolean(validationUnknownCount || validationBudgetExhaustedCount);
-        const coverageBlocksCompletion = policyText(payload.adapter, "opportunityReport.inputCoverageMode", "enforce") !== "report"
-          && task.inputCoverageStatus === "partial_coverage";
+        const coverageBlocksCompletion = !officialWriteAllowed("local", pipelineTaskCoverageGate(task));
         const finalStatus: PipelineSubmitTaskRecord["status"] = cancelledDuringTask
           ? "cancelled"
           : task.inputCoverageStatus === "failed"
             ? "failed"
-          : unknownCount || validationBlocksCompletion || coverageBlocksCompletion
+          : unknownCount || coverageBlocksCompletion
             ? "partial"
           : failedCount
             ? (submittedCount || skippedCount ? "partial" : "failed")
@@ -7064,13 +8194,6 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
           cancelledCount,
           unknownCount,
           remoteRequestCount,
-          officialWordsRequestCount,
-          officialWordsCount,
-          officialGoodsRequestCount,
-          officialVerifiedCount,
-          officialRejectedCount,
-          validationUnknownCount,
-          validationBudgetExhaustedCount,
           leaseExpiresAt: undefined,
           lastError: quotaExhaustedReason || submitThrottleReason || task.lastError,
           finishedAt,
@@ -7088,16 +8211,6 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
           cancelledCount,
           unknownCount,
           remoteRequestCount,
-          officialWordsRequestCount,
-          officialGoodsRequestCount,
-          officialVerifiedCount,
-          officialRejectedCount,
-          validationUnknownCount,
-          validationBudgetExhaustedCount,
-          officialValidationCacheHitCount,
-          officialValidationDurationMs,
-          officialValidationCompleteRatio: taskCandidates.length ? officialVerifiedCount / taskCandidates.length : 0,
-          distinctValidationGroupCount,
           skipReason: quotaExhaustedReason || submitThrottleReason || undefined,
           quotaAttemptCount: finalQuotaAttemptCount,
           quotaRemainingAfterSubmit: Math.max(0, limit - finalQuotaAttemptCount),
@@ -7123,16 +8236,6 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             cancelledCount,
             unknownCount,
             remoteRequestCount,
-            officialWordsRequestCount,
-            officialWordsCount,
-            officialGoodsRequestCount,
-            officialVerifiedCount,
-            officialRejectedCount,
-            validationUnknownCount,
-            validationBudgetExhaustedCount,
-            officialValidationCacheHitCount,
-            officialValidationDurationMs,
-            distinctValidationGroupCount,
             executionCount: executions.length,
             quotaAttemptCount: finalQuotaAttemptCount,
             dailyAttemptLimit: limit,
@@ -7292,7 +8395,6 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   cancelledPipelineRunIds.delete(runId);
   const matchRules = normalizeOpportunityMatchRules(args.matchRules);
   const filters = args.filters || {};
-  const validationMode = officialValidationMode(payload.adapter);
   try {
     assertOpportunityPipelineContract(payload.adapter);
   } catch (error) {
@@ -7376,6 +8478,17 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   let fallbackSubmitCandidateCount = 0;
   let estimatedSubmitGroupCount = 0;
   let estimatedSubmitDurationMs = 0;
+  let coverageBlockedCount = 0;
+  let benefitProductCount = 0;
+  let benefitAcquiredExposure = 0;
+  let benefitEstimatedExposure = 0;
+  let benefitAcquiredExposureParsedCount = 0;
+  let benefitAcquiredExposureUnparsedCount = 0;
+  let benefitEstimatedExposureParsedCount = 0;
+  let benefitEstimatedExposureUnparsedCount = 0;
+  let benefitSubmitRecordCount = 0;
+  let benefitAssociatedClueCount = 0;
+  let benefitSaturatedProductCount = 0;
   const pipelineClues: DoudianOpportunityClueRow[] = [];
   const matchRulesHash = stableMatchRulesHash(args);
   await repositoryPut(pipelineRunStore, {
@@ -7432,6 +8545,16 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       qualifiedCandidateCount,
       eligibleCandidateCount,
       plannedSubmitCandidateCount,
+      benefitProductCount,
+      benefitAcquiredExposure,
+      benefitEstimatedExposure,
+      benefitAcquiredExposureParsedCount,
+      benefitAcquiredExposureUnparsedCount,
+      benefitEstimatedExposureParsedCount,
+      benefitEstimatedExposureUnparsedCount,
+      benefitSubmitRecordCount,
+      benefitAssociatedClueCount,
+      benefitSaturatedProductCount,
       primarySubmitCandidateCount,
       fallbackSubmitCandidateCount,
       estimatedSubmitGroupCount,
@@ -7494,8 +8617,9 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     };
   };
 
-  for (const [index, store] of targets.entries()) {
-    if (pipelineCancelled(args)) return finishCancelled();
+  const storePrepareConcurrency = 2;
+  const persistedDedupeIndex = await submittedDedupeIndex([], targets.map((store) => store.shopId));
+  const preparedStores = await mapConcurrentOrdered(targets, storePrepareConcurrency, async (store, index) => {
     const identity = normalizePipelineStoreIdentity(store);
     const id = storeRunId(runId, identity);
     const startedAt = nowIso();
@@ -7521,12 +8645,13 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       updatedAt: startedAt
     } satisfies PipelineStoreRunRecord);
     try {
-      dispatchPipelineProgress(args, 5 + (index / targets.length) * 70, `扫描店铺商品：${store.shopName || store.shopId}`);
+      dispatchPipelineProgress(args, 5 + (index / targets.length) * 20, `扫描店铺商品：${store.shopName || store.shopId}`);
       const scan = await scanProductsForStore(payload, store, args, runId, index + 1, targets.length);
-      if (pipelineCancelled(args)) return finishCancelled();
-      sourceHealth.push(...scan.sourceHealth);
       if (!scan.detail.ok) throw new Error(scan.detail.message || "opportunity product scan failed");
-      products.push(...scan.products);
+      failurePhase = "submit-history-sync";
+      const benefitScan = await scanBenefitProductsForStore(payload, store, args);
+      if (benefitScan.status !== "complete") throw new Error("submit history sync incomplete");
+      const benefitOverview = benefitScan.overview;
       const inputCoverage: PipelineInputCoverage = {
         productScanStatus: scan.scanStatus,
         productFetchedCount: scan.products.length,
@@ -7538,29 +8663,17 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         clueFetchedUniqueCount: 0,
         clueRemoteTotalByCategory: {},
         clueTruncatedCategoryCount: 0,
+        benefitScanStatus: benefitScan.status,
+        benefitFetchedUniqueProductCount: benefitScan.records.length,
+        benefitRemoteTotal: benefitScan.remoteTotalKnown ? benefitScan.remoteTotal : undefined,
+        benefitRemoteTotalKnown: benefitScan.remoteTotalKnown,
+        benefitNextPage: benefitScan.nextPage,
+        clueCoverageSatisfied: true,
         coverageVersion: inputCoverageVersion
       };
-      const storeDailyAttemptLimit = dailyAttemptLimit(args, payload.adapter);
-      const quotaUsedBefore = await submitAttemptCountForShop(identity.shopId);
-      const quotaRemainingBefore = Math.max(0, storeDailyAttemptLimit - quotaUsedBefore);
-      const storeTopKPerProduct = dynamicTopKPerProduct({
-        configuredTopK: matchRules.topKPerProduct,
-        quotaRemaining: quotaRemainingBefore,
-        productCount: scan.products.length,
-        maxTopK: storeDailyAttemptLimit
-      });
       const extracted = extractCurrentStoreCategories(scan.products);
-      failurePhase = "category-ledger";
       const effective = effectiveStoreCategories(extracted.categories, matchRules);
-      const productsByCategoryKey = groupProductsByCategoryKey(scan.products);
-      currentCategoryCount += extracted.categories.length;
-      effectiveCategoryCount += effective.length;
-      await updatePipelineStoreRunProgress(id, {
-        phase: "clue-load",
-        productCount: scan.products.length,
-        currentCategoryCount: extracted.categories.length,
-        effectiveCategoryCount: effective.length
-      }).catch(() => null);
+      failurePhase = "category-ledger";
       await saveStoreCategorySnapshot({
         runId,
         identity,
@@ -7570,14 +8683,178 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         createdAt: nowIso()
       });
       await upsertStoreCategoryLedger({ identity, categories: extracted.categories, seenAt: nowIso() });
+      await updatePipelineStoreRunProgress(id, {
+        phase: "clue-load",
+        productCount: scan.products.length,
+        currentCategoryCount: extracted.categories.length,
+        effectiveCategoryCount: effective.length
+      }).catch(() => null);
+      const storeDailyAttemptLimit = dailyAttemptLimit(args, payload.adapter);
+      const quotaUsedBefore = await submitAttemptCountForShop(identity.shopId);
+      const quotaRemainingBefore = Math.max(0, storeDailyAttemptLimit - quotaUsedBefore);
+      const storeCandidateLimitPerProduct = policyNumber(payload.adapter, "opportunityReport.candidateLimitPerProduct", 5, 1, 20);
+      return {
+        ok: true as const,
+        store,
+        index,
+        identity,
+        id,
+        startedAt,
+        scan,
+        benefitScan,
+        benefitOverview,
+        benefitIndex: new Map(benefitScan.records.map((record) => [record.productId, record])),
+        dedupeIndex: persistedDedupeIndex,
+        inputCoverage,
+        extracted,
+        effective,
+        productsByCategoryKey: groupProductsByCategoryKey(scan.products),
+        storeDailyAttemptLimit,
+        quotaUsedBefore,
+        quotaRemainingBefore,
+        storeCandidateLimitPerProduct,
+        storeTopKPerProduct: boundedProductCandidateLimit(Number(matchRules.topKPerProduct || 1), storeCandidateLimitPerProduct)
+      };
+    } catch (error) {
+      return { ok: false as const, store, index, identity, id, startedAt, failurePhase, error };
+    }
+  }, { shouldStop: () => pipelineCancelled(args) });
+  if (pipelineCancelled(args)) return finishCancelled();
+
+  const fullCluePageBudget = policyNumber(payload.adapter, "opportunityReport.maxCluePages", 200, 1, 200);
+  const boundedCluePageBudget = normalizedClueFilter(filters, payload.adapter).clueCoveragePages;
+  const categoryDemand = aggregateCategoryDemands(preparedStores.flatMap((prepared) => prepared.ok ? [{
+    tenantId: prepared.identity.tenantId,
+    shopId: prepared.identity.shopId,
+    categoryKeys: prepared.effective.map(cacheCategoryKey).filter(Boolean),
+    requestedPages: prepared.effective.length === 1 ? fullCluePageBudget : boundedCluePageBudget,
+    fullCoverage: prepared.effective.length === 1
+  }] : []));
+  await reportDoudianDiagnostic({
+    category: "opportunity-pipeline",
+    event: "category-demand-aggregated",
+    runId,
+    storePrepareConcurrency,
+    preparedStoreCount: preparedStores.filter((item) => item.ok).length,
+    categoryDemand: Array.from(categoryDemand.entries()).map(([categoryKey, demand]) => ({ categoryKey, ...demand }))
+  }, true);
+
+  await mapConcurrentOrdered(preparedStores, storePrepareConcurrency, async (prepared, index) => {
+    const { store, identity, id, startedAt } = prepared;
+    if (!prepared.ok) {
+      failedCount += 1;
+      const failedAt = nowIso();
+      const failureReason = prepared.failurePhase === "product-scan" ? "pipeline-product-scan-failed" : `pipeline-${prepared.failurePhase}-failed`;
+      await repositoryPut(pipelineStoreRunStore, {
+        id,
+        runId,
+        ...identity,
+        status: "failed",
+        phase: "finished",
+        productCount: 0,
+        currentCategoryCount: 0,
+        effectiveCategoryCount: 0,
+        clueCount: 0,
+        tokenCount: 0,
+        candidateCount: 0,
+        eligibleCandidateCount: 0,
+        qualifiedCandidateCount: 0,
+        plannedSubmitCandidateCount: 0,
+        submittedCount: 0,
+        failedCount: 1,
+        skipReason: failureReason,
+        startedAt,
+        updatedAt: failedAt,
+        finishedAt: failedAt
+      } satisfies PipelineStoreRunRecord);
+      await writePipelineEvent({
+        runId,
+        storeRunId: id,
+        shopId: identity.shopId,
+        level: "error",
+        event: "pipeline-store-prepare-failed",
+        message: prepared.error instanceof Error ? prepared.error.message : String(prepared.error),
+        detail: { phase: prepared.failurePhase, storePrepareConcurrency }
+      }).catch(() => undefined);
+      details.push({
+        shopId: store.shopId,
+        shopName: store.shopName,
+        status: "failed",
+        ok: false,
+        message: prepared.error instanceof Error ? prepared.error.message : String(prepared.error),
+        reason: failureReason,
+        category: "api",
+        index: index + 1,
+        total: targets.length
+      });
+      processedStoreCount += 1;
+      return;
+    }
+    const {
+      scan,
+      benefitScan,
+      benefitOverview,
+      benefitIndex,
+      dedupeIndex,
+      inputCoverage,
+      extracted,
+      effective,
+      productsByCategoryKey,
+      storeDailyAttemptLimit,
+      quotaUsedBefore,
+      quotaRemainingBefore,
+      storeCandidateLimitPerProduct,
+      storeTopKPerProduct
+    } = prepared;
+    if (pipelineCancelled(args)) return;
+    let failurePhase: PipelineStoreRunRecord["phase"] = "clue-load";
+    try {
+      dispatchPipelineProgress(args, 5 + (index / targets.length) * 70, `扫描店铺商品：${store.shopName || store.shopId}`);
+      sourceHealth.push(...scan.sourceHealth);
+      sourceHealth.push(...benefitScan.sourceHealth);
+      products.push(...scan.products);
+      benefitProductCount += benefitOverview.productCount;
+      benefitAcquiredExposure += benefitOverview.acquiredExposure;
+      benefitEstimatedExposure += benefitOverview.estimatedExposure;
+      benefitAcquiredExposureParsedCount += benefitOverview.acquiredExposureParsedCount;
+      benefitAcquiredExposureUnparsedCount += benefitOverview.acquiredExposureUnparsedCount;
+      benefitEstimatedExposureParsedCount += benefitOverview.estimatedExposureParsedCount;
+      benefitEstimatedExposureUnparsedCount += benefitOverview.estimatedExposureUnparsedCount;
+      benefitSubmitRecordCount += benefitOverview.recordCount;
+      benefitAssociatedClueCount += benefitOverview.associatedClueCount;
+      benefitSaturatedProductCount += benefitOverview.saturatedProductCount;
+      currentCategoryCount += extracted.categories.length;
+      effectiveCategoryCount += effective.length;
+      await updatePipelineStoreRunProgress(id, {
+        phase: "clue-load",
+        productCount: scan.products.length,
+        benefitProductCount: benefitOverview.productCount,
+        benefitAcquiredExposure: benefitOverview.acquiredExposure,
+        benefitEstimatedExposure: benefitOverview.estimatedExposure,
+        benefitAcquiredExposureParsedCount: benefitOverview.acquiredExposureParsedCount,
+        benefitAcquiredExposureUnparsedCount: benefitOverview.acquiredExposureUnparsedCount,
+        benefitEstimatedExposureParsedCount: benefitOverview.estimatedExposureParsedCount,
+        benefitEstimatedExposureUnparsedCount: benefitOverview.estimatedExposureUnparsedCount,
+        benefitSubmitRecordCount: benefitOverview.recordCount,
+        benefitAssociatedClueCount: benefitOverview.associatedClueCount,
+        benefitSaturatedProductCount: benefitOverview.saturatedProductCount,
+        currentCategoryCount: extracted.categories.length,
+        effectiveCategoryCount: effective.length
+      }).catch(() => null);
 
       let storeClueCount = 0;
       let storeTokenCount = 0;
       const storeClueIds = new Set<string>();
       const storeCandidates: DoudianOpportunityPrematchCandidate[] = [];
       const storeDiagnostics = createMatchDiagnostics();
-      const storeSourceHealth = [...scan.sourceHealth];
+      const storeSourceHealth = [...scan.sourceHealth, ...benefitScan.sourceHealth];
       const missingCategoryIdCategories = effective.filter((category) => !text(category.categoryId));
+      if (missingCategoryIdCategories.length) {
+        // A product category without a stable platform id cannot be queried,
+        // so the clue gate must remain closed even if other categories load.
+        inputCoverage.clueScanStatus = "failed";
+        inputCoverage.clueCoverageSatisfied = false;
+      }
       if (missingCategoryIdCategories.length) {
         await writePipelineEvent({
           runId,
@@ -7604,7 +8881,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         }).catch(() => undefined);
       }
       for (const category of effective) {
-        if (pipelineCancelled(args)) return finishCancelled();
+        if (pipelineCancelled(args)) return;
         const categoryKey = cacheCategoryKey(category);
         if (!categoryKey) {
           await writePipelineEvent({
@@ -7620,6 +8897,19 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         }
         const categoryProducts = productsByCategoryKey.get(categoryKey) || [];
         if (!categoryProducts.length) continue;
+        const demand = categoryDemand.get(`${identity.tenantId}::${categoryKey}`) || {
+          requestedPages: effective.length === 1 ? fullCluePageBudget : boundedCluePageBudget,
+          fullCoverage: effective.length === 1,
+          consumerShopIds: [identity.shopId]
+        };
+        storeSourceHealth.push({
+          key: `category-demand:${categoryKey}`,
+          ok: true,
+          categoryKey,
+          requestedCoverage: demand.fullCoverage ? "all-pages" : `${demand.requestedPages}-pages`,
+          requestedPages: demand.requestedPages,
+          consumerShopIds: demand.consumerShopIds
+        });
         failurePhase = "clue-load";
         const clueResult = await loadCluesByCategoryWithCache({
           payload,
@@ -7629,11 +8919,56 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           filters,
           category,
           dryRun: args.dryRun,
-          mockClues: args.mockClues
+          mockClues: args.mockClues,
+          requestedPages: demand.requestedPages,
+          pageBudgetSatisfiesCoverage: effective.length > 1
         });
+        const clueLoadSummary = {
+          shopId: identity.shopId,
+          categoryKey,
+          ok: clueResult.ok,
+          cacheHit: clueResult.cacheHit,
+          cacheScope: clueResult.cacheScope,
+          scanStatus: clueResult.scanStatus,
+          coverageSatisfied: clueResult.coverageSatisfied,
+          fetchedPages: clueResult.fetchedPages,
+          rowCount: clueResult.rows.length,
+          remoteTotal: clueResult.remoteTotalKnown ? clueResult.remoteTotal : undefined,
+          remoteTotalKnown: clueResult.remoteTotalKnown,
+          sourceHealth: clueResult.sourceHealth.map((item) => ({
+            key: item.key,
+            status: item.status,
+            ok: item.ok,
+            count: item.count,
+            uniqueCount: item.uniqueCount,
+            pageNew: item.pageNew,
+            duplicateCount: item.duplicateCount,
+            missingIdCount: item.missingIdCount,
+            duplicatePage: item.duplicatePage,
+            remoteTotal: item.remoteTotal,
+            error: item.error
+          }))
+        };
+        await reportDoudianDiagnostic({
+          category: "opportunity-pipeline",
+          event: "clue-load-summary",
+          runId,
+          ...clueLoadSummary
+        }, true).catch(() => undefined);
         storeSourceHealth.push(...clueResult.sourceHealth);
         sourceHealth.push(...clueResult.sourceHealth);
-        if (clueResult.ok === false) throw new Error("opportunity clue loading failed");
+        if (clueResult.ok === false) {
+          await writePipelineEvent({
+            runId,
+            storeRunId: id,
+            shopId: identity.shopId,
+            level: "error",
+            event: "pipeline-clue-load-failed",
+            message: "opportunity clue loading failed",
+            detail: clueLoadSummary
+          }).catch(() => undefined);
+          throw new Error("opportunity clue loading failed");
+        }
         inputCoverage.clueRemoteTotalByCategory[categoryKey] = clueResult.remoteTotalKnown ? clueResult.remoteTotal : null;
         if (clueResult.scanStatus === "truncated") {
           inputCoverage.clueScanStatus = "truncated";
@@ -7641,6 +8976,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         } else if (clueResult.scanStatus === "failed") {
           inputCoverage.clueScanStatus = "failed";
         }
+        if (!clueResult.coverageSatisfied) inputCoverage.clueCoverageSatisfied = false;
         if (!clueResult.rows.length || !clueResult.cacheKey) continue;
         pipelineClues.push(...clueResult.rows);
         storeClueCount += clueResult.rows.length;
@@ -7649,6 +8985,11 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         await updatePipelineStoreRunProgress(id, {
           phase: "clue-load",
           productCount: scan.products.length,
+          benefitProductCount: benefitOverview.productCount,
+          benefitAcquiredExposure: benefitOverview.acquiredExposure,
+          benefitEstimatedExposure: benefitOverview.estimatedExposure,
+          benefitAcquiredExposureUnparsedCount: benefitOverview.acquiredExposureUnparsedCount,
+          benefitEstimatedExposureUnparsedCount: benefitOverview.estimatedExposureUnparsedCount,
           currentCategoryCount: extracted.categories.length,
           effectiveCategoryCount: effective.length,
           clueCount: storeClueCount
@@ -7667,6 +9008,11 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         await updatePipelineStoreRunProgress(id, {
           phase: "match",
           productCount: scan.products.length,
+          benefitProductCount: benefitOverview.productCount,
+          benefitAcquiredExposure: benefitOverview.acquiredExposure,
+          benefitEstimatedExposure: benefitOverview.estimatedExposure,
+          benefitAcquiredExposureUnparsedCount: benefitOverview.acquiredExposureUnparsedCount,
+          benefitEstimatedExposureUnparsedCount: benefitOverview.estimatedExposureUnparsedCount,
           currentCategoryCount: extracted.categories.length,
           effectiveCategoryCount: effective.length,
           clueCount: storeClueCount,
@@ -7688,19 +9034,21 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           minWeightHitRatio: Number(matchRules.minWeightHitRatio || 0.35),
           genericTokenDfRatio: Number(matchRules.genericTokenDfRatio || 0.12),
           topKPerProduct: storeTopKPerProduct,
+          dedupeIndex,
+          benefitIndex,
           matchRulesHash,
           opportunityArgs: args
         });
         storeCandidates.push(...matchResult.candidates);
         mergeMatchDiagnostics(storeDiagnostics, matchResult.diagnostics);
       }
-      if (pipelineCancelled(args)) return finishCancelled();
-      const dedupeIndex = await submittedDedupeIndex(storeCandidates);
+      if (pipelineCancelled(args)) return;
       const rankedStoreCandidates = markProductRanks({
         candidates: storeCandidates,
         topKPerProduct: storeTopKPerProduct,
         opportunityArgs: args,
-        dedupeIndex
+        dedupeIndex,
+        benefitIndex
       });
       const plannedSelection = selectStoreSubmitCandidates({
         candidates: rankedStoreCandidates,
@@ -7713,9 +9061,19 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       const storeEstimatedSubmitGroupCount = estimateSubmitGroups(plannedStoreCandidates, payload.adapter);
       const storeEstimatedSubmitDurationMs = estimateSubmitDurationMs(storeEstimatedSubmitGroupCount, payload.adapter);
       const eligibleCount = plannedSelection.plannedSubmitCandidateCount;
+      const writeCoverageComplete = pipelineInputCoverageAllowsWrite(inputCoverage);
+      const persistedEligibleCount = writeCoverageComplete ? eligibleCount : 0;
+      const persistedPlannedSubmitCandidateCount = writeCoverageComplete ? plannedSelection.plannedSubmitCandidateCount : 0;
+      const persistedPrimarySubmitCandidateCount = writeCoverageComplete ? plannedSelection.primarySubmitCandidateCount : 0;
+      const persistedFallbackSubmitCandidateCount = writeCoverageComplete ? plannedSelection.fallbackSubmitCandidateCount : 0;
+      const persistedEstimatedSubmitGroupCount = writeCoverageComplete ? storeEstimatedSubmitGroupCount : 0;
+      const persistedEstimatedSubmitDurationMs = writeCoverageComplete ? storeEstimatedSubmitDurationMs : 0;
+      const persistedQuotaRemainingAfterPlan = writeCoverageComplete
+        ? plannedSelection.quotaRemainingAfterPlan
+        : plannedSelection.quotaRemainingBefore;
       const alternativeCount = plannedStoreCandidates.filter((candidate) => candidateRank(candidate) > 1 || candidate.alternative === true).length;
       storeDiagnostics.persistedCandidateCount = plannedStoreCandidates.length;
-      storeDiagnostics.eligibleCandidateCount = eligibleCount;
+      storeDiagnostics.eligibleCandidateCount = persistedEligibleCount;
       storeDiagnostics.alternativeCandidateCount = alternativeCount;
       storeDiagnostics.droppedByTopKCount = Math.max(0, storeDiagnostics.passedThresholdCount - plannedStoreCandidates.length);
       const compactedStoreCandidates = plannedStoreCandidates.map((candidate) => ({
@@ -7730,14 +9088,16 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         candidates: compactedStoreCandidates,
         snapshotVersion: matchRulesHash,
         inputCoverage,
-        candidateDepthMax: policyNumber(payload.adapter, "opportunityReport.officialValidationCandidateDepthMax", 5, 1, 20)
+        candidateLimitPerProduct: storeCandidateLimitPerProduct
       });
       if (task) {
         submitTaskCount += 1;
       }
-      if (pipelineCancelled(args)) return finishCancelled();
+      if (!writeCoverageComplete) coverageBlockedCount += 1;
+      if (pipelineCancelled(args)) return;
       let skipReason = "";
-      if (!effective.length) skipReason = "no-effective-category";
+      if (!writeCoverageComplete) skipReason = "input_coverage_not_complete";
+      else if (!effective.length) skipReason = "no-effective-category";
       else if (!storeClueCount) skipReason = "no-clue-for-effective-category";
       else if (!plannedStoreCandidates.length) skipReason = "no-token-match-candidate";
       else if (!eligibleCount) skipReason = "no-eligible-candidate";
@@ -7746,12 +9106,12 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       tokenCount += storeTokenCount;
       candidateCount += plannedStoreCandidates.length;
       qualifiedCandidateCount += plannedSelection.qualifiedCandidateCount;
-      eligibleCandidateCount += eligibleCount;
-      plannedSubmitCandidateCount += plannedSelection.plannedSubmitCandidateCount;
-      primarySubmitCandidateCount += plannedSelection.primarySubmitCandidateCount;
-      fallbackSubmitCandidateCount += plannedSelection.fallbackSubmitCandidateCount;
-      estimatedSubmitGroupCount += storeEstimatedSubmitGroupCount;
-      estimatedSubmitDurationMs += storeEstimatedSubmitDurationMs;
+      eligibleCandidateCount += persistedEligibleCount;
+      plannedSubmitCandidateCount += persistedPlannedSubmitCandidateCount;
+      primarySubmitCandidateCount += persistedPrimarySubmitCandidateCount;
+      fallbackSubmitCandidateCount += persistedFallbackSubmitCandidateCount;
+      estimatedSubmitGroupCount += persistedEstimatedSubmitGroupCount;
+      estimatedSubmitDurationMs += persistedEstimatedSubmitDurationMs;
       processedStoreCount += 1;
       const finishedAt = nowIso();
       await repositoryPut(pipelineStoreRunStore, {
@@ -7762,6 +9122,16 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         phase: task ? "submit-queued" : "finished",
         inputCoverage,
         productCount: scan.products.length,
+        benefitProductCount: benefitOverview.productCount,
+        benefitAcquiredExposure: benefitOverview.acquiredExposure,
+        benefitEstimatedExposure: benefitOverview.estimatedExposure,
+        benefitAcquiredExposureParsedCount: benefitOverview.acquiredExposureParsedCount,
+        benefitAcquiredExposureUnparsedCount: benefitOverview.acquiredExposureUnparsedCount,
+        benefitEstimatedExposureParsedCount: benefitOverview.estimatedExposureParsedCount,
+        benefitEstimatedExposureUnparsedCount: benefitOverview.estimatedExposureUnparsedCount,
+        benefitSubmitRecordCount: benefitOverview.recordCount,
+        benefitAssociatedClueCount: benefitOverview.associatedClueCount,
+        benefitSaturatedProductCount: benefitOverview.saturatedProductCount,
         currentCategoryCount: extracted.categories.length,
         effectiveCategoryCount: effective.length,
         clueCount: storeClueCount,
@@ -7769,20 +9139,20 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         matchDiagnostics: storeDiagnostics,
         ...matchDiagnosticsSummary(storeDiagnostics),
         candidateCount: plannedStoreCandidates.length,
-        eligibleCandidateCount: eligibleCount,
+        eligibleCandidateCount: persistedEligibleCount,
         alternativeCandidateCount: alternativeCount,
         qualifiedCandidateCount: plannedSelection.qualifiedCandidateCount,
         primaryCandidateCount: plannedSelection.primaryCandidateCount,
         fallbackCandidateCount: plannedSelection.fallbackCandidateCount,
-        plannedSubmitCandidateCount: plannedSelection.plannedSubmitCandidateCount,
-        primarySubmitCandidateCount: plannedSelection.primarySubmitCandidateCount,
-        fallbackSubmitCandidateCount: plannedSelection.fallbackSubmitCandidateCount,
-        estimatedSubmitGroupCount: storeEstimatedSubmitGroupCount,
-        estimatedSubmitDurationMs: storeEstimatedSubmitDurationMs,
+        plannedSubmitCandidateCount: persistedPlannedSubmitCandidateCount,
+        primarySubmitCandidateCount: persistedPrimarySubmitCandidateCount,
+        fallbackSubmitCandidateCount: persistedFallbackSubmitCandidateCount,
+        estimatedSubmitGroupCount: persistedEstimatedSubmitGroupCount,
+        estimatedSubmitDurationMs: persistedEstimatedSubmitDurationMs,
         dailyAttemptLimit: plannedSelection.dailyAttemptLimit,
         quotaUsedBefore: plannedSelection.quotaUsedBefore,
         quotaRemainingBefore: plannedSelection.quotaRemainingBefore,
-        quotaRemainingAfterPlan: plannedSelection.quotaRemainingAfterPlan,
+        quotaRemainingAfterPlan: persistedQuotaRemainingAfterPlan,
         quotaAttemptCount: plannedSelection.quotaUsedBefore,
         quotaRemainingAfterSubmit: plannedSelection.quotaRemainingBefore,
         submittedCount: 0,
@@ -7802,6 +9172,11 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         message: task ? "商机候选已生成并进入提报队列" : skipReason ? "店铺未生成可提报任务" : "店铺商机提报处理完成",
         detail: {
           productCount: scan.products.length,
+          benefitProductCount: benefitOverview.productCount,
+          benefitAcquiredExposure: benefitOverview.acquiredExposure,
+          benefitEstimatedExposure: benefitOverview.estimatedExposure,
+          benefitAcquiredExposureUnparsedCount: benefitOverview.acquiredExposureUnparsedCount,
+          benefitEstimatedExposureUnparsedCount: benefitOverview.estimatedExposureUnparsedCount,
           currentCategoryCount: extracted.categories.length,
           effectiveCategoryCount: effective.length,
           missingCategoryProductCount: extracted.missingCategoryProductCount,
@@ -7809,18 +9184,18 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           tokenCount: storeTokenCount,
           candidateCount: plannedStoreCandidates.length,
           qualifiedCandidateCount: plannedSelection.qualifiedCandidateCount,
-          eligibleCount,
-          plannedSubmitCandidateCount: plannedSelection.plannedSubmitCandidateCount,
-          primarySubmitCandidateCount: plannedSelection.primarySubmitCandidateCount,
-          fallbackSubmitCandidateCount: plannedSelection.fallbackSubmitCandidateCount,
+          eligibleCount: persistedEligibleCount,
+          plannedSubmitCandidateCount: persistedPlannedSubmitCandidateCount,
+          primarySubmitCandidateCount: persistedPrimarySubmitCandidateCount,
+          fallbackSubmitCandidateCount: persistedFallbackSubmitCandidateCount,
           maxSubmitCandidatesPerStore: policyNumber(payload.adapter, "opportunityReport.maxSubmitCandidatesPerStore", 1000, 1, 10000),
-          estimatedSubmitGroupCount: storeEstimatedSubmitGroupCount,
-          estimatedSubmitDurationMs: storeEstimatedSubmitDurationMs,
+          estimatedSubmitGroupCount: persistedEstimatedSubmitGroupCount,
+          estimatedSubmitDurationMs: persistedEstimatedSubmitDurationMs,
           alternativeCount,
           dailyAttemptLimit: plannedSelection.dailyAttemptLimit,
           quotaUsedBefore: plannedSelection.quotaUsedBefore,
           quotaRemainingBefore: plannedSelection.quotaRemainingBefore,
-          quotaRemainingAfterPlan: plannedSelection.quotaRemainingAfterPlan,
+          quotaRemainingAfterPlan: persistedQuotaRemainingAfterPlan,
           matchDiagnostics: matchDiagnosticsSummary(storeDiagnostics),
           submitTaskId: task?.id
         }
@@ -7855,6 +9230,11 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         reason: skipReason,
         diagnostic: {
           productCount: scan.products.length,
+          benefitProductCount: benefitOverview.productCount,
+          benefitAcquiredExposure: benefitOverview.acquiredExposure,
+          benefitEstimatedExposure: benefitOverview.estimatedExposure,
+          benefitAcquiredExposureUnparsedCount: benefitOverview.acquiredExposureUnparsedCount,
+          benefitEstimatedExposureUnparsedCount: benefitOverview.estimatedExposureUnparsedCount,
           currentCategoryCount: extracted.categories.length,
           effectiveCategoryCount: effective.length,
           missingCategoryProductCount: extracted.missingCategoryProductCount,
@@ -7863,17 +9243,17 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           tokenCount: storeTokenCount,
           candidateCount: plannedStoreCandidates.length,
           qualifiedCandidateCount: plannedSelection.qualifiedCandidateCount,
-          eligibleCount,
-          eligibleCandidateCount: eligibleCount,
-          plannedSubmitCandidateCount: plannedSelection.plannedSubmitCandidateCount,
-          primarySubmitCandidateCount: plannedSelection.primarySubmitCandidateCount,
-          fallbackSubmitCandidateCount: plannedSelection.fallbackSubmitCandidateCount,
+          eligibleCount: persistedEligibleCount,
+          eligibleCandidateCount: persistedEligibleCount,
+          plannedSubmitCandidateCount: persistedPlannedSubmitCandidateCount,
+          primarySubmitCandidateCount: persistedPrimarySubmitCandidateCount,
+          fallbackSubmitCandidateCount: persistedFallbackSubmitCandidateCount,
           alternativeCount,
           alternativeCandidateCount: alternativeCount,
           dailyAttemptLimit: plannedSelection.dailyAttemptLimit,
           quotaUsedBefore: plannedSelection.quotaUsedBefore,
           quotaRemainingBefore: plannedSelection.quotaRemainingBefore,
-          quotaRemainingAfterPlan: plannedSelection.quotaRemainingAfterPlan,
+          quotaRemainingAfterPlan: persistedQuotaRemainingAfterPlan,
           quotaAttemptCount: plannedSelection.quotaUsedBefore,
           quotaRemainingAfterSubmit: plannedSelection.quotaRemainingBefore,
           matchDiagnostics: matchDiagnosticsSummary(storeDiagnostics),
@@ -7885,7 +9265,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     } catch (error) {
       failedCount += 1;
       const failedAt = nowIso();
-      const failureReason = failurePhase === "product-scan" ? "pipeline-product-scan-failed" : `pipeline-${failurePhase}-failed`;
+      const failureReason = `pipeline-${failurePhase}-failed`;
       await repositoryPut(pipelineStoreRunStore, {
         id,
         runId,
@@ -7929,7 +9309,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         total: targets.length
       });
     }
-  }
+  }, { shouldStop: () => pipelineCancelled(args) });
 
   if (pipelineCancelled(args)) return finishCancelled();
   if (submitTaskCount > 0) {
@@ -7964,13 +9344,23 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
 
   const status = failedCount
     ? (processedStoreCount ? "partial" : "failed")
-    : "ok";
+    : coverageBlockedCount
+      ? "partial"
+      : "ok";
   const summary = {
-    officialValidationObserveMode: validationMode === "observe" ? 1 : 0,
-    officialValidationDisabledMode: validationMode === "disabled" ? 1 : 0,
-    officialValidationEnforceMode: validationMode === "enforce" ? 1 : 0,
     inputCoverageReportMode: policyText(payload.adapter, "opportunityReport.inputCoverageMode", "enforce") === "report" ? 1 : 0,
+    inputCoveragePartialCount: coverageBlockedCount,
     productCount: products.length,
+    benefitProductCount,
+    benefitAcquiredExposure,
+    benefitEstimatedExposure,
+    benefitAcquiredExposureParsedCount,
+    benefitAcquiredExposureUnparsedCount,
+    benefitEstimatedExposureParsedCount,
+    benefitEstimatedExposureUnparsedCount,
+    benefitSubmitRecordCount,
+    benefitAssociatedClueCount,
+    benefitSaturatedProductCount,
     currentCategoryCount,
     effectiveCategoryCount,
     clueCount,
@@ -7984,6 +9374,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     estimatedSubmitGroupCount,
     estimatedSubmitDurationMs,
     submitTaskCount,
+    coverageBlockedCount,
     submittedCount: 0,
     failedCount,
     skippedCount,
@@ -8021,6 +9412,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   const finalSummary = refreshedRun?.summary || summary;
   const finalFailedCount = Number(finalSummary.failedCount || failedCount || 0);
   const finalSubmittedCount = Number(finalSummary.submittedCount || 0);
+  const finalCoverageBlockedCount = Math.max(Number(finalSummary.inputCoveragePartialCount || 0), coverageBlockedCount);
   const previewCandidates = await loadPipelineCandidatesForRun(runId, latestPipelineCandidatePreviewLimit);
   const candidateTotalCount = Number(finalSummary.candidateCount || candidateCount || previewCandidates.length);
   const responseSummary = {
@@ -8038,8 +9430,8 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     message: pipelineSubmitResultMessage({
       failedCount: finalFailedCount,
       submittedCount: finalSubmittedCount,
-      validationMode,
-      submitTaskCount
+      submitTaskCount,
+      coverageBlockedCount: finalCoverageBlockedCount
     }),
     runId,
     operationId: args.operationId,
@@ -8051,7 +9443,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     details,
     successCount: details.filter((detail) => detail.ok).length,
     failureCount: finalFailedCount,
-    partialCount: finalStatus === "partial" ? submitTaskCount : 0,
+    partialCount: finalStatus === "partial" ? Math.max(submitTaskCount, finalCoverageBlockedCount) : 0,
     summary: responseSummary,
     scanSummary: responseSummary,
     sourceHealth,
@@ -8069,9 +9461,9 @@ export async function fetchOpportunityReport(args: OpportunityArgs = {}): Promis
   if (mode === "product-scan") return fetchProductScan(payload, args);
   if (mode === "product-prematch") return fetchProductPrematch(payload, args);
   if (mode === "pipeline-submit") return fetchPipelineSubmit(payload, args);
-  if (mode === "clue-submit") return fetchClueSubmit(payload, args);
-  if (mode === "product-submit") return fetchProductSubmit(payload, args);
-  if (mode === "prematch-submit") return fetchPrematchSubmit(payload, args);
+  if (["clue-submit", "product-submit", "prematch-submit"].includes(mode)) {
+    return { ok: false, status: "retired-direct-submit", mode, message: "Direct opportunity submit is retired; use pipeline-submit", rows: [], clues: [], products: [], executions: [] };
+  }
   if (mode === "collect") return fetchCollect(payload, args);
   if (mode === "latest") return fetchOpportunityReportLatest(args);
   return { ok: false, status: "unsupported-mode", mode, message: "unsupported opportunity report mode", rows: [], clues: [], products: [], executions: [] };
@@ -8086,24 +9478,28 @@ export async function runOpportunityPipelineSubmitTask(args: OpportunityArgs = {
   if (result.status !== "cancelled" && result.status !== "partial" && result.ok === false) {
     throw new Error(result.message || `商机提报任务失败：${result.status || "unknown"}`);
   }
+  const persistedResult = result.runId
+    ? await fetchOpportunityPipelineRun({ runId: result.runId, includeCandidates: false }).catch(() => null)
+    : null;
+  const finalResult = persistedResult?.status !== "missing" ? persistedResult || result : result;
   return {
-    ok: result.ok,
-    status: result.status,
+    ok: finalResult.ok,
+    status: finalResult.status,
     mode: result.mode,
     message: result.message,
-    runId: result.runId,
-    operationId: result.operationId,
+    runId: finalResult.runId || result.runId,
+    operationId: finalResult.operationId || result.operationId,
     rows: [],
     clues: [],
     products: [],
     prematches: [],
     executions: [],
-    details: result.details || [],
-    successCount: result.successCount,
-    failureCount: result.failureCount,
-    partialCount: result.partialCount,
-    summary: result.summary || {},
-    scanSummary: result.scanSummary || result.summary || {},
+    details: finalResult.details || result.details || [],
+    successCount: finalResult.successCount ?? result.successCount,
+    failureCount: finalResult.failureCount ?? result.failureCount,
+    partialCount: finalResult.partialCount ?? result.partialCount,
+    summary: finalResult.summary || result.summary || {},
+    scanSummary: finalResult.scanSummary || finalResult.summary || result.scanSummary || result.summary || {},
     sourceHealth: [],
     filters: result.filters,
     matchRules: result.matchRules,
@@ -8160,6 +9556,11 @@ async function buildPipelineRunCachedResult(
       diagnostic: {
         phase: storeRun.phase,
         productCount: storeRun.productCount,
+        benefitProductCount: storeRun.benefitProductCount,
+        benefitAcquiredExposure: storeRun.benefitAcquiredExposure,
+        benefitEstimatedExposure: storeRun.benefitEstimatedExposure,
+        benefitAcquiredExposureUnparsedCount: storeRun.benefitAcquiredExposureUnparsedCount,
+        benefitEstimatedExposureUnparsedCount: storeRun.benefitEstimatedExposureUnparsedCount,
         clueCount: storeRun.clueCount,
         currentCategoryCount: storeRun.currentCategoryCount,
         effectiveCategoryCount: storeRun.effectiveCategoryCount,
@@ -8289,9 +9690,14 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
         ok: storeRun.status === "ok" || storeRun.status === "skipped",
         message: storeRun.skipReason || storeRun.phase,
         diagnostic: {
-          phase: storeRun.phase,
-          productCount: storeRun.productCount,
-          clueCount: storeRun.clueCount,
+        phase: storeRun.phase,
+        productCount: storeRun.productCount,
+        benefitProductCount: storeRun.benefitProductCount,
+        benefitAcquiredExposure: storeRun.benefitAcquiredExposure,
+        benefitEstimatedExposure: storeRun.benefitEstimatedExposure,
+        benefitAcquiredExposureUnparsedCount: storeRun.benefitAcquiredExposureUnparsedCount,
+        benefitEstimatedExposureUnparsedCount: storeRun.benefitEstimatedExposureUnparsedCount,
+        clueCount: storeRun.clueCount,
           currentCategoryCount: storeRun.currentCategoryCount,
           effectiveCategoryCount: storeRun.effectiveCategoryCount,
           candidateCount: storeRun.candidateCount,

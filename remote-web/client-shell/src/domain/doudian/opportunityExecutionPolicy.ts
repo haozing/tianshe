@@ -82,6 +82,15 @@ export function isProductClueLimitMessage(message: unknown) {
   return value.includes("最多支持关联") || value.includes("最多可关联") || value.includes("50个线索");
 }
 
+export function isAlreadySubmittedOpportunityMessage(message: unknown) {
+  const value = String(message ?? "").trim();
+  if (!value) return false;
+  return /already\s*(?:submitted|joined|registered|enrolled)/i.test(value)
+    || value.includes("\u5df2\u62a5\u540d")
+    || value.includes("\u5df2\u5173\u8054")
+    || value.includes("\u91cd\u590d\u63d0\u62a5");
+}
+
 export function preserveCancelledStatus(currentStatus: unknown, nextStatus: string) {
   return normalized(currentStatus) === "cancelled" ? "cancelled" : nextStatus;
 }

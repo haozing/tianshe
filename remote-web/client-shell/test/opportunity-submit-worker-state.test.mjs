@@ -68,5 +68,5 @@ test("submit worker uses two store slots and isolates rate limits by store", asy
   assert.match(domain, /pipeline-submit-retry-waiting/);
   assert.match(domain, /otherStoreTasksContinue:\s*slotCount > 1/);
   assert.match(domain, /otherStoreWorkersBlocked:\s*false/);
-  assert.match(domain, /rateLimitScope:\s*"store-only-test"/);
+  assert.match(domain, /rateLimitScope:\s*"store-only"/);
 });

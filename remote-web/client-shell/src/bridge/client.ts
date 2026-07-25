@@ -592,8 +592,15 @@ export async function fetchDoudianOpportunityReport(args: {
     ...(args.operationId ? { operationId: args.operationId } : {})
   }, { force: args.forceAdapter === true });
   const mode = args.mode || "clue-scan";
+  if (["clue-submit", "product-submit", "prematch-submit"].includes(mode)) {
+    throw new Error("Direct opportunity submit is retired; use the pipeline submit task");
+  }
   return runDoudianStoreTask({
-    taskType: ["clue-scan", "product-scan", "product-prematch"].includes(mode) ? "opportunityReportScan" : "opportunityReportAction",
+    taskType: mode === "pipeline-submit"
+      ? "opportunityPipelineSubmit"
+      : ["clue-scan", "product-scan", "product-prematch"].includes(mode)
+        ? "opportunityReportScan"
+        : "opportunityReportAction",
     operationId: args.operationId,
     metadata: { mutation: !["clue-scan", "product-scan", "product-prematch", "latest"].includes(mode), replaceActive: true },
     payload: nextArgs

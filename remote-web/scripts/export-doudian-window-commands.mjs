@@ -7,6 +7,7 @@ import { buildDoudianScripts } from "../client-shell/src/bridge/doudianScripts.t
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const adapterPath = resolve(root, "client-shell", "public", "config", "doudian-adapter.marketing-pilot.json");
 const outputPath = resolve(root, "client-shell", "public", "config", "doudian-window-commands.json");
+const deployOutputPath = resolve(root, "new-remote-web", "config", "doudian-window-commands.json");
 const adapterBuffer = readFileSync(adapterPath);
 const adapter = JSON.parse(adapterBuffer.toString("utf8"));
 const scripts = buildDoudianScripts(adapter);
@@ -23,5 +24,7 @@ const output = {
   }
 };
 
-writeFileSync(outputPath, `${JSON.stringify(output)}\n`, "utf8");
+const serialized = `${JSON.stringify(output)}\n`;
+writeFileSync(outputPath, serialized, "utf8");
+writeFileSync(deployOutputPath, serialized, "utf8");
 console.log(`DOUDIAN_WINDOW_COMMANDS_OK ${output.version}`);

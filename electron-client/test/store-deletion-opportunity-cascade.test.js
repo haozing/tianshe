@@ -163,6 +163,30 @@ test("deleting a store cancels active opportunity state without removing accepte
     shopName: "Delete Smoke Store",
     cacheScope: "global"
   });
+  await put("opportunity_benefit_product_indexes_v1", {
+    id: `${identity.tenantId}-${shopId}-${identity.storeGeneration}-benefit-product`,
+    ...identity,
+    productId: "benefit-product"
+  });
+  await put("opportunity_submit_history_records_v1", {
+    id: `${identity.tenantId}-${shopId}-${identity.storeGeneration}-history-record`,
+    ...identity,
+    remoteRecordId: "history-record",
+    productId: "history-product",
+    clueId: "history-clue"
+  });
+  await put("opportunity_submit_history_sync_v1", {
+    id: `${identity.tenantId}-${shopId}-${identity.storeGeneration}-sync`,
+    ...identity,
+    initialized: true,
+    updatedAt: new Date().toISOString()
+  });
+  await put("opportunity_submit_history_product_indexes_v1", {
+    id: `${identity.tenantId}-${shopId}-${identity.storeGeneration}-history-product`,
+    ...identity,
+    productId: "history-product",
+    associatedClueIds: ["history-clue"]
+  });
   await service.request("opportunityAttempts.putMany", {
     attempts: [{
       id: "accepted-attempt",
@@ -194,6 +218,10 @@ test("deleting a store cancels active opportunity state without removing accepte
   assert.equal(await get("opportunity_clue_cache_v2", "shop-clue-cache"), null);
   assert.equal(await get("opportunity_clue_cache_shards_v2", "shop-clue-cache-0"), null);
   assert.equal((await get("opportunity_clue_cache_v2", "global-clue-cache")).cacheScope, "global");
+  assert.equal(await get("opportunity_benefit_product_indexes_v1", `${identity.tenantId}-${shopId}-${identity.storeGeneration}-benefit-product`), null);
+  assert.equal(await get("opportunity_submit_history_records_v1", `${identity.tenantId}-${shopId}-${identity.storeGeneration}-history-record`), null);
+  assert.equal(await get("opportunity_submit_history_sync_v1", `${identity.tenantId}-${shopId}-${identity.storeGeneration}-sync`), null);
+  assert.equal(await get("opportunity_submit_history_product_indexes_v1", `${identity.tenantId}-${shopId}-${identity.storeGeneration}-history-product`), null);
   assert.equal((await get("opportunity_pipeline_runs_v2", runId)).status, "cancelled");
   assert.equal((await get("opportunity_pipeline_runs_v2", completedRunId)).status, "ok");
   assert.equal((await get("operations", operationId)).status, "cancelled");

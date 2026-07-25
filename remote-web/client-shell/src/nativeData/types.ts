@@ -109,6 +109,10 @@ export type NativeDataRecordStoreName =
   | "opportunity_official_clue_words_cache_v1"
   | "opportunity_official_clue_goods_cache_v1"
   | "opportunity_official_clue_goods_cache_shards_v1"
+  | "opportunity_benefit_product_indexes_v1"
+  | "opportunity_submit_history_records_v1"
+  | "opportunity_submit_history_sync_v1"
+  | "opportunity_submit_history_product_indexes_v1"
   | "opportunity_pipeline_candidates_v2"
   | "opportunity_pipeline_submit_tasks_v2"
   | "opportunity_pipeline_operation_events_v2"
@@ -542,7 +546,7 @@ export interface NativeDataApi {
   opportunityAttempts?: {
     putMany: (args: { attempts: Array<Record<string, unknown>> }) => Promise<{ ok: boolean; count: number }>;
     count: (args: { businessDate: string; shopId?: string }) => Promise<{ businessDate: string; shopId?: string; count?: number; counts?: Record<string, number> }>;
-    listDedupeKeys: () => Promise<{ relationKeys: string[]; clueKeys: string[]; clueCategoryKeys: string[] }>;
+    listDedupeKeys: (args?: { shopId?: string; shopIds?: string[] }) => Promise<{ relationKeys: string[]; clueKeys: string[]; clueCategoryKeys: string[] }>;
     findDedupeKeys: (args: { relationKeys?: string[]; clueKeys?: string[]; clueCategoryKeys?: string[] }) => Promise<{ relationKeys: string[]; clueKeys: string[]; clueCategoryKeys: string[] }>;
     cleanup: (args?: { failedRetentionDays?: number }) => Promise<{ ok: boolean; deleted: number; cutoff: string }>;
   };

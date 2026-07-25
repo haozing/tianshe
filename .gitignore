@@ -18,7 +18,8 @@ node_modules/
 .env.*
 !.env.oss.example
 archive
-docs
+docs/*
+!docs/chihu-opportunity-full-scan-association-cache-analysis.md
 kmsource
 remote-web/client-shell/src/domain/doudian
 !remote-web/client-shell/src/domain/doudian/

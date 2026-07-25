@@ -552,6 +552,10 @@ const NATIVE_RECORD_STORES = new Set([
   "opportunity_official_clue_words_cache_v1",
   "opportunity_official_clue_goods_cache_v1",
   "opportunity_official_clue_goods_cache_shards_v1",
+  "opportunity_benefit_product_indexes_v1",
+  "opportunity_submit_history_records_v1",
+  "opportunity_submit_history_sync_v1",
+  "opportunity_submit_history_product_indexes_v1",
   "opportunity_pipeline_candidates_v2",
   "opportunity_pipeline_submit_tasks_v2",
   "opportunity_pipeline_operation_events_v2",
@@ -980,12 +984,21 @@ function countOpportunitySubmitAttempts(args = {}) {
     : { businessDate: businessDateValue, counts: Object.fromEntries(row.map((item) => [item.shop_id, Number(item.count || 0)])) };
 }
 
-function listOpportunitySubmitDedupeKeys() {
+function listOpportunitySubmitDedupeKeys(args = {}) {
+  const shopIds = Array.from(new Set(
+    (Array.isArray(args.shopIds) ? args.shopIds : [args.shopId])
+      .map(normalizeString)
+      .filter(Boolean)
+  ));
+  const shopFilter = shopIds.length
+    ? ` AND shop_id IN (${shopIds.map(() => "?").join(", ")})`
+    : "";
   const rows = ensureDb().prepare(`
     SELECT relation_key, clue_key, clue_category_key
     FROM opportunity_submit_attempts_v2
     WHERE status IN ('accepted', 'confirmed')
-  `).all();
+    ${shopFilter}
+  `).all(...shopIds);
   return {
     relationKeys: Array.from(new Set(rows.map((row) => row.relation_key).filter(Boolean))),
     clueKeys: Array.from(new Set(rows.map((row) => row.clue_key).filter(Boolean))),
@@ -1495,6 +1508,18 @@ function cancelStoreOpportunityState(database, identity, ts, reason = "store-led
     const record = formatNativeRecord(row);
     if (!deletedOfficialGoodsCacheIds.has(normalizeString(record.cacheKey))) continue;
     summary.deletedCacheRecords += deleteNativeRecordRow(database, row);
+  }
+  for (const row of nativeRecordRows(database, "opportunity_benefit_product_indexes_v1")) {
+    const record = formatNativeRecord(row);
+    if (!nativeRecordMatchesIdentity(record, identity)) continue;
+    summary.deletedCacheRecords += deleteNativeRecordRow(database, row);
+  }
+  for (const storeName of ["opportunity_submit_history_records_v1", "opportunity_submit_history_sync_v1", "opportunity_submit_history_product_indexes_v1"]) {
+    for (const row of nativeRecordRows(database, storeName)) {
+      const record = formatNativeRecord(row);
+      if (!nativeRecordMatchesIdentity(record, identity)) continue;
+      summary.deletedCacheRecords += deleteNativeRecordRow(database, row);
+    }
   }
 
   for (const runId of affectedRunIds) {

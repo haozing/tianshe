@@ -64,6 +64,10 @@ test("task-specific modes fail closed", () => {
   assert.deepEqual(validateTaskParams("bulkDeleteScan", { mode: "scan", shopIds: ["1"] }), { mode: "scan", shopIds: ["1"] });
   assert.throws(() => validateTaskParams("bulkDeleteExecute", { mode: "scan" }), /mode must be execute/);
   assert.throws(() => validateTaskParams("opportunityReportScan", { mode: "collect" }), /mode is invalid/);
+  assert.deepEqual(validateTaskParams("opportunityReportAction", { mode: "collect", shopIds: ["shop-1"] }), { mode: "collect", shopIds: ["shop-1"] });
+  for (const mode of ["clue-submit", "product-submit", "prematch-submit"]) {
+    assert.throws(() => validateTaskParams("opportunityReportAction", { mode }), /mode is invalid/);
+  }
   assert.throws(() => validateTaskParams("notRegistered", {}), (error) => error.code === "TASK_TYPE_DENIED");
 });
 
@@ -100,6 +104,19 @@ test("each task receives only its audited request plans", () => {
   const businessPlans = allowedPlanKeys(TASK_DEFINITIONS.businessData, adapter);
   assert.equal(businessPlans.includes("businessHomepage"), true);
   assert.equal(businessPlans.some((key) => key.startsWith("marketing") || key.startsWith("opportunity")), false);
+  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.opportunityReportScan, adapter).sort(), [
+    "opportunityClueRealtimeList",
+    "opportunityProductList",
+    "opportunitySubmitHistoryList"
+  ]);
+  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.opportunityReportAction, adapter).sort(), ["opportunityCollectClue"]);
+  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.opportunityPipelineSubmit, adapter).sort(), [
+    "opportunityClueRealtimeList",
+    "opportunityEditGoodsTitle",
+    "opportunityProductList",
+    "opportunitySubmitClue",
+    "opportunitySubmitHistoryList"
+  ]);
 
   const marketingRead = { feature: "general_coupon", action: "list" };
   assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.marketingTask, adapter, marketingRead).sort(), [

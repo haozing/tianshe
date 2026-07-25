@@ -276,7 +276,7 @@ function SubmissionCount({ value, waiting }: { value: number; waiting: boolean }
   );
 }
 
-function CompactMetric({ label, value, detail, tone = "default" }: { label: string; value: number; detail?: string; tone?: "default" | "blue" | "green" | "warn" }) {
+function CompactMetric({ label, value, detail, tone = "default" }: { label: string; value: number | null; detail?: string; tone?: "default" | "blue" | "green" | "warn" }) {
   const toneClass = {
     default: "text-[#111827]",
     blue: "text-brand-navy",
@@ -287,7 +287,7 @@ function CompactMetric({ label, value, detail, tone = "default" }: { label: stri
     <div className="min-w-[112px] rounded-md border border-[#edf1f6] bg-[#fbfcff] px-3 py-2">
       <span className="block truncate text-[11px] font-semibold text-brand-muted">{label}</span>
       <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
-        <AnimatedNumber value={value} className={toneClass} />
+        {value === null ? <span className={cn("text-[18px] font-bold", toneClass)}>--</span> : <AnimatedNumber value={value} className={toneClass} />}
         {detail ? <span className="min-w-0 truncate text-[11px] font-semibold text-[#667085]">{detail}</span> : null}
       </div>
     </div>
@@ -538,8 +538,6 @@ function pipelineSnapshotLog(details: DoudianRunDetail[], summary: Record<string
   const productCount = Number(summary.productCount || 0);
   const clueCount = Number(summary.clueCount || 0);
   if (submittedCount || failedCount || safetySkippedCount) return `提报完成：提报数 ${formatNumber(submittedCount)} · 失败 ${formatNumber(failedCount)} · 安全跳过 ${formatNumber(safetySkippedCount)}`;
-  if (Number(summary.officialValidationObserveMode || 0)) return `官方校验观察完成：通过 ${formatNumber(summary.officialVerifiedCount)} · 未知 ${formatNumber(summary.validationUnknownCount)} · 未执行平台写入`;
-  if (Number(summary.officialValidationDisabledMode || 0)) return "官方校验已停用，未执行平台写入";
   if (productCount || clueCount) return `已同步：商品 ${formatNumber(productCount)} · 商机 ${formatNumber(clueCount)}`;
   return "等待一键提报";
 }
@@ -589,7 +587,7 @@ export function OpportunityProductPrematchPage() {
     tagIdList: selectedReasonIds,
     profitIdList: selectedBenefitIds,
     recentlyDayType,
-    cluePage: 5
+    clueCoveragePages: 5
   }), [activeRank, recentlyDayType, selectedBenefitIds, selectedReasonIds]);
 
   const matchRules = useMemo<DoudianOpportunityMatchRules>(() => ({
@@ -615,8 +613,9 @@ export function OpportunityProductPrematchPage() {
     const totalCount = summaryNumber("candidateTotalCount", summaryNumber("candidateCount", candidates.length));
     const loadedCount = candidates.length;
     const listTruncated = summaryNumber("candidateListTruncated", 0) > 0 || totalCount > loadedCount;
+    const localEligibleCount = summaryNumber("plannedSubmitCandidateCount", summaryNumber("eligibleCandidateCount", eligibleCount));
     return {
-      eligibleCount: summaryNumber("officialVerifiedCount", summaryNumber("plannedSubmitCandidateCount", summaryNumber("eligibleCandidateCount", eligibleCount))),
+      eligibleCount: localEligibleCount,
       submittedCount: summaryNumber("submittedCount", submittedCount),
       estimatedCost,
       totalCount,
@@ -673,6 +672,16 @@ export function OpportunityProductPrematchPage() {
       .map((store, index) => {
         const detail = detailsByIdentity.get(storeIdentityKey(store));
         const productCount = detailDiagnosticNumber(detail, "productCount") || productCountByShop.get(store.shopId) || 0;
+        const benefitProductValue = detailDiagnosticOptionalNumber(detail, "benefitProductCount");
+        const benefitProductCount = benefitProductValue ?? 0;
+        const benefitLoaded = benefitProductValue !== undefined;
+        const benefitAcquiredExposure = detailDiagnosticNumber(detail, "benefitAcquiredExposure");
+        const benefitEstimatedExposure = detailDiagnosticNumber(detail, "benefitEstimatedExposure");
+        const benefitAcquiredExposureUnparsedCount = detailDiagnosticNumber(detail, "benefitAcquiredExposureUnparsedCount");
+        const benefitEstimatedExposureUnparsedCount = detailDiagnosticNumber(detail, "benefitEstimatedExposureUnparsedCount");
+        const benefitSubmitRecordCount = detailDiagnosticNumber(detail, "benefitSubmitRecordCount");
+        const benefitAssociatedClueCount = detailDiagnosticNumber(detail, "benefitAssociatedClueCount");
+        const benefitSaturatedProductCount = detailDiagnosticNumber(detail, "benefitSaturatedProductCount");
         const clueCount = detailDiagnosticNumber(detail, "clueCount");
         const candidateCount = detailDiagnosticNumber(detail, "candidateCount") || candidateCountByShop.get(store.shopId) || 0;
         const qualifiedCandidateCount = detailDiagnosticOptionalNumber(detail, "qualifiedCandidateCount") ?? candidateCount;
@@ -698,6 +707,15 @@ export function OpportunityProductPrematchPage() {
           status,
           phase: diagnosticPhase || messagePhase,
           productCount,
+          benefitProductCount,
+          benefitLoaded,
+          benefitAcquiredExposure,
+          benefitEstimatedExposure,
+          benefitAcquiredExposureUnparsedCount,
+          benefitEstimatedExposureUnparsedCount,
+          benefitSubmitRecordCount,
+          benefitAssociatedClueCount,
+          benefitSaturatedProductCount,
           clueCount,
           candidateCount,
           qualifiedCandidateCount,
@@ -711,6 +729,38 @@ export function OpportunityProductPrematchPage() {
       })
       .sort((left, right) => storeRunPriority(left.status, left.phase) - storeRunPriority(right.status, right.phase) || left.index - right.index);
   }, [candidateCountByShop, productCountByShop, runDetails, stores]);
+
+  const selectedBenefitOverview = useMemo(() => storeRunRows.reduce((overview, row) => {
+    if (!selectedShopIds.has(row.shopId)) return overview;
+    overview.selectedStoreCount += 1;
+    if (row.benefitLoaded) overview.loadedStoreCount += 1;
+    if (row.status === "failed") overview.failedStoreCount += 1;
+    overview.productCount += row.benefitProductCount;
+    overview.acquiredExposure += row.benefitAcquiredExposure;
+    overview.estimatedExposure += row.benefitEstimatedExposure;
+    overview.acquiredExposureUnparsedCount += row.benefitAcquiredExposureUnparsedCount;
+    overview.estimatedExposureUnparsedCount += row.benefitEstimatedExposureUnparsedCount;
+    overview.submitRecordCount += row.benefitSubmitRecordCount;
+    overview.associatedClueCount += row.benefitAssociatedClueCount;
+    overview.saturatedProductCount += row.benefitSaturatedProductCount;
+    return overview;
+  }, {
+    productCount: 0,
+    acquiredExposure: 0,
+    estimatedExposure: 0,
+    acquiredExposureUnparsedCount: 0,
+    estimatedExposureUnparsedCount: 0,
+    submitRecordCount: 0,
+    associatedClueCount: 0,
+    saturatedProductCount: 0,
+    selectedStoreCount: 0,
+    loadedStoreCount: 0,
+    failedStoreCount: 0
+  }), [selectedShopIds, storeRunRows]);
+  const benefitOverviewComplete = selectedBenefitOverview.selectedStoreCount > 0
+    && selectedBenefitOverview.loadedStoreCount === selectedBenefitOverview.selectedStoreCount
+    && selectedBenefitOverview.failedStoreCount === 0;
+  const benefitOverviewPendingDetail = pipelineBusy ? "计算中" : "数据不完整";
 
   const categoryOptions = useMemo<StoreCategoryOption[]>(() => {
     const byKey = new Map<string, StoreCategoryOption>();
@@ -807,12 +857,15 @@ export function OpportunityProductPrematchPage() {
     }
     actionLockRef.current = false;
     setPipelineInFlight(false);
-    if (detail.status === "succeeded") {
+    if (detail.status === "succeeded" || detail.status === "failed") {
       const runId = activePipelineOperationIdRef.current;
-      activePipelineOperationIdRef.current = "";
       lastPipelineSnapshotRefreshRef.current = 0;
-      recordPipelineLog("一键提报完成，正在刷新结果");
-      void restorePipelineRun(runId);
+      recordPipelineLog(detail.status === "succeeded" ? "一键提报完成，正在刷新结果" : "一键提报结束，正在刷新最终结果");
+      void restorePipelineRun(runId, { updatePipelineLog: true }).catch((error) => {
+        recordPipelineLog(`提报结束，但结果加载失败：${error instanceof Error ? error.message : String(error)}`);
+      }).finally(() => {
+        if (activePipelineOperationIdRef.current === runId) activePipelineOperationIdRef.current = "";
+      });
       return;
     }
     if (detail.status === "cancelled") {
@@ -849,10 +902,15 @@ export function OpportunityProductPrematchPage() {
 
   async function initializePage() {
     const activeStores = await refreshStores({ selectAllWhenEmpty: true });
-    await restoreLatest(activeStores);
-    if (!activeStores.length) return;
+    if (!activeStores.length) {
+      await refreshStoreCategories([]);
+      return;
+    }
     const operation = await restoreDoudianOpportunityPipelineTask().catch(() => null);
-    if (!operation) return;
+    if (!operation) {
+      await refreshStoreCategories(activeStores);
+      return;
+    }
     actionLockRef.current = true;
     activePipelineOperationIdRef.current = operation.operationId;
     setMatchRunId(operation.operationId);
@@ -1099,15 +1157,23 @@ export function OpportunityProductPrematchPage() {
     }
     actionLockRef.current = true;
     setPipelineInFlight(true);
+    pipelineSnapshotRequestSeqRef.current += 1;
+    lastPipelineSnapshotRefreshRef.current = 0;
     const operationId = `opportunity-pipeline-submit-${Date.now()}`;
     setMatchRunId(operationId);
+    setProducts([]);
+    setClues([]);
     setCandidates([]);
+    setExecutions([]);
     setAutoSubmitPage(0);
     setCandidatePageCursors([null]);
     setCandidateNextCursor(null);
     setCandidateHasMore(false);
     setRunDetails([]);
     setResultSummary({});
+    setProductRunId("");
+    setClueRunId("");
+    setPipelineLogs([]);
     recordPipelineLog(`店铺范围：已选择 ${selectedShopIds.size} 家店铺`);
     recordPipelineLog("提报模式：自动匹配商品与商机词");
     recordPipelineLog("一键提报：任务已启动，正在创建后台任务");
@@ -1173,7 +1239,7 @@ export function OpportunityProductPrematchPage() {
               恢复上次结果
             </button>
           </div>
-          <div className="grid shrink-0 grid-cols-4 gap-2 max-[980px]:grid-cols-2 max-[560px]:grid-cols-1">
+          <div className="grid shrink-0 grid-cols-7 gap-2 max-[1380px]:grid-cols-4 max-[980px]:grid-cols-2 max-[560px]:grid-cols-1">
             <CompactMetric label="店铺进度" value={processedStoreCount || storeRunRows.length} detail={`/ ${formatNumber(totalStoreCount || selectedShopIds.size)}`} tone="blue" />
             <CompactMetric
               label="商品数"
@@ -1186,6 +1252,9 @@ export function OpportunityProductPrematchPage() {
               detail={clueTruncatedCategoryCount ? `${formatNumber(clueTruncatedCategoryCount)} 个类目截断` : undefined}
               tone="green"
             />
+            <CompactMetric label="报名商品" value={benefitOverviewComplete ? selectedBenefitOverview.productCount : null} detail={benefitOverviewComplete ? undefined : benefitOverviewPendingDetail} />
+            <CompactMetric label="报名记录" value={benefitOverviewComplete ? selectedBenefitOverview.submitRecordCount : null} detail={benefitOverviewComplete ? undefined : benefitOverviewPendingDetail} tone="blue" />
+            <CompactMetric label="满额商品" value={benefitOverviewComplete ? selectedBenefitOverview.saturatedProductCount : null} detail={benefitOverviewComplete ? undefined : benefitOverviewPendingDetail} tone="warn" />
             <CompactMetric label="提报数" value={candidateSummary.submittedCount} tone="green" />
           </div>
         </div>

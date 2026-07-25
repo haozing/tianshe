@@ -327,7 +327,7 @@ export function OpportunityReportPage() {
     clueBrandExists: brand === "all" ? null : brand === "known",
     recentlyDayType,
     benefitContentType: contentTypes,
-    cluePage
+    clueCoveragePages: cluePage
   }), [activeRank, benefit, brand, cluePage, contentTypes, query, reason, recentlyDayType]);
 
   async function refreshStores() {

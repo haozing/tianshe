@@ -1039,6 +1039,8 @@ export interface DoudianOpportunityFilters {
   recentlyDayType?: number;
   benefitContentType?: string | string[];
   cluePage?: number;
+  clueCoveragePages?: number;
+  benefitDatePeriod?: number;
   categoryPath?: DoudianOpportunityCategoryRef[];
   categoryLeafId?: string | number;
   startTime?: string;
@@ -1096,6 +1098,12 @@ export interface PipelineInputCoverage {
   clueFetchedUniqueCount: number;
   clueRemoteTotalByCategory: Record<string, number | null>;
   clueTruncatedCategoryCount: number;
+  benefitScanStatus: "complete" | "truncated" | "failed";
+  benefitFetchedUniqueProductCount: number;
+  benefitRemoteTotal?: number;
+  benefitRemoteTotalKnown: boolean;
+  benefitNextPage?: number;
+  clueCoverageSatisfied: boolean;
   coverageVersion: string;
 }
 

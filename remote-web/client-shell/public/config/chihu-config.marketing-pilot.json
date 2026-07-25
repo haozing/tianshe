@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.21.stale-goods-real-execution-v1-marketing-write-v1",
+  "version": "2026.07.24.opportunity-clue-id-contract-v1-marketing-write-v1",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "701fa1d-dirty",
-    "buildTime": "2026-07-21T13:05:40.968Z"
+    "gitCommit": "4bbde93-dirty",
+    "buildTime": "2026-07-24T11:57:10.523Z"
   }
 }

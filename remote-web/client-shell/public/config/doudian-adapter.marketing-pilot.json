@@ -57,6 +57,7 @@
       "businessSmartActivityNewUserBonus",
       "businessOnSaleProducts",
       "businessOfflineProducts",
+      "fundAccountOpenInfo",
       "fundAccountCenter",
       "fundPledgeCash",
       "fundPledgePayable",
@@ -78,10 +79,9 @@
       "bulkDeleteCompleteDelete",
       "opportunityClueRealtimeList",
       "opportunitySubmitClue",
-      "opportunityClueWords",
       "opportunityEditGoodsTitle",
       "opportunityCategoryList",
-      "opportunityClueGoodsList",
+      "opportunitySubmitHistoryList",
       "opportunityProductList",
       "opportunityCollectClue",
       "opportunityFavoriteAutoSubmitPage",
@@ -282,12 +282,12 @@
           "action": "collectFundsData",
           "requestPlans": [
             "fundAccountList",
+            "fundAccountOpenInfo",
             "fundPledgeCash",
             "fundPledgePayable",
             "fundShopAwardOverview",
             "fundCompensateStatistics",
             "fundBillQuery",
-            "fundAccountOpenInfo",
             "fundAccountCenter",
             "fundShopDepositPage"
           ]
@@ -408,9 +408,8 @@
           "action": "executeOpportunitySubmit",
           "requestPlans": [
             "opportunityClueRealtimeList",
-            "opportunityClueWords",
             "opportunityProductList",
-            "opportunityClueGoodsList",
+            "opportunitySubmitHistoryList",
             "opportunityEditGoodsTitle",
             "opportunitySubmitClue"
           ]
@@ -469,6 +468,7 @@
     "businessCreditScoreLevel": "/ecology/front/shopXzg/score/level",
     "businessOnSaleProducts": "/product_diagnose/tproduct/get_diagnose_recommend_product_pool",
     "businessOfflineProducts": "/product/tproduct/list",
+    "fundAccountOpenInfo": "/ecom/merchant/queryAccountOpenInfo",
     "fundAccountCenter": "/ffa/fund-control/account-center",
     "fundPledgeCash": "/shopuser/govern/bff/api/tpledgecash/index",
     "fundPledgePayable": "/governance/shop/tpledgecash/payable/info_v2",
@@ -493,6 +493,7 @@
     "opportunityEditGoodsTitle": "/api/commop/business_chance_center/product/batch/edit",
     "opportunityCategoryList": "/api/commop/business_chance_center/shop_full_category/list",
     "opportunityClueGoodsList": "/api/commop/business_chance_center/product/list",
+    "opportunitySubmitHistoryList": "/api/commop/business_chance_center/item_submit/common/list",
     "opportunityProductList": "/product/tproduct/list",
     "opportunityCollectClue": "/api/commop/business_chance_center/clue/auto_submit/open",
     "opportunityFavoriteAutoSubmitPage": "/api/commop/business_chance_center/clue/auto_submit/page",
@@ -514,8 +515,7 @@
     "marketingNewUserBonusCreate": "/marketing/union_allowance/v1/create_apply",
     "marketingNewUserBonusDisable": "/marketing/union_allowance/v1/disable_apply",
     "marketingGeneralCouponCreate": "/marketing/coupons/v1/shopcoupons?_bid=ecom_market_shop&appid=1",
-    "marketingGeneralCouponToggleRenew": "/marketing/promotion/v1/operate_activity_ext_info",
-    "fundAccountOpenInfo": "/ecom/merchant/queryAccountOpenInfo"
+    "marketingGeneralCouponToggleRenew": "/marketing/promotion/v1/operate_activity_ext_info"
   },
   "selectors": {
     "headerShopName": [
@@ -2142,6 +2142,15 @@
         "opportunityProductList.data.data.total",
         "opportunityProductList.total"
       ],
+      "submitHistoryListPaths": [
+        "opportunitySubmitHistoryList.data",
+        "opportunitySubmitHistoryList.data.list",
+        "opportunitySubmitHistoryList.list"
+      ],
+      "submitHistoryTotalPaths": [
+        "opportunitySubmitHistoryList.total",
+        "opportunitySubmitHistoryList.data.total"
+      ],
       "clueGoodsListPaths": [
         "opportunityClueGoodsList.data",
         "opportunityClueGoodsList.data.data",
@@ -2173,6 +2182,17 @@
         "price": 100
       },
       "fields": {
+        "clueId": [
+          "clue_detail.clue_id",
+          "clue_detail.clueId",
+          "clueDetail.clue_id",
+          "clueDetail.clueId",
+          "detail.clue_id",
+          "detail.clueId",
+          "clue_id",
+          "clueId",
+          "id"
+        ],
         "productId": [
           "product_id",
           "productId",
@@ -3645,6 +3665,34 @@
       "retryDelayMs": 1200,
       "retryBackoff": "linear"
     },
+    "fundAccountOpenInfo": {
+      "endpointKey": "fundAccountOpenInfo",
+      "method": "POST",
+      "sign": false,
+      "includeEmptySignature": false,
+      "requestMode": "platform",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Origin": "https://fxg.jinritemai.com"
+      },
+      "referer": "https://fxg.jinritemai.com/ffa/ecom/merchant/payment-settings",
+      "body": {
+        "merchant_ecom_source": "/pc/fxg",
+        "exts": {}
+      },
+      "retryOnHttpError": false,
+      "maxAttempts": 1,
+      "successPaths": [
+        "opened_info.NEW_HZ.bank_settle_card",
+        "data.opened_info.NEW_HZ.bank_settle_card"
+      ],
+      "allowMissingCode": false,
+      "failureMessages": [
+        "未登录",
+        "请登录"
+      ]
+    },
     "fundAccountCenter": {
       "endpointKey": "fundAccountCenter",
       "method": "GET",
@@ -4556,6 +4604,51 @@
       "successPaths": [
         "data",
         "data.data"
+      ]
+    },
+    "opportunitySubmitHistoryList": {
+      "endpointKey": "opportunitySubmitHistoryList",
+      "method": "POST",
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/bu/NewBusinessCenter",
+      "signDomain": ".jinritemai.com",
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "signQuery": "",
+      "signBody": "{bodyJson}",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Origin": "https://fxg.jinritemai.com"
+      },
+      "body": "{bodyJson}",
+      "retryOnHttpError": true,
+      "retryOnBusinessFailure": true,
+      "maxAttempts": 2,
+      "retryDelayMs": 1200,
+      "retryBackoff": "linear",
+      "allowMissingCode": true,
+      "successCodes": [
+        0,
+        "0",
+        200,
+        "200"
+      ],
+      "successPaths": [
+        "data",
+        "data.data"
+      ],
+      "successStatusPaths": [
+        "base_resp.status_code",
+        "data.base_resp.status_code"
       ]
     },
     "opportunityProductList": {
@@ -5674,34 +5767,6 @@
       "mutation": true,
       "prepareRetryAttempts": 0,
       "reconcilePlanKey": "marketingGeneralCouponDetail"
-    },
-    "fundAccountOpenInfo": {
-      "endpointKey": "fundAccountOpenInfo",
-      "method": "POST",
-      "sign": false,
-      "includeEmptySignature": false,
-      "requestMode": "platform",
-      "headers": {
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-        "Origin": "https://fxg.jinritemai.com"
-      },
-      "referer": "https://fxg.jinritemai.com/ffa/ecom/merchant/payment-settings",
-      "body": {
-        "merchant_ecom_source": "/pc/fxg",
-        "exts": {}
-      },
-      "retryOnHttpError": false,
-      "maxAttempts": 1,
-      "successPaths": [
-        "opened_info.NEW_HZ.bank_settle_card",
-        "data.opened_info.NEW_HZ.bank_settle_card"
-      ],
-      "allowMissingCode": false,
-      "failureMessages": [
-        "未登录",
-        "请登录"
-      ]
     }
   },
   "policies": {
@@ -7402,9 +7467,16 @@
       "ruleVersion": "opportunity-report-rule.xzb-v1",
       "fieldSchemaVersion": "opportunity-report-fields.xzb-v1",
       "cluePageSize": 72,
-      "maxCluePages": 2,
+      "clueCoveragePages": 5,
+      "maxCluePages": 200,
       "productPageSize": 100,
-      "maxProductListPages": 10,
+      "maxProductListPages": 100,
+      "submitHistoryPageSize": 100,
+      "maxSubmitHistoryPagesPerWindow": 1000,
+      "submitHistoryWindowDays": 31,
+      "submitHistoryInitialLookbackDays": 30,
+      "submitHistoryIncrementalOverlapSeconds": 86400,
+      "submitHistoryPageDelayMs": 150,
       "productPageStart": 0,
       "officialProductPageSize": 100,
       "maxOfficialProductPages": 20,
@@ -7425,42 +7497,23 @@
       "submitLeaseRenewalMs": 120000,
       "maxTitleLength": 60,
       "enableRemoteClueWords": false,
-      "officialValidationMode": "observe",
-      "officialValidationBaselineVerified": false,
-      "officialValidationPolicyVersion": "official-validation-policy-v1",
-      "officialWordsContractVersion": "official-words-contract-unverified-v1",
-      "officialGoodsContractVersion": "official-goods-contract-unverified-v1",
-      "officialWordsSemantics": "unknown",
-      "officialGoodsContractMode": "unknown",
-      "goodsMembershipSufficientForSubmit": false,
-      "wordsRequiredForSubmit": true,
-      "officialGoodsAbsenceIsHardRejection": false,
       "anchorEnforcementMode": "observe",
       "validatedAnchorWordsByClueId": {},
       "validatedAnchorWordsByClueName": {},
-      "officialValidationCandidateDepthMin": 2,
-      "officialValidationCandidateDepthMax": 5,
-      "officialValidationConcurrency": 2,
-      "officialGoodsPageConcurrency": 2,
-      "officialValidationMaxGroupsPerStore": 20,
-      "officialValidationMaxRequestsPerStore": 100,
-      "officialWordsCacheTtlMinutes": 360,
-      "officialGoodsCacheTtlMinutes": 15,
-      "officialEmptyGoodsCacheTtlMinutes": 5,
-      "officialValidationTimeoutMsPerStore": 60000,
+      "candidateLimitPerProduct": 5,
       "preparingTaskTtlMinutes": 60,
-      "inputCoverageMode": "report",
+      "inputCoverageMode": "enforce",
       "canaryDailyAttemptLimit": 10,
-      "pipelineCacheScope": "shop",
-      "enableGlobalPipelineCache": false,
+      "pipelineCacheScope": "global",
+      "enableGlobalPipelineCache": true,
+      "clueCacheTtlHours": 1,
       "titleAppendSeparator": " ",
       "requestPlans": [
         "opportunityClueRealtimeList",
         "opportunitySubmitClue",
-        "opportunityClueWords",
         "opportunityEditGoodsTitle",
         "opportunityCategoryList",
-        "opportunityClueGoodsList",
+        "opportunitySubmitHistoryList",
         "opportunityProductList",
         "opportunityCollectClue"
       ],

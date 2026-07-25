@@ -43,7 +43,7 @@ const OPPORTUNITY_RUNTIME_SCOPES = [{
   recordIds: ["opportunity-submit-attempts-v2-migration", "opportunity-retention-v1"],
   actions: ["read", "write"]
 }];
-const OPPORTUNITY_DATA_STORES = ["opportunity_clue_scan_runs_v1", "opportunity_clue_candidates_v1", "opportunity_product_scan_runs_v1", "opportunity_product_candidates_v1", "opportunity_prematch_runs_v1", "opportunity_prematch_candidates_v1", "opportunity_execute_runs_v1", "opportunity_submit_attempts_v1", "opportunity_pipeline_runs_v2", "opportunity_pipeline_store_runs_v2", "opportunity_store_category_snapshots_v2", "opportunity_store_category_ledger_v2", "opportunity_clue_cache_v2", "opportunity_clue_cache_shards_v2", "opportunity_clue_word_cache_v2", "opportunity_clue_word_cache_shards_v2", "opportunity_official_clue_words_cache_v1", "opportunity_official_clue_goods_cache_v1", "opportunity_official_clue_goods_cache_shards_v1", "opportunity_pipeline_candidates_v2", "opportunity_pipeline_submit_tasks_v2", "opportunity_pipeline_operation_events_v2"];
+const OPPORTUNITY_DATA_STORES = ["opportunity_clue_scan_runs_v1", "opportunity_clue_candidates_v1", "opportunity_product_scan_runs_v1", "opportunity_product_candidates_v1", "opportunity_prematch_runs_v1", "opportunity_prematch_candidates_v1", "opportunity_execute_runs_v1", "opportunity_submit_attempts_v1", "opportunity_pipeline_runs_v2", "opportunity_pipeline_store_runs_v2", "opportunity_store_category_snapshots_v2", "opportunity_store_category_ledger_v2", "opportunity_clue_cache_v2", "opportunity_clue_cache_shards_v2", "opportunity_clue_word_cache_v2", "opportunity_clue_word_cache_shards_v2", "opportunity_official_clue_words_cache_v1", "opportunity_official_clue_goods_cache_v1", "opportunity_official_clue_goods_cache_shards_v1", "opportunity_benefit_product_indexes_v1", "opportunity_submit_history_records_v1", "opportunity_submit_history_sync_v1", "opportunity_submit_history_product_indexes_v1", "opportunity_pipeline_candidates_v2", "opportunity_pipeline_submit_tasks_v2", "opportunity_pipeline_operation_events_v2"];
 
 function marketingRecordScopes(actions) {
   return [
@@ -90,7 +90,7 @@ const VIOLATION_PLANS = ["violationRiskTicketList", "violationPenaltyTicketList"
 const STALE_SCAN_PLANS = ["staleGoodsProductList", "staleGoodsRecommendAdmit", "staleGoodsCompassDownload"];
 const STALE_EXECUTE_PLANS = [...STALE_SCAN_PLANS, "staleGoodsBatchOffline", "staleGoodsBatchDelete", "staleGoodsCompleteDelete"];
 const BULK_DELETE_PLANS = ["bulkDeleteProductList", "bulkDeleteBatchDelete", "bulkDeleteCompleteDelete"];
-const OPPORTUNITY_SUBMIT_PLANS = ["opportunityClueRealtimeList", "opportunityClueWords", "opportunityProductList", "opportunityClueGoodsList", "opportunityEditGoodsTitle", "opportunitySubmitClue"];
+const OPPORTUNITY_SUBMIT_PLANS = ["opportunityClueRealtimeList", "opportunitySubmitHistoryList", "opportunityProductList", "opportunityEditGoodsTitle", "opportunitySubmitClue"];
 
 const MARKETING_PLAN_POLICY = Object.freeze({
   limited_time: Object.freeze({
@@ -159,8 +159,8 @@ const TASK_DEFINITIONS = Object.freeze({
   staleGoodsExecute: definition("free", true, STALE_EXECUTE_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["stale_scan_runs", "stale_candidates", "stale_execute_runs"], ["read", "write", "delete"]), ...CATALOG_IDENTITY_SCOPES]),
   bulkDeleteScan: definition("free", false, ["bulkDeleteProductList"], [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["bulk_delete_scan_runs_v1", "bulk_delete_candidates_v1", "bulk_delete_execute_runs_v1", "bulk_delete_operation_events_v1"], ["read", "write", "delete"]), ...CATALOG_IDENTITY_SCOPES]),
   bulkDeleteExecute: definition("free", true, BULK_DELETE_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["bulk_delete_scan_runs_v1", "bulk_delete_candidates_v1", "bulk_delete_execute_runs_v1", "bulk_delete_operation_events_v1"], ["read", "write", "delete"]), ...CATALOG_IDENTITY_SCOPES]),
-  opportunityReportScan: definition("paid", false, ["opportunityClueRealtimeList", "opportunityProductList"], [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(OPPORTUNITY_DATA_STORES, ["read", "write", "delete"]), ...OPPORTUNITY_RUNTIME_SCOPES, ...CATALOG_IDENTITY_SCOPES, ...OPPORTUNITY_ATTEMPT_SCOPES]),
-  opportunityReportAction: definition("paid", true, (params) => String(params.mode || "") === "collect" ? ["opportunityCollectClue"] : OPPORTUNITY_SUBMIT_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(OPPORTUNITY_DATA_STORES, ["read", "write", "delete"]), ...OPPORTUNITY_RUNTIME_SCOPES, ...CATALOG_IDENTITY_SCOPES, ...OPPORTUNITY_ATTEMPT_SCOPES]),
+  opportunityReportScan: definition("paid", false, ["opportunityClueRealtimeList", "opportunitySubmitHistoryList", "opportunityProductList"], [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(OPPORTUNITY_DATA_STORES, ["read", "write", "delete"]), ...OPPORTUNITY_RUNTIME_SCOPES, ...CATALOG_IDENTITY_SCOPES, ...OPPORTUNITY_ATTEMPT_SCOPES]),
+  opportunityReportAction: definition("paid", true, ["opportunityCollectClue"], [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(OPPORTUNITY_DATA_STORES, ["read", "write", "delete"]), ...OPPORTUNITY_RUNTIME_SCOPES, ...CATALOG_IDENTITY_SCOPES, ...OPPORTUNITY_ATTEMPT_SCOPES]),
   opportunityFavoriteCategories: definition("paid", false, ["opportunityCategoryList"], STORE_LEDGER_READ_SCOPES),
   opportunityPipelineSubmit: definition("paid", true, OPPORTUNITY_SUBMIT_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(OPPORTUNITY_DATA_STORES, ["read", "write", "delete"]), ...OPPORTUNITY_RUNTIME_SCOPES, ...CATALOG_IDENTITY_SCOPES, ...OPPORTUNITY_ATTEMPT_SCOPES]),
   opportunityAutoFavorites: definition("paid", true, ["opportunityClueRealtimeList", "opportunityCategoryList", "opportunityCollectClue"], [...STORE_LEDGER_READ_SCOPES, ...STORE_ASSERT_SCOPE]),
@@ -278,7 +278,7 @@ function validateTaskParams(taskType, value) {
   if (taskType === "staleGoodsScan" && mode && mode !== "scan") throw paramsError("staleGoodsScan mode must be scan");
   if (taskType === "staleGoodsExecute" && mode !== "execute") throw paramsError("staleGoodsExecute mode must be execute");
   if (taskType === "opportunityReportScan" && !["clue-scan", "product-scan", "product-prematch"].includes(mode)) throw paramsError("opportunityReportScan mode is invalid");
-  if (taskType === "opportunityReportAction" && !["clue-submit", "product-submit", "prematch-submit", "collect"].includes(mode)) throw paramsError("opportunityReportAction mode is invalid");
+  if (taskType === "opportunityReportAction" && mode !== "collect") throw paramsError("opportunityReportAction mode is invalid");
   if (taskType === "opportunityPipelineSubmit" && mode !== "pipeline-submit") throw paramsError("opportunityPipelineSubmit mode is invalid");
   if (taskType === "marketingTask") {
     marketingPolicy(params);

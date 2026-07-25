@@ -2,6 +2,12 @@ export function productCandidateKey(candidate: { shopId: string; productId: stri
   return `${candidate.shopId}::${candidate.productId}`;
 }
 
+export function boundedProductCandidateLimit(configuredTopK: number, taskCandidateLimit: number) {
+  const configured = Math.max(1, Math.floor(Number(configuredTopK || 1)));
+  const taskLimit = Math.max(1, Math.floor(Number(taskCandidateLimit || 1)));
+  return Math.min(configured, taskLimit);
+}
+
 export function compareCandidatesByEvidence<T extends {
   matchScore: number;
   matchedWeightRatio?: number;
@@ -30,4 +36,30 @@ export function flattenProductTopK<T extends { shopId: string; productId: string
   topMatches: Map<string, T[]>
 ) {
   return Array.from(topMatches.values()).flat().sort(compareCandidatesByEvidence);
+}
+
+export function rankCandidatesAfterFiltering<T extends {
+  matchScore: number;
+  matchedWeightRatio?: number;
+  matchedTokenCount?: number;
+  clueName?: string;
+}>(
+  candidates: T[],
+  args: { limit: number; skipReason: (candidate: T) => string }
+) {
+  const skipped: Array<{ candidate: T; skipReason: string }> = [];
+  const eligible: T[] = [];
+  for (const candidate of candidates) {
+    const skipReason = String(args.skipReason(candidate) || "");
+    if (skipReason) skipped.push({ candidate, skipReason });
+    else eligible.push(candidate);
+  }
+  const limit = Math.max(1, Math.floor(Number(args.limit || 1)));
+  return {
+    ranked: eligible
+      .sort(compareCandidatesByEvidence)
+      .slice(0, limit)
+      .map((candidate, index) => ({ candidate, rankForProduct: index + 1 })),
+    skipped
+  };
 }

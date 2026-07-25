@@ -58,18 +58,28 @@ export function officialEnforcementReady(args: {
     && args.anchorEnforcementMode === "enforce_high_confidence";
 }
 
+export interface OpportunityCoverageGate {
+  productComplete: boolean;
+  benefitComplete: boolean;
+  clueCoverageSatisfied: boolean;
+}
+
 export function officialWriteAllowed(
-  mode: "disabled" | "observe" | "enforce" | "legacy",
-  inputCoverageStatus?: "complete" | "partial_coverage" | "failed",
-  inputCoverageMode: "enforce" | "report" = "enforce"
+  mode: "disabled" | "local" | "observe" | "enforce" | "legacy",
+  coverage?: OpportunityCoverageGate | "complete" | "partial_coverage" | "failed"
 ) {
-  const coverageAllowsWrite = inputCoverageStatus === "complete"
-    || (inputCoverageMode === "report" && inputCoverageStatus === "partial_coverage");
+  // Keep accepting the persisted status used by old tasks, but never let the
+  // legacy report mode turn partial input into a write permission.
+  const coverageAllowsWrite = typeof coverage === "string"
+    ? coverage === "complete"
+    : coverage?.productComplete === true
+      && coverage.benefitComplete === true
+      && coverage.clueCoverageSatisfied === true;
   return mode !== "disabled" && coverageAllowsWrite;
 }
 
 export function officialDecisionAllowsWrite(args: {
-  mode: "observe" | "enforce";
+  mode: "local" | "observe" | "enforce";
   writeEnabled: boolean;
   locallyEligible: boolean;
   localStatus: string;
@@ -91,6 +101,7 @@ export interface InputScanFacts {
   requestFailed?: boolean;
   schemaMismatch?: boolean;
   fetchedCount: number;
+  uniqueFetchedCount?: number;
   remoteTotal?: number;
   remoteTotalKnown: boolean;
   fetchedPages: number;
@@ -99,11 +110,26 @@ export interface InputScanFacts {
   lastPageRowCount?: number;
   explicitLastPage?: boolean;
   limitReached?: boolean;
+  duplicatePage?: boolean;
+  totalZeroWithRows?: boolean;
 }
 
 export interface InputScanCoverage {
   status: "complete" | "truncated" | "failed";
   nextPage?: number;
+}
+
+export function clueCoverageSatisfiesPolicy(args: {
+  status: InputScanCoverage["status"];
+  fetchedPages: number;
+  requestedPages: number;
+  pageBudgetSatisfiesCoverage?: boolean;
+}) {
+  return args.status === "complete" || (
+    args.pageBudgetSatisfiesCoverage === true &&
+    args.status === "truncated" &&
+    args.fetchedPages >= args.requestedPages
+  );
 }
 
 function uniqueNormalized(values: string[]) {
@@ -174,22 +200,38 @@ export function parseOfficialBusinessStatus(payload: unknown, statusPaths: strin
 }
 
 export function evaluateInputScanCoverage(facts: InputScanFacts): InputScanCoverage {
-  if (facts.requestFailed || facts.schemaMismatch) return { status: "failed" };
+  if (facts.requestFailed || facts.schemaMismatch || facts.duplicatePage || facts.totalZeroWithRows) return { status: "failed" };
+  const effectiveFetchedCount = facts.uniqueFetchedCount ?? facts.fetchedCount;
   const totalComplete = facts.remoteTotalKnown
     && facts.remoteTotal !== undefined
-    && facts.fetchedCount >= Math.max(0, facts.remoteTotal);
+    && effectiveFetchedCount >= Math.max(0, facts.remoteTotal);
   const shortPageComplete = facts.fetchedPages > 0
     && facts.lastPageRowCount !== undefined
     && facts.lastPageRowCount < facts.pageSize;
   const declaredLastPage = Boolean(facts.explicitLastPage || shortPageComplete);
   const totalContradictsLastPage = facts.remoteTotalKnown
     && facts.remoteTotal !== undefined
-    && facts.fetchedCount < Math.max(0, facts.remoteTotal)
+    && effectiveFetchedCount < Math.max(0, facts.remoteTotal)
     && declaredLastPage;
   if (totalContradictsLastPage) return { status: "failed" };
   if (totalComplete || (!facts.remoteTotalKnown && declaredLastPage)) return { status: "complete" };
   if (facts.limitReached || facts.fetchedPages >= facts.maxPages) return { status: "truncated", nextPage: facts.fetchedPages + 1 };
   return { status: "failed" };
+}
+
+export function evaluateClueScanCoverage(
+  facts: InputScanFacts,
+  policy: { requestedPages: number; pageBudgetSatisfiesCoverage?: boolean }
+): InputScanCoverage {
+  const coverage = evaluateInputScanCoverage(facts);
+  const hardFailure = Boolean(facts.requestFailed || facts.schemaMismatch || facts.duplicatePage || facts.totalZeroWithRows);
+  if (!hardFailure
+    && policy.pageBudgetSatisfiesCoverage === true
+    && facts.fetchedPages >= policy.requestedPages
+    && coverage.status === "failed") {
+    return { status: "truncated", nextPage: facts.fetchedPages + 1 };
+  }
+  return coverage;
 }
 
 export function validateOfficialCandidate(args: {

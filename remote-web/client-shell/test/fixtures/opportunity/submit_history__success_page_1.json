@@ -1,0 +1,18 @@
+{
+  "base_resp": { "status_code": 200, "status_message": "Success" },
+  "data": [
+    {
+      "id": 1001,
+      "clue_id": 2001,
+      "clue_name": "sample clue",
+      "clue_channel": "industry_selected",
+      "product_info": { "product_id": "3001", "product_title": "sample product" },
+      "submit_time": 1784894774000,
+      "audit_time": 1784894775000,
+      "audit_status": 3,
+      "is_auto_submitted": false
+    }
+  ],
+  "total": 3,
+  "max_appeal_per_day": 50
+}

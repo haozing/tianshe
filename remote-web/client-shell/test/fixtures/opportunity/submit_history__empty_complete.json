@@ -1,0 +1,6 @@
+{
+  "base_resp": { "status_code": 200, "status_message": "Success" },
+  "data": [],
+  "total": 0,
+  "max_appeal_per_day": 50
+}

@@ -35,9 +35,37 @@ test("prematch keeps the submit action and live event stream in the open workspa
   assert.match(source, /ref=\{pipelineLogViewportRef\}/);
 });
 
+test("a new workspace session starts with fresh run counters", () => {
+  const initializePage = source.match(/async function initializePage\(\) \{[\s\S]*?\n  \}\n\n  async function refreshStores/)?.[0] || "";
+  assert.ok(initializePage);
+  assert.doesNotMatch(initializePage, /restoreLatest\(/);
+  assert.match(initializePage, /restoreDoudianOpportunityPipelineTask\(\)/);
+  assert.match(initializePage, /refreshStoreCategories\(activeStores\)/);
+  assert.match(source, /onClick=\{\(\) => void restoreLatest\(\)\}/);
+});
+
+test("a new submit clears the prior workspace while completion restores and reports the persisted run", () => {
+  const submit = source.match(/function runPipelineSubmit\(\) \{[\s\S]*?\n  \}\n\n  return \(/)?.[0] || "";
+  assert.ok(submit);
+  assert.match(submit, /setProducts\(\[\]\)/);
+  assert.match(submit, /setClues\(\[\]\)/);
+  assert.match(submit, /setCandidates\(\[\]\)/);
+  assert.match(submit, /setExecutions\(\[\]\)/);
+  assert.match(submit, /setPipelineLogs\(\[\]\)/);
+  assert.match(source, /restorePipelineRun\(runId, \{ updatePipelineLog: true \}\)/);
+  assert.match(source, /detail\.status === "succeeded" \|\| detail\.status === "failed"/);
+  assert.match(domainSource, /const persistedResult = result\.runId[\s\S]*?fetchOpportunityPipelineRun/);
+});
+
 test("prematch overview uses concise animated business counters", () => {
   assert.match(source, /label="商品数"/);
   assert.match(source, /label="商机数"/);
+  assert.match(source, /label="报名商品"/);
+  assert.match(source, /label="报名记录"/);
+  assert.match(source, /label="满额商品"/);
+  assert.match(source, /selectedShopIds\.has\(row\.shopId\)/);
+  assert.match(source, /value === null/);
+  assert.match(source, /pipelineBusy \? "计算中" : "数据不完整"/);
   assert.match(source, /label="提报数"/);
   assert.match(source, /function AnimatedNumber/);
   assert.match(source, /opportunity-counter-ring/);

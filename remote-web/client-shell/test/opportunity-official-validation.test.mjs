@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  evaluateClueScanCoverage,
   evaluateInputScanCoverage,
   officialDecisionAllowsWrite,
   officialEnforcementReady,
@@ -39,8 +40,9 @@ test("enforce remains closed until contracts and high-confidence anchors are ena
   assert.equal(officialWriteAllowed("enforce", "partial_coverage"), false);
   assert.equal(officialWriteAllowed("enforce", "failed"), false);
   assert.equal(officialWriteAllowed("observe", "complete"), true);
-  assert.equal(officialWriteAllowed("observe", "partial_coverage", "report"), true);
+  assert.equal(officialWriteAllowed("observe", "partial_coverage", "report"), false);
   assert.equal(officialWriteAllowed("observe", "failed", "report"), false);
+  assert.equal(officialWriteAllowed("local", "complete"), true);
   assert.equal(officialWriteAllowed("disabled", "complete", "report"), false);
 });
 
@@ -263,5 +265,32 @@ test("scan coverage does not treat an unknown total at the page limit as complet
     maxPages: 10,
     pageSize: 100,
     lastPageRowCount: 87
+  }).status, "failed");
+});
+
+test("multi-category clue coverage accepts a clean five-page budget but keeps hard failures closed", () => {
+  const facts = {
+    fetchedCount: 350,
+    uniqueFetchedCount: 348,
+    remoteTotal: 500,
+    remoteTotalKnown: true,
+    fetchedPages: 5,
+    maxPages: 5,
+    pageSize: 72,
+    lastPageRowCount: 62,
+    duplicatePage: false,
+    totalZeroWithRows: false
+  };
+  assert.deepEqual(evaluateClueScanCoverage(facts, {
+    requestedPages: 5,
+    pageBudgetSatisfiesCoverage: true
+  }), { status: "truncated", nextPage: 6 });
+  assert.equal(evaluateClueScanCoverage({ ...facts, duplicatePage: true }, {
+    requestedPages: 5,
+    pageBudgetSatisfiesCoverage: true
+  }).status, "failed");
+  assert.equal(evaluateClueScanCoverage({ ...facts, requestFailed: true }, {
+    requestedPages: 5,
+    pageBudgetSatisfiesCoverage: true
   }).status, "failed");
 });

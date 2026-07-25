@@ -1,0 +1,12 @@
+{
+  "base_resp": { "status_code": 200, "status_message": "Success" },
+  "data": [
+    {
+      "id": 1001,
+      "clue_id": 2001,
+      "product_info": { "product_id": "3001" },
+      "submit_time": 1784894774000
+    }
+  ],
+  "total": 3
+}

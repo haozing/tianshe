@@ -481,6 +481,8 @@ config.features.marketingWriteActions = { enabled: true };
 
 writeJson(pilotAdapterPath, adapter);
 writeJson(pilotConfigPath, config);
+copyFileSync(baseAdapterPath, join(deployConfigRoot, "doudian-adapter.json"));
+copyFileSync(baseConfigPath, join(deployConfigRoot, "chihu-config.json"));
 copyFileSync(pilotAdapterPath, join(deployConfigRoot, "doudian-adapter.marketing-pilot.json"));
 copyFileSync(pilotConfigPath, join(deployConfigRoot, "chihu-config.marketing-pilot.json"));
 
