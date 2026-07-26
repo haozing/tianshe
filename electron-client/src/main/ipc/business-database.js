@@ -1,5 +1,6 @@
 const { app, ipcMain } = require("electron");
 const { getNativeDataService } = require("../database");
+const { notifyOpportunityHistoryPrewarm, nudgeOpportunitySubmitRecovery } = require("../tasks/task-manager");
 
 function service() {
   return getNativeDataService({ app });
@@ -7,6 +8,26 @@ function service() {
 
 function request(method, priority) {
   return async (_event, args = {}) => service().request(method, args || {}, { priority });
+}
+
+function storeWriteRequest(method) {
+  return async (_event, args = {}) => {
+    const result = await service().request(method, args || {}, { priority: "write" });
+    if (String(args.storeName || args.store || "") !== "stores") return result;
+    const records = method === "records.putMany" ? args.records : [args.record];
+    const shopIds = [...new Set((Array.isArray(records) ? records : [])
+      .filter((record) => record && record.status === "online")
+      .map((record) => String(record.shopId || record.id || ""))
+      .filter(Boolean))];
+    if (shopIds.length) {
+      await nudgeOpportunitySubmitRecovery(["login_wait"], {
+        shopIds,
+        recoverySource: "store-login-restored"
+      });
+      notifyOpportunityHistoryPrewarm("store-login-restored");
+    }
+    return result;
+  };
 }
 
 function registerBusinessDatabaseHandlers() {
@@ -20,8 +41,8 @@ function registerBusinessDatabaseHandlers() {
   ipcMain.handle("native:data:stores:assertActiveIdentity", request("stores.assertActiveIdentity", "interactive"));
   ipcMain.handle("native:data:stores:tombstoneIdentity", request("stores.tombstoneIdentity", "write"));
 
-  ipcMain.handle("native:data:records:put", request("records.put", "write"));
-  ipcMain.handle("native:data:records:putMany", request("records.putMany", "write"));
+  ipcMain.handle("native:data:records:put", storeWriteRequest("records.put"));
+  ipcMain.handle("native:data:records:putMany", storeWriteRequest("records.putMany"));
   ipcMain.handle("native:data:records:acquireOperation", request("records.acquireOperation", "write"));
   ipcMain.handle("native:data:records:claimOpportunitySubmitTask", request("records.claimOpportunitySubmitTask", "write"));
   ipcMain.handle("native:data:records:putLarge:start", request("records.putLarge.start", "write"));
@@ -37,6 +58,15 @@ function registerBusinessDatabaseHandlers() {
   ipcMain.handle("native:data:records:cleanupOperations", request("records.cleanupOperations", "write"));
   ipcMain.handle("native:data:records:delete", request("records.delete", "write"));
   ipcMain.handle("native:data:records:deleteMany", request("records.deleteMany", "write"));
+
+  ipcMain.handle("native:data:opportunitySubmit:claimSchedulerLease", request("opportunitySubmit.claimSchedulerLease", "write"));
+  ipcMain.handle("native:data:opportunitySubmit:releaseSchedulerLease", request("opportunitySubmit.releaseSchedulerLease", "write"));
+  ipcMain.handle("native:data:opportunitySubmit:admit", request("opportunitySubmit.admit", "write"));
+  ipcMain.handle("native:data:opportunitySubmit:consumeHttpGrant", request("opportunitySubmit.consumeHttpGrant", "write"));
+  ipcMain.handle("native:data:opportunitySubmit:resolve", request("opportunitySubmit.resolve", "write"));
+  ipcMain.handle("native:data:opportunitySubmit:releaseReservation", request("opportunitySubmit.releaseReservation", "write"));
+  ipcMain.handle("native:data:opportunitySubmit:getQuotaUsage", request("opportunitySubmit.getQuotaUsage", "interactive"));
+  ipcMain.handle("native:data:opportunitySubmit:summarizeRun", request("opportunitySubmit.summarizeRun", "interactive"));
 
   ipcMain.handle("native:data:opportunityAttempts:putMany", request("opportunityAttempts.putMany", "write"));
   ipcMain.handle("native:data:opportunityAttempts:count", request("opportunityAttempts.count", "interactive"));

@@ -77,13 +77,19 @@ import {
   type OfficialValidationPolicy,
   type OfficialWordsSemantics
 } from "./opportunity/officialValidation";
-import { SUBMIT_HISTORY_CLUE_CAPACITY, evaluateSubmitHistoryPageCoverage, isSubmitHistoryBusinessSuccess, parseSubmitHistorySnapshot, submitHistoryCapacityFacts, submitHistoryInitialStart, submitHistoryRemoteUpdatedAtWatermark, submitHistoryWindows } from "./opportunity/submitHistory";
+import { SUBMIT_HISTORY_CLUE_CAPACITY, advanceSubmitHistoryThrottle, evaluateSubmitHistoryPageCoverage, isSubmitHistoryBusinessSuccess, parseSubmitHistorySnapshot, submitHistoryBusinessFacts, submitHistoryCapacityFacts, submitHistoryInitialStart, submitHistoryPageBatchRange, submitHistoryPageReachesEnd, submitHistoryRemoteUpdatedAtWatermark, submitHistoryWindows } from "./opportunity/submitHistory";
 import { isUnresolvedSubmitState, logicalSubmitAttemptId, recoverUnresolvedSubmitCandidate } from "./opportunity/submitRecovery.ts";
-import { activeSubmitTasksForRun, submitWorkerProgress } from "./opportunity/submitWorkerState.ts";
-import { responseHeaderText, submitRetryWaitMs } from "./opportunity/submitRetryPolicy.ts";
-import { pipelineDiagnosticsBlockCompletion, pipelineInputCoverageAllowsWrite, pipelineSubmitResultMessage, pipelineTaskCoverageGate } from "./opportunity/pipelineResult.ts";
+import { activeSubmitTasksForRun, canSupersedeContractMismatchTask, hasRemainingLegacySubmitWork, isDeferredSubmitTaskStatus, orphanedSubmitQueueStoreRuns, submitWorkerProgress } from "./opportunity/submitWorkerState.ts";
+import { responseHeaderText, retryAfterMs, submitRetryWaitMs } from "./opportunity/submitRetryPolicy.ts";
+import { classifyCoordinatedSubmitAttempt, type CoordinatedSubmitClassification } from "./opportunity/submitAttemptClassifier.ts";
+import { pipelineDiagnosticsBlockCompletion, pipelineInputCoverageAllowsWrite, pipelineMutationTerminalFailureCount, pipelineNoCandidateSkipReason, pipelineStoreResultMessage, pipelineSubmitResponseStatus, pipelineSubmitResultMessage, pipelineTaskAwaitsAutomaticRecovery, pipelineTaskCoverageGate, pipelineTaskRetryableRemainingCount } from "./opportunity/pipelineResult.ts";
 import { aggregateCategoryDemands, mapConcurrentOrdered } from "./opportunity/pipelinePreparation.ts";
 import { evaluateSharedCacheProbe, resolvePipelineCacheScope } from "./opportunity/pipelineCachePolicy.ts";
+import {
+  evaluateSubmitConcurrencyReadiness,
+  type SubmitConcurrencyEvaluation,
+  type SubmitConcurrencyRunSnapshot
+} from "./opportunity/submitConcurrencyReadiness.ts";
 
 const clueScanStore = "opportunity_clue_scan_runs_v1" as const;
 const clueCandidateStore = "opportunity_clue_candidates_v1" as const;
@@ -134,6 +140,8 @@ const productCategoryIdFallbackPaths = [
   "categoryDetail.firstCid"
 ];
 let pipelineSubmitWorkerTail: Promise<unknown> = Promise.resolve();
+let submitHistoryRequestTail: Promise<void> = Promise.resolve();
+let submitHistoryGlobalThrottle = { busyStreak: 0, nextEligibleAtMs: 0 };
 const cancelledPipelineRunIds = new Set<string>();
 const clueCacheLoadFlights = new Map<string, Promise<unknown>>();
 
@@ -165,6 +173,15 @@ interface OpportunityArgs {
   pageSize?: number;
   maxPages?: number;
   includeCandidates?: boolean;
+  submitTaskId?: string;
+  taskId?: string;
+  reason?: string;
+  taskContract?: {
+    releaseId?: string;
+    releaseManifestHash?: string;
+    runnerArtifactHash?: string;
+    adapterSnapshotHash?: string;
+  };
   mockClues?: Array<Record<string, unknown>>;
   mockProducts?: Array<Record<string, unknown>>;
   mockOfficialClueWords?: Record<string, string[]>;
@@ -322,6 +339,12 @@ interface PipelineRunRecord {
   adapterVersion: string;
   scriptsVersion: string;
   requestPlanHash: string;
+  submitConcurrencyEvaluation?: SubmitConcurrencyEvaluation & {
+    signature: string;
+    evaluatedAt: string;
+  };
+  recoverySource?: string;
+  lastRecoveredAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -351,6 +374,7 @@ interface PipelineStoreRunRecord extends PipelineStoreIdentity {
   persistedCandidateCount?: number;
   eligibleCandidateCount?: number;
   alternativeCandidateCount?: number;
+  filteredByHistoryCount?: number;
   qualifiedCandidateCount?: number;
   primaryCandidateCount?: number;
   fallbackCandidateCount?: number;
@@ -428,7 +452,7 @@ interface PipelineSubmitTaskRecord extends PipelineStoreIdentity {
   id: string;
   runId: string;
   storeRunId: string;
-  status: "preparing" | "ready" | "queued" | "running" | "ok" | "partial" | "failed" | "cancelled";
+  status: "preparing" | "ready" | "queued" | "running" | "cancelling" | "cooling_down" | "ok" | "partial" | "deferred" | "deferred_contract_mismatch" | "manual_reconcile" | "failed" | "cancelled" | "expired";
   concurrencyKey: string;
   ownerRunId?: string;
   candidateIds: string[];
@@ -461,6 +485,36 @@ interface PipelineSubmitTaskRecord extends PipelineStoreIdentity {
   benefitComplete?: boolean;
   clueCoverageSatisfied?: boolean;
   remoteRequestCount?: number;
+  candidateMutationAttemptCount?: number;
+  httpRequestAttemptCount?: number;
+  nextCandidateIndex?: number;
+  inFlightAttemptId?: string;
+  inFlightLogicalGroupId?: string;
+  inFlightCandidateIds?: string[];
+  inFlightAttemptOrdinal?: number;
+  quotaReservationId?: string;
+  httpGrantId?: string;
+  httpGrantConsumedAt?: string;
+  fencingToken?: number;
+  resumeAt?: string;
+  throttleCount?: number;
+  throttlePauseMs?: number;
+  lastThrottleAt?: string;
+  retryableRemainingCount?: number;
+  checkpointVersion?: string;
+  deferredReason?: "throttle_budget" | "authorization_wait" | "login_wait" | "contract_mismatch" | "retry_exhausted";
+  requiresExplicitResume?: boolean;
+  releaseId?: string;
+  releaseManifestHash?: string;
+  runnerArtifactHash?: string;
+  adapterVersion?: string;
+  scriptsVersion?: string;
+  requestPlanHash?: string;
+  submitContractVersion?: string;
+  pacingPolicyHash?: string;
+  adapterSnapshotHash?: string;
+  submitThrottleRecoveryEnabled?: boolean;
+  contractSnapshotId?: string;
   startedAt?: string;
   leaseExpiresAt?: string;
   finishedAt?: string;
@@ -677,6 +731,7 @@ interface OfficialClueGoodsCacheShardRecord {
 interface OpportunityMutationCounts {
   acknowledged: number;
   failed: number;
+  pending: number;
   skipped: number;
   safetySkipped: number;
   unknown: number;
@@ -688,6 +743,26 @@ interface OpportunityMutationSummary extends OpportunityMutationCounts {
   ok: boolean;
   runId: string;
   byShop: Record<string, OpportunityMutationCounts>;
+}
+
+interface OpportunitySubmitRunMetrics {
+  throttleCount: number;
+  recoveredAfterThrottleCount: number;
+  globalThrottleCount: number;
+  candidateMutationAttemptCount: number;
+  httpRequestAttemptCount: number;
+  maxStoreIntervalMs: number;
+  averageStoreIntervalMs: number;
+  globalRateMode: "inactive" | "protective";
+  globalIntervalMs: number;
+  dailyCandidateMutationUsed: number;
+  dailyCandidateMutationReserved: number;
+  dailyCandidateMutationRemaining: number;
+  dailyHttpRequestUsed: number;
+  dailyHttpRequestReserved: number;
+  dailyHttpRequestRemaining: number;
+  firstHttpDispatchedAt: string;
+  lastHttpResolvedAt: string;
 }
 
 function assertNotCancelled(shouldCancel?: () => boolean) {
@@ -703,6 +778,23 @@ async function cancellableWait(ms: number, shouldCancel?: () => boolean) {
     remaining -= delayMs;
   }
   assertNotCancelled(shouldCancel);
+}
+
+async function waitForSubmitHistoryCooldown(
+  args: OpportunityArgs,
+  resumeAtMs: number,
+  shopLabel: string,
+  checkpointNextPage?: number
+) {
+  while (resumeAtMs > Date.now()) {
+    const remainingMs = resumeAtMs - Date.now();
+    const remainingSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+    const checkpointMessage = checkpointNextPage && checkpointNextPage > 1
+      ? `，恢复后从第 ${checkpointNextPage} 页继续`
+      : "";
+    dispatchPipelineProgress(args, 15, `提报历史校验受平台限流：${shopLabel}，${remainingSeconds} 秒后自动恢复${checkpointMessage}`);
+    await cancellableWait(Math.min(5_000, remainingMs), () => pipelineCancelled(args));
+  }
 }
 
 function adapterPayload(args: OpportunityArgs): DoudianAdapterPayload {
@@ -891,7 +983,7 @@ interface SubmitHistoryRecord extends PipelineStoreIdentity {
   auditStatus: string;
   appealStatus: string;
   isAutoSubmitted: boolean;
-  raw: Record<string, unknown>;
+  raw?: Record<string, unknown>;
   fetchedAt: string;
   updatedAt: string;
 }
@@ -899,7 +991,7 @@ interface SubmitHistoryRecord extends PipelineStoreIdentity {
 interface SubmitHistorySyncRecord extends PipelineStoreIdentity {
   id: string;
   initialized: boolean;
-  status: "complete" | "truncated" | "failed";
+  status: "complete" | "truncated" | "failed" | "cooling_down";
   initialStartEpochSeconds: number;
   initialCursorStartEpochSeconds: number;
   watermarkMs: number;
@@ -908,6 +1000,16 @@ interface SubmitHistorySyncRecord extends PipelineStoreIdentity {
   lastMode: "initial" | "incremental";
   lastSuccessfulSyncAt?: string;
   lastError?: string;
+  resumeAt?: string;
+  throttleAttemptCount?: number;
+  lastBusinessCode?: string;
+  lastBusinessMessage?: string;
+  checkpointWindowStartEpochSeconds?: number;
+  checkpointWindowEndEpochSeconds?: number;
+  checkpointNextPage?: number;
+  checkpointRemoteTotal?: number;
+  historyCompactionCursor?: string;
+  historyCompactionCompletedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -1497,6 +1599,69 @@ function stableFilterHash(filters: DoudianOpportunityFilters = {}, adapter: Doud
   return stableHash(platformFilter);
 }
 
+const opportunitySubmitContractVersion = "opportunity-submit-contract-v1";
+
+function submitCoordinatorEnabled(adapter: DoudianAdapterConfig) {
+  return policyBoolean(adapter, "opportunityReport.submitThrottleRecoveryEnabled", false);
+}
+
+function submitCoordinatorPolicy(adapter: DoudianAdapterConfig) {
+  return {
+    policyVersion: "opportunity-submit-adaptive-v1",
+    submitPacingInitialIntervalMs: policyNumber(adapter, "opportunityReport.submitPacingInitialIntervalMs", 15000, 1000, 600000),
+    submitPacingMinIntervalMs: policyNumber(adapter, "opportunityReport.submitPacingMinIntervalMs", 10000, 500, 600000),
+    submitPacingMaxIntervalMs: policyNumber(adapter, "opportunityReport.submitPacingMaxIntervalMs", 60000, 1000, 600000),
+    submitPacingJitterMs: policyNumber(adapter, "opportunityReport.submitPacingJitterMs", 1500, 0, 60000),
+    submitPacingSuccessesToDecrease: policyNumber(adapter, "opportunityReport.submitPacingSuccessesToDecrease", 8, 1, 100),
+    submitPacingDecreaseMs: policyNumber(adapter, "opportunityReport.submitPacingDecreaseMs", 1000, 1, 60000),
+    submitPacing429Multiplier: Number(policy(adapter, "opportunityReport.submitPacing429Multiplier", 1.5)),
+    submitPacingMaxCooldownMs: policyNumber(adapter, "opportunityReport.submitPacingMaxCooldownMs", 120000, 1000, 86400000),
+    submitGlobalBurstSpacingMs: policyNumber(adapter, "opportunityReport.submitGlobalBurstSpacingMs", 500, 0, 60000),
+    submitGlobalPacingInitialMs: policyNumber(adapter, "opportunityReport.submitGlobalPacingInitialMs", 15000, 1000, 600000),
+    submitGlobalPacingMaxMs: policyNumber(adapter, "opportunityReport.submitGlobalPacingMaxMs", 60000, 1000, 600000),
+    submitGlobalPacing429Multiplier: Number(policy(adapter, "opportunityReport.submitGlobalPacing429Multiplier", 1.5)),
+    submitGlobalPacingDecreaseMs: policyNumber(adapter, "opportunityReport.submitGlobalPacingDecreaseMs", 5000, 1, 60000),
+    submitGlobal429WindowMs: policyNumber(adapter, "opportunityReport.submitGlobal429WindowMs", 120000, 10000, 3600000),
+    submitGlobal429DistinctStores: policyNumber(adapter, "opportunityReport.submitGlobal429DistinctStores", 2, 2, 1000),
+    submitGlobalStableWindowsToExit: policyNumber(adapter, "opportunityReport.submitGlobalStableWindowsToExit", 2, 1, 100),
+    submitStoreThrottleBudgetMs: policyNumber(adapter, "opportunityReport.submitStoreThrottleBudgetMs", 1800000, 60000, 3600000),
+    submitRetryLimit: policyNumber(adapter, "opportunityReport.submitRetryLimit", 3, 1, 100)
+  };
+}
+
+function submitTaskContract(payload: DoudianAdapterPayload, args: OpportunityArgs) {
+  const trusted = objectRecord(args.taskContract);
+  const pacingPolicy = submitCoordinatorPolicy(payload.adapter);
+  return {
+    releaseId: text(trusted.releaseId) || "unbound",
+    releaseManifestHash: text(trusted.releaseManifestHash) || "unbound",
+    runnerArtifactHash: text(trusted.runnerArtifactHash) || "unbound",
+    adapterVersion: payload.adapter.version || "unbound",
+    scriptsVersion: payload.scripts?.version || "unbound",
+    requestPlanHash: requestPlanHash(payload.adapter),
+    submitContractVersion: opportunitySubmitContractVersion,
+    pacingPolicyHash: stableHash(pacingPolicy),
+    adapterSnapshotHash: text(trusted.adapterSnapshotHash) || "unbound",
+    submitThrottleRecoveryEnabled: submitCoordinatorEnabled(payload.adapter)
+  };
+}
+
+function assertBoundSubmitTaskContract(task: PipelineSubmitTaskRecord) {
+  const fields = [
+    task.releaseId,
+    task.releaseManifestHash,
+    task.runnerArtifactHash,
+    task.adapterVersion,
+    task.scriptsVersion,
+    task.requestPlanHash,
+    task.submitContractVersion,
+    task.pacingPolicyHash,
+    task.adapterSnapshotHash
+  ];
+  if (fields.some((value) => !text(value) || value === "unbound")) throw new Error("Opportunity submit task is missing a trusted release contract");
+  if (task.submitThrottleRecoveryEnabled !== true) throw new Error("Opportunity submit task was not created with recovery enabled");
+}
+
 function stableMatchRulesHash(args: OpportunityArgs) {
   const rules = normalizeOpportunityMatchRules(args.matchRules);
   return stableHash({
@@ -1916,6 +2081,65 @@ function submitHistoryResponseOk(response: RequestPlanResult, adapter: DoudianAd
   return isSubmitHistoryBusinessSuccess(response.data);
 }
 
+function submitHistoryThrottlePolicy(adapter: DoudianAdapterConfig) {
+  const multiplierValue = Number(policy(adapter, "opportunityReport.submitHistoryThrottleMultiplier", 1.5));
+  return {
+    requestSpacingMs: policyNumber(adapter, "opportunityReport.submitHistoryRequestSpacingMs", 1500, 0, 60_000),
+    initialCooldownMs: policyNumber(adapter, "opportunityReport.submitHistoryThrottleInitialCooldownMs", 60_000, 10_000, 10 * 60_000),
+    maxCooldownMs: policyNumber(adapter, "opportunityReport.submitHistoryThrottleMaxCooldownMs", 300_000, 10_000, 30 * 60_000),
+    multiplier: Number.isFinite(multiplierValue) ? Math.max(1, Math.min(4, multiplierValue)) : 1.5
+  };
+}
+
+async function runSubmitHistoryRequest(
+  payload: DoudianAdapterPayload,
+  store: DoudianStoreSummary,
+  args: OpportunityArgs,
+  planKey: string,
+  body: Record<string, unknown>
+) {
+  const previous = submitHistoryRequestTail;
+  let release: () => void = () => undefined;
+  submitHistoryRequestTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous.catch(() => undefined);
+  try {
+    const shouldCancel = () => pipelineCancelled(args);
+    const waitMs = Math.max(0, submitHistoryGlobalThrottle.nextEligibleAtMs - Date.now());
+    if (waitMs > 0) await cancellableWait(waitMs, shouldCancel);
+    const response = await runDoudianRequestPlan(payload, {
+      partition: store.partition,
+      planKey,
+      context: bodyContext(body),
+      shouldCancel,
+      maxAttempts: 1
+    });
+    const parsedBusiness = submitHistoryBusinessFacts(response.data);
+    const business = response.status === 429 && !parsedBusiness.busy
+      ? { found: true, ok: false, code: "429", message: response.error || "HTTP 429", busy: true }
+      : parsedBusiness;
+    const outcome = business.busy
+      ? "busy" as const
+      : submitHistoryResponseOk(response, payload.adapter, planKey)
+        ? "success" as const
+        : "failure" as const;
+    submitHistoryGlobalThrottle = advanceSubmitHistoryThrottle(
+      submitHistoryGlobalThrottle,
+      outcome,
+      Date.now(),
+      submitHistoryThrottlePolicy(payload.adapter)
+    );
+    return {
+      response,
+      business,
+      throttleResumeAt: business.busy ? new Date(submitHistoryGlobalThrottle.nextEligibleAtMs).toISOString() : undefined
+    };
+  } finally {
+    release();
+  }
+}
+
 function submitHistoryRecordId(identity: PipelineStoreIdentity, remoteRecordId: string) {
   return `${storeScopeId(identity)}-record-${encodeURIComponent(remoteRecordId)}`;
 }
@@ -1927,10 +2151,36 @@ function normalizeSubmitHistoryRecord(identity: PipelineStoreIdentity, raw: Reco
     id: submitHistoryRecordId(identity, snapshot.remoteRecordId),
     ...identity,
     ...snapshot,
-    raw,
     fetchedAt,
     updatedAt: fetchedAt
   } satisfies SubmitHistoryRecord;
+}
+
+async function compactSubmitHistoryRawRecords(identity: PipelineStoreIdentity, maxRecords: number) {
+  const syncId = `${storeScopeId(identity)}-sync`;
+  const sync = await repositoryGet<SubmitHistorySyncRecord>(submitHistorySyncStore, syncId).catch(() => null);
+  if (!sync || sync.historyCompactionCompletedAt) {
+    return { scannedCount: 0, compactedCount: 0, complete: Boolean(sync?.historyCompactionCompletedAt) };
+  }
+  const prefix = `${storeScopeId(identity)}-`;
+  const page = await repositoryListByPrefix<SubmitHistoryRecord>(submitHistoryRecordStore, prefix, {
+    cursor: sync.historyCompactionCursor || null,
+    pageSize: Math.max(1, Math.min(500, Math.floor(Number(maxRecords || 500))))
+  });
+  const compacted = page.items.flatMap((record) => {
+    if (!record.raw) return [];
+    const { raw: _raw, ...canonical } = record;
+    return [canonical as SubmitHistoryRecord];
+  });
+  if (compacted.length) await repositoryPutMany(submitHistoryRecordStore, compacted, { concurrency: 2 });
+  const compactedAt = nowIso();
+  await repositoryPut(submitHistorySyncStore, {
+    ...sync,
+    historyCompactionCursor: page.hasMore ? text(page.nextCursor) || sync.historyCompactionCursor : undefined,
+    historyCompactionCompletedAt: page.hasMore ? undefined : compactedAt,
+    updatedAt: compactedAt
+  });
+  return { scannedCount: page.items.length, compactedCount: compacted.length, complete: !page.hasMore };
 }
 
 async function mergeSubmitHistoryIndexes(
@@ -2038,15 +2288,32 @@ async function mergeSubmitHistoryIndexes(
   if (deleteIndexIds.length) await repositoryDeleteMany(submitHistoryProductIndexStore, deleteIndexIds);
 }
 
-async function fetchSubmitHistoryWindow(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: OpportunityArgs, window: { startEpochSeconds: number; endEpochSeconds: number }) {
+async function persistSubmitHistoryBatch(identity: PipelineStoreIdentity, records: SubmitHistoryRecord[]) {
+  if (!records.length) return { insertedCount: 0 };
+  const recordIds = records.map((record) => record.id);
+  const previousRecords = await repositoryGetMany<SubmitHistoryRecord>(submitHistoryRecordStore, recordIds).catch(() => []);
+  const existingIds = new Set(previousRecords.map((record) => record.id));
+  await repositoryPutMany(submitHistoryRecordStore, records, { concurrency: 2 });
+  await mergeSubmitHistoryIndexes(identity, records, previousRecords);
+  return { insertedCount: records.filter((record) => !existingIds.has(record.id)).length };
+}
+
+async function fetchSubmitHistoryWindow(
+  payload: DoudianAdapterPayload,
+  store: DoudianStoreSummary,
+  args: OpportunityArgs,
+  window: { startEpochSeconds: number; endEpochSeconds: number },
+  options: { startPage?: number; pageBatchSize?: number; remoteTotal?: number } = {}
+) {
   const planKey = "opportunitySubmitHistoryList";
   const pageSize = policyNumber(payload.adapter, "opportunityReport.submitHistoryPageSize", 100, 10, 200);
   const maxPages = policyNumber(payload.adapter, "opportunityReport.maxSubmitHistoryPagesPerWindow", 1000, 1, 2000);
+  const pageRange = submitHistoryPageBatchRange(options.startPage || 1, maxPages, options.pageBatchSize || maxPages);
   const pageDelayMs = policyNumber(payload.adapter, "opportunityReport.submitHistoryPageDelayMs", 150, 0, 5000);
   const rowsById = new Map<string, Record<string, unknown>>();
   const sourceHealth: Array<Record<string, unknown>> = [];
-  let remoteTotal = 0;
-  let remoteTotalKnown = false;
+  let remoteTotal = Number.isFinite(Number(options.remoteTotal)) ? Math.max(0, Math.floor(Number(options.remoteTotal))) : 0;
+  let remoteTotalKnown = Number.isFinite(Number(options.remoteTotal));
   let fetchedPages = 0;
   let requestFailed = false;
   let schemaMismatch = false;
@@ -2056,65 +2323,108 @@ async function fetchSubmitHistoryWindow(payload: DoudianAdapterPayload, store: D
   let duplicatePage = false;
   let totalZeroWithRows = false;
   let endReached = false;
+  let businessBusyCount = 0;
+  let lastBusinessCode = "";
+  let lastBusinessMessage = "";
+  let throttleResumeAt: string | undefined;
+  let lastSuccessfulPage = pageRange.startPage - 1;
+  let failedPage: number | undefined;
   const schemaSamples: Array<Record<string, unknown>> = [];
-  for (let page = 1; page <= maxPages; page += 1) {
+  for (let page = pageRange.startPage; page <= pageRange.endPage; page += 1) {
     const shouldCancel = () => pipelineCancelled(args);
     assertNotCancelled(shouldCancel);
     const body = submitHistoryListBody(window, page, pageSize);
     try {
-      const response = await runDoudianRequestPlan(payload, { partition: store.partition, planKey, context: bodyContext(body), shouldCancel });
+      const request = await runSubmitHistoryRequest(payload, store, args, planKey, body);
+      const response = request.response;
       const wrapped = { [planKey]: response.data };
       const rows = firstArray(wrapped, mappingArray(payload.adapter, "submitHistoryListPaths", [
         "opportunitySubmitHistoryList.data",
         "opportunitySubmitHistoryList.data.list",
         "opportunitySubmitHistoryList.list"
       ])).map(objectRecord);
+      const ok = submitHistoryResponseOk(response, payload.adapter, planKey);
+      const business = request.business;
       rawRowCount += rows.length;
       fetchedPages += 1;
       const pageTotal = readOptionalTotal(wrapped, payload.adapter, "submitHistoryTotalPaths");
-      if (pageTotal !== undefined) {
+      if (ok && pageTotal !== undefined) {
         remoteTotal = Math.max(remoteTotal, pageTotal);
         remoteTotalKnown = true;
       }
-      if (pageTotal === 0 && rows.length) totalZeroWithRows = true;
+      if (ok && pageTotal === 0 && rows.length) totalZeroWithRows = true;
+      const parsedRows: Array<{ remoteRecordId: string; row: Record<string, unknown> }> = [];
+      const pageRecordIds = new Set<string>();
+      let pageSchemaMismatchCount = 0;
       let pageNew = 0;
       for (const row of rows) {
         const snapshot = parseSubmitHistorySnapshot(row);
         if (!snapshot) {
           schemaMismatch = true;
           schemaMismatchCount += 1;
+          pageSchemaMismatchCount += 1;
           if (schemaSamples.length < 5) schemaSamples.push({ page, shape: diagnosticValueShape(row) });
           continue;
         }
-        if (rowsById.has(snapshot.remoteRecordId)) {
+        if (rowsById.has(snapshot.remoteRecordId) || pageRecordIds.has(snapshot.remoteRecordId)) {
           duplicateRecordCount += 1;
         } else {
-          rowsById.set(snapshot.remoteRecordId, row);
+          pageRecordIds.add(snapshot.remoteRecordId);
+          parsedRows.push({ remoteRecordId: snapshot.remoteRecordId, row });
           pageNew += 1;
         }
       }
-      if (rows.length > 0 && pageNew === 0) duplicatePage = true;
-      const ok = submitHistoryResponseOk(response, payload.adapter, planKey);
-      sourceHealth.push({ key: page === 1 ? planKey : `${planKey}:page:${page}`, status: response.status, ok, count: rows.length, uniqueCount: rowsById.size, pageNew, duplicateRecordCount, pageTotal });
-      if (!ok || !rows.length && remoteTotalKnown && rowsById.size < remoteTotal) {
+      if (business.busy) {
+        businessBusyCount += 1;
+        lastBusinessCode = business.code;
+        lastBusinessMessage = business.message;
+        throttleResumeAt = request.throttleResumeAt;
+      }
+      sourceHealth.push({
+        key: page === 1 ? planKey : `${planKey}:page:${page}`,
+        status: response.status,
+        ok,
+        count: rows.length,
+        uniqueCount: rowsById.size + pageNew,
+        pageNew,
+        duplicateRecordCount,
+        pageTotal,
+        businessCode: business.code,
+        businessMessage: business.message,
+        businessBusy: business.busy
+      });
+      const pageReachesEnd = submitHistoryPageReachesEnd(page, pageSize, rows.length, remoteTotalKnown ? remoteTotal : undefined);
+      if (!ok || pageSchemaMismatchCount > 0 || totalZeroWithRows || (!rows.length && remoteTotalKnown && !pageReachesEnd)) {
         requestFailed = true;
+        failedPage = page;
         break;
       }
-      if (!rows.length || (remoteTotalKnown && rowsById.size >= remoteTotal) || (!remoteTotalKnown && rows.length < pageSize)) {
+      if (rows.length > 0 && !pageNew) {
+        duplicatePage = true;
+        requestFailed = true;
+        failedPage = page;
+        break;
+      }
+      for (const parsed of parsedRows) rowsById.set(parsed.remoteRecordId, parsed.row);
+      lastSuccessfulPage = page;
+      if (pageReachesEnd) {
         endReached = true;
         break;
       }
-      if (!pageNew) {
-        requestFailed = true;
-        break;
-      }
-      if (pageDelayMs > 0) await cancellableWait(pageDelayMs, shouldCancel);
+      if (pageDelayMs > 0 && page < pageRange.endPage) await cancellableWait(pageDelayMs, shouldCancel);
     } catch (error) {
       requestFailed = true;
+      failedPage = page;
       sourceHealth.push({ key: page === 1 ? planKey : `${planKey}:page:${page}`, status: 0, ok: false, error: error instanceof Error ? error.message : String(error) });
       break;
     }
   }
+  const batchBoundaryReached = !requestFailed
+    && !schemaMismatch
+    && !duplicatePage
+    && !totalZeroWithRows
+    && !endReached
+    && lastSuccessfulPage >= pageRange.endPage;
   const status = evaluateSubmitHistoryPageCoverage({
     requestFailed: requestFailed || !sourceHealth.length || sourceHealth.some((item) => item.ok !== true),
     schemaMismatch,
@@ -2122,7 +2432,7 @@ async function fetchSubmitHistoryWindow(payload: DoudianAdapterPayload, store: D
     totalZeroWithRows,
     endReached,
     fetchedPages,
-    maxPages
+    maxPages: pageRange.endPage - pageRange.startPage + 1
   });
   const fetchedAt = nowIso();
   const records = Array.from(rowsById.values())
@@ -2130,6 +2440,13 @@ async function fetchSubmitHistoryWindow(payload: DoudianAdapterPayload, store: D
     .filter((record): record is SubmitHistoryRecord => Boolean(record));
   const normalizedRecords = records.length === rowsById.size;
   const finalStatus = normalizedRecords ? status : "failed" as const;
+  const nextPage = finalStatus === "complete"
+    ? undefined
+    : finalStatus === "failed"
+      ? failedPage || Math.max(pageRange.startPage, lastSuccessfulPage + 1)
+      : lastSuccessfulPage < maxPages
+        ? lastSuccessfulPage + 1
+        : undefined;
   return {
     status: finalStatus,
     records,
@@ -2137,97 +2454,329 @@ async function fetchSubmitHistoryWindow(payload: DoudianAdapterPayload, store: D
     remoteTotal,
     remoteTotalKnown,
     fetchedPages,
-    diagnostic: { status: finalStatus, window, rawRowCount, parsedRecordCount: records.length, remoteTotal: remoteTotalKnown ? remoteTotal : undefined, remoteTotalKnown, endReached, requestFailed, schemaMismatch, schemaMismatchCount, duplicatePage, duplicateRecordCount, totalZeroWithRows }
+    businessBusyCount,
+    lastBusinessCode,
+    lastBusinessMessage,
+    throttleResumeAt,
+    startPage: pageRange.startPage,
+    endPage: pageRange.endPage,
+    lastSuccessfulPage,
+    failedPage,
+    nextPage,
+    batchBoundaryReached,
+    diagnostic: { status: finalStatus, window, startPage: pageRange.startPage, endPage: pageRange.endPage, lastSuccessfulPage, failedPage, nextPage, batchBoundaryReached, rawRowCount, parsedRecordCount: records.length, remoteTotal: remoteTotalKnown ? remoteTotal : undefined, remoteTotalKnown, endReached, requestFailed, schemaMismatch, schemaMismatchCount, duplicatePage, duplicateRecordCount, totalZeroWithRows, businessBusyCount, lastBusinessCode, lastBusinessMessage, throttleResumeAt }
   };
 }
 
 async function scanBenefitProductsForStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: OpportunityArgs) {
   const identity = normalizePipelineStoreIdentity(store);
+  const shopLabel = identity.shopName || identity.shopId;
   const nowSeconds = Math.floor(Date.now() / 1000);
   const initialLookbackDays = policyNumber(payload.adapter, "opportunityReport.submitHistoryInitialLookbackDays", 30, 1, 3650);
-  const initialStart = submitHistoryInitialStart(nowSeconds, initialLookbackDays);
-  const windowDays = policyNumber(payload.adapter, "opportunityReport.submitHistoryWindowDays", 31, 1, 366);
+  const configuredInitialStart = submitHistoryInitialStart(nowSeconds, initialLookbackDays);
+  const prewarmSlice = args.mode === "history-prewarm";
+  const windowDays = prewarmSlice
+    ? policyNumber(payload.adapter, "opportunityReport.submitHistoryPrewarmWindowDays", 1, 1, 31)
+    : policyNumber(payload.adapter, "opportunityReport.submitHistoryWindowDays", 31, 1, 366);
   const overlapSeconds = policyNumber(payload.adapter, "opportunityReport.submitHistoryIncrementalOverlapSeconds", 86400, 0, 31 * 86400);
+  const pageSize = policyNumber(payload.adapter, "opportunityReport.submitHistoryPageSize", 100, 10, 200);
+  const checkpointPageBatchSize = policyNumber(payload.adapter, "opportunityReport.submitHistoryCheckpointPageBatchSize", 10, 1, 100);
   const syncId = `${storeScopeId(identity)}-sync`;
   const previous = await repositoryGet<SubmitHistorySyncRecord>(submitHistorySyncStore, syncId).catch(() => null);
+  const initialStart = previous && !previous.initialized && previous.initialStartEpochSeconds > 0
+    ? previous.initialStartEpochSeconds
+    : configuredInitialStart;
+  const throttleRecoveryEnabled = !prewarmSlice && policyBoolean(payload.adapter, "opportunityReport.submitHistoryThrottleRecoveryEnabled", true);
+  const throttleRecoveryBudgetMs = policyNumber(payload.adapter, "opportunityReport.submitHistoryThrottleRecoveryBudgetMs", 30 * 60_000, 60_000, 2 * 60 * 60_000);
+  const throttleRecoveryDeadlineMs = Date.now() + throttleRecoveryBudgetMs;
+  let throttleRecoveryCount = 0;
+  const storedCheckpointNextPage = Math.max(1, Math.floor(Number(previous?.checkpointNextPage) || 1));
+  const previousResumeAtMs = Date.parse(String(previous?.resumeAt || ""));
+  if (throttleRecoveryEnabled && previous?.status === "cooling_down" && Number.isFinite(previousResumeAtMs) && previousResumeAtMs > Date.now()) {
+    const diagnosticRunId = text(args.runId || args.operationId);
+    if (diagnosticRunId) await writePipelineEvent({
+      runId: diagnosticRunId,
+      shopId: identity.shopId,
+      level: "warn",
+      event: "pipeline-submit-history-waiting",
+      message: "提报历史校验正在等待平台限流恢复",
+      detail: { resumeAt: previous.resumeAt, checkpointNextPage: storedCheckpointNextPage, businessCode: previous.lastBusinessCode, businessMessage: previous.lastBusinessMessage }
+    }).catch(() => undefined);
+    await waitForSubmitHistoryCooldown(args, previousResumeAtMs, shopLabel, storedCheckpointNextPage);
+  }
   const isInitial = !previous || !previous.initialized;
   const startEpochSeconds = isInitial
     ? Math.max(initialStart, previous?.initialCursorStartEpochSeconds || initialStart)
     : Math.max(initialStart, Math.floor(previous.watermarkMs / 1000) - overlapSeconds);
-  const windows = submitHistoryWindows(startEpochSeconds, nowSeconds, windowDays);
+  const checkpointWindowStart = Math.floor(Number(previous?.checkpointWindowStartEpochSeconds));
+  const checkpointWindowEnd = Math.floor(Number(previous?.checkpointWindowEndEpochSeconds));
+  const hasWindowCheckpoint = Number.isFinite(checkpointWindowStart)
+    && Number.isFinite(checkpointWindowEnd)
+    && checkpointWindowStart >= startEpochSeconds
+    && checkpointWindowStart <= nowSeconds
+    && checkpointWindowEnd >= checkpointWindowStart
+    && storedCheckpointNextPage > 1;
+  let allWindows = submitHistoryWindows(startEpochSeconds, nowSeconds, windowDays);
+  if (hasWindowCheckpoint) {
+    const resumedWindow = {
+      startEpochSeconds: checkpointWindowStart,
+      endEpochSeconds: Math.min(nowSeconds, checkpointWindowEnd)
+    };
+    allWindows = [
+      resumedWindow,
+      ...submitHistoryWindows(resumedWindow.endEpochSeconds + 1, nowSeconds, windowDays)
+    ];
+  }
+  const maxWindows = prewarmSlice && isInitial
+    ? policyNumber(payload.adapter, "opportunityReport.submitHistoryPrewarmMaxWindowsPerRun", 1, 1, 31)
+    : allWindows.length;
+  const windows = allWindows.slice(0, maxWindows);
   let recordCount = previous?.recordCount || 0;
   let fetchedPages = 0;
   let remoteTotal = 0;
   let remoteTotalKnown = false;
+  let businessBusyCount = 0;
   let remoteUpdatedAtWatermarkMs = Math.max(0, Number(previous?.remoteUpdatedAtWatermarkMs || 0));
+  const remoteTotalByWindow = new Map<string, number>();
   const sourceHealth: Array<Record<string, unknown>> = [];
   for (const window of windows) {
-    const result = await fetchSubmitHistoryWindow(payload, store, args, window);
-    fetchedPages += result.fetchedPages;
-    remoteTotal += result.remoteTotal;
-    remoteTotalKnown ||= result.remoteTotalKnown;
-    const evidenceByKey = new Map<string, Record<string, unknown>>();
-    for (const item of [result.sourceHealth[0], ...result.sourceHealth.filter((entry) => entry.ok === false), ...result.sourceHealth.slice(-5)]) {
-      if (item) evidenceByKey.set(text(item.key), item);
-    }
-    const windowDiagnostic = { ...result.diagnostic, mode: isInitial ? "initial" : "incremental", requestEvidence: Array.from(evidenceByKey.values()) };
-    sourceHealth.push(windowDiagnostic);
-    await reportDoudianDiagnostic({ category: "opportunity-pipeline", event: "submit-history-window", runId: args.runId || args.operationId, shopId: identity.shopId, ...windowDiagnostic }, true).catch(() => undefined);
-    if (result.status !== "complete") {
-      const failedAt = nowIso();
-      await repositoryPut(submitHistorySyncStore, {
-        id: syncId,
-        ...identity,
-        initialized: previous?.initialized === true,
-        status: result.status,
-        initialStartEpochSeconds: initialStart,
-        initialCursorStartEpochSeconds: isInitial ? window.startEpochSeconds : startEpochSeconds,
-        watermarkMs: previous?.watermarkMs || 0,
-        remoteUpdatedAtWatermarkMs,
-        recordCount,
-        lastMode: isInitial ? "initial" : "incremental",
-        lastError: "submit history window incomplete",
-        createdAt: previous?.createdAt || failedAt,
-        updatedAt: failedAt
-      } satisfies SubmitHistorySyncRecord).catch(() => undefined);
-      const diagnosticRunId = text(args.runId || args.operationId);
-      if (diagnosticRunId) await writePipelineEvent({ runId: diagnosticRunId, shopId: identity.shopId, level: "error", event: "pipeline-submit-history-incomplete", message: "submit history sync incomplete", detail: { ...result.diagnostic, sourceHealth } }).catch(() => undefined);
-      const index = await loadBenefitIndexForStore(identity);
-      const records = Array.from(index.values());
-      return { status: "failed" as const, records, overview: summarizeBenefitProducts(records), sourceHealth, remoteTotal, remoteTotalKnown, fetchedPages, nextPage: undefined };
-    }
-    remoteUpdatedAtWatermarkMs = submitHistoryRemoteUpdatedAtWatermark(result.records, remoteUpdatedAtWatermarkMs);
-    const recordIds = result.records.map((record) => record.id);
-    const previousRecords = await repositoryGetMany<SubmitHistoryRecord>(submitHistoryRecordStore, recordIds).catch(() => []);
-    const existingIds = new Set(previousRecords.map((record) => record.id));
-    if (result.records.length) {
-      await repositoryPutMany(submitHistoryRecordStore, result.records, { concurrency: 2 });
-      await mergeSubmitHistoryIndexes(identity, result.records, previousRecords);
-    }
-    recordCount += result.records.filter((record) => !existingIds.has(record.id)).length;
-    const nextCursor = window.endEpochSeconds + 1;
-    if (isInitial) {
+    const windowKey = `${window.startEpochSeconds}-${window.endEpochSeconds}`;
+    const resumesStoredWindow = hasWindowCheckpoint
+      && window.startEpochSeconds === checkpointWindowStart
+      && window.endEpochSeconds === Math.min(nowSeconds, checkpointWindowEnd);
+    let windowNextPage = resumesStoredWindow ? storedCheckpointNextPage : 1;
+    let windowRemoteTotal = resumesStoredWindow && Number.isFinite(Number(previous?.checkpointRemoteTotal))
+      ? Math.max(0, Math.floor(Number(previous?.checkpointRemoteTotal)))
+      : undefined;
+    if (windowRemoteTotal !== undefined) remoteTotalByWindow.set(windowKey, windowRemoteTotal);
+    let windowThrottleRecoveryCount = 0;
+    while (true) {
+      const result = await fetchSubmitHistoryWindow(payload, store, args, window, {
+        startPage: windowNextPage,
+        pageBatchSize: checkpointPageBatchSize,
+        remoteTotal: windowRemoteTotal
+      });
+      fetchedPages += result.fetchedPages;
+      if (result.remoteTotalKnown) {
+        windowRemoteTotal = result.remoteTotal;
+        remoteTotalByWindow.set(windowKey, result.remoteTotal);
+      }
+      remoteTotal = Array.from(remoteTotalByWindow.values()).reduce((sum, value) => sum + value, 0);
+      remoteTotalKnown = remoteTotalByWindow.size > 0;
+      businessBusyCount += result.businessBusyCount;
+      const evidenceByKey = new Map<string, Record<string, unknown>>();
+      for (const item of [result.sourceHealth[0], ...result.sourceHealth.filter((entry) => entry.ok === false), ...result.sourceHealth.slice(-5)]) {
+        if (item) evidenceByKey.set(text(item.key), item);
+      }
+      const windowDiagnostic = { ...result.diagnostic, mode: isInitial ? "initial" : "incremental", requestEvidence: Array.from(evidenceByKey.values()) };
+      sourceHealth.push(windowDiagnostic);
+      await reportDoudianDiagnostic({ category: "opportunity-pipeline", event: "submit-history-window", runId: args.runId || args.operationId, shopId: identity.shopId, ...windowDiagnostic }, true).catch(() => undefined);
+      remoteUpdatedAtWatermarkMs = submitHistoryRemoteUpdatedAtWatermark(result.records, remoteUpdatedAtWatermarkMs);
+      const persisted = await persistSubmitHistoryBatch(identity, result.records);
+      recordCount += persisted.insertedCount;
+      const checkpointNextPage = result.nextPage || windowNextPage;
+      const totalPages = windowRemoteTotal === undefined ? undefined : Math.max(1, Math.ceil(windowRemoteTotal / pageSize));
+      if (result.lastSuccessfulPage >= result.startPage) {
+        const progressDetail = {
+          mode: isInitial ? "initial" : "incremental",
+          window,
+          batchStartPage: result.startPage,
+          lastSuccessfulPage: result.lastSuccessfulPage,
+          checkpointNextPage,
+          totalPages,
+          batchRecordCount: result.records.length,
+          persistedRecordCount: recordCount
+        };
+        const progressMessage = `同步提报历史：${shopLabel}，已保存第 ${result.lastSuccessfulPage}${totalPages ? `/${totalPages}` : ""} 页`;
+        dispatchPipelineProgress(args, 15, progressMessage);
+        await reportDoudianDiagnostic({ category: "opportunity-pipeline", event: "submit-history-progress", runId: args.runId || args.operationId, shopId: identity.shopId, ...progressDetail }, true).catch(() => undefined);
+        const diagnosticRunId = text(args.runId || args.operationId);
+        if (diagnosticRunId) await writePipelineEvent({
+          runId: diagnosticRunId,
+          shopId: identity.shopId,
+          level: "info",
+          event: "pipeline-submit-history-progress",
+          message: progressMessage,
+          detail: progressDetail
+        }).catch(() => undefined);
+      }
+      if (result.status === "truncated" && result.nextPage) {
+        const checkpointAt = nowIso();
+        await repositoryPut(submitHistorySyncStore, {
+          id: syncId,
+          ...identity,
+          initialized: previous?.initialized === true,
+          status: "truncated",
+          initialStartEpochSeconds: initialStart,
+          initialCursorStartEpochSeconds: isInitial ? window.startEpochSeconds : startEpochSeconds,
+          watermarkMs: previous?.watermarkMs || 0,
+          remoteUpdatedAtWatermarkMs,
+          recordCount,
+          lastMode: isInitial ? "initial" : "incremental",
+          checkpointWindowStartEpochSeconds: window.startEpochSeconds,
+          checkpointWindowEndEpochSeconds: window.endEpochSeconds,
+          checkpointNextPage: result.nextPage,
+          checkpointRemoteTotal: windowRemoteTotal,
+          historyCompactionCursor: previous?.historyCompactionCursor,
+          historyCompactionCompletedAt: previous?.historyCompactionCompletedAt,
+          createdAt: previous?.createdAt || checkpointAt,
+          updatedAt: checkpointAt
+        } satisfies SubmitHistorySyncRecord);
+        windowNextPage = result.nextPage;
+        continue;
+      }
+      if (result.status !== "complete") {
+        const resumeAtMs = Date.parse(String(result.throttleResumeAt || ""));
+        const canRecoverThrottle = throttleRecoveryEnabled
+          && result.businessBusyCount > 0
+          && Number.isFinite(resumeAtMs)
+          && resumeAtMs <= throttleRecoveryDeadlineMs;
+        if (canRecoverThrottle) {
+          throttleRecoveryCount += 1;
+          windowThrottleRecoveryCount += 1;
+          const coolingAt = nowIso();
+          const resumeAt = new Date(resumeAtMs).toISOString();
+          await repositoryPut(submitHistorySyncStore, {
+            id: syncId,
+            ...identity,
+            initialized: previous?.initialized === true,
+            status: "cooling_down",
+            initialStartEpochSeconds: initialStart,
+            initialCursorStartEpochSeconds: isInitial ? window.startEpochSeconds : startEpochSeconds,
+            watermarkMs: previous?.watermarkMs || 0,
+            remoteUpdatedAtWatermarkMs,
+            recordCount,
+            lastMode: isInitial ? "initial" : "incremental",
+            lastError: "submit history throttled",
+            resumeAt,
+            throttleAttemptCount: throttleRecoveryCount,
+            lastBusinessCode: result.lastBusinessCode,
+            lastBusinessMessage: result.lastBusinessMessage,
+            checkpointWindowStartEpochSeconds: window.startEpochSeconds,
+            checkpointWindowEndEpochSeconds: window.endEpochSeconds,
+            checkpointNextPage,
+            checkpointRemoteTotal: windowRemoteTotal,
+            historyCompactionCursor: previous?.historyCompactionCursor,
+            historyCompactionCompletedAt: previous?.historyCompactionCompletedAt,
+            createdAt: previous?.createdAt || coolingAt,
+            updatedAt: coolingAt
+          } satisfies SubmitHistorySyncRecord);
+          const waitSeconds = Math.max(1, Math.ceil((resumeAtMs - Date.now()) / 1000));
+          const diagnosticRunId = text(args.runId || args.operationId);
+          const throttleDetail = {
+            status: "cooling_down",
+            businessCode: result.lastBusinessCode,
+            businessMessage: result.lastBusinessMessage,
+            resumeAt,
+            waitSeconds,
+            checkpointNextPage,
+            lastSuccessfulPage: result.lastSuccessfulPage,
+            persistedRecordCount: recordCount,
+            throttleAttemptCount: throttleRecoveryCount,
+            throttleRecoveryBudgetMs
+          };
+          await reportDoudianDiagnostic({ category: "opportunity-pipeline", event: "submit-history-throttled", runId: diagnosticRunId, shopId: identity.shopId, ...throttleDetail }, true).catch(() => undefined);
+          if (diagnosticRunId) await writePipelineEvent({
+            runId: diagnosticRunId,
+            shopId: identity.shopId,
+            level: "warn",
+            event: "pipeline-submit-history-throttled",
+            message: `平台访问频率受限，${waitSeconds} 秒后自动恢复`,
+            detail: throttleDetail
+          }).catch(() => undefined);
+          await waitForSubmitHistoryCooldown(args, resumeAtMs, shopLabel, checkpointNextPage);
+          windowNextPage = checkpointNextPage;
+          continue;
+        }
+        const failedAt = nowIso();
+        const throttleExhausted = result.businessBusyCount > 0 && throttleRecoveryEnabled;
+        const lastError = throttleExhausted ? "submit history throttle recovery exhausted" : "submit history window incomplete";
+        await repositoryPut(submitHistorySyncStore, {
+          id: syncId,
+          ...identity,
+          initialized: previous?.initialized === true,
+          status: result.status,
+          initialStartEpochSeconds: initialStart,
+          initialCursorStartEpochSeconds: isInitial ? window.startEpochSeconds : startEpochSeconds,
+          watermarkMs: previous?.watermarkMs || 0,
+          remoteUpdatedAtWatermarkMs,
+          recordCount,
+          lastMode: isInitial ? "initial" : "incremental",
+          lastError,
+          throttleAttemptCount: throttleRecoveryCount || undefined,
+          lastBusinessCode: result.lastBusinessCode || undefined,
+          lastBusinessMessage: result.lastBusinessMessage || undefined,
+          checkpointWindowStartEpochSeconds: window.startEpochSeconds,
+          checkpointWindowEndEpochSeconds: window.endEpochSeconds,
+          checkpointNextPage,
+          checkpointRemoteTotal: windowRemoteTotal,
+          historyCompactionCursor: previous?.historyCompactionCursor,
+          historyCompactionCompletedAt: previous?.historyCompactionCompletedAt,
+          createdAt: previous?.createdAt || failedAt,
+          updatedAt: failedAt
+        } satisfies SubmitHistorySyncRecord).catch(() => undefined);
+        const diagnosticRunId = text(args.runId || args.operationId);
+        if (diagnosticRunId) await writePipelineEvent({
+          runId: diagnosticRunId,
+          shopId: identity.shopId,
+          level: "error",
+          event: throttleExhausted ? "pipeline-submit-history-throttle-exhausted" : "pipeline-submit-history-incomplete",
+          message: throttleExhausted ? "提报历史校验限流恢复超时" : "submit history sync incomplete",
+          detail: { ...result.diagnostic, throttleRecoveryCount, throttleRecoveryBudgetMs, sourceHealth }
+        }).catch(() => undefined);
+        const index = await loadBenefitIndexForStore(identity);
+        const records = Array.from(index.values());
+        return { status: "failed" as const, mode: isInitial ? "initial" as const : "incremental" as const, records, overview: summarizeBenefitProducts(records), sourceHealth, remoteTotal, remoteTotalKnown, fetchedPages, businessBusyCount, throttleRecoveryCount, nextPage: checkpointNextPage };
+      }
+      if (windowThrottleRecoveryCount > 0) {
+        const diagnosticRunId = text(args.runId || args.operationId);
+        dispatchPipelineProgress(args, 16, `提报历史校验已恢复：${identity.shopName || identity.shopId}`);
+        if (diagnosticRunId) await writePipelineEvent({
+          runId: diagnosticRunId,
+          shopId: identity.shopId,
+          level: "info",
+          event: "pipeline-submit-history-recovered",
+          message: "提报历史校验已从平台限流中恢复",
+          detail: { throttleRecoveryCount: windowThrottleRecoveryCount }
+        }).catch(() => undefined);
+      }
+      const nextCursor = window.endEpochSeconds + 1;
       const checkpointAt = nowIso();
       await repositoryPut(submitHistorySyncStore, {
         id: syncId,
         ...identity,
-        initialized: false,
+        initialized: previous?.initialized === true,
         status: "truncated",
         initialStartEpochSeconds: initialStart,
-        initialCursorStartEpochSeconds: nextCursor,
-        watermarkMs: previous?.watermarkMs || 0,
+        initialCursorStartEpochSeconds: isInitial ? nextCursor : previous?.initialCursorStartEpochSeconds || initialStart,
+        watermarkMs: isInitial ? previous?.watermarkMs || 0 : Math.max(previous?.watermarkMs || 0, window.endEpochSeconds * 1000),
         remoteUpdatedAtWatermarkMs,
         recordCount,
-        lastMode: "initial",
+        lastMode: isInitial ? "initial" : "incremental",
+        historyCompactionCursor: previous?.historyCompactionCursor,
+        historyCompactionCompletedAt: previous?.historyCompactionCompletedAt,
         createdAt: previous?.createdAt || checkpointAt,
         updatedAt: checkpointAt
       } satisfies SubmitHistorySyncRecord);
+      break;
     }
   }
-  const persistedRecordCount = await repositoryGetAllByPrefix<SubmitHistoryRecord>(submitHistoryRecordStore, `${storeScopeId(identity)}-`, { pageSize: 500, maxItems: 500000 })
-    .then((items) => items.length)
-    .catch(() => recordCount);
-  recordCount = persistedRecordCount;
+  if (isInitial && windows.length < allWindows.length) {
+    const index = await loadBenefitIndexForStore(identity);
+    const records = Array.from(index.values());
+    return {
+      status: "truncated" as const,
+      mode: "initial" as const,
+      records,
+      overview: summarizeBenefitProducts(records),
+      sourceHealth,
+      remoteTotal,
+      remoteTotalKnown,
+      fetchedPages,
+      businessBusyCount,
+      nextPage: undefined
+    };
+  }
   const finishedAt = nowIso();
   await repositoryPut(submitHistorySyncStore, {
     id: syncId,
@@ -2241,6 +2790,8 @@ async function scanBenefitProductsForStore(payload: DoudianAdapterPayload, store
     recordCount,
     lastMode: isInitial ? "initial" : "incremental",
     lastSuccessfulSyncAt: finishedAt,
+    historyCompactionCursor: previous?.historyCompactionCursor,
+    historyCompactionCompletedAt: previous?.historyCompactionCompletedAt,
     createdAt: previous?.createdAt || finishedAt,
     updatedAt: finishedAt
   } satisfies SubmitHistorySyncRecord);
@@ -2248,7 +2799,137 @@ async function scanBenefitProductsForStore(payload: DoudianAdapterPayload, store
   const records = Array.from(index.values());
   const overview = summarizeBenefitProducts(records);
   await reportDoudianDiagnostic({ category: "opportunity-pipeline", event: "submit-history-sync-complete", runId: args.runId || args.operationId, shopId: identity.shopId, mode: isInitial ? "initial" : "incremental", recordCount, fetchedPages, remoteTotal: remoteTotalKnown ? remoteTotal : undefined, queryWatermarkMs: nowSeconds * 1000, remoteUpdatedAtWatermarkMs, sourceHealth }, true).catch(() => undefined);
-  return { status: "complete" as const, records, overview, sourceHealth, remoteTotal, remoteTotalKnown, fetchedPages, nextPage: undefined };
+  return { status: "complete" as const, mode: isInitial ? "initial" as const : "incremental" as const, records, overview, sourceHealth, remoteTotal, remoteTotalKnown, fetchedPages, businessBusyCount, nextPage: undefined };
+}
+
+export async function runOpportunityHistoryPrewarmTask(args: OpportunityArgs = {}): Promise<DoudianOpportunityReportResult> {
+  const payload = adapterPayload(args);
+  const ledger = await listStoreLedger();
+  const targets = targetStores(ledger.stores || [], args.shopIds);
+  const operationId = text(args.operationId) || `opportunity-history-prewarm-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  if (!targets.length) {
+    return { ...ledger, ok: false, status: "no-store", mode: "history-prewarm", message: "No Doudian stores selected", details: [], successCount: 0, failureCount: 0 };
+  }
+  const details: DoudianRunDetail[] = [];
+  const sourceHealth: Array<Record<string, unknown>> = [];
+  let initialSyncCount = 0;
+  let incrementalSyncCount = 0;
+  let businessBusyCount = 0;
+  let fetchedPages = 0;
+  let recordCount = 0;
+  let compactedRecordCount = 0;
+  let deferredSliceCount = 0;
+  for (const [index, store] of targets.entries()) {
+    assertNotCancelled(args.isCancelled);
+    const identity = normalizePipelineStoreIdentity(store);
+    const startedAt = nowIso();
+    dispatchDoudianProgress({
+      operationId,
+      taskType: "opportunityHistoryPrewarm",
+      status: "running",
+      progress: Math.max(1, Math.floor((index / targets.length) * 99)),
+      message: `预热报名历史：${store.shopName || store.shopId}`
+    });
+    await writePipelineEvent({
+      runId: operationId,
+      shopId: identity.shopId,
+      level: "info",
+      event: "submit-history-prewarm-started",
+      message: "submit history prewarm started",
+      detail: { reason: text(args.reason) || "idle-maintenance", startedAt }
+    }).catch(() => undefined);
+    try {
+      if (store.status !== "online") throw new Error("store login is not online");
+      await assertMutationStoreActive(store);
+      const result = await scanBenefitProductsForStore(payload, store, { ...args, operationId, runId: operationId });
+      const compaction = await compactSubmitHistoryRawRecords(
+        identity,
+        policyNumber(payload.adapter, "opportunityReport.submitHistoryPrewarmCompactionBatchSize", 500, 1, 500)
+      ).catch(() => ({ scannedCount: 0, compactedCount: 0, complete: false }));
+      sourceHealth.push(...result.sourceHealth);
+      businessBusyCount += result.businessBusyCount;
+      fetchedPages += result.fetchedPages;
+      recordCount += result.records.length;
+      compactedRecordCount += compaction.compactedCount;
+      if (result.mode === "initial") initialSyncCount += 1;
+      else incrementalSyncCount += 1;
+      const ok = result.status !== "failed";
+      const deferredSlice = result.status === "truncated";
+      if (deferredSlice) deferredSliceCount += 1;
+      details.push({
+        shopId: store.shopId,
+        shopName: store.shopName,
+        status: result.status === "complete" ? "ok" : ok ? "partial" : "failed",
+        ok,
+        message: result.status === "complete" ? "报名历史预热完成" : deferredSlice ? "报名历史预热切片已保存" : "报名历史预热未完成",
+        reason: result.status === "complete" ? undefined : deferredSlice ? "submit-history-prewarm-slice-complete" : result.businessBusyCount > 0 ? "submit-history-business-busy" : "submit-history-incomplete",
+        diagnostic: {
+          mode: result.mode,
+          fetchedPages: result.fetchedPages,
+          recordCount: result.records.length,
+          businessBusyCount: result.businessBusyCount,
+          compactedRecordCount: compaction.compactedCount,
+          compactionComplete: compaction.complete,
+          remoteTotal: result.remoteTotalKnown ? result.remoteTotal : undefined
+        },
+        attemptedAt: startedAt,
+        index: index + 1,
+        total: targets.length
+      });
+      await writePipelineEvent({
+        runId: operationId,
+        shopId: identity.shopId,
+        level: ok ? "info" : "warn",
+        event: result.status === "complete" ? "submit-history-prewarm-finished" : "submit-history-prewarm-deferred",
+        message: result.status === "complete" ? "submit history prewarm finished" : "submit history prewarm slice checkpointed",
+        detail: { mode: result.mode, fetchedPages: result.fetchedPages, recordCount: result.records.length, businessBusyCount: result.businessBusyCount, compactedRecordCount: compaction.compactedCount }
+      }).catch(() => undefined);
+      if (result.businessBusyCount > 0) break;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      details.push({
+        shopId: store.shopId,
+        shopName: store.shopName,
+        status: "failed",
+        ok: false,
+        message,
+        reason: "submit-history-prewarm-failed",
+        attemptedAt: startedAt,
+        index: index + 1,
+        total: targets.length
+      });
+      await writePipelineEvent({
+        runId: operationId,
+        shopId: identity.shopId,
+        level: "error",
+        event: "submit-history-prewarm-failed",
+        message,
+        detail: { reason: text(args.reason) || "idle-maintenance" }
+      }).catch(() => undefined);
+    }
+  }
+  const successCount = details.filter((detail) => detail.ok).length;
+  const failureCount = details.length - successCount;
+  const status = failureCount === 0 ? "ok" : successCount > 0 ? "partial" : "failed";
+  dispatchDoudianProgress({
+    operationId,
+    taskType: "opportunityHistoryPrewarm",
+    status: status === "ok" ? "succeeded" : status,
+    progress: 99,
+    message: status === "ok" ? "报名历史预热完成" : "报名历史预热部分未完成"
+  });
+  return {
+    ...ledger,
+    ok: failureCount === 0,
+    status,
+    mode: "history-prewarm",
+    message: failureCount === 0 ? "报名历史预热完成" : "报名历史预热部分未完成",
+    details,
+    successCount,
+    failureCount,
+    sourceHealth,
+    summary: { initialSyncCount, incrementalSyncCount, businessBusyCount, fetchedPages, recordCount, compactedRecordCount, deferredSliceCount }
+  };
 }
 
 async function loadBenefitIndexForStore(identity: PipelineStoreIdentity) {
@@ -2531,10 +3212,39 @@ async function loadOpportunityMutationSummary(runId: string): Promise<Opportunit
   return summarize({ runId }).catch(() => null);
 }
 
+async function loadOpportunitySubmitRunMetrics(run: PipelineRunRecord): Promise<OpportunitySubmitRunMetrics | null> {
+  const summarize = getNativeData()?.opportunitySubmit?.summarizeRun;
+  if (!summarize) return null;
+  const result = await summarize({
+    runId: run.runId,
+    businessDate: businessDateKey(),
+    endpointContract: "opportunitySubmitClue",
+    dailyCandidateMutationLimit: Number(run.summary?.dailyCandidateMutationLimit || 1000),
+    dailyHttpRequestLimit: Number(run.summary?.dailyHttpRequestLimit || 1000),
+    policy: {
+      submitPacingInitialIntervalMs: Number(run.summary?.submitPacingInitialIntervalMs || 15000),
+      submitGlobalPacingInitialMs: Number(run.summary?.submitGlobalPacingInitialMs || 15000),
+      submitGlobal429WindowMs: Number(run.summary?.submitGlobal429WindowMs || 120000),
+      submitGlobal429DistinctStores: Number(run.summary?.submitGlobal429DistinctStores || 2)
+    }
+  }).catch(() => null);
+  return result as unknown as OpportunitySubmitRunMetrics | null;
+}
+
+function submitConcurrencySnapshot(run: PipelineRunRecord): SubmitConcurrencyRunSnapshot {
+  return {
+    runId: run.runId,
+    status: run.status,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    summary: run.summary || {}
+  };
+}
+
 async function submitTaskIsCancelled(task: PipelineSubmitTaskRecord, args: OpportunityArgs) {
   if (cancelledPipelineRunIds.has(task.runId) || pipelineCancelled({ ...args, runId: task.runId })) return true;
   const current = await repositoryGet<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore, task.id).catch(() => null);
-  return current?.status === "cancelled";
+  return current?.status === "cancelled" || current?.status === "cancelling";
 }
 
 async function updateSubmitTaskFromWorker(
@@ -2544,14 +3254,17 @@ async function updateSubmitTaskFromWorker(
 ) {
   const current = await repositoryGet<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore, task.id).catch(() => null);
   if (!current) return null;
-  const cancelled = cancelledPipelineRunIds.has(task.runId) || current.status === "cancelled";
+  const cancelled = cancelledPipelineRunIds.has(task.runId) || current.status === "cancelled" || current.status === "cancelling";
   if (!cancelled && current.ownerRunId && current.ownerRunId !== workerId) return current;
-  const nextStatus = preserveCancelledStatus(current.status, text(patch.status || current.status)) as PipelineSubmitTaskRecord["status"];
+  const requestedStatus = text(patch.status || current.status);
+  const nextStatus = (current.status === "cancelling" && requestedStatus !== "cancelled"
+    ? "cancelling"
+    : preserveCancelledStatus(current.status, requestedStatus)) as PipelineSubmitTaskRecord["status"];
   const next = {
     ...current,
     ...patch,
     status: nextStatus,
-    leaseExpiresAt: nextStatus === "cancelled"
+    leaseExpiresAt: nextStatus === "cancelled" || nextStatus === "cancelling"
       ? undefined
       : Object.prototype.hasOwnProperty.call(patch, "leaseExpiresAt")
         ? patch.leaseExpiresAt
@@ -2568,7 +3281,7 @@ const officialValidationCacheRemovalMetaId = "opportunity-official-validation-ca
 
 function expiredHistoryRecords<T extends { id: string; createdAt?: string; updatedAt?: string; status?: string }>(records: T[], cutoffMs: number, maxRecords: number) {
   const terminal = records
-    .filter((item) => !["preparing", "ready", "running", "queued"].includes(item.status || ""))
+    .filter((item) => !["preparing", "ready", "running", "queued", "cancelling", "cooling_down", "deferred", "deferred_contract_mismatch", "manual_reconcile"].includes(item.status || ""))
     .sort((left, right) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")));
   return terminal.filter((item, index) => {
     const timestamp = Date.parse(String(item.updatedAt || item.createdAt || ""));
@@ -3505,12 +4218,16 @@ function matchCategoryProductsByAhoTokens(args: {
     for (const [clueId, tokenSet] of matchedByClue.entries()) {
       const clue = clueById.get(clueId);
       if (!clue) continue;
-      if (candidateHistorySkipReason(args, {
+      const historySkipReason = candidateHistorySkipReason(args, {
         shopId: product.shopId,
         productId: product.productId,
         clueId: clue.clueId,
         clueLastCategoryId: clue.lastCategoryId
-      })) continue;
+      });
+      if (historySkipReason) {
+        diagnostics.filteredByHistoryCount += 1;
+        continue;
+      }
       const clueTokens = uniqueText(args.tokenIndex.clueTokens[clueId] || []);
       const clueEvidenceGroups = groupEvidenceTerms(clueTokens);
       const clueTokenCount = clueTokens.length;
@@ -3825,6 +4542,7 @@ async function enqueueStoreSubmit(args: {
   snapshotVersion: string;
   inputCoverage: PipelineInputCoverage;
   candidateLimitPerProduct: number;
+  contract: ReturnType<typeof submitTaskContract>;
 }) {
   const writeCoverageComplete = pipelineInputCoverageAllowsWrite(args.inputCoverage);
   if (!writeCoverageComplete) {
@@ -3860,9 +4578,46 @@ async function enqueueStoreSubmit(args: {
     return null;
   }
   const concurrencyKey = storeScopeId(args.identity);
-  const active = (await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore).catch(() => []))
-    .find((task) => task.runId === args.runId && task.concurrencyKey === concurrencyKey && (["preparing", "ready", "queued", "running"] as string[]).includes(task.status));
-  if (active && active.status !== "preparing") return active;
+  const activeStatuses = ["preparing", "ready", "queued", "running", "cancelling", "cooling_down", "deferred", "deferred_contract_mismatch", "manual_reconcile"];
+  const activeTasks = (await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore))
+    .filter((task) => task.concurrencyKey === concurrencyKey && activeStatuses.includes(task.status));
+  const currentRunTask = activeTasks.find((task) => task.runId === args.runId);
+  if (currentRunTask && currentRunTask.status !== "preparing") return currentRunTask;
+  const staleTasks = activeTasks.filter((task) => task.runId !== args.runId);
+  for (const staleTask of staleTasks) {
+    const mutationSummary = await loadOpportunityMutationSummary(staleTask.runId);
+    const mutationCounts = mutationSummary?.byShop[staleTask.shopId];
+    if (!canSupersedeContractMismatchTask(staleTask, mutationCounts)) {
+      throw new Error(`店铺存在其他运行的未完成提报任务（${staleTask.status}），请先完成或核对该任务`);
+    }
+    const retiredAt = nowIso();
+    await repositoryPut(pipelineSubmitTaskStore, {
+      ...staleTask,
+      status: "expired",
+      ownerRunId: undefined,
+      leaseExpiresAt: undefined,
+      finishedAt: staleTask.finishedAt || retiredAt,
+      lastError: `已由新运行 ${args.runId} 替代无法恢复的旧版本任务`,
+      updatedAt: retiredAt
+    } satisfies PipelineSubmitTaskRecord);
+    await updatePipelineStoreRunProgress(staleTask.storeRunId, {
+      status: "partial",
+      phase: "finished",
+      skipReason: "superseded_contract_mismatch",
+      finishedAt: retiredAt
+    });
+    await writePipelineEvent({
+      runId: staleTask.runId,
+      storeRunId: staleTask.storeRunId,
+      shopId: staleTask.shopId,
+      level: "warn",
+      event: "pipeline-submit-task-superseded",
+      message: "旧版本提报任务无法恢复，已保存历史结果并由新运行重新规划",
+      detail: { taskId: staleTask.id, supersededByRunId: args.runId }
+    }).catch(() => undefined);
+    await refreshPipelineRunSummary(staleTask.runId).catch(() => null);
+  }
+  const active = currentRunTask;
   const now = nowIso();
   const task: PipelineSubmitTaskRecord = {
     ...(active || {} as PipelineSubmitTaskRecord),
@@ -3890,6 +4645,7 @@ async function enqueueStoreSubmit(args: {
     submittedCount: 0,
     skippedCount: 0,
     failedCount: 0,
+    ...args.contract,
     createdAt: active?.createdAt || now,
     updatedAt: now
   };
@@ -3943,15 +4699,15 @@ async function cancelPipelinePendingWorkForRun(runId: string, reason = "已取�
       finishedAt: item.finishedAt || now
     } satisfies PipelineStoreRunRecord)), { concurrency: 2 });
   }
-  const cancellableTasks = tasks.filter((item) => ["preparing", "ready", "queued", "running"].includes(item.status));
+  const cancellableTasks = tasks.filter((item) => ["preparing", "ready", "queued", "running", "cancelling", "cooling_down", "deferred", "deferred_contract_mismatch", "manual_reconcile"].includes(item.status));
   if (!cancellableTasks.length) return;
   await repositoryPutMany(pipelineSubmitTaskStore, cancellableTasks.map((item) => ({
     ...item,
-    status: "cancelled",
+    status: item.inFlightAttemptId ? "cancelling" : "cancelled",
     leaseExpiresAt: undefined,
     lastError: reason,
     updatedAt: now,
-    finishedAt: item.finishedAt || now
+    finishedAt: item.inFlightAttemptId ? undefined : item.finishedAt || now
   } satisfies PipelineSubmitTaskRecord)), { concurrency: 2 });
   const taskIds = new Set(cancellableTasks.map((task) => task.id));
   const candidateIds = Array.from(new Set(
@@ -3966,7 +4722,7 @@ async function cancelPipelinePendingWorkForRun(runId: string, reason = "已取�
   const candidates = candidatePages.flat();
   const updatedCandidates = candidates
     .filter((candidate) => candidate.submitTaskId && taskIds.has(candidate.submitTaskId))
-    .filter((candidate) => candidate.submitStatus === "queued" || candidate.submitStatus === "fallback" || candidate.status === "ready" || candidate.status === "alternative")
+    .filter((candidate) => candidate.submitStatus === "queued" || candidate.submitStatus === "fallback" || candidate.submitStatus === "retry_waiting" || candidate.status === "ready" || candidate.status === "alternative" || candidate.status === "retry_waiting")
     .map((candidate) => ({
       ...candidate,
       eligible: false,
@@ -4008,10 +4764,11 @@ export async function cancelOpportunityPipelineSubmitTask(args: {
 async function refreshPipelineRunSummary(runId: string) {
   const run = await repositoryGet<PipelineRunRecord>(pipelineRunStore, runId).catch(() => null);
   if (!run) return null;
-  const [storeRuns, tasks, mutationSummary] = await Promise.all([
+  const [storeRuns, tasks, mutationSummary, submitMetrics] = await Promise.all([
     loadPipelineStoreRunsForRun(runId),
-    loadPipelineSubmitTasksForRun(runId),
-    loadOpportunityMutationSummary(runId)
+    loadPipelineSubmitTasksForRunStrict(runId),
+    loadOpportunityMutationSummary(runId),
+    loadOpportunitySubmitRunMetrics(run)
   ]);
   let scopedStoreRuns = storeRuns.filter((item) => item.runId === runId);
   const scopedTasks = tasks.filter((item) => item.runId === runId);
@@ -4023,7 +4780,7 @@ async function refreshPipelineRunSummary(runId: string) {
       return {
         ...storeRun,
         submittedCount: Number(counts.acknowledged || 0) + Number(counts.confirmed || 0),
-        failedCount: Number(counts.failed || 0) + Number(counts.unknown || 0),
+        failedCount: pipelineMutationTerminalFailureCount(counts),
         skippedCount: Number(counts.skipped || 0),
         safetySkippedCount: Number(counts.safetySkipped || 0),
         unknownCount: Number(counts.unknown || 0)
@@ -4041,6 +4798,32 @@ async function refreshPipelineRunSummary(runId: string) {
     scopedStoreRuns = reconciledStoreRuns;
   }
   const taskStoreRunIds = new Set(scopedTasks.map((task) => task.storeRunId));
+  const orphanedStoreRuns = orphanedSubmitQueueStoreRuns(scopedStoreRuns, scopedTasks);
+  if (orphanedStoreRuns.length) {
+    const repairedAt = nowIso();
+    const orphanedIds = new Set(orphanedStoreRuns.map((item) => item.id));
+    const repairedStoreRuns = orphanedStoreRuns.map((item) => ({
+      ...item,
+      status: "failed",
+      phase: "finished" as const,
+      failedCount: Math.max(1, Number(item.failedCount || 0)),
+      skipReason: "submit_task_missing",
+      updatedAt: repairedAt,
+      finishedAt: item.finishedAt || repairedAt
+    } satisfies PipelineStoreRunRecord));
+    await repositoryPutMany(pipelineStoreRunStore, repairedStoreRuns, { concurrency: 2 });
+    const repairedById = new Map(repairedStoreRuns.map((item) => [item.id, item]));
+    scopedStoreRuns = scopedStoreRuns.map((item) => orphanedIds.has(item.id) ? repairedById.get(item.id)! : item);
+    await Promise.all(repairedStoreRuns.map((item) => writePipelineEvent({
+      runId,
+      storeRunId: item.id,
+      shopId: item.shopId,
+      level: "error",
+      event: "pipeline-submit-orphaned-store-run-repaired",
+      message: "提报队列记录缺少对应任务，已自动结束以避免持续卡住",
+      detail: { previousStatus: "queued", previousPhase: "submit-queued" }
+    }).catch(() => undefined)));
+  }
   const failedStoreCount = scopedStoreRuns.filter((item) => item.status === "failed" && !taskStoreRunIds.has(item.id)).length;
   const skippedStoreCount = scopedStoreRuns.filter((item) => item.status === "skipped" && !taskStoreRunIds.has(item.id)).length;
   const taskSubmittedCount = scopedTasks.reduce((sum, item) => sum + Number(item.submittedCount || 0), 0);
@@ -4051,7 +4834,7 @@ async function refreshPipelineRunSummary(runId: string) {
     ? Number(mutationSummary!.acknowledged || 0) + Number(mutationSummary!.confirmed || 0)
     : taskSubmittedCount;
   const failedCount = failedStoreCount + (hasMutationSummary
-    ? Number(mutationSummary!.failed || 0) + Number(mutationSummary!.unknown || 0)
+    ? pipelineMutationTerminalFailureCount(mutationSummary)
     : taskFailedCount);
   const skippedCount = skippedStoreCount + (hasMutationSummary
     ? Number(mutationSummary!.skipped || 0) + Math.max(0, taskSkippedCount - taskSafetySkippedCount)
@@ -4066,6 +4849,13 @@ async function refreshPipelineRunSummary(runId: string) {
   const runningCount =
     scopedTasks.filter((item) => ["preparing", "ready", "queued", "running"].includes(item.status)).length +
     scopedStoreRuns.filter((item) => item.status === "queued" || item.status === "running").length;
+  const deferredCount = scopedTasks.filter((item) => ["cooling_down", "deferred", "deferred_contract_mismatch", "manual_reconcile"].includes(item.status)).length;
+  const automaticRecoveryPendingCount = scopedTasks.filter(pipelineTaskAwaitsAutomaticRecovery).length;
+  const retryableRemainingCount = scopedTasks.reduce((sum, item) => sum + pipelineTaskRetryableRemainingCount(item), 0);
+  const retryExhaustedCount = scopedTasks.filter((item) => item.deferredReason === "retry_exhausted").length;
+  const unknownCount = hasMutationSummary ? Number(mutationSummary!.unknown || 0) : scopedTasks.reduce((sum, item) => sum + Number(item.unknownCount || 0), 0);
+  const authorizationWaitingCount = scopedTasks.filter((item) => item.deferredReason === "authorization_wait").length;
+  const contractMismatchCount = scopedTasks.filter((item) => item.status === "deferred_contract_mismatch" || item.deferredReason === "contract_mismatch").length;
   const inputCoveragePartialCount = scopedStoreRuns.filter((item) => item.inputCoverage && (
     item.inputCoverage.productScanStatus !== "complete"
     || item.inputCoverage.benefitScanStatus !== "complete"
@@ -4085,17 +4875,32 @@ async function refreshPipelineRunSummary(runId: string) {
       ? "running"
       : failedCount
         ? (submittedCount || skippedCount ? "partial" : "failed")
+        : deferredCount || retryableRemainingCount || unknownCount || Number(mutationSummary?.pending || 0)
+          ? "partial"
         : diagnosticsBlockCompletion
           ? "partial"
           : "ok";
   const safetySkippedCount = hasMutationSummary ? Number(mutationSummary!.safetySkipped || 0) : taskSafetySkippedCount;
   const quotaExhaustedCount = scopedTasks.reduce((sum, item) => sum + Number(item.quotaExhaustedCount || 0), 0);
   const cancelledCount = scopedTasks.reduce((sum, item) => sum + Number(item.cancelledCount || 0), 0);
-  const unknownCount = hasMutationSummary ? Number(mutationSummary!.unknown || 0) : scopedTasks.reduce((sum, item) => sum + Number(item.unknownCount || 0), 0);
   const remoteRequestCount = scopedTasks.reduce((sum, item) => sum + Number(item.remoteRequestCount || 0), 0);
   const estimatedSubmitGroupCount = scopedStoreRuns.reduce((sum, item) => sum + Number(item.estimatedSubmitGroupCount || 0), 0);
   const estimatedSubmitDurationMs = scopedStoreRuns.reduce((sum, item) => sum + Number(item.estimatedSubmitDurationMs || 0), 0);
-  const summary = {
+  const firstHttpDispatchedMs = Date.parse(String(submitMetrics?.firstHttpDispatchedAt || ""));
+  const lastHttpResolvedMs = Date.parse(String(submitMetrics?.lastHttpResolvedAt || ""));
+  const submitPacingInitialIntervalMs = Number(run.summary?.submitPacingInitialIntervalMs || 15000);
+  const submitWindowDurationMs = submitMetrics?.httpRequestAttemptCount
+    ? Math.max(
+      submitPacingInitialIntervalMs,
+      Number.isFinite(firstHttpDispatchedMs) && Number.isFinite(lastHttpResolvedMs)
+        ? Math.max(0, lastHttpResolvedMs - firstHttpDispatchedMs)
+        : 0
+    )
+    : 0;
+  const effectiveCompletionPerMinute = submitWindowDurationMs > 0
+    ? Number(((submittedCount * 60000) / submitWindowDurationMs).toFixed(4))
+    : 0;
+  const summary: Record<string, number> = {
     ...(run.summary || {}),
     productCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.productCount || 0), 0),
     productFetchedCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.inputCoverage?.productFetchedCount || item.productCount || 0), 0),
@@ -4134,16 +4939,44 @@ async function refreshPipelineRunSummary(runId: string) {
     quotaUsedBefore: scopedStoreRuns.reduce((sum, item) => sum + Number(item.quotaUsedBefore || 0), 0),
     quotaRemainingBefore: scopedStoreRuns.reduce((sum, item) => sum + Number(item.quotaRemainingBefore || 0), 0),
     quotaRemainingAfterPlan: scopedStoreRuns.reduce((sum, item) => sum + Number(item.quotaRemainingAfterPlan || 0), 0),
-    quotaAttemptCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.quotaAttemptCount || item.quotaUsedBefore || 0), 0),
+    quotaAttemptCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.quotaAttemptCount ?? item.quotaUsedBefore ?? 0), 0),
     quotaRemainingAfterSubmit: scopedStoreRuns.reduce((sum, item) => sum + Number(item.quotaRemainingAfterSubmit || item.quotaRemainingAfterPlan || 0), 0),
     rawPairCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.rawPairCount || item.matchDiagnostics?.rawPairCount || 0), 0),
     passedThresholdCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.passedThresholdCount || item.matchDiagnostics?.passedThresholdCount || 0), 0),
+    filteredByHistoryCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.filteredByHistoryCount || item.matchDiagnostics?.filteredByHistoryCount || 0), 0),
     filteredByNoTokenCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.filteredByNoTokenCount || item.matchDiagnostics?.filteredByNoTokenCount || 0), 0),
     filteredByWeakSingleTokenCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.filteredByWeakSingleTokenCount || item.matchDiagnostics?.filteredByWeakSingleTokenCount || 0), 0),
     filteredByThresholdCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.filteredByThresholdCount || item.matchDiagnostics?.filteredByThresholdCount || 0), 0),
     filteredByGenericOnlyCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.filteredByGenericOnlyCount || item.matchDiagnostics?.filteredByGenericOnlyCount || 0), 0),
     droppedByTopKCount: scopedStoreRuns.reduce((sum, item) => sum + Number(item.droppedByTopKCount || item.matchDiagnostics?.droppedByTopKCount || 0), 0),
     submitTaskCount: scopedTasks.length,
+    orphanedSubmitQueueRepairCount: Number(run.summary?.orphanedSubmitQueueRepairCount || 0) + orphanedStoreRuns.length,
+    deferredCount,
+    automaticRecoveryPendingCount,
+    pendingMutationCount: Number(mutationSummary?.pending || 0),
+    retryableRemainingCount,
+    retryExhaustedCount,
+    throttleCount: Number(submitMetrics?.throttleCount ?? scopedTasks.reduce((sum, item) => sum + Number(item.throttleCount || 0), 0)),
+    throttlePauseMs: scopedTasks.reduce((sum, item) => sum + Number(item.throttlePauseMs || 0), 0),
+    recoveredAfterThrottleCount: Number(submitMetrics?.recoveredAfterThrottleCount || 0),
+    globalThrottleCount: Number(submitMetrics?.globalThrottleCount || 0),
+    maxStoreIntervalMs: Number(submitMetrics?.maxStoreIntervalMs || submitPacingInitialIntervalMs),
+    averageStoreIntervalMs: Number(submitMetrics?.averageStoreIntervalMs || submitPacingInitialIntervalMs),
+    globalRateMode: submitMetrics?.globalRateMode === "protective" ? 1 : 0,
+    globalIntervalMs: Number(submitMetrics?.globalIntervalMs || run.summary?.submitGlobalPacingInitialMs || 15000),
+    candidateMutationAttemptCount: Number(submitMetrics?.candidateMutationAttemptCount || 0),
+    httpRequestAttemptCount: Number(submitMetrics?.httpRequestAttemptCount ?? remoteRequestCount),
+    dailyCandidateMutationUsed: Number(submitMetrics?.dailyCandidateMutationUsed || 0),
+    dailyCandidateMutationReserved: Number(submitMetrics?.dailyCandidateMutationReserved || 0),
+    dailyCandidateMutationRemaining: Number(submitMetrics?.dailyCandidateMutationRemaining || 0),
+    dailyHttpRequestUsed: Number(submitMetrics?.dailyHttpRequestUsed || 0),
+    dailyHttpRequestReserved: Number(submitMetrics?.dailyHttpRequestReserved || 0),
+    dailyHttpRequestRemaining: Number(submitMetrics?.dailyHttpRequestRemaining || 0),
+    submitWindowDurationMs,
+    effectiveCompletionPerMinute,
+    manualReconcileCount: scopedTasks.filter((item) => item.status === "manual_reconcile").length,
+    authorizationWaitingCount,
+    contractMismatchCount,
     submittedCount,
     submitAcceptedCount: submittedCount,
     platformApprovedCount: 0,
@@ -4164,6 +4997,34 @@ async function refreshPipelineRunSummary(runId: string) {
     processedStoreCount: scopedStoreRuns.length,
     totalStoreCount: run.totalStoreCount
   };
+  let concurrencyEvaluation = run.submitConcurrencyEvaluation;
+  let concurrencyEvaluationChanged = false;
+  if (status !== "running") {
+    const previousRuns = (await repositoryGetAll<PipelineRunRecord>(pipelineRunStore).catch(() => []))
+      .filter((item) => item.runId !== runId);
+    const evaluation = evaluateSubmitConcurrencyReadiness(
+      submitConcurrencySnapshot({ ...run, status, summary, updatedAt: nowIso() }),
+      previousRuns.map(submitConcurrencySnapshot)
+    );
+    const signature = stableHash(JSON.stringify({
+      decision: evaluation.decision,
+      reasons: evaluation.reasons,
+      evaluatedRunIds: evaluation.evaluatedRunIds,
+      evidence: evaluation.evidence
+    }));
+    concurrencyEvaluationChanged = run.submitConcurrencyEvaluation?.signature !== signature;
+    concurrencyEvaluation = concurrencyEvaluationChanged
+      ? { ...evaluation, signature, evaluatedAt: nowIso() }
+      : run.submitConcurrencyEvaluation;
+    summary.submitConcurrencyDecisionCode = evaluation.decision === "eligible_for_canary_3"
+      ? 1
+      : evaluation.decision === "continue_canary_3"
+        ? 2
+        : evaluation.decision === "rollback_to_2"
+          ? 3
+          : 0;
+    summary.submitConcurrencyStableRunCount = evaluation.stableRunCount;
+  }
   const updated = {
     ...run,
     status,
@@ -4172,9 +5033,19 @@ async function refreshPipelineRunSummary(runId: string) {
     skippedCount,
     failedCount,
     summary,
+    submitConcurrencyEvaluation: concurrencyEvaluation,
     updatedAt: nowIso()
   } satisfies PipelineRunRecord;
   await repositoryPut(pipelineRunStore, updated);
+  if (concurrencyEvaluationChanged && concurrencyEvaluation) {
+    await writePipelineEvent({
+      runId,
+      level: concurrencyEvaluation.decision === "rollback_to_2" ? "warn" : "info",
+      event: "pipeline-submit-concurrency-evaluated",
+      message: concurrencyEvaluation.decision,
+      detail: { ...concurrencyEvaluation }
+    }).catch(() => undefined);
+  }
   return updated;
 }
 
@@ -5794,9 +6665,13 @@ function submitFrequencyLimitedMessage(message: string, response?: RequestPlanRe
   if (!value) return false;
   return value.includes("操作太频繁") ||
     value.includes("访问过于频繁") ||
-    value.includes("环境存在风险") ||
     value.includes("频控") ||
     (value.includes("频繁") && (value.includes("稍后") || value.includes("访问")));
+}
+
+function submitManualInterventionMessage(message: string, response?: RequestPlanResult) {
+  const value = text(message || responseMessage(response));
+  return Boolean(value && /环境存在风险|账号风控|身份校验|滑块|验证码|验证后重试|重新登录/.test(value));
 }
 
 function productIdsFromSubmitMessage(message: string) {
@@ -5897,6 +6772,72 @@ function productFailureMessages(message: string) {
   return failures;
 }
 
+interface CoordinatedRemoteSubmitResult {
+  response?: RequestPlanResult;
+  attemptCount: number;
+  deferred?: boolean;
+  classification?: CoordinatedSubmitClassification;
+  coordination?: Record<string, unknown>;
+  settledTask?: PipelineSubmitTaskRecord;
+}
+
+function coordinatedSubmitEventDetail(args: {
+  task: PipelineSubmitTaskRecord;
+  taskState?: PipelineSubmitTaskRecord;
+  schedulerLease: OpportunitySubmitSchedulerLease;
+  workerId: string;
+  workerSlot?: number;
+  taskConcurrency?: number;
+  candidates?: DoudianOpportunityPrematchCandidate[];
+  attempt?: Record<string, unknown>;
+  rate?: Record<string, unknown>;
+  quota?: Record<string, unknown>;
+  nextEligibleAt?: unknown;
+  reason?: unknown;
+  extra?: Record<string, unknown>;
+}) {
+  const taskState = args.taskState || args.task;
+  const attempt = objectRecord(args.attempt);
+  const rate = objectRecord(args.rate);
+  const storeRate = objectRecord(rate.store);
+  const globalRate = objectRecord(rate.global);
+  const quota = objectRecord(args.quota);
+  const candidateIds = (args.candidates || []).map((candidate) => candidate.id);
+  return {
+    taskId: args.task.id,
+    logicalGroupId: text(attempt.logicalGroupId || taskState.inFlightLogicalGroupId),
+    attemptId: text(attempt.attemptId || taskState.inFlightAttemptId),
+    candidateId: candidateIds.length === 1 ? candidateIds[0] : undefined,
+    candidateIds,
+    retryCycle: Number(attempt.retryCycle || 0),
+    attemptOrdinal: Number(attempt.attemptOrdinal || taskState.inFlightAttemptOrdinal || 0),
+    quotaReservationId: text(attempt.quotaReservationId || taskState.quotaReservationId),
+    httpGrantId: text(attempt.httpGrantId || taskState.httpGrantId),
+    nextEligibleAt: text(args.nextEligibleAt || storeRate.nextEligibleAt || taskState.resumeAt),
+    storeIntervalMs: Number(storeRate.intervalMs || 0),
+    globalIntervalMs: Number(globalRate.intervalMs || 0),
+    globalMode: text(globalRate.mode),
+    throttleCount: Number(taskState.throttleCount || 0),
+    candidateMutationAttemptCount: Number(taskState.candidateMutationAttemptCount ?? 0),
+    httpRequestAttemptCount: Number(taskState.httpRequestAttemptCount ?? taskState.remoteRequestCount ?? 0),
+    dailyCandidateMutationUsed: Number(quota.candidateDispatched || 0),
+    dailyHttpRequestUsed: Number(quota.httpDispatched || 0),
+    retryableRemainingCount: Number(taskState.retryableRemainingCount || 0),
+    workerId: args.workerId,
+    workerSlot: args.workerSlot,
+    taskConcurrency: args.taskConcurrency,
+    schedulerOwnerId: args.schedulerLease.ownerId,
+    schedulerFencingToken: args.schedulerLease.fencingToken,
+    releaseId: args.task.releaseId,
+    releaseManifestHash: args.task.releaseManifestHash,
+    submitContractVersion: args.task.submitContractVersion,
+    pacingPolicyHash: args.task.pacingPolicyHash,
+    policyVersion: text(storeRate.policyVersion || globalRate.policyVersion),
+    schedulerReason: text(args.reason),
+    ...args.extra
+  };
+}
+
 async function submitWithRetry(
   payload: DoudianAdapterPayload,
   store: DoudianStoreSummary,
@@ -5912,7 +6853,8 @@ async function submitWithRetry(
   }
 ) {
   const planKey = "opportunitySubmitClue";
-  const retryLimit = policyNumber(payload.adapter, "opportunityReport.submitRetryLimit", 3, 1, 3);
+  const coordinated = submitCoordinatorEnabled(payload.adapter);
+  const retryLimit = coordinated ? 1 : policyNumber(payload.adapter, "opportunityReport.submitRetryLimit", 3, 1, 3);
   const retryDelay = policyNumber(payload.adapter, "opportunityReport.submitRetryDelayMs", 10000, 0, 30000);
   const clueId = text(trace?.clueId || body.clue_id);
   const productIds = uniqueText(trace?.productIds || (Array.isArray(body.products)
@@ -5957,7 +6899,7 @@ async function submitWithRetry(
       attemptIndex: attempt,
       status,
       headers: response.headers,
-      jitterMs: status === 429 ? Math.floor(Math.random() * 5001) : 0
+      jitterMs: coordinated ? 0 : status === 429 ? Math.floor(Math.random() * 5001) : 0
     }) : 0;
     await reportDoudianDiagnostic({
       category: "opportunity-pipeline",
@@ -6228,6 +7170,7 @@ async function submitProductsForClue(args: {
   beginMutation?: () => void;
   endMutation?: () => void;
   onRemoteSubmitStart?: (products: DoudianOpportunityProductRow[]) => Promise<void>;
+  submitRemote?: (body: Record<string, unknown>, products: DoudianOpportunityProductRow[]) => Promise<CoordinatedRemoteSubmitResult>;
 }) {
   const executions: DoudianOpportunityExecution[] = [];
   const words = args.pipelineWords || (args.validatedByPipeline ? baseClueWords(args.clue) : await queryClueWords(args.payload, args.store, args.clue, args.dryRun));
@@ -6362,21 +7305,28 @@ async function submitProductsForClue(args: {
     } else {
       assertNotCancelled(args.shouldCancel);
       await assertMutationStoreActive(args.store);
-      await args.onRemoteSubmitStart?.(batch);
-      const submitResult = await submitWithRetry(
-        args.payload,
-        args.store,
-        submitBody(args.clue, batch, args.store, args.module),
-        args.shouldCancel,
-        args.beginMutation,
-        args.endMutation,
-        {
-          runId: args.runId,
-          sourceRunId: args.sourceRunId,
-          clueId: args.clue.clueId,
-          productIds: batch.map((product) => product.productId)
-        }
-      );
+      const body = submitBody(args.clue, batch, args.store, args.module);
+      let submitResult: CoordinatedRemoteSubmitResult;
+      if (args.submitRemote) {
+        submitResult = await args.submitRemote(body, batch);
+      } else {
+        await args.onRemoteSubmitStart?.(batch);
+        submitResult = await submitWithRetry(
+          args.payload,
+          args.store,
+          body,
+          args.shouldCancel,
+          args.beginMutation,
+          args.endMutation,
+          {
+            runId: args.runId,
+            sourceRunId: args.sourceRunId,
+            clueId: args.clue.clueId,
+            productIds: batch.map((product) => product.productId)
+          }
+        );
+      }
+      if (submitResult.deferred) continue;
       const response = submitResult.response;
       const remoteCode = responseCode(response);
       const ok = submitResponseOk(response);
@@ -6385,12 +7335,41 @@ async function submitProductsForClue(args: {
         remoteAccepted: ok,
         remoteResponseCode: remoteCode == null ? "" : String(remoteCode),
         remoteHttpStatus: Number(response?.status || 0),
-        submitAttemptCount: submitResult.attemptCount
+        submitAttemptCount: submitResult.attemptCount,
+        ...(submitResult.coordination || {})
       };
       const message = ok ? "商机提报已提交" : normalizedSubmitMessage(responseMessage(response));
       const failureMessages = ok ? new Map<string, string>() : productFailureMessages(message);
       const hasBatchFailureItems = batch.some((product) => failureMessages.has(product.productId));
-      if (!ok && hasBatchFailureItems) {
+      if (submitResult.classification?.outcome === "throttled") {
+        executions.push(...executionForProducts({
+          runId: args.runId,
+          sourceRunId: args.sourceRunId,
+          store: args.store,
+          clue: args.clue,
+          products: batch,
+          status: "retry_waiting",
+          ok: false,
+          message: message || "商机提报触发频控，已进入持久化冷却",
+          planKey: "opportunitySubmitClue",
+          stage: "submit",
+          diagnostic: submitDiagnostic
+        }));
+      } else if (submitResult.classification?.outcome === "unknown") {
+        executions.push(...executionForProducts({
+          runId: args.runId,
+          sourceRunId: args.sourceRunId,
+          store: args.store,
+          clue: args.clue,
+          products: batch,
+          status: "unknown",
+          ok: false,
+          message: message || "提报结果无法确认，已转人工对账",
+          planKey: "opportunitySubmitClue",
+          stage: "submit",
+          diagnostic: submitDiagnostic
+        }));
+      } else if (!ok && hasBatchFailureItems) {
         const failedProducts = batch.filter((product) => failureMessages.has(product.productId));
         const unresolvedProducts = batch.filter((product) => !failureMessages.has(product.productId));
         if (unresolvedProducts.length) {
@@ -7529,12 +8508,453 @@ async function validateTaskCandidatesOfficially(args: {
   };
 }
 
+interface OpportunitySubmitSchedulerLease {
+  tenantId: string;
+  endpointContract: string;
+  ownerId: string;
+  fencingToken: number;
+  leaseExpiresAt?: string;
+}
+
+async function claimSubmitSchedulerLease(
+  task: PipelineSubmitTaskRecord,
+  payload: DoudianAdapterPayload,
+  ownerId: string,
+  workerSlot: number,
+  taskConcurrency: number
+) {
+  const coordinator = getNativeData()?.opportunitySubmit;
+  if (!coordinator) throw new Error("Opportunity submit coordinator is unavailable");
+  const tenantId = text(task.tenantId) || "default";
+  const endpointContract = "opportunitySubmitClue";
+  const throttleBudgetMs = policyNumber(payload.adapter, "opportunityReport.submitStoreThrottleBudgetMs", 1800000, 60000, 3600000);
+  const now = nowIso();
+  const result = objectRecord(await coordinator.claimSchedulerLease({
+    tenantId,
+    endpointContract,
+    ownerId,
+    now,
+    leaseExpiresAt: new Date(Date.now() + Math.min(3600000, throttleBudgetMs + 300000)).toISOString()
+  }));
+  if (result.claimed !== true) return null;
+  const lease = objectRecord(result.lease);
+  const fencingToken = Math.max(0, Math.floor(Number(lease.fencingToken || 0)));
+  if (!fencingToken) throw new Error("Opportunity submit scheduler returned an invalid fencing token");
+  const schedulerLease = {
+    tenantId,
+    endpointContract,
+    ownerId,
+    fencingToken,
+    leaseExpiresAt: text(lease.leaseExpiresAt)
+  } satisfies OpportunitySubmitSchedulerLease;
+  await writePipelineEvent({
+    runId: task.runId,
+    storeRunId: task.storeRunId,
+    shopId: task.shopId,
+    level: "info",
+    event: "submit-scheduler-lease-claimed",
+    message: "Submit scheduler lease claimed",
+    detail: coordinatedSubmitEventDetail({
+      task,
+      schedulerLease,
+      workerId: ownerId,
+      workerSlot,
+      taskConcurrency,
+      reason: text(result.reason),
+      nextEligibleAt: schedulerLease.leaseExpiresAt,
+      extra: { endpointContract }
+    })
+  }).catch(() => undefined);
+  return schedulerLease;
+}
+
+async function releaseSubmitSchedulerLease(lease: OpportunitySubmitSchedulerLease | null | undefined) {
+  const coordinator = getNativeData()?.opportunitySubmit;
+  if (!coordinator || !lease) return;
+  await coordinator.releaseSchedulerLease({
+    tenantId: lease.tenantId,
+    endpointContract: lease.endpointContract,
+    ownerId: lease.ownerId,
+    fencingToken: lease.fencingToken,
+    now: nowIso()
+  }).catch(() => undefined);
+}
+
+interface CoordinatedInFlightRecoveryResult {
+  task: PipelineSubmitTaskRecord;
+  action: "reservation_released" | "dispatched_marked_unknown";
+  attemptId: string;
+}
+
+async function recoverCoordinatedInFlightAttempt(args: {
+  payload: DoudianAdapterPayload;
+  task: PipelineSubmitTaskRecord;
+  workerId: string;
+  schedulerLease: OpportunitySubmitSchedulerLease;
+}): Promise<CoordinatedInFlightRecoveryResult> {
+  const coordinator = getNativeData()?.opportunitySubmit;
+  if (!coordinator) throw new Error("Opportunity submit coordinator is unavailable");
+  assertBoundSubmitTaskContract(args.task);
+  const attemptId = text(args.task.inFlightAttemptId);
+  const fencingToken = Number(args.task.fencingToken || 0);
+  if (!attemptId || !fencingToken) throw new Error("Opportunity submit recovery checkpoint is incomplete");
+  const fence = {
+    taskId: args.task.id,
+    ownerRunId: args.workerId,
+    fencingToken,
+    schedulerOwnerId: args.schedulerLease.ownerId,
+    schedulerFencingToken: args.schedulerLease.fencingToken,
+    endpointContract: args.schedulerLease.endpointContract
+  };
+  try {
+    const released = objectRecord(await coordinator.releaseReservation({ ...fence, attemptId, now: nowIso() }));
+    if (released.released === true) {
+      return {
+        task: objectRecord(released.task) as unknown as PipelineSubmitTaskRecord,
+        action: "reservation_released",
+        attemptId
+      };
+    }
+  } catch {
+    // A consumed grant cannot be released. Resolve it as unknown under the new fence.
+  }
+  const resolved = objectRecord(await coordinator.resolve({
+    ...fence,
+    attemptId,
+    now: nowIso(),
+    outcome: "unknown",
+    responseClass: "worker-recovery-dispatched-unknown",
+    message: "submit result unresolved after worker recovery",
+    policy: submitCoordinatorPolicy(args.payload.adapter)
+  }));
+  return {
+    task: objectRecord(resolved.task) as unknown as PipelineSubmitTaskRecord,
+    action: "dispatched_marked_unknown",
+    attemptId
+  };
+}
+
+async function coordinatedSubmitAttempt(args: {
+  payload: DoudianAdapterPayload;
+  opportunityArgs: OpportunityArgs;
+  store: DoudianStoreSummary;
+  task: PipelineSubmitTaskRecord;
+  workerId: string;
+  workerSlot: number;
+  taskConcurrency: number;
+  schedulerLease: OpportunitySubmitSchedulerLease;
+  candidates: DoudianOpportunityPrematchCandidate[];
+  products: DoudianOpportunityProductRow[];
+  body: Record<string, unknown>;
+  shouldCancel?: () => boolean;
+  beginMutation?: () => void;
+  endMutation?: () => void;
+}): Promise<CoordinatedRemoteSubmitResult> {
+  const coordinator = getNativeData()?.opportunitySubmit;
+  if (!coordinator) throw new Error("Opportunity submit coordinator is unavailable");
+  assertBoundSubmitTaskContract(args.task);
+  const candidateByProductId = new Map(args.candidates.map((candidate) => [candidate.productId, candidate]));
+  const orderedCandidates = args.products.map((product) => candidateByProductId.get(product.productId)).filter((candidate): candidate is DoudianOpportunityPrematchCandidate => Boolean(candidate));
+  if (orderedCandidates.length !== args.products.length) throw new Error("Coordinated submit candidate snapshot does not match the remote batch");
+  const logicalGroupIds = uniqueText(orderedCandidates.map((candidate) => text(candidate.logicalGroupId)));
+  if (logicalGroupIds.length > 1) throw new Error("Coordinated submit retry batch mixes logical groups");
+  const policySnapshot = submitCoordinatorPolicy(args.payload.adapter);
+  const fence = {
+    taskId: args.task.id,
+    ownerRunId: args.workerId,
+    fencingToken: Number(args.task.fencingToken || 0),
+    schedulerOwnerId: args.schedulerLease.ownerId,
+    schedulerFencingToken: args.schedulerLease.fencingToken,
+    endpointContract: args.schedulerLease.endpointContract
+  };
+  if (!fence.fencingToken) throw new Error("Opportunity submit task is missing a fencing token");
+  const admission = objectRecord(await coordinator.admit({
+    ...fence,
+    now: nowIso(),
+    businessDate: businessDateKey(),
+    candidateIds: orderedCandidates.map((candidate) => candidate.id),
+    clueId: text(args.body.clue_id || orderedCandidates[0]?.clueId),
+    requestBody: args.body,
+    logicalGroupId: logicalGroupIds[0] || undefined,
+    dailyCandidateMutationLimit: dailyAttemptLimit(args.opportunityArgs, args.payload.adapter),
+    dailyHttpRequestLimit: policyNumber(args.payload.adapter, "opportunityReport.submitDailyHttpRequestLimit", 1000, 1, 1000000),
+    policy: policySnapshot,
+    contractSnapshot: {
+      releaseId: args.task.releaseId,
+      releaseManifestHash: args.task.releaseManifestHash,
+      runnerArtifactHash: args.task.runnerArtifactHash,
+      adapterVersion: args.task.adapterVersion,
+      scriptsVersion: args.task.scriptsVersion,
+      requestPlanHash: args.task.requestPlanHash,
+      submitContractVersion: args.task.submitContractVersion,
+      pacingPolicyHash: args.task.pacingPolicyHash,
+      adapterSnapshotHash: args.task.adapterSnapshotHash
+    }
+  }));
+  const admissionTask = objectRecord(admission.task) as unknown as PipelineSubmitTaskRecord;
+  const admissionRate = objectRecord(admission.rate);
+  const admissionQuota = objectRecord(admission.quota);
+  if (admission.admitted !== true) {
+    const reason = text(admission.reason);
+    const event = reason === "rate-delayed"
+      ? "submit-rate-delayed"
+      : reason === "retry-exhausted"
+        ? "submit-retry-exhausted"
+        : "submit-task-deferred";
+    await writePipelineEvent({
+      runId: args.task.runId,
+      storeRunId: args.task.storeRunId,
+      shopId: args.task.shopId,
+      level: reason === "rate-delayed" ? "info" : "warn",
+      event,
+      message: reason === "rate-delayed" ? "Submit request delayed by pacing policy" : "Submit request deferred by coordinator",
+      detail: coordinatedSubmitEventDetail({
+        task: args.task,
+        taskState: admissionTask,
+        schedulerLease: args.schedulerLease,
+        workerId: args.workerId,
+        workerSlot: args.workerSlot,
+        taskConcurrency: args.taskConcurrency,
+        candidates: orderedCandidates,
+        rate: { store: admission.storeRate, global: admission.globalRate },
+        quota: objectRecord(admission.usage),
+        nextEligibleAt: admission.resumeAt,
+        reason
+      })
+    }).catch(() => undefined);
+    return {
+      attemptCount: 0,
+      deferred: true,
+      settledTask: admissionTask,
+      coordination: {
+        coordinatorReason: text(admission.reason),
+        coordinatorTaskStatus: text(objectRecord(admission.task).status),
+        coordinatorResumeAt: text(admission.resumeAt || objectRecord(admission.task).resumeAt)
+      }
+    };
+  }
+
+  const attempt = objectRecord(admission.attempt);
+  const attemptId = text(attempt.attemptId);
+  const httpGrantId = text(attempt.httpGrantId);
+  if (!attemptId || !httpGrantId) throw new Error("Opportunity submit admission returned an incomplete HTTP grant");
+  await writePipelineEvent({
+    runId: args.task.runId,
+    storeRunId: args.task.storeRunId,
+    shopId: args.task.shopId,
+    level: "info",
+    event: "submit-rate-admitted",
+    message: "Submit request admitted by pacing policy",
+    detail: coordinatedSubmitEventDetail({
+      task: args.task,
+      taskState: admissionTask,
+      schedulerLease: args.schedulerLease,
+      workerId: args.workerId,
+      workerSlot: args.workerSlot,
+      taskConcurrency: args.taskConcurrency,
+      candidates: orderedCandidates,
+      attempt,
+      rate: admissionRate,
+      quota: admissionQuota,
+      reason: admission.reason
+    })
+  }).catch(() => undefined);
+  let dispatched = false;
+  let dispatchResult: Record<string, unknown> = {};
+  try {
+    assertNotCancelled(args.shouldCancel);
+    dispatchResult = objectRecord(await coordinator.consumeHttpGrant({ ...fence, attemptId, httpGrantId, now: nowIso() }));
+    dispatched = true;
+    await writePipelineEvent({
+      runId: args.task.runId,
+      storeRunId: args.task.storeRunId,
+      shopId: args.task.shopId,
+      level: "info",
+      event: "submit-http-grant-dispatched",
+      message: "Submit HTTP grant dispatched",
+      detail: coordinatedSubmitEventDetail({
+        task: args.task,
+        taskState: objectRecord(dispatchResult.task) as unknown as PipelineSubmitTaskRecord,
+        schedulerLease: args.schedulerLease,
+        workerId: args.workerId,
+        workerSlot: args.workerSlot,
+        taskConcurrency: args.taskConcurrency,
+        candidates: orderedCandidates,
+        attempt,
+        rate: admissionRate,
+        quota: objectRecord(dispatchResult.quota),
+        reason: "http-grant-consumed"
+      })
+    }).catch(() => undefined);
+  } catch (error) {
+    if (!dispatched) await coordinator.releaseReservation({ ...fence, attemptId, now: nowIso() }).catch(() => undefined);
+    throw error;
+  }
+
+  let response: RequestPlanResult | undefined;
+  let requestError = "";
+  try {
+    const submitResult = await submitWithRetry(
+      args.payload,
+      args.store,
+      args.body,
+      args.shouldCancel,
+      args.beginMutation,
+      args.endMutation,
+      {
+        runId: args.task.runId,
+        sourceRunId: args.task.runId,
+        clueId: text(args.body.clue_id),
+        productIds: args.products.map((product) => product.productId)
+      }
+    );
+    response = submitResult.response;
+  } catch (error) {
+    requestError = error instanceof Error ? error.message : String(error);
+  }
+
+  const message = requestError || responseMessage(response);
+  const accepted = submitResponseOk(response);
+  const wholeBatchState = accepted ? undefined : submitMessageState(message);
+  const classification = classifyCoordinatedSubmitAttempt({
+    accepted,
+    httpStatus: Number(response?.status || 0),
+    message,
+    candidates: orderedCandidates.map((candidate) => ({ candidateId: candidate.id, productId: candidate.productId })),
+    failureMessages: accepted ? undefined : productFailureMessages(message),
+    wholeBatchStatus: wholeBatchState?.status === "skipped" ? "skipped" : "failed",
+    frequencyLimited: submitFrequencyLimitedMessage(message, response),
+    manualInterventionRequired: submitManualInterventionMessage(message, response),
+    uncertain: Boolean(requestError) || transientSubmitMessage(message, response)
+  });
+  const resolved = objectRecord(await coordinator.resolve({
+    ...fence,
+    attemptId,
+    now: nowIso(),
+    outcome: classification.outcome,
+    responseClass: classification.responseClass,
+    candidateResults: classification.candidateResults,
+    httpStatus: Number(response?.status || 0),
+    retryAfterMs: retryAfterMs(response?.headers),
+    message,
+    policy: policySnapshot
+  }));
+  const settledTask = objectRecord(resolved.task) as unknown as PipelineSubmitTaskRecord;
+  const resolvedRate = objectRecord(resolved.rate);
+  const resolvedDetail = coordinatedSubmitEventDetail({
+    task: args.task,
+    taskState: settledTask,
+    schedulerLease: args.schedulerLease,
+    workerId: args.workerId,
+    workerSlot: args.workerSlot,
+    taskConcurrency: args.taskConcurrency,
+    candidates: orderedCandidates,
+    attempt,
+    rate: resolvedRate,
+    quota: objectRecord(dispatchResult.quota),
+    nextEligibleAt: resolved.resumeAt,
+    reason: classification.outcome,
+    extra: {
+      coordinatorOutcome: classification.outcome,
+      responseClass: classification.responseClass,
+      httpStatus: Number(response?.status || 0),
+      retryExhausted: resolved.retryExhausted === true,
+      throttleBudgetExceeded: resolved.throttleBudgetExceeded === true
+    }
+  });
+  await writePipelineEvent({
+    runId: args.task.runId,
+    storeRunId: args.task.storeRunId,
+    shopId: args.task.shopId,
+    level: classification.outcome === "failed" || classification.outcome === "unknown" ? "warn" : "info",
+    event: "submit-result-reconciled",
+    message: "Submit result reconciled with the persisted checkpoint",
+    detail: resolvedDetail
+  }).catch(() => undefined);
+  const admittedStoreRate = objectRecord(admissionRate.store);
+  const admittedGlobalRate = objectRecord(admissionRate.global);
+  const nextStoreRate = objectRecord(resolvedRate.store);
+  const nextGlobalRate = objectRecord(resolvedRate.global);
+  const rateAdjusted = Number(admittedStoreRate.intervalMs || 0) !== Number(nextStoreRate.intervalMs || 0)
+    || Number(admittedGlobalRate.intervalMs || 0) !== Number(nextGlobalRate.intervalMs || 0)
+    || text(admittedGlobalRate.mode) !== text(nextGlobalRate.mode);
+  if (classification.outcome === "throttled") {
+    await writePipelineEvent({
+      runId: args.task.runId,
+      storeRunId: args.task.storeRunId,
+      shopId: args.task.shopId,
+      level: "warn",
+      event: "submit-throttle-detected",
+      message: "Submit throttle detected and isolated to the affected store",
+      detail: resolvedDetail
+    }).catch(() => undefined);
+  }
+  if (rateAdjusted) {
+    await writePipelineEvent({
+      runId: args.task.runId,
+      storeRunId: args.task.storeRunId,
+      shopId: args.task.shopId,
+      level: classification.outcome === "throttled" ? "warn" : "info",
+      event: "submit-rate-adjusted",
+      message: "Submit pacing rate adjusted",
+      detail: {
+        ...resolvedDetail,
+        previousStoreIntervalMs: Number(admittedStoreRate.intervalMs || 0),
+        previousGlobalIntervalMs: Number(admittedGlobalRate.intervalMs || 0),
+        previousGlobalMode: text(admittedGlobalRate.mode)
+      }
+    }).catch(() => undefined);
+  }
+  if (resolved.retryExhausted === true) {
+    await writePipelineEvent({
+      runId: args.task.runId,
+      storeRunId: args.task.storeRunId,
+      shopId: args.task.shopId,
+      level: "warn",
+      event: "submit-retry-exhausted",
+      message: "Submit retry limit exhausted",
+      detail: resolvedDetail
+    }).catch(() => undefined);
+  }
+  return {
+    response,
+    attemptCount: 1,
+    classification,
+    settledTask,
+    coordination: {
+      logicalGroupId: text(attempt.logicalGroupId),
+      coordinatorCandidateIds: orderedCandidates.map((candidate) => candidate.id),
+      requestAttemptId: attemptId,
+      retryCycle: Number(attempt.retryCycle || 0),
+      attemptOrdinal: Number(attempt.attemptOrdinal || 0),
+      quotaReservationId: text(attempt.quotaReservationId),
+      httpGrantId,
+      coordinatorReason: classification.outcome === "throttled" ? "throttled" : "resolved",
+      coordinatorOutcome: classification.outcome,
+      coordinatorTaskStatus: text(objectRecord(resolved.task).status),
+      coordinatorResumeAt: text(resolved.resumeAt)
+    }
+  };
+}
+
 async function executeSubmitWorker(payload: DoudianAdapterPayload, args: OpportunityArgs = {}) {
     const ledger = await listStoreLedger();
     const stores = ledger.stores || [];
     const scopedRunId = text(args.runId || args.operationId || args.sourceRunId);
     const taskConcurrency = submitTaskConcurrency(payload.adapter);
     const workerId = `${scopedRunId || "global"}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const coordinated = submitCoordinatorEnabled(payload.adapter) && !args.dryRun;
+    const schedulerLeases = new Map<string, Promise<OpportunitySubmitSchedulerLease | null>>();
+    let schedulerBusy = false;
+    const schedulerLeaseForTask = (task: PipelineSubmitTaskRecord, workerSlot: number) => {
+      const tenantId = text(task.tenantId) || "default";
+      let pending = schedulerLeases.get(tenantId);
+      if (!pending) {
+        pending = claimSubmitSchedulerLease(task, payload, workerId, workerSlot, taskConcurrency);
+        schedulerLeases.set(tenantId, pending);
+      }
+      return pending;
+    };
     void reportDoudianDiagnostic({
       category: "opportunity-pipeline",
       event: "submit-worker-started",
@@ -7545,6 +8965,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
       otherStoreTasksContinueOnRateLimit: true
     }, true);
     let processed = 0;
+    try {
     while (true) {
       const nowMs = Date.now();
       const taskPool = scopedRunId
@@ -7552,7 +8973,11 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
         : await repositoryGetAll<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore);
       const tasks = taskPool
         .filter((task) => !scopedRunId || task.runId === scopedRunId)
-        .filter((task) => task.status === "ready" || task.status === "queued" || (task.status === "running" && (!task.leaseExpiresAt || Date.parse(task.leaseExpiresAt) < nowMs)))
+        .filter((task) => !args.submitTaskId || task.id === args.submitTaskId)
+        .filter((task) => ((task.status === "ready" || task.status === "queued") && (!task.resumeAt || Date.parse(task.resumeAt) <= nowMs)) ||
+          (task.status === "running" && (!task.leaseExpiresAt || Date.parse(task.leaseExpiresAt) < nowMs)) ||
+          (coordinated && task.status === "cooling_down" && Boolean(task.resumeAt) && Date.parse(task.resumeAt || "") <= nowMs) ||
+          (coordinated && task.status === "deferred" && task.requiresExplicitResume !== true && Boolean(task.resumeAt) && Date.parse(task.resumeAt || "") <= nowMs))
         .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
       if (!tasks.length) break;
       const activeKeys = new Set<string>();
@@ -7571,6 +8996,11 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
       const initialTask = selectedTasks[nextTaskIndex];
       nextTaskIndex += 1;
       if (!initialTask) return;
+      const schedulerLease = coordinated ? await schedulerLeaseForTask(initialTask, workerSlot) : null;
+      if (coordinated && !schedulerLease) {
+        schedulerBusy = true;
+        continue;
+      }
       let task = initialTask;
       const startedAt = nowIso();
       const leaseExpiresAt = submitLeaseExpiresAt(payload.adapter);
@@ -7593,6 +9023,25 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
           updatedAt: startedAt
         } satisfies PipelineSubmitTaskRecord;
         await repositoryPut(pipelineSubmitTaskStore, task);
+      }
+      if (coordinated && schedulerLease && ["cooling_down", "deferred"].includes(initialTask.status)) {
+        await writePipelineEvent({
+          runId: task.runId,
+          storeRunId: task.storeRunId,
+          shopId: task.shopId,
+          level: "info",
+          event: "submit-task-resumed",
+          message: "Submit task resumed from a persisted checkpoint",
+          detail: coordinatedSubmitEventDetail({
+            task,
+            schedulerLease,
+            workerId,
+            workerSlot,
+            taskConcurrency,
+            reason: initialTask.deferredReason || initialTask.status,
+            extra: { resumedFromStatus: initialTask.status }
+          })
+        }).catch(() => undefined);
       }
       const store = stores.find((item) => item.shopId === task.shopId);
       const loadedTaskCandidates = await repositoryGetMany<DoudianOpportunityPrematchCandidate>(pipelineCandidateStore, task.candidateIds).catch(() => []);
@@ -7646,6 +9095,9 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
       let submitThrottleReason = "";
       let quotaExhaustedReason = "";
       let cancelledDuringTask = false;
+      let coordinatedTaskState: PipelineSubmitTaskRecord | null = null;
+      let coordinatedTaskReason = "";
+      let coordinatedTaskOutcome = "";
       const blockedProductIds = new Set<string>();
       const fallbackEligibleProductIds = new Set<string>();
       const processedCandidateIds = new Set<string>();
@@ -7656,6 +9108,62 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
         if (taskCandidates.length !== task.candidateIds.length) throw new Error("Submit task candidate snapshot is incomplete");
         if (task.candidateIdsHash && task.candidateIdsHash !== stableHash([...taskCandidates.map((candidate) => candidate.id)].sort())) {
           throw new Error("Submit task candidate snapshot hash is incomplete");
+        }
+        if (coordinated && task.inFlightAttemptId) {
+          const recovery = await recoverCoordinatedInFlightAttempt({
+            payload,
+            task,
+            workerId,
+            schedulerLease: schedulerLease!
+          });
+          coordinatedTaskState = recovery.task;
+          const recoveredStatus = text(recovery.task.status);
+          const recoveredAt = nowIso();
+          await updatePipelineStoreRunProgress(task.storeRunId, {
+            status: recoveredStatus === "ready" ? "running" : "partial",
+            phase: "submitting",
+            submittedCount: Number(recovery.task.submittedCount || 0),
+            failedCount: Number(recovery.task.failedCount || 0),
+            skippedCount: Number(recovery.task.skippedCount || 0),
+            quotaExhaustedCount: Number(recovery.task.quotaExhaustedCount || 0),
+            unknownCount: Number(recovery.task.unknownCount || 0),
+            remoteRequestCount: Number(recovery.task.remoteRequestCount || 0),
+            finishedAt: recoveredStatus === "ready" ? undefined : recoveredAt
+          }).catch(() => null);
+          await writePipelineEvent({
+            runId: task.runId,
+            storeRunId: task.storeRunId,
+            shopId: task.shopId,
+            level: recovery.action === "reservation_released" ? "info" : "warn",
+            event: recovery.action === "reservation_released"
+              ? "pipeline-submit-reservation-released-after-recovery"
+              : "pipeline-submit-dispatched-marked-unknown-after-recovery",
+            message: recovery.action === "reservation_released"
+              ? "Unused submit reservation was released after worker recovery"
+              : "Dispatched submit result was unresolved and requires manual reconciliation",
+            detail: {
+              taskId: task.id,
+              attemptId: recovery.attemptId,
+              taskStatus: recoveredStatus,
+              workerId
+            }
+          }).catch(() => undefined);
+          await reportDoudianDiagnostic({
+            category: "opportunity-pipeline",
+            event: "submit-worker-in-flight-recovered",
+            runId: task.runId,
+            storeRunId: task.storeRunId,
+            shopId: task.shopId,
+            taskId: task.id,
+            attemptId: recovery.attemptId,
+            recoveryAction: recovery.action,
+            taskStatus: recoveredStatus,
+            workerId
+          }, true);
+          await refreshPipelineRunSummary(task.runId).catch(() => null);
+          processed += 1;
+          processedThisPass += 1;
+          continue;
         }
         const recoveredSending = taskCandidates.filter(isUnresolvedSubmitState);
         if (recoveredSending.length) {
@@ -7678,6 +9186,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
                   submitStatus: "accepted",
                   auditStatus: "pending",
                   submitAttemptId: recoveredIds.get(candidate.id),
+                  skipReason: undefined,
                   submittedAt: candidate.submittedAt || recoveredAt,
                   updatedAt: recoveredAt
                 }
@@ -7710,7 +9219,8 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
         const shouldCancelSubmit = () => cancelledPipelineRunIds.has(task.runId) || args.isCancelled?.() === true;
         await updatePipelineStoreRunProgress(task.storeRunId, {
           status: "running",
-          phase: "submitting"
+          phase: "submitting",
+          finishedAt: undefined
         }).catch(() => null);
         if (!args.dryRun) await assertMutationStoreActive(store);
         const coverageAllowsWrite = officialWriteAllowed("local", pipelineTaskCoverageGate(task));
@@ -7761,11 +9271,12 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
           }
           const isFallback = candidate.submitPriority === "fallback" || candidate.submitStatus === "fallback";
           const terminalStatus = text(candidate.submitStatus || candidate.status);
+          const retryLogicalGroupId = coordinated && terminalStatus === "retry_waiting" ? text(candidate.logicalGroupId) : "";
           if (["accepted", "submitted", "failed", "skipped", "cancelled", "quota_exhausted", "unknown"].includes(terminalStatus)) {
             processedCandidateIds.add(candidate.id);
             continue;
           }
-          if (isFallback && (!allowPostSubmitFallback || !fallbackEligibleProductIds.has(candidate.productId))) {
+          if (!retryLogicalGroupId && isFallback && (!allowPostSubmitFallback || !fallbackEligibleProductIds.has(candidate.productId))) {
             processedCandidateIds.add(candidate.id);
             skippedCount += 1;
             updatedCandidates.push({
@@ -7778,7 +9289,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             });
             continue;
           }
-          if (!isFallback && (!candidate.eligible || candidate.status !== "ready")) {
+          if (!retryLogicalGroupId && !isFallback && (!candidate.eligible || candidate.status !== "ready")) {
             processedCandidateIds.add(candidate.id);
             skippedCount += 1;
             updatedCandidates.push(candidate);
@@ -7872,7 +9383,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             continue;
           }
           const remaining = Math.max(0, limit - used);
-          if (remaining <= 0) {
+          if (!coordinated && remaining <= 0) {
             processedCandidateIds.add(candidate.id);
             quotaExhaustedReason = "今日提报尝试额度不足，已停止本店后续提报";
             skippedCount += 1;
@@ -7903,7 +9414,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             });
             continue;
           }
-          const submittedSkipReason = shouldSkipSubmittedCandidate(args, dedupeIndex, candidate);
+          const submittedSkipReason = retryLogicalGroupId ? "" : shouldSkipSubmittedCandidate(args, dedupeIndex, candidate);
           if (submittedSkipReason) {
             processedCandidateIds.add(candidate.id);
             skippedCount += 1;
@@ -7932,10 +9443,12 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             });
             continue;
           }
-          const batchLimit = Math.min(submitWorkerBatchSize(payload.adapter), remaining);
-          const batchCandidates = [candidate];
+          const batchLimit = coordinated ? submitWorkerBatchSize(payload.adapter) : Math.min(submitWorkerBatchSize(payload.adapter), remaining);
+          const batchCandidates = retryLogicalGroupId
+            ? taskCandidates.filter((item) => text(item.logicalGroupId) === retryLogicalGroupId)
+            : [candidate];
           const candidateAttemptIds = new Map<string, string>();
-          for (let nextIndex = candidateIndex + 1; nextIndex < taskCandidates.length && batchCandidates.length < batchLimit; nextIndex += 1) {
+          for (let nextIndex = candidateIndex + 1; !retryLogicalGroupId && nextIndex < taskCandidates.length && batchCandidates.length < batchLimit; nextIndex += 1) {
             const nextCandidate = taskCandidates[nextIndex];
             if (!nextCandidate || processedCandidateIds.has(nextCandidate.id)) continue;
             if (!sameSubmitBatchCandidate(candidate, nextCandidate)) continue;
@@ -7944,6 +9457,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             if (shouldSkipSubmittedCandidate(args, dedupeIndex, nextCandidate)) continue;
             batchCandidates.push(nextCandidate);
           }
+          let coordinatedRemoteResult: CoordinatedRemoteSubmitResult | undefined;
           const nextExecutions = await submitProductsForClue({
             payload,
             store,
@@ -7961,7 +9475,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             shouldCancel: shouldCancelSubmit,
             beginMutation: args.beginMutation,
             endMutation: args.endMutation,
-            onRemoteSubmitStart: async (remoteProducts) => {
+            onRemoteSubmitStart: coordinated ? undefined : async (remoteProducts) => {
               assertNotCancelled(shouldCancelSubmit);
               const remoteProductIds = new Set(remoteProducts.map((product) => product.productId));
               const sendingCandidates = batchCandidates.filter((batchCandidate) => remoteProductIds.has(batchCandidate.productId));
@@ -7986,19 +9500,50 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
                 updatedAt: sendingAt
               })), { concurrency: 2 });
               assertNotCancelled(shouldCancelSubmit);
-            }
+            },
+            submitRemote: coordinated ? async (body, remoteProducts) => {
+              coordinatedRemoteResult = await coordinatedSubmitAttempt({
+                payload,
+                opportunityArgs: args,
+                store,
+                task,
+                workerId,
+                workerSlot,
+                taskConcurrency,
+                schedulerLease: schedulerLease!,
+                candidates: batchCandidates,
+                products: remoteProducts,
+                body,
+                shouldCancel: shouldCancelSubmit,
+                beginMutation: args.beginMutation,
+                endMutation: args.endMutation
+              });
+              coordinatedTaskState = coordinatedRemoteResult.settledTask || null;
+              coordinatedTaskReason = text(coordinatedRemoteResult.coordination?.coordinatorReason);
+              coordinatedTaskOutcome = text(coordinatedRemoteResult.classification?.outcome);
+              return coordinatedRemoteResult;
+            } : undefined
           });
-          const batchRemoteRequestCount = nextExecutions.reduce((maximum, item) => {
+          coordinatedTaskState = coordinatedRemoteResult?.settledTask || coordinatedTaskState;
+          if (coordinatedRemoteResult?.deferred) break;
+          const batchRemoteRequestCount = coordinatedRemoteResult?.attemptCount ?? nextExecutions.reduce((maximum, item) => {
             const itemDiagnostic = objectRecord(item.diagnostic);
             return Math.max(maximum, Math.max(0, Math.floor(Number(itemDiagnostic.submitAttemptCount || 0))));
           }, 0);
           remoteRequestCount += batchRemoteRequestCount;
           let batchAttempts = 0;
           const resolvedBatchCandidates: DoudianOpportunityPrematchCandidate[] = [];
+          const coordinatedCandidateIds = new Set(arrayText(coordinatedRemoteResult?.coordination?.coordinatorCandidateIds));
+          const coordinatedCandidateResults = new Map((coordinatedRemoteResult?.classification?.candidateResults || []).map((result) => [result.candidateId, result]));
           for (const batchCandidate of batchCandidates) {
             processedCandidateIds.add(batchCandidate.id);
             const candidateExecutions = executionsForCandidate(nextExecutions, batchCandidate);
-            const attempts = args.dryRun ? 0 : await recordSubmitAttempts({ runId: task.runId, matchRunId: task.runId, candidate: batchCandidate, executions: candidateExecutions });
+            const coordinatedCandidate = coordinatedCandidateIds.has(batchCandidate.id);
+            const attempts = args.dryRun
+              ? 0
+              : coordinatedCandidate
+                ? 1
+                : await recordSubmitAttempts({ runId: task.runId, matchRunId: task.runId, candidate: batchCandidate, executions: candidateExecutions });
             batchAttempts += attempts;
             used += attempts;
             const decoratedExecutions = candidateExecutions.map((item) => ({
@@ -8014,8 +9559,26 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
               }
             }));
             executions.push(...decoratedExecutions);
-            const { failed, failureMessage, submitted, safetySkipped, unknown } = candidateExecutionState(candidateExecutions);
-            const alreadySubmitted = Boolean(failed && failureMessage && isAlreadySubmittedOpportunityMessage(failureMessage));
+            const executionState = candidateExecutionState(candidateExecutions);
+            const coordinatedCandidateResult = coordinatedCandidateResults.get(batchCandidate.id);
+            const coordinatedStatus = coordinatedCandidateResult?.status || (coordinatedCandidate
+              ? coordinatedRemoteResult?.classification?.outcome === "accepted"
+                ? "accepted"
+                : coordinatedRemoteResult?.classification?.outcome === "failed"
+                  ? "failed"
+                  : coordinatedRemoteResult?.classification?.outcome === "unknown"
+                    ? "unknown"
+                    : coordinatedRemoteResult?.classification?.outcome === "throttled"
+                      ? "retry_waiting"
+                      : ""
+              : "");
+            const submitted = coordinatedCandidate ? coordinatedStatus === "accepted" : executionState.submitted;
+            const failed = coordinatedCandidate ? coordinatedStatus === "failed" : executionState.failed;
+            const unknown = coordinatedCandidate ? coordinatedStatus === "unknown" : executionState.unknown;
+            const retryWaiting = coordinatedCandidate && coordinatedStatus === "retry_waiting";
+            const safetySkipped = coordinatedCandidate ? false : executionState.safetySkipped;
+            const failureMessage = coordinatedCandidateResult?.message || executionState.failureMessage;
+            const alreadySubmitted = coordinatedCandidate ? coordinatedStatus === "skipped" : Boolean(failed && failureMessage && isAlreadySubmittedOpportunityMessage(failureMessage));
             const dailyQuotaExhausted = Boolean(failureMessage && isStoreDailyQuotaMessage(failureMessage));
             if (dailyQuotaExhausted && !quotaExhaustedReason) {
               quotaExhaustedReason = normalizedSubmitMessage(failureMessage) || "已达店铺今日商机提报上限";
@@ -8055,7 +9618,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             const submitAttemptCount = candidateExecutions.reduce((maximum, item) => (
               Math.max(maximum, Math.max(0, Math.floor(Number(objectRecord(item.diagnostic).submitAttemptCount || 0))))
             ), 0);
-            if (!submitThrottleReason && stopStoreOnSubmitFrequency(payload.adapter) && ((failureMessage && submitFrequencyLimitedMessage(failureMessage)) || finalRateLimited)) {
+            if (!coordinated && !submitThrottleReason && stopStoreOnSubmitFrequency(payload.adapter) && ((failureMessage && submitFrequencyLimitedMessage(failureMessage)) || finalRateLimited)) {
               submitThrottleReason = finalRateLimited ? "HTTP 429 重试后仍被限流，已停止本店后续提报" : failureMessage || "商机中心提交触发频控，已停止本店后续提报";
               await writePipelineEvent({
                 runId: task.runId,
@@ -8114,11 +9677,13 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             if (failed && !alreadySubmitted) failedCount += 1;
             if (safetySkipped) safetySkippedCount += 1;
             if (unknown) unknownCount += 1;
-            if (alreadySubmitted || (!submitted && !failed)) skippedCount += 1;
+            if (!retryWaiting && (alreadySubmitted || (!submitted && !failed && !unknown))) skippedCount += 1;
             if (isFallback && submitted) fallbackEligibleProductIds.delete(batchCandidate.productId);
             if (allowPostSubmitFallback && !isFallback && failed && !alreadySubmitted && !unknown && !dailyQuotaExhausted && !submitThrottleReason) fallbackEligibleProductIds.add(batchCandidate.productId);
-            const logicalAttemptId = candidateAttemptIds.get(batchCandidate.id) || batchCandidate.submitAttemptId;
-            if (logicalAttemptId) {
+            const logicalAttemptId = coordinatedCandidate
+              ? text(coordinatedRemoteResult?.coordination?.requestAttemptId)
+              : candidateAttemptIds.get(batchCandidate.id) || batchCandidate.submitAttemptId;
+            if (!coordinatedCandidate && logicalAttemptId) {
               await persistSubmitAttemptRecords([logicalSubmitAttemptRecord({
                 id: logicalAttemptId,
                 runId: task.runId,
@@ -8127,7 +9692,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
                 message: submitted ? "submit request accepted" : alreadySubmitted ? "platform reports product already submitted for this clue" : failureMessage || "submit result unresolved"
               })], attempts <= 0);
             }
-            resolvedBatchCandidates.push({
+            if (!coordinatedCandidate) resolvedBatchCandidates.push({
               ...batchCandidate,
               eligible: false,
               estimatedCost: 0,
@@ -8135,7 +9700,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
               submitStatus: submitted ? "accepted" : alreadySubmitted ? "skipped" : unknown ? "unknown" : failed ? "failed" : "skipped",
               auditStatus: submitted ? "pending" : batchCandidate.auditStatus,
               submitAttemptId: logicalAttemptId,
-              skipReason: alreadySubmitted ? "报名记录索引已回写：商品此前已提交该商机" : failed ? failureMessage : batchCandidate.skipReason,
+              skipReason: submitted ? undefined : alreadySubmitted ? "报名记录索引已回写：商品此前已提交该商机" : failed ? failureMessage : batchCandidate.skipReason,
               submittedAt: submitted ? nowIso() : undefined
             });
           }
@@ -8149,11 +9714,11 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
             submitWorkerProgress(processedCandidateIds.size, taskCandidates.length),
             `商机提报处理中 ${processedCandidateIds.size}/${taskCandidates.length}`
           );
-          if (!args.dryRun && batchAttempts > 0 && !submitThrottleReason) {
+          if (!coordinated && !args.dryRun && batchAttempts > 0 && !submitThrottleReason && hasRemainingLegacySubmitWork(taskCandidates, processedCandidateIds)) {
             const delayMs = submitCandidateDelayMs(payload.adapter);
             if (delayMs) await cancellableWait(delayMs, shouldCancelSubmit);
           }
-          if (Date.now() - lastLeaseRenewalMs >= leaseRenewalIntervalMs) {
+          if (!coordinated && Date.now() - lastLeaseRenewalMs >= leaseRenewalIntervalMs) {
             lastLeaseRenewalMs = Date.now();
             const renewedAt = nowIso();
             await updateSubmitTaskFromWorker(task, workerId, {
@@ -8170,8 +9735,89 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
               updatedAt: renewedAt
             });
           }
+          if (coordinatedTaskState) break;
         }
         if (updatedCandidates.length) await repositoryPutMany(pipelineCandidateStore, updatedCandidates, { concurrency: 2 });
+        if (coordinatedTaskState) {
+          submittedCount = Number(coordinatedTaskState.submittedCount || submittedCount);
+          skippedCount = Number(coordinatedTaskState.skippedCount || skippedCount);
+          failedCount = Number(coordinatedTaskState.failedCount || failedCount);
+          quotaExhaustedCount = Number(coordinatedTaskState.quotaExhaustedCount || quotaExhaustedCount);
+          unknownCount = Number(coordinatedTaskState.unknownCount || unknownCount);
+          remoteRequestCount = Number(coordinatedTaskState.remoteRequestCount || remoteRequestCount);
+          const coordinatedStatus = coordinatedTaskState.status;
+          const continuesImmediately = coordinatedStatus === "ready" || coordinatedStatus === "queued" || coordinatedStatus === "running";
+          const deferred = coordinatedStatus === "cooling_down" || coordinatedStatus === "deferred" || coordinatedStatus === "deferred_contract_mismatch" || coordinatedStatus === "manual_reconcile";
+          const throttleCooling = coordinatedStatus === "cooling_down" && coordinatedTaskOutcome === "throttled";
+          const storeStatus: PipelineStoreRunRecord["status"] = continuesImmediately
+            ? "running"
+            : deferred
+              ? "partial"
+              : coordinatedStatus === "ok"
+                ? "ok"
+                : coordinatedStatus === "cancelled"
+                  ? "cancelled"
+                  : coordinatedStatus === "failed"
+                    ? "failed"
+                    : "partial";
+          const settledAt = nowIso();
+          const finalQuotaAttemptCount = await submitAttemptCountForShop(store.shopId);
+          await updatePipelineStoreRunProgress(task.storeRunId, {
+            status: storeStatus,
+            phase: continuesImmediately ? "submitting" : "finished",
+            submittedCount,
+            failedCount,
+            skippedCount,
+            safetySkippedCount,
+            quotaExhaustedCount,
+            cancelledCount,
+            unknownCount,
+            remoteRequestCount,
+            skipReason: deferred ? coordinatedTaskState.deferredReason || coordinatedStatus : undefined,
+            quotaAttemptCount: finalQuotaAttemptCount,
+            quotaRemainingAfterSubmit: Math.max(0, limit - finalQuotaAttemptCount),
+            finishedAt: continuesImmediately ? undefined : settledAt
+          }).catch(() => null);
+          await writePipelineEvent({
+            runId: task.runId,
+            storeRunId: task.storeRunId,
+            shopId: task.shopId,
+            level: throttleCooling || (deferred && coordinatedStatus !== "cooling_down") || failedCount || unknownCount ? "warn" : "info",
+            event: throttleCooling
+              ? "submit-task-cooling-down"
+              : coordinatedStatus === "cooling_down"
+                ? "submit-checkpoint-persisted"
+              : deferred
+                ? "submit-task-deferred"
+                : continuesImmediately
+                  ? "submit-checkpoint-persisted"
+                  : "pipeline-submit-task-finished",
+            message: throttleCooling
+              ? "Submit task entered cooldown after a throttle response"
+              : coordinatedStatus === "cooling_down"
+                ? "Submit task checkpoint persisted while waiting for the next pacing window"
+              : deferred
+                ? "商机提报任务需要后续恢复或人工处理"
+                : continuesImmediately
+                  ? "商机提报批次已结算，任务等待下一次领取"
+                  : "商机提报任务完成",
+            detail: {
+              taskId: task.id,
+              taskStatus: coordinatedStatus,
+              coordinatorReason: coordinatedTaskReason,
+              coordinatorOutcome: coordinatedTaskOutcome,
+              resumeAt: coordinatedTaskState.resumeAt,
+              retryableRemainingCount: coordinatedTaskState.retryableRemainingCount,
+              submittedCount,
+              failedCount,
+              skippedCount,
+              quotaExhaustedCount,
+              unknownCount,
+              remoteRequestCount
+            }
+          }).catch(() => undefined);
+          await refreshPipelineRunSummary(task.runId).catch(() => null);
+        } else {
         cancelledDuringTask = cancelledDuringTask || await submitTaskIsCancelled(task, args);
         const coverageBlocksCompletion = !officialWriteAllowed("local", pipelineTaskCoverageGate(task));
         const finalStatus: PipelineSubmitTaskRecord["status"] = cancelledDuringTask
@@ -8194,8 +9840,9 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
           cancelledCount,
           unknownCount,
           remoteRequestCount,
+          retryableRemainingCount: 0,
           leaseExpiresAt: undefined,
-          lastError: quotaExhaustedReason || submitThrottleReason || task.lastError,
+          lastError: finalStatus === "ok" ? undefined : quotaExhaustedReason || submitThrottleReason || task.lastError,
           finishedAt,
           updatedAt: finishedAt
         });
@@ -8262,6 +9909,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
           dailyAttemptLimit: limit
         }, true);
         await refreshPipelineRunSummary(task.runId).catch(() => null);
+        }
       } catch (error) {
         const cancelled = await submitTaskIsCancelled(task, args);
         if (sendingCandidateIds.size) {
@@ -8345,7 +9993,10 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
       processed,
       taskConcurrency
     }, true);
-    return { ok: true, processed };
+    return { ok: true, processed, schedulerBusy };
+    } finally {
+      await Promise.all(Array.from(schedulerLeases.values()).map(async (pending) => releaseSubmitSchedulerLease(await pending)));
+    }
 }
 
 function runSubmitWorker(payload: DoudianAdapterPayload, args: OpportunityArgs = {}) {
@@ -8459,6 +10110,16 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   await cleanupOpportunityData(payload.adapter).catch(() => undefined);
 
   const now = nowIso();
+  const coordinatorPolicy = submitCoordinatorPolicy(payload.adapter);
+  const pipelineRuntimePolicySummary = {
+    submitTaskConcurrency: submitTaskConcurrency(payload.adapter),
+    dailyCandidateMutationLimit: dailyAttemptLimit(args, payload.adapter),
+    dailyHttpRequestLimit: policyNumber(payload.adapter, "opportunityReport.submitDailyHttpRequestLimit", 1000, 1, 1000000),
+    submitPacingInitialIntervalMs: coordinatorPolicy.submitPacingInitialIntervalMs,
+    submitGlobalPacingInitialMs: coordinatorPolicy.submitGlobalPacingInitialMs,
+    submitGlobal429WindowMs: coordinatorPolicy.submitGlobal429WindowMs,
+    submitGlobal429DistinctStores: coordinatorPolicy.submitGlobal429DistinctStores
+  };
   const details: DoudianRunDetail[] = [];
   const sourceHealth: Array<Record<string, unknown>> = [];
   const products: DoudianOpportunityProductRow[] = [];
@@ -8509,7 +10170,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     submittedCount: 0,
     skippedCount: 0,
     failedCount: 0,
-    summary: {},
+    summary: pipelineRuntimePolicySummary,
     adapterVersion: payload.adapter.version || "",
     scriptsVersion: payload.scripts?.version || "",
     requestPlanHash: requestPlanHash(payload.adapter),
@@ -8536,6 +10197,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     const cancelledAt = nowIso();
     await cancelPipelinePendingWorkForRun(runId);
     const summary = {
+      ...pipelineRuntimePolicySummary,
       productCount: products.length,
       currentCategoryCount,
       effectiveCategoryCount,
@@ -8738,6 +10400,18 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     preparedStoreCount: preparedStores.filter((item) => item.ok).length,
     categoryDemand: Array.from(categoryDemand.entries()).map(([categoryKey, demand]) => ({ categoryKey, ...demand }))
   }, true);
+
+  const streamingSubmitEnabled = policyBoolean(payload.adapter, "opportunityReport.submitPipelineStreamingEnabled", false);
+  const streamingWorkerRuns: Array<Promise<{
+    result?: Awaited<ReturnType<typeof runSubmitWorker>>;
+    error?: unknown;
+  }>> = [];
+  const scheduleStreamingSubmitWorker = () => {
+    if (!streamingSubmitEnabled) return;
+    const scheduled = runSubmitWorker(payload, { ...args, runId })
+      .then((result) => ({ result }), (error) => ({ error }));
+    streamingWorkerRuns.push(scheduled);
+  };
 
   await mapConcurrentOrdered(preparedStores, storePrepareConcurrency, async (prepared, index) => {
     const { store, identity, id, startedAt } = prepared;
@@ -9081,6 +10755,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         tenantId: identity.tenantId,
         storeGeneration: identity.storeGeneration
       }));
+      failurePhase = "submit-queued";
       const task = await enqueueStoreSubmit({
         runId,
         storeRunId: id,
@@ -9088,8 +10763,12 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         candidates: compactedStoreCandidates,
         snapshotVersion: matchRulesHash,
         inputCoverage,
-        candidateLimitPerProduct: storeCandidateLimitPerProduct
+        candidateLimitPerProduct: storeCandidateLimitPerProduct,
+        contract: submitTaskContract(payload, args)
       });
+      if (task && task.runId !== runId) {
+        throw new Error(`提报任务运行归属不一致：期望 ${runId}，实际 ${task.runId}`);
+      }
       if (task) {
         submitTaskCount += 1;
       }
@@ -9099,8 +10778,9 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       if (!writeCoverageComplete) skipReason = "input_coverage_not_complete";
       else if (!effective.length) skipReason = "no-effective-category";
       else if (!storeClueCount) skipReason = "no-clue-for-effective-category";
-      else if (!plannedStoreCandidates.length) skipReason = "no-token-match-candidate";
+      else if (!plannedStoreCandidates.length) skipReason = pipelineNoCandidateSkipReason(storeDiagnostics);
       else if (!eligibleCount) skipReason = "no-eligible-candidate";
+      const skipMessage = pipelineStoreResultMessage(skipReason);
       if (skipReason) skippedCount += 1;
       clueCount += storeClueCount;
       tokenCount += storeTokenCount;
@@ -9169,7 +10849,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         shopId: identity.shopId,
         level: task ? "info" : skipReason ? "warn" : "info",
         event: task ? "pipeline-submit-task-queued" : skipReason ? "pipeline-store-skipped" : "pipeline-store-finished",
-        message: task ? "商机候选已生成并进入提报队列" : skipReason ? "店铺未生成可提报任务" : "店铺商机提报处理完成",
+        message: task ? "商机候选已生成并进入提报队列" : skipReason ? skipMessage : "店铺商机提报处理完成",
         detail: {
           productCount: scan.products.length,
           benefitProductCount: benefitOverview.productCount,
@@ -9200,6 +10880,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
           submitTaskId: task?.id
         }
       }).catch(() => undefined);
+      if (task) scheduleStreamingSubmitWorker();
       if (!task) {
         await reportDoudianDiagnostic({
           category: "opportunity-pipeline",
@@ -9226,7 +10907,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
         shopName: store.shopName,
         status: task ? "queued" : skipReason ? "skipped" : "ok",
         ok: !skipReason,
-        message: task ? "已生成候选并进入提报队列" : skipReason ? "未生成可提报任务" : "店铺商机提报处理完成",
+        message: task ? "已生成候选并进入提报队列" : skipReason ? skipMessage : "店铺商机提报处理完成",
         reason: skipReason,
         diagnostic: {
           productCount: scan.products.length,
@@ -9314,9 +10995,55 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   if (pipelineCancelled(args)) return finishCancelled();
   if (submitTaskCount > 0) {
     dispatchPipelineProgress(args, 82, "自动提报任务处理中");
-    const workerResult = await runSubmitWorker(payload, { ...args, runId });
+    const workerResults: Array<Awaited<ReturnType<typeof runSubmitWorker>>> = [];
+    if (streamingSubmitEnabled) {
+      const streamed = await Promise.all(streamingWorkerRuns);
+      const failedWorker = streamed.find((item) => item.error !== undefined);
+      if (failedWorker?.error !== undefined) throw failedWorker.error;
+      workerResults.push(...streamed.flatMap((item) => item.result ? [item.result] : []));
+      workerResults.push(await runSubmitWorker(payload, { ...args, runId }));
+    } else {
+      workerResults.push(await runSubmitWorker(payload, { ...args, runId }));
+    }
+    const workerResult = {
+      ok: workerResults.every((item) => item.ok !== false),
+      processed: workerResults.reduce((sum, item) => sum + Number(item.processed || 0), 0),
+      schedulerBusy: workerResults.some((item) => item.schedulerBusy === true)
+    };
     const submitTasksAfterWorker = await loadPipelineSubmitTasksForRunStrict(runId);
-    const unconsumedTasks = activeSubmitTasksForRun(submitTasksAfterWorker, runId);
+    const resumableTasks = submitTasksAfterWorker.filter((task) => task.runId === runId && (
+      task.status === "cooling_down" ||
+      isDeferredSubmitTaskStatus(task.status) ||
+      ((task.status === "ready" || task.status === "queued") && Boolean(task.resumeAt) && Date.parse(task.resumeAt || "") > Date.now()) ||
+      (workerResult.schedulerBusy && (task.status === "ready" || task.status === "queued"))
+    ));
+    if (resumableTasks.length) {
+      const deferredAt = nowIso();
+      await Promise.all(resumableTasks.map((task) => updatePipelineStoreRunProgress(task.storeRunId, {
+        status: "partial",
+        phase: "finished",
+        submittedCount: Number(task.submittedCount || 0),
+        failedCount: Number(task.failedCount || 0),
+        skippedCount: Number(task.skippedCount || 0),
+        quotaExhaustedCount: Number(task.quotaExhaustedCount || 0),
+        unknownCount: Number(task.unknownCount || 0),
+        remoteRequestCount: Number(task.remoteRequestCount || 0),
+        skipReason: task.deferredReason || (task.status === "cooling_down" ? "rate_cooling_down" : workerResult.schedulerBusy ? "scheduler_lease_busy" : task.status),
+        finishedAt: deferredAt
+      }).catch(() => null)));
+      details.push(...resumableTasks.map((task) => ({
+        shopId: task.shopId,
+        shopName: task.shopName,
+        status: "partial",
+        ok: false,
+        message: task.status === "cooling_down" ? "提报触发频控，已保存进度并等待恢复" : "提报任务已保存，等待后续恢复",
+        reason: task.deferredReason || (workerResult.schedulerBusy ? "scheduler-lease-busy" : task.status),
+        category: "client",
+        diagnostic: { taskId: task.id, taskStatus: task.status, resumeAt: task.resumeAt, workerProcessed: workerResult.processed }
+      } satisfies DoudianRunDetail)));
+    }
+    const resumableTaskIds = new Set(resumableTasks.map((task) => task.id));
+    const unconsumedTasks = activeSubmitTasksForRun(submitTasksAfterWorker, runId).filter((task) => !resumableTaskIds.has(task.id));
     if (unconsumedTasks.length) {
       const reason = `商机提报 worker 已退出，但仍有 ${unconsumedTasks.length} 个队列任务未消费`;
       await failUnconsumedSubmitTasks(unconsumedTasks, reason);
@@ -9348,6 +11075,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
       ? "partial"
       : "ok";
   const summary = {
+    ...pipelineRuntimePolicySummary,
     inputCoverageReportMode: policyText(payload.adapter, "opportunityReport.inputCoverageMode", "enforce") === "report" ? 1 : 0,
     inputCoveragePartialCount: coverageBlockedCount,
     productCount: products.length,
@@ -9374,6 +11102,8 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     estimatedSubmitGroupCount,
     estimatedSubmitDurationMs,
     submitTaskCount,
+    streamingSubmitEnabled: streamingSubmitEnabled ? 1 : 0,
+    streamingWorkerRunCount: streamingWorkerRuns.length,
     coverageBlockedCount,
     submittedCount: 0,
     failedCount,
@@ -9409,7 +11139,8 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
   } satisfies PipelineRunRecord);
   const refreshedRun = await refreshPipelineRunSummary(runId).catch(() => null);
   const finalStatus = refreshedRun?.status || status;
-  const finalSummary = refreshedRun?.summary || summary;
+  const responseStatus = pipelineSubmitResponseStatus(finalStatus);
+  const finalSummary: Record<string, number> = refreshedRun?.summary || summary;
   const finalFailedCount = Number(finalSummary.failedCount || failedCount || 0);
   const finalSubmittedCount = Number(finalSummary.submittedCount || 0);
   const finalCoverageBlockedCount = Math.max(Number(finalSummary.inputCoveragePartialCount || 0), coverageBlockedCount);
@@ -9424,14 +11155,17 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
 
   return {
     ...ledger,
-    ok: finalStatus === "ok",
-    status: finalStatus,
+    ok: responseStatus === "ok",
+    status: responseStatus,
     mode: "pipeline-submit",
     message: pipelineSubmitResultMessage({
       failedCount: finalFailedCount,
       submittedCount: finalSubmittedCount,
       submitTaskCount,
-      coverageBlockedCount: finalCoverageBlockedCount
+      coverageBlockedCount: finalCoverageBlockedCount,
+      automaticRecoveryPendingCount: Number(finalSummary.automaticRecoveryPendingCount || 0),
+      retryableRemainingCount: Number(finalSummary.retryableRemainingCount || 0),
+      filteredByHistoryCount: Number(finalSummary.filteredByHistoryCount || 0)
     }),
     runId,
     operationId: args.operationId,
@@ -9443,7 +11177,7 @@ async function fetchPipelineSubmit(payload: DoudianAdapterPayload, args: Opportu
     details,
     successCount: details.filter((detail) => detail.ok).length,
     failureCount: finalFailedCount,
-    partialCount: finalStatus === "partial" ? Math.max(submitTaskCount, finalCoverageBlockedCount) : 0,
+    partialCount: responseStatus === "partial" ? Math.max(submitTaskCount, finalCoverageBlockedCount) : 0,
     summary: responseSummary,
     scanSummary: responseSummary,
     sourceHealth,
@@ -9507,6 +11241,98 @@ export async function runOpportunityPipelineSubmitTask(args: OpportunityArgs = {
   };
 }
 
+export async function runOpportunitySubmitContinuationTask(args: OpportunityArgs = {}): Promise<DoudianOpportunityReportResult> {
+  const payload = adapterPayload(args);
+  const taskId = text(args.submitTaskId || args.taskId);
+  if (!taskId) throw new Error("Opportunity submit continuation requires taskId");
+  const task = await repositoryGet<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore, taskId);
+  if (!task) throw new Error("Opportunity submit continuation task is missing");
+  if (["ok", "partial", "failed", "cancelled", "expired"].includes(task.status)) {
+    return {
+      ok: task.status === "ok",
+      status: task.status,
+      mode: "submit-continuation",
+      message: "提报任务已处于终态",
+      runId: task.runId,
+      operationId: args.operationId,
+      rows: [], clues: [], products: [], prematches: [], executions: [], sourceHealth: [],
+      details: [{
+        shopId: task.shopId,
+        shopName: task.shopName,
+        status: task.status,
+        ok: task.status === "ok",
+        message: "提报任务已处于终态",
+        diagnostic: { taskId: task.id, taskStatus: task.status }
+      }],
+      summary: { remoteRequestCount: Number(task.remoteRequestCount || 0) }
+    };
+  }
+  const currentContract = submitTaskContract(payload, args);
+  for (const key of ["releaseId", "releaseManifestHash", "runnerArtifactHash", "adapterSnapshotHash", "adapterVersion", "scriptsVersion", "requestPlanHash", "submitContractVersion", "pacingPolicyHash", "submitThrottleRecoveryEnabled"] as const) {
+    if (text(task[key]) !== text(currentContract[key])) throw new Error(`Opportunity submit continuation contract changed: ${key}`);
+  }
+  const workerResult = await runSubmitWorker(payload, {
+    ...args,
+    runId: task.runId,
+    submitTaskId: task.id
+  });
+  const settledTask = await repositoryGet<PipelineSubmitTaskRecord>(pipelineSubmitTaskStore, task.id) || task;
+  let pipelineRun: PipelineRunRecord | null = await refreshPipelineRunSummary(task.runId).catch(() => null);
+  if (pipelineRun) {
+    const recoveredAt = nowIso();
+    const recoveredPipelineRun: PipelineRunRecord = {
+      ...pipelineRun,
+      recoverySource: text(args.reason) || "background-scheduler",
+      lastRecoveredAt: recoveredAt,
+      updatedAt: recoveredAt
+    };
+    pipelineRun = recoveredPipelineRun;
+    await repositoryPut(pipelineRunStore, recoveredPipelineRun);
+    await writePipelineEvent({
+      runId: task.runId,
+      storeRunId: task.storeRunId,
+      shopId: task.shopId,
+      level: settledTask.status === "manual_reconcile" ? "warn" : "info",
+      event: "pipeline-submit-background-recovery-finished",
+      message: "Background submit continuation updated the pipeline run",
+      detail: {
+        taskId: task.id,
+        taskStatus: settledTask.status,
+        recoverySource: recoveredPipelineRun.recoverySource,
+        resumeAt: settledTask.resumeAt
+      }
+    }).catch(() => undefined);
+  }
+  const partial = ["ready", "queued", "running", "cooling_down", "deferred", "deferred_contract_mismatch", "manual_reconcile"].includes(settledTask.status);
+  return {
+    ok: settledTask.status === "ok",
+    status: partial ? "partial" : settledTask.status,
+    mode: "submit-continuation",
+    message: settledTask.status === "cooling_down"
+      ? "提报仍在冷却，已保存恢复时间"
+      : partial
+        ? "提报任务仍有待恢复项目"
+        : "提报 continuation 已完成",
+    runId: task.runId,
+    operationId: args.operationId,
+    rows: [], clues: [], products: [], prematches: [], executions: [], sourceHealth: [],
+    details: [{
+      shopId: settledTask.shopId,
+      shopName: settledTask.shopName,
+      status: settledTask.status,
+      ok: settledTask.status === "ok",
+      message: settledTask.status === "cooling_down" ? "提报仍在冷却，已保存恢复时间" : "提报 continuation 已结算",
+      diagnostic: { taskId: settledTask.id, taskStatus: settledTask.status, resumeAt: settledTask.resumeAt }
+    }],
+    summary: {
+      ...(pipelineRun?.summary || {}),
+      retryableRemainingCount: pipelineTaskRetryableRemainingCount(settledTask),
+      workerProcessed: workerResult.processed,
+      schedulerBusy: workerResult.schedulerBusy === true ? 1 : 0
+    }
+  };
+}
+
 async function buildPipelineRunCachedResult(
   args: OpportunityArgs,
   pipelineRun: PipelineRunRecord,
@@ -9552,7 +11378,7 @@ async function buildPipelineRunCachedResult(
       storeGeneration: storeRun.storeGeneration,
       status: storeRun.status,
       ok: storeRun.status === "ok" || storeRun.status === "skipped",
-      message: storeRun.skipReason || storeRun.phase,
+      message: pipelineStoreResultMessage(storeRun.skipReason) || storeRun.phase,
       diagnostic: {
         phase: storeRun.phase,
         productCount: storeRun.productCount,
@@ -9688,7 +11514,7 @@ export async function fetchOpportunityReportLatest(args: OpportunityArgs = {}): 
         storeGeneration: storeRun.storeGeneration,
         status: storeRun.status,
         ok: storeRun.status === "ok" || storeRun.status === "skipped",
-        message: storeRun.skipReason || storeRun.phase,
+        message: pipelineStoreResultMessage(storeRun.skipReason) || storeRun.phase,
         diagnostic: {
         phase: storeRun.phase,
         productCount: storeRun.productCount,

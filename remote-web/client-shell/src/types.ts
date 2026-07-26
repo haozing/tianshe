@@ -40,6 +40,9 @@ export interface ReleaseManifest {
   schemaVersion: 1;
   releaseId: string;
   buildTime: string;
+  entry?: {
+    remoteWebOrigin?: string;
+  };
   signature?: {
     schemaVersion: 1;
     algorithm: "ed25519";
@@ -1080,6 +1083,7 @@ export interface MatchDiagnostics {
   persistedCandidateCount: number;
   eligibleCandidateCount: number;
   alternativeCandidateCount: number;
+  filteredByHistoryCount: number;
   filteredByNoTokenCount: number;
   filteredByWeakSingleTokenCount: number;
   filteredByThresholdCount: number;
@@ -1247,7 +1251,7 @@ export interface DoudianOpportunityPrematchCandidate {
   effectiveCategoryKey?: string;
   matchStatus?: "local_candidate" | "dropped";
   validationStatus?: "not_started" | "pending" | "verified" | "rejected" | "unknown" | "budget_exhausted";
-  submitStatus?: "not_queued" | "queued" | "sending" | "accepted" | "failed" | "unknown" | "skipped" | "cancelled" | "quota_exhausted" | "fallback" | "submitted" | "submitting" | string;
+  submitStatus?: "not_queued" | "queued" | "sending" | "retry_waiting" | "accepted" | "failed" | "unknown" | "skipped" | "cancelled" | "quota_exhausted" | "fallback" | "submitted" | "submitting" | string;
   auditStatus?: "not_started" | "pending" | "approved" | "rejected" | "expired_unknown";
   validationReason?: string;
   validatedAt?: string;
@@ -1265,6 +1269,8 @@ export interface DoudianOpportunityPrematchCandidate {
   submitModule?: "query" | "search_page_query";
   submitModuleDecisionVersion?: string;
   submitAttemptId?: string;
+  logicalGroupId?: string;
+  attemptOrdinal?: number;
   submitTaskId?: string;
   submitPriority?: "primary" | "fallback" | string;
   fallbackSubmit?: boolean;

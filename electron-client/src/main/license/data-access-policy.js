@@ -2,6 +2,8 @@ const PAID_TASK_TYPES = new Set([
   "opportunityReportScan",
   "opportunityReportAction",
   "opportunityPipelineSubmit",
+  "opportunitySubmitContinuation",
+  "opportunityHistoryPrewarm",
   "opportunityAutoFavorites",
   "opportunityFavoriteRecords",
   "opportunityFavoriteCancel",
@@ -19,7 +21,7 @@ function dataAction(channel) {
   if (String(channel || "").startsWith("native:data:records:putLarge:")) return "write";
   const command = String(channel || "").split(":").pop() || "";
   if (/delete|cleanup/i.test(command)) return "delete";
-  if (/put|save|record|acquire|claim|finish|cancel|report|invalidate|tombstone|upsert|heartbeat/i.test(command)) return "write";
+  if (/put|save|record|acquire|claim|finish|cancel|report|invalidate|tombstone|upsert|heartbeat|admit|consume|resolve|release/i.test(command)) return "write";
   return "read";
 }
 
@@ -39,6 +41,7 @@ function paidDataRequest(channel, args = {}) {
   const id = recordSelector(args);
   const scheduleRecord = id.startsWith("marketing:schedule:");
   if (channel.startsWith("native:data:opportunityAttempts:")) return true;
+  if (channel.startsWith("native:data:opportunitySubmit:")) return true;
   if (["native:data:features:saveOpportunityRun", "native:data:features:loadOpportunityCandidates", "native:data:catalog:summarizeOpportunityRunMutations"].includes(channel)) return true;
   if (storeName.startsWith("opportunity_")) return true;
   if (storeName === "remote_feature_records_v1") return !scheduleRecord;

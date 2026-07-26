@@ -19,12 +19,14 @@ import {
   X
 } from "lucide-react";
 import type { LicenseStatus } from "../bridge/license";
-import type { WorkspaceState } from "../types";
+import type { ReleaseManifest, WorkspaceState } from "../types";
 import { cn, isActiveRoute } from "../lib/utils";
 import { remoteAsset } from "../lib/assets";
 import { closeMainWindow, getDesktopVersionData, mainZoomSupported, minimizeMainWindow, reloadMainWindowUrl, setMainZoom, startDesktopUpdate, toggleMaximizeMainWindow } from "../bridge/client";
 import { addPreferencesListener, getPreferences, hasRecentReleaseRedirect, markReleaseRedirect, releaseChannelLabel, releaseChannelToUpdateChannel, savePreferences } from "../bridge/storage";
 import type { ChihuPreferences, PageScale, ReleaseChannel } from "../bridge/storage";
+import { RELEASE_MANIFEST_URL, loadJson } from "../bridge/config";
+import { releaseChannelFromRemoteOrigin, remoteUrlForReleaseChannel } from "../bridge/releaseChannel";
 import { applyAndPersistPageScale } from "../bridge/pageScale";
 import type { PageScaleChangeResult } from "../bridge/pageScale";
 import type { NativeUpdateVersionData } from "../native/types";
@@ -89,8 +91,6 @@ interface UpdateNotesDocument {
 }
 
 const UPDATE_NOTES_URL = "./config/update-notes.json";
-const REMOTE_RELEASE_PATH_PATTERN = /\/remote-web\/(current|beta)\//;
-
 const fallbackUpdateNotes: UpdateNotesDocument = {
   schemaVersion: 1,
   productName: "赤狐管家",
@@ -161,29 +161,6 @@ function updateStateCopy(state: UpdateCheckState, data: NativeUpdateVersionData 
   if (state === "unsupported") return "暂不支持检查";
   if (state === "error") return "检查失败";
   return "检查更新";
-}
-
-function remoteUrlForReleaseChannel(channel: ReleaseChannel, href = window.location.href) {
-  try {
-    const url = new URL(href);
-    if (!REMOTE_RELEASE_PATH_PATTERN.test(url.pathname)) return "";
-    url.pathname = url.pathname.replace(REMOTE_RELEASE_PATH_PATTERN, `/remote-web/${channel === "beta" ? "beta" : "current"}/`);
-    return url.toString();
-  } catch {
-    return "";
-  }
-}
-
-async function remoteEntryAvailable(url: string) {
-  try {
-    let response = await fetch(url, { method: "HEAD", cache: "no-store" });
-    if (response.ok) return true;
-    if (response.status === 405) {
-      response = await fetch(url, { method: "GET", cache: "no-store" });
-      return response.ok;
-    }
-  } catch {}
-  return false;
 }
 
 function UpdateNotesDialog({
@@ -368,6 +345,7 @@ const PAGE_SCALE_OPTIONS: PageScale[] = [1, 1.1, 1.25];
 function SettingsDialog({
   open,
   preferences,
+  actualReleaseChannel,
   onOpenChange,
   onSaved,
   onReloadChannel,
@@ -376,6 +354,7 @@ function SettingsDialog({
 }: {
   open: boolean;
   preferences: ChihuPreferences;
+  actualReleaseChannel: ReleaseChannel | null;
   onOpenChange: (open: boolean) => void;
   onSaved: (preferences: ChihuPreferences) => void;
   onReloadChannel: (channel: ReleaseChannel) => Promise<"reloaded" | "same" | "unsupported" | "unavailable" | "error">;
@@ -387,7 +366,8 @@ function SettingsDialog({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [pageScaleBusy, setPageScaleBusy] = useState(false);
-  const isBeta = draft.releaseChannel === "beta";
+  const displayedReleaseChannel = actualReleaseChannel || draft.releaseChannel;
+  const isBeta = displayedReleaseChannel === "beta";
 
   useEffect(() => {
     if (!open) return;
@@ -535,7 +515,7 @@ function SettingsDialog({
                 </button>
               </div>
               <div className="mt-3 text-[14px] leading-6 text-[#344054]">
-                当前环境：<span className="font-semibold text-[#3346e8]">{releaseChannelLabel(draft.releaseChannel)}</span>
+                当前环境：<span className={cn("font-semibold", isBeta ? "text-[#c2410c]" : "text-[#087443]")}>{releaseChannelLabel(displayedReleaseChannel)}</span>
               </div>
               {message ? <div className="mt-2 text-[13px] leading-5 text-[#087443]">{message}</div> : null}
               {error ? <div className="mt-2 text-[13px] leading-5 text-[#d92d20]">{error}</div> : null}
@@ -623,10 +603,13 @@ function ProfileMenuV2({
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [preferences, setPreferences] = useState<ChihuPreferences>(() => getPreferences());
+  const [releaseRemoteOrigin, setReleaseRemoteOrigin] = useState("");
+  const [actualReleaseChannel, setActualReleaseChannel] = useState<ReleaseChannel | null>(null);
   const [pageScaleSupported, setPageScaleSupported] = useState(() => mainZoomSupported());
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
-  const updateChannel = releaseChannelToUpdateChannel(preferences.releaseChannel);
+  const displayedReleaseChannel = actualReleaseChannel || preferences.releaseChannel;
+  const updateChannel = releaseChannelToUpdateChannel(displayedReleaseChannel);
 
   useEffect(() => {
     const supported = mainZoomSupported();
@@ -651,10 +634,9 @@ function ProfileMenuV2({
   }
 
   async function reloadReleaseChannel(channel: ReleaseChannel): Promise<"reloaded" | "same" | "unsupported" | "unavailable" | "error"> {
-    const targetUrl = remoteUrlForReleaseChannel(channel);
+    const targetUrl = remoteUrlForReleaseChannel(channel, releaseRemoteOrigin || window.location.href);
     if (!targetUrl) return "unsupported";
     if (targetUrl === window.location.href) return "same";
-    if (!(await remoteEntryAvailable(targetUrl))) return "unavailable";
     try {
       markReleaseRedirect(channel, targetUrl);
       return await reloadMainWindowUrl(targetUrl) ? "reloaded" : "error";
@@ -737,6 +719,24 @@ function ProfileMenuV2({
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    void loadJson<ReleaseManifest>(RELEASE_MANIFEST_URL).then((manifest) => {
+      if (cancelled) return;
+      const remoteOrigin = manifest.entry?.remoteWebOrigin || "";
+      const actualChannel = releaseChannelFromRemoteOrigin(remoteOrigin);
+      setReleaseRemoteOrigin(remoteOrigin);
+      setActualReleaseChannel(actualChannel);
+      if (!actualChannel) return;
+      const current = getPreferences();
+      if (current.releaseChannel === actualChannel) return;
+      setPreferences(savePreferences({ releaseChannel: actualChannel }));
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!profileMenuOpen) return;
 
     const closeOnOutsidePointer = (event: PointerEvent) => {
@@ -760,10 +760,10 @@ function ProfileMenuV2({
   useEffect(() => {
     let cancelled = false;
     async function alignRemoteEntry() {
-      const targetUrl = remoteUrlForReleaseChannel(preferences.releaseChannel);
+      const targetUrl = remoteUrlForReleaseChannel(preferences.releaseChannel, releaseRemoteOrigin || window.location.href);
       if (!targetUrl || targetUrl === window.location.href) return;
       if (hasRecentReleaseRedirect(preferences.releaseChannel, targetUrl)) return;
-      if (!(await remoteEntryAvailable(targetUrl)) || cancelled) return;
+      if (cancelled) return;
       markReleaseRedirect(preferences.releaseChannel, targetUrl);
       await reloadMainWindowUrl(targetUrl).catch(() => undefined);
     }
@@ -771,7 +771,7 @@ function ProfileMenuV2({
     return () => {
       cancelled = true;
     };
-  }, [preferences.releaseChannel]);
+  }, [preferences.releaseChannel, releaseRemoteOrigin]);
 
   useEffect(() => {
     const onUpdateAvailable = (event: Event) => {
@@ -1016,6 +1016,7 @@ function ProfileMenuV2({
       <SettingsDialog
         open={settingsOpen}
         preferences={preferences}
+        actualReleaseChannel={actualReleaseChannel}
         onOpenChange={setSettingsOpen}
         onSaved={setPreferences}
         onReloadChannel={reloadReleaseChannel}

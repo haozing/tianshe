@@ -4,7 +4,7 @@ import type { CatalogMutationStatus, CatalogMutationRecordInput } from "../../na
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
 import { normalizeDoudianProductStatus } from "./productStatus";
 import { bulkDeleteLiveLookupContext, type BulkDeleteLiveLookupScope } from "./bulkDeleteContract";
-import { opportunityLiveLookupContext } from "./opportunity/mutationSafetyContract.ts";
+import { catalogMutationStatusFromExecution, opportunityLiveLookupContext } from "./opportunity/mutationSafetyContract.ts";
 
 const DEFAULT_TENANT_ID = "local-user";
 const LIVE_LOOKUP_CACHE_TTL_MS = 60_000;
@@ -609,19 +609,6 @@ export async function prepareMutationSafety<T extends MutationCandidateInput>(ar
   };
 }
 
-function statusFromExecution(execution: MutationExecutionInput): CatalogMutationStatus {
-  const status = text(execution.status);
-  const message = text(execution.message).toLowerCase();
-  if (status === "dry_run") return "skipped";
-  if (status === "skipped") return "skipped";
-  if (status === "quota_exhausted") return "skipped";
-  if (status === "unknown") return "unknown";
-  if (execution.ok === true && status === "submitted") return "acknowledged";
-  if (execution.ok === true) return "acknowledged";
-  if (/timeout|timed out|network|socket|aborted|unknown|\u8d85\u65f6/.test(message)) return "unknown";
-  return "failed";
-}
-
 export async function recordExecutionMutationResults(args: {
   store: DoudianStoreSummary;
   executions: MutationExecutionInput[];
@@ -630,7 +617,7 @@ export async function recordExecutionMutationResults(args: {
   const mutations = args.executions
     .filter((item) => text(item.mutationKey) && text(item.productId))
     .map((item) => {
-      const status = statusFromExecution(item);
+      const status: CatalogMutationStatus = catalogMutationStatusFromExecution(item);
       return {
         mutationKey: text(item.mutationKey),
         productId: text(item.productId),

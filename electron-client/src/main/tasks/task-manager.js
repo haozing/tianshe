@@ -22,9 +22,12 @@ const {
   taskMutation,
   validateTaskParams
 } = require("./task-registry");
-const { interruptedTaskStatus, opportunitySubmitProgressStalled, taskResultPersistence, terminalTaskStatus } = require("./task-result-policy");
+const { interruptedTaskStatus, opportunitySubmitProgressStalled, taskResultPersistence, terminalTaskProgress, terminalTaskStatus } = require("./task-result-policy");
 const { httpTransportFingerprint, runnerPartitionAllowed, transportMatchesPlan, transportMatchesPlanTemplate } = require("./task-transport-policy");
 const { taskWindowCommandScript } = require("./task-window-commands");
+const { dueOpportunityHistoryPrewarmStores, nextOpportunityHistoryPrewarmWakeAt } = require("./opportunity-history-prewarm-scheduler");
+const { automaticOpportunitySubmitRecoveryPendingTask, dueOpportunitySubmitRecoveryTasks, nextOpportunitySubmitRecoveryWakeAt } = require("./opportunity-submit-recovery-scheduler");
+const { opportunitySubmitOperationState } = require("./opportunity-submit-operation-state");
 
 const runnerContexts = new Map();
 const operationContexts = new Map();
@@ -32,7 +35,22 @@ const MAX_RUNNERS = 8;
 const MAX_OWNER_RUNNERS = 4;
 const MAX_RUNNER_LIFETIME_MS = 90 * 60 * 1000;
 const HEARTBEAT_TIMEOUT_MS = 45 * 1000;
+const OPPORTUNITY_SUBMIT_RECOVERY_POLL_MS = 30 * 1000;
+const OPPORTUNITY_SUBMIT_AUTH_RETRY_MS = 5 * 60 * 1000;
+const OPPORTUNITY_SUBMIT_LOGIN_RETRY_MS = 30 * 1000;
+const OPPORTUNITY_HISTORY_PREWARM_POLL_MS = 60 * 1000;
 let installed = false;
+let opportunitySubmitRecoveryStarted = false;
+let opportunitySubmitRecoveryTimer = null;
+let opportunitySubmitRecoveryTickPromise = null;
+let opportunitySubmitRecoveryReason = "scheduled";
+let opportunityHistoryPrewarmStarted = false;
+let opportunityHistoryPrewarmTimer = null;
+let opportunityHistoryPrewarmTickPromise = null;
+let opportunityHistoryPrewarmReason = "scheduled";
+const opportunityHistoryPrewarmLastAttemptByShopId = new Map();
+let opportunityHistoryPrewarmLastForegroundActivityAt = Date.now();
+let opportunityHistoryPrewarmNextAllowedAt = 0;
 
 function service() {
   return getNativeDataService({ app });
@@ -51,12 +69,19 @@ function developmentSnapshot() {
     const adapterBuffer = fs.readFileSync(path.join(publicConfig, "doudian-adapter.marketing-pilot.json"));
     const windowCommandsBuffer = fs.readFileSync(path.join(publicConfig, "doudian-window-commands.json"));
     const configBuffer = fs.readFileSync(path.join(publicConfig, "chihu-config.json"));
+    const manifestBuffer = fs.readFileSync(path.resolve(publicConfig, "..", "release-manifest.json"));
+    const runnerBuffers = ["app.js", "bridge.js"].map((fileName) => {
+      const buffer = fs.readFileSync(path.resolve(publicConfig, "..", fileName));
+      return `${fileName}:${crypto.createHash("sha256").update(buffer).digest("hex")}`;
+    });
     const windowCommands = JSON.parse(windowCommandsBuffer.toString("utf8"));
     const adapterSha256 = crypto.createHash("sha256").update(adapterBuffer).digest("hex");
     if (windowCommands.schemaVersion !== 1 || windowCommands.adapterSha256 !== adapterSha256 || !windowCommands.commands) return null;
     return {
       releaseId: "development",
       entryUrl: HOME_INDEX_URL,
+      releaseManifestHash: crypto.createHash("sha256").update(manifestBuffer).digest("hex"),
+      runnerArtifactHash: crypto.createHash("sha256").update(runnerBuffers.sort().join("\n")).digest("hex"),
       adapterSnapshotHash: crypto.createHash("sha256").update(Buffer.concat([adapterBuffer, windowCommandsBuffer])).digest("hex"),
       adapter: JSON.parse(adapterBuffer.toString("utf8")),
       windowCommands,
@@ -72,6 +97,36 @@ function currentSnapshot(releaseId = "") {
   if (verified) return verified;
   if (!releaseId || releaseId === "development") return developmentSnapshot();
   return null;
+}
+
+function opportunitySubmitRecoveryEnabled(snapshot) {
+  return snapshot?.adapter?.policies?.opportunityReport?.submitThrottleRecoveryEnabled === true;
+}
+
+function opportunityHistoryPrewarmEnabled(snapshot) {
+  return snapshot?.adapter?.policies?.opportunityReport?.submitHistoryPrewarmEnabled === true;
+}
+
+function opportunityHistoryPrewarmPolicy(snapshot) {
+  const policy = snapshot?.adapter?.policies?.opportunityReport || {};
+  return {
+    intervalMs: Math.max(60_000, Number(policy.submitHistoryPrewarmIntervalMs || 6 * 60 * 60 * 1000)),
+    retryMs: Math.max(30_000, Number(policy.submitHistoryPrewarmRetryMs || 5 * 60 * 1000)),
+    idleGraceMs: Math.max(60_000, Number(policy.submitHistoryPrewarmIdleGraceMs || 3 * 60 * 1000)),
+    interSliceDelayMs: Math.max(30_000, Number(policy.submitHistoryPrewarmInterSliceDelayMs || 60_000))
+  };
+}
+
+function opportunitySubmitRecoveryContractMatches(task, snapshot) {
+  if (!task || !snapshot) return false;
+  return String(task.releaseId || "") === String(snapshot.releaseId || "") &&
+    String(task.releaseManifestHash || "") === String(snapshot.releaseManifestHash || "") &&
+    String(task.runnerArtifactHash || "") === String(snapshot.runnerArtifactHash || "") &&
+    String(task.adapterSnapshotHash || "") === String(snapshot.adapterSnapshotHash || "");
+}
+
+function isoAfter(delayMs) {
+  return new Date(Date.now() + Math.max(0, Number(delayMs || 0))).toISOString();
 }
 
 function cookieDomain(value) {
@@ -125,6 +180,14 @@ async function taskPartitionScope(taskType, params, snapshot) {
     ...(Array.isArray(params.stores) ? params.stores.map((item) => item?.shopId) : []),
     ...(Array.isArray(params.storeRefs) ? params.storeRefs.map((item) => item?.shopId) : [])
   ].map((value) => String(value || "")).filter(Boolean));
+  if (taskType === "opportunitySubmitContinuation" && params.taskId) {
+    const submitTask = await service().request("records.get", {
+      storeName: "opportunity_pipeline_submit_tasks_v2",
+      id: String(params.taskId)
+    }, { priority: "interactive" }).catch(() => null);
+    if (!submitTask || !submitTask.shopId) throw taskError("TASK_PARAMS_INVALID", "待恢复的商机提报任务不存在");
+    requestedShopIds.add(String(submitTask.shopId));
+  }
   const page = await service().request("records.list", { storeName: "stores", limit: 50000 }, { priority: "interactive" }).catch(() => null);
   const stores = Array.isArray(page) ? page : Array.isArray(page?.items) ? page.items : [];
   const selectedStores = stores.filter((store) => !requestedShopIds.size || requestedShopIds.has(String(store?.shopId || store?.id || "")));
@@ -142,6 +205,7 @@ async function taskPartitionScope(taskType, params, snapshot) {
 function featureEnabled(definition, snapshot, params = {}) {
   if (definition === TASK_DEFINITIONS.mockLongTask) return true;
   if (!snapshot?.adapter || !snapshot?.config) return false;
+  if (definition === TASK_DEFINITIONS.opportunityHistoryPrewarm && !opportunityHistoryPrewarmEnabled(snapshot)) return false;
   if (definition === TASK_DEFINITIONS.marketingTask || definition === TASK_DEFINITIONS.marketingReconcile) {
     const features = snapshot.config.features || {};
     if (features.marketingMenu?.enabled !== true) return false;
@@ -156,7 +220,13 @@ function operationIdFor(taskType) {
 function taskParamsWithServerMetadata(params, context) {
   return {
     ...params,
-    operationId: context.operationId
+    operationId: context.operationId,
+    taskContract: {
+      releaseId: context.releaseId,
+      releaseManifestHash: context.releaseManifestHash,
+      runnerArtifactHash: context.runnerArtifactHash,
+      adapterSnapshotHash: context.adapterSnapshotHash
+    }
   };
 }
 
@@ -183,6 +253,8 @@ async function writeOperationEvidence(context, status = "running", patch = {}) {
       paidGrantedAtStart: context.paidGrantedAtStart,
       adapterSnapshotHash: context.adapterSnapshotHash,
       releaseId: context.releaseId,
+      releaseManifestHash: context.releaseManifestHash,
+      runnerArtifactHash: context.runnerArtifactHash,
       allowedPlanKeys: [...context.allowedPlanKeys],
       recoveryPlanKeys: [...context.recoveryPlanKeys],
       allowedDataScopes: context.allowedDataScopes,
@@ -193,11 +265,75 @@ async function writeOperationEvidence(context, status = "running", patch = {}) {
     },
     metadata: {
       ...(existing?.metadata || {}),
-      mutation: context.mutation === true
+      mutation: context.mutation === true,
+      ...(context.submitTaskId ? { submitTaskId: context.submitTaskId } : {}),
+      ...(context.recoverySource ? { recoverySource: context.recoverySource } : {})
     },
     ...patch
   };
   await service().request("records.put", { storeName: "operations", record }, { priority: "write" });
+  return record;
+}
+
+function operationOwnerWebContentsId(record) {
+  const match = /^main:(\d+)$/.exec(String(record?.ownerSessionId || ""));
+  return match ? Number(match[1]) : 0;
+}
+
+async function syncOpportunityPipelineSourceOperation(context) {
+  if (context.taskType !== "opportunitySubmitContinuation" || !context.submitTaskId) return null;
+  const task = await service().request("records.get", {
+    storeName: "opportunity_pipeline_submit_tasks_v2",
+    id: String(context.submitTaskId)
+  }, { priority: "interactive" }).catch(() => null);
+  const runId = String(task?.runId || "");
+  if (!runId) return null;
+  const [run, taskPage] = await Promise.all([
+    service().request("records.get", {
+      storeName: "opportunity_pipeline_runs_v2",
+      id: runId
+    }, { priority: "interactive" }).catch(() => null),
+    service().request("records.queryByPrefix", {
+      storeName: "opportunity_pipeline_submit_tasks_v2",
+      recordIdPrefix: runId,
+      limit: 1000
+    }, { priority: "interactive" }).catch(() => null)
+  ]);
+  if (!run) return null;
+  const sourceOperationId = String(run.operationId || run.runId || run.id || runId);
+  const existing = await service().request("records.get", {
+    storeName: "operations",
+    id: sourceOperationId
+  }, { priority: "interactive" }).catch(() => null);
+  if (!existing || existing.taskType !== "opportunityPipelineSubmit") return null;
+  const tasks = (Array.isArray(taskPage?.items) ? taskPage.items : [])
+    .filter((item) => String(item?.runId || "") === runId);
+  const state = opportunitySubmitOperationState({ run, tasks, currentProgress: existing.progress });
+  const now = new Date().toISOString();
+  const record = {
+    ...existing,
+    status: state.status,
+    progress: state.progress,
+    resultSummary: state.resultSummary,
+    result: state.result,
+    updatedAt: now,
+    metadata: {
+      ...(existing.metadata || {}),
+      backgroundRecoveryActive: tasks.some(automaticOpportunitySubmitRecoveryPendingTask),
+      lastContinuationOperationId: context.operationId
+    }
+  };
+  if (state.status !== "failed") delete record.error;
+  await service().request("records.put", { storeName: "operations", record }, { priority: "write" });
+  const ownerWebContentsId = operationOwnerWebContentsId(record);
+  if (ownerWebContentsId) {
+    sendOwnerEvent({ ownerWebContentsId }, {
+      type: "task:result",
+      operationId: sourceOperationId,
+      resultSummary: state.resultSummary,
+      result: state.result
+    });
+  }
   return record;
 }
 
@@ -225,6 +361,23 @@ async function closeRunnerContext(context, reason, options = {}) {
   clearTimeout(context.lifetimeTimer);
   clearInterval(context.heartbeatTimer);
   if (!options.terminal) {
+    const prewarmYielded = context.taskType === "opportunityHistoryPrewarm" && [
+      "foreground-task-started",
+      "submit-recovery-started"
+    ].includes(String(reason || ""));
+    if (prewarmYielded) {
+      await writeOperationEvidence(context, "partial", {
+        progress: Number(context.lastProgress || 0),
+        resultSummary: "history prewarm yielded to submit work",
+        result: {
+          ok: true,
+          status: "partial",
+          mode: "history-prewarm",
+          message: "history prewarm yielded to submit work",
+          reason: String(reason || "foreground-task-started")
+        }
+      }).catch(() => undefined);
+    } else {
     const status = interruptedTaskStatus({
       mutation: context.mutation,
       mutationStarted: context.mutationStarted,
@@ -244,6 +397,7 @@ async function closeRunnerContext(context, reason, options = {}) {
         ? { resultSummary: "cancelled", result: { ok: false, status: "cancelled", message: "已取消任务" } }
         : { error: reconciling ? "runner lost; reconciliation required" : reason })
     });
+    }
   }
   const win = BrowserWindow.fromWebContents(context.runnerWebContents);
   if (win && !win.isDestroyed()) win.destroy();
@@ -251,6 +405,8 @@ async function closeRunnerContext(context, reason, options = {}) {
     const child = BrowserWindow.fromId(childId);
     if (child && !child.isDestroyed()) child.destroy();
   }
+  if (context.taskType === "opportunitySubmitContinuation") notifyOpportunitySubmitRecovery("continuation-finished");
+  if (context.taskType === "opportunityHistoryPrewarm") notifyOpportunityHistoryPrewarm("prewarm-finished");
 }
 
 function createRunnerWindow(context, snapshot, task) {
@@ -298,20 +454,26 @@ function createRunnerWindow(context, snapshot, task) {
   return runner;
 }
 
+function armRunnerLifecycle(context) {
+  context.lifetimeTimer = setTimeout(() => void closeRunnerContext(context, "runner lifetime exceeded"), MAX_RUNNER_LIFETIME_MS);
+  context.heartbeatTimer = setInterval(() => {
+    const now = Date.now();
+    if (now - context.lastHeartbeatAt > HEARTBEAT_TIMEOUT_MS) void closeRunnerContext(context, "runner heartbeat expired");
+    else if (opportunitySubmitProgressStalled(context, now)) void closeRunnerContext(context, "opportunity submit worker progress stalled");
+  }, 5000);
+}
+
 async function startRunner(event, request = {}) {
   const ownerPrincipal = requireWebContentsPrincipal(event, ["main"]);
   const taskType = String(request.taskType || "");
   const definition = TASK_DEFINITIONS[taskType];
-  if (!definition || definition.accessTier === "recovery") return { ok: false, code: "TASK_TYPE_DENIED", message: "该任务不能从页面启动" };
+  if (!definition || definition.accessTier === "recovery" || taskType === "opportunityHistoryPrewarm") return { ok: false, code: "TASK_TYPE_DENIED", message: "该任务不能从页面启动" };
   if (definition.accessTier === "internal" && !getLicenseConfig().explicitTestMode) return { ok: false, code: "TASK_TYPE_DENIED", message: "内部任务仅允许显式测试环境启动" };
   let params;
   try {
     params = validateTaskParams(taskType, request.params || {});
   } catch (error) {
     return { ok: false, code: error.code || "TASK_PARAMS_INVALID", message: error.message || "任务参数无效" };
-  }
-  if (runnerContexts.size >= MAX_RUNNERS || ownerRunnerCount(event.sender.id) >= MAX_OWNER_RUNNERS) {
-    return { ok: false, code: "TASK_TYPE_DENIED", message: "任务并发数已达到上限" };
   }
   if (definition.accessTier === "paid") {
     try {
@@ -320,8 +482,25 @@ async function startRunner(event, request = {}) {
       return { ok: false, code: error.code || "LICENSE_REQUIRED", message: error.message || "请先开通完整版" };
     }
   }
-  const snapshot = currentSnapshot();
+  let snapshot = currentSnapshot();
+  if (taskType === "opportunitySubmitContinuation") {
+    const submitTask = await service().request("records.get", {
+      storeName: "opportunity_pipeline_submit_tasks_v2",
+      id: String(params.taskId || "")
+    }, { priority: "interactive" }).catch(() => null);
+    snapshot = submitTask?.releaseId ? currentSnapshot(String(submitTask.releaseId)) : null;
+    if (!submitTask || !snapshot || submitTask.adapterSnapshotHash !== snapshot.adapterSnapshotHash) {
+      return { ok: false, code: "TASK_TYPE_DENIED", message: "原提报任务的发布快照不可用，请转人工对账" };
+    }
+  }
   if (!snapshot || !featureEnabled(definition, snapshot, params)) return { ok: false, code: "TASK_TYPE_DENIED", message: "当前发布版本未启用该任务" };
+  if (taskType === "opportunityHistoryPrewarm" && operationContexts.size > 0) {
+    return { ok: false, code: "TASK_TYPE_DENIED", message: "报名历史预热仅在软件空闲时运行" };
+  }
+  if (taskType !== "opportunityHistoryPrewarm") await yieldOpportunityHistoryPrewarm("foreground-task-started");
+  if (runnerContexts.size >= MAX_RUNNERS || ownerRunnerCount(event.sender.id) >= MAX_OWNER_RUNNERS) {
+    return { ok: false, code: "TASK_TYPE_DENIED", message: "任务并发数已达到上限" };
+  }
   const partitionScope = await taskPartitionScope(taskType, params, snapshot);
   const operationId = operationIdFor(taskType);
   const context = {
@@ -336,6 +515,8 @@ async function startRunner(event, request = {}) {
     paidGrantedAtStart: definition.accessTier === "paid",
     principalNavigationEpoch: 1,
     releaseId: snapshot.releaseId,
+    releaseManifestHash: snapshot.releaseManifestHash,
+    runnerArtifactHash: snapshot.runnerArtifactHash,
     adapterSnapshotHash: snapshot.adapterSnapshotHash,
     allowedPlanKeys: new Set(allowedPlanKeys(definition, snapshot.adapter, params)),
     recoveryPlanKeys: new Set(recoveryPlanKeys(definition, snapshot.adapter, params)),
@@ -372,13 +553,453 @@ async function startRunner(event, request = {}) {
     payload: taskParamsWithServerMetadata(params, context)
   };
   const runner = createRunnerWindow(context, snapshot, task);
-  context.lifetimeTimer = setTimeout(() => void closeRunnerContext(context, "runner lifetime exceeded"), MAX_RUNNER_LIFETIME_MS);
-  context.heartbeatTimer = setInterval(() => {
-    const now = Date.now();
-    if (now - context.lastHeartbeatAt > HEARTBEAT_TIMEOUT_MS) void closeRunnerContext(context, "runner heartbeat expired");
-    else if (opportunitySubmitProgressStalled(context, now)) void closeRunnerContext(context, "opportunity submit worker progress stalled");
-  }, 5000);
+  armRunnerLifecycle(context);
+  if (taskType === "opportunityPipelineSubmit") notifyOpportunitySubmitRecovery("foreground-submit-started");
   return { ok: true, operationId, status: "started", runnerWinId: runner.id };
+}
+
+function activeOpportunitySubmitContinuationTaskIds() {
+  return new Set([...operationContexts.values()]
+    .filter((context) => context.taskType === "opportunitySubmitContinuation" && context.submitTaskId)
+    .map((context) => String(context.submitTaskId)));
+}
+
+async function deferOpportunitySubmitRecoveryTask(task, deferredReason, options = {}) {
+  return service().request("opportunitySubmit.deferTask", {
+    taskId: String(task.id || ""),
+    deferredReason,
+    now: new Date().toISOString(),
+    ...(options.resumeAt ? { resumeAt: options.resumeAt } : {}),
+    ...(options.requiresExplicitResume === true ? { requiresExplicitResume: true } : {}),
+    ...(options.message ? { message: String(options.message).slice(0, 4000) } : {}),
+    recoverySource: String(options.recoverySource || "background-scheduler")
+  }, { priority: "write" }).catch(() => null);
+}
+
+async function storeRecordForSubmitTask(task) {
+  const page = await service().request("records.list", {
+    storeName: "stores",
+    limit: 50000
+  }, { priority: "interactive" }).catch(() => null);
+  const stores = Array.isArray(page?.items) ? page.items : [];
+  return stores.find((store) => String(store?.shopId || store?.id || "") === String(task.shopId || "") &&
+    Number(store?.storeGeneration || 0) === Number(task.storeGeneration || 0)) || null;
+}
+
+async function startOpportunitySubmitContinuation(task, reason = "scheduled") {
+  const taskId = String(task?.id || "");
+  if (!taskId) return { started: false, reason: "task-missing" };
+  if (task.submitThrottleRecoveryEnabled !== true) return { started: false, reason: "feature-disabled" };
+  if (operationContexts.has(String(task.runId || "")) || activeOpportunitySubmitContinuationTaskIds().has(taskId)) {
+    return { started: false, reason: "already-active" };
+  }
+  const definition = TASK_DEFINITIONS.opportunitySubmitContinuation;
+  const params = validateTaskParams("opportunitySubmitContinuation", {
+    mode: "submit-continuation",
+    taskId,
+    reason: String(reason || "scheduled").slice(0, 200)
+  });
+  const snapshot = currentSnapshot(String(task.releaseId || ""));
+  if (!opportunitySubmitRecoveryContractMatches(task, snapshot)) {
+    await deferOpportunitySubmitRecoveryTask(task, "contract_mismatch", {
+      requiresExplicitResume: true,
+      message: "trusted release snapshot is unavailable or no longer matches the submit task",
+      recoverySource: reason
+    });
+    return { started: false, reason: "contract-mismatch" };
+  }
+  if (!opportunitySubmitRecoveryEnabled(snapshot) || !featureEnabled(definition, snapshot, params)) {
+    return { started: false, reason: "feature-disabled" };
+  }
+  try {
+    await requirePaidFeature({ taskType: "opportunitySubmitContinuation", taskId, recoverySource: reason });
+  } catch (error) {
+    await deferOpportunitySubmitRecoveryTask(task, "authorization_wait", {
+      resumeAt: isoAfter(OPPORTUNITY_SUBMIT_AUTH_RETRY_MS),
+      message: error?.message || "paid authorization is unavailable",
+      recoverySource: reason
+    });
+    return { started: false, reason: "authorization-wait" };
+  }
+  const store = await storeRecordForSubmitTask(task);
+  const configuredPrefix = String(snapshot.adapter?.shopPartitionPrefix || "persist:chihu_doudian_shop_");
+  if (!store || store.status !== "online" || !String(store.partition || "").startsWith(configuredPrefix)) {
+    await deferOpportunitySubmitRecoveryTask(task, "login_wait", {
+      resumeAt: isoAfter(OPPORTUNITY_SUBMIT_LOGIN_RETRY_MS),
+      message: !store ? "store generation is unavailable" : "store login is not online",
+      recoverySource: reason
+    });
+    return { started: false, reason: "login-wait" };
+  }
+  const partitionScope = await taskPartitionScope("opportunitySubmitContinuation", params, snapshot);
+  const exactStoreAllowed = partitionScope.allowedStoreRefs.some((item) => String(item.shopId || "") === String(task.shopId || "") &&
+    Number(item.storeGeneration || 0) === Number(task.storeGeneration || 0));
+  if (!exactStoreAllowed || !partitionScope.allowedPartitions.has(String(store.partition || ""))) {
+    await deferOpportunitySubmitRecoveryTask(task, "login_wait", {
+      resumeAt: isoAfter(OPPORTUNITY_SUBMIT_LOGIN_RETRY_MS),
+      message: "store partition or generation is not available to the recovery runner",
+      recoverySource: reason
+    });
+    return { started: false, reason: "partition-wait" };
+  }
+  await yieldOpportunityHistoryPrewarm("submit-recovery-started");
+  if (runnerContexts.size >= MAX_RUNNERS) return { started: false, reason: "runner-capacity" };
+  const operationId = operationIdFor("opportunitySubmitContinuation");
+  const context = {
+    runnerWebContentsId: 0,
+    runnerWebContents: null,
+    ownerWebContentsId: 0,
+    ownerNavigationEpoch: 0,
+    operationId,
+    taskType: "opportunitySubmitContinuation",
+    accessTier: "recovery",
+    mutation: true,
+    paidGrantedAtStart: true,
+    principalNavigationEpoch: 1,
+    releaseId: snapshot.releaseId,
+    releaseManifestHash: snapshot.releaseManifestHash,
+    runnerArtifactHash: snapshot.runnerArtifactHash,
+    adapterSnapshotHash: snapshot.adapterSnapshotHash,
+    allowedPlanKeys: new Set(allowedPlanKeys(definition, snapshot.adapter, params)),
+    recoveryPlanKeys: new Set(),
+    allowedPlatformOrigins: new Set(platformOrigins(snapshot.adapter)),
+    allowedPartitions: partitionScope.allowedPartitions,
+    allowedPartitionPrefixes: partitionScope.allowedPartitionPrefixes,
+    allowedStoreRefs: partitionScope.allowedStoreRefs,
+    allowedDataScopes: materializeDataScopes(definition.allowedDataScopes, operationId),
+    childWindowIds: new Set(),
+    childWindowPartitions: new Map(),
+    programmaticWindowCloseIds: new Set(),
+    activePlanGrants: new Map(),
+    httpGrants: new Map(),
+    createdAt: new Date().toISOString(),
+    createdAtMs: Date.now(),
+    lastHeartbeatAt: Date.now(),
+    lastProgressAt: Date.now(),
+    lastProgress: 0,
+    mutationStarted: false,
+    inFlightMutations: 0,
+    cancellationRequested: false,
+    closed: false,
+    submitTaskId: taskId,
+    recoverySource: String(reason || "scheduled")
+  };
+  operationContexts.set(operationId, context);
+  try {
+    await writeOperationEvidence(context, "running");
+    const runnerTask = {
+      taskType: "opportunitySubmitContinuation",
+      operationId,
+      metadata: {
+        mutation: true,
+        adapterSnapshotHash: snapshot.adapterSnapshotHash,
+        submitTaskId: taskId,
+        recoverySource: context.recoverySource
+      },
+      payload: taskParamsWithServerMetadata(params, context)
+    };
+    const runner = createRunnerWindow(context, snapshot, runnerTask);
+    armRunnerLifecycle(context);
+    return { started: true, reason: "started", operationId, runnerWinId: runner.id };
+  } catch (error) {
+    operationContexts.delete(operationId);
+    throw error;
+  }
+}
+
+function scheduleOpportunitySubmitRecovery(delayMs, reason) {
+  if (!opportunitySubmitRecoveryStarted) return;
+  opportunitySubmitRecoveryReason = String(reason || opportunitySubmitRecoveryReason || "scheduled");
+  if (opportunitySubmitRecoveryTimer) clearTimeout(opportunitySubmitRecoveryTimer);
+  opportunitySubmitRecoveryTimer = setTimeout(() => {
+    opportunitySubmitRecoveryTimer = null;
+    void runOpportunitySubmitRecoveryTick();
+  }, Math.max(100, Math.floor(Number(delayMs || 0))));
+  opportunitySubmitRecoveryTimer.unref?.();
+}
+
+async function runOpportunitySubmitRecoveryTick() {
+  if (!opportunitySubmitRecoveryStarted) return;
+  if (opportunitySubmitRecoveryTickPromise) return opportunitySubmitRecoveryTickPromise;
+  const trigger = opportunitySubmitRecoveryReason;
+  opportunitySubmitRecoveryReason = "scheduled";
+  opportunitySubmitRecoveryTickPromise = (async () => {
+    const page = await service().request("records.list", {
+      storeName: "opportunity_pipeline_submit_tasks_v2",
+      limit: 50000
+    }, { priority: "interactive" });
+    const tasks = (Array.isArray(page?.items) ? page.items : [])
+      .filter((task) => task?.submitThrottleRecoveryEnabled === true);
+    const activeRunIds = new Set(operationContexts.keys());
+    const activeTaskIds = activeOpportunitySubmitContinuationTaskIds();
+    const dueTasks = dueOpportunitySubmitRecoveryTasks(tasks, { activeRunIds, activeTaskIds });
+    const continuationActive = [...operationContexts.values()].some((context) => context.taskType === "opportunitySubmitContinuation");
+    if (!continuationActive) {
+      for (const task of dueTasks) {
+        const result = await startOpportunitySubmitContinuation(task, trigger);
+        if (result.started) break;
+      }
+    }
+    const nextWakeAt = nextOpportunitySubmitRecoveryWakeAt(tasks);
+    const delay = nextWakeAt ? Math.min(OPPORTUNITY_SUBMIT_RECOVERY_POLL_MS, Math.max(100, nextWakeAt - Date.now())) : OPPORTUNITY_SUBMIT_RECOVERY_POLL_MS;
+    scheduleOpportunitySubmitRecovery(delay, "scheduled");
+  })().catch((error) => {
+    console.warn("[opportunity-submit-recovery] scheduler tick failed:", error?.message || error);
+    scheduleOpportunitySubmitRecovery(OPPORTUNITY_SUBMIT_RECOVERY_POLL_MS, "retry-after-error");
+  }).finally(() => {
+    opportunitySubmitRecoveryTickPromise = null;
+  });
+  return opportunitySubmitRecoveryTickPromise;
+}
+
+function notifyOpportunitySubmitRecovery(reason = "external") {
+  scheduleOpportunitySubmitRecovery(250, reason);
+}
+
+function startOpportunitySubmitRecoveryScheduler() {
+  if (opportunitySubmitRecoveryStarted) return;
+  opportunitySubmitRecoveryStarted = true;
+  scheduleOpportunitySubmitRecovery(1000, "app-startup");
+}
+
+function stopOpportunitySubmitRecoveryScheduler() {
+  opportunitySubmitRecoveryStarted = false;
+  if (opportunitySubmitRecoveryTimer) clearTimeout(opportunitySubmitRecoveryTimer);
+  opportunitySubmitRecoveryTimer = null;
+}
+
+async function nudgeOpportunitySubmitRecovery(deferredReasons, options = {}) {
+  const result = await service().request("opportunitySubmit.nudgeDeferredTasks", {
+    deferredReasons,
+    now: new Date().toISOString(),
+    ...(Array.isArray(options.shopIds) && options.shopIds.length ? { shopIds: options.shopIds } : {}),
+    ...(Array.isArray(options.taskIds) && options.taskIds.length ? { taskIds: options.taskIds } : {}),
+    recoverySource: String(options.recoverySource || "external")
+  }, { priority: "write" }).catch(() => null);
+  notifyOpportunitySubmitRecovery(options.recoverySource || "external");
+  return result;
+}
+
+function activeOpportunityHistoryPrewarmContexts() {
+  return [...operationContexts.values()].filter((context) => context.taskType === "opportunityHistoryPrewarm");
+}
+
+async function yieldOpportunityHistoryPrewarm(reason = "foreground-task-started") {
+  opportunityHistoryPrewarmLastForegroundActivityAt = Date.now();
+  const contexts = activeOpportunityHistoryPrewarmContexts();
+  await Promise.all(contexts.map((context) => closeRunnerContext(context, reason)));
+}
+
+async function automaticOpportunitySubmitWorkPending() {
+  const page = await service().request("records.list", {
+    storeName: "opportunity_pipeline_submit_tasks_v2",
+    limit: 50000
+  }, { priority: "interactive" });
+  const tasks = (Array.isArray(page?.items) ? page.items : [])
+    .filter((task) => task?.submitThrottleRecoveryEnabled === true);
+  return {
+    pending: tasks.some(automaticOpportunitySubmitRecoveryPendingTask),
+    nextWakeAt: nextOpportunitySubmitRecoveryWakeAt(tasks)
+  };
+}
+
+async function startOpportunityHistoryPrewarm(store, snapshot, reason = "idle-maintenance") {
+  if (!store || runnerContexts.size >= MAX_RUNNERS || operationContexts.size > 0) return { started: false, reason: "not-idle" };
+  const submitWork = await automaticOpportunitySubmitWorkPending();
+  if (submitWork.pending) return { started: false, reason: "submit-pending", nextWakeAt: submitWork.nextWakeAt };
+  const shopId = String(store.shopId || store.id || "");
+  if (!shopId || store.status !== "online") return { started: false, reason: "login-wait" };
+  const definition = TASK_DEFINITIONS.opportunityHistoryPrewarm;
+  const params = validateTaskParams("opportunityHistoryPrewarm", {
+    mode: "history-prewarm",
+    shopIds: [shopId],
+    reason: String(reason || "idle-maintenance").slice(0, 200)
+  });
+  if (!featureEnabled(definition, snapshot, params)) return { started: false, reason: "feature-disabled" };
+  try {
+    await requirePaidFeature({ taskType: "opportunityHistoryPrewarm", shopId, recoverySource: reason });
+  } catch {
+    return { started: false, reason: "authorization-wait" };
+  }
+  const configuredPrefix = String(snapshot.adapter?.shopPartitionPrefix || "persist:chihu_doudian_shop_");
+  if (!String(store.partition || "").startsWith(configuredPrefix)) return { started: false, reason: "partition-wait" };
+  const partitionScope = await taskPartitionScope("opportunityHistoryPrewarm", params, snapshot);
+  const exactStoreAllowed = partitionScope.allowedStoreRefs.some((item) => String(item.shopId || "") === shopId &&
+    Number(item.storeGeneration || 0) === Number(store.storeGeneration || 0));
+  if (!exactStoreAllowed || !partitionScope.allowedPartitions.has(String(store.partition || ""))) {
+    return { started: false, reason: "partition-wait" };
+  }
+  const operationId = operationIdFor("opportunityHistoryPrewarm");
+  const context = {
+    runnerWebContentsId: 0,
+    runnerWebContents: null,
+    ownerWebContentsId: 0,
+    ownerNavigationEpoch: 0,
+    operationId,
+    taskType: "opportunityHistoryPrewarm",
+    accessTier: definition.accessTier,
+    mutation: false,
+    paidGrantedAtStart: true,
+    principalNavigationEpoch: 1,
+    releaseId: snapshot.releaseId,
+    releaseManifestHash: snapshot.releaseManifestHash,
+    runnerArtifactHash: snapshot.runnerArtifactHash,
+    adapterSnapshotHash: snapshot.adapterSnapshotHash,
+    allowedPlanKeys: new Set(allowedPlanKeys(definition, snapshot.adapter, params)),
+    recoveryPlanKeys: new Set(),
+    allowedPlatformOrigins: new Set(platformOrigins(snapshot.adapter)),
+    allowedPartitions: partitionScope.allowedPartitions,
+    allowedPartitionPrefixes: partitionScope.allowedPartitionPrefixes,
+    allowedStoreRefs: partitionScope.allowedStoreRefs,
+    allowedDataScopes: materializeDataScopes(definition.allowedDataScopes, operationId),
+    childWindowIds: new Set(),
+    childWindowPartitions: new Map(),
+    programmaticWindowCloseIds: new Set(),
+    activePlanGrants: new Map(),
+    httpGrants: new Map(),
+    createdAt: new Date().toISOString(),
+    createdAtMs: Date.now(),
+    lastHeartbeatAt: Date.now(),
+    lastProgressAt: Date.now(),
+    lastProgress: 0,
+    mutationStarted: false,
+    inFlightMutations: 0,
+    cancellationRequested: false,
+    closed: false,
+    historyPrewarmShopId: shopId,
+    recoverySource: String(reason || "idle-maintenance")
+  };
+  operationContexts.set(operationId, context);
+  try {
+    await writeOperationEvidence(context, "running");
+    const runnerTask = {
+      taskType: "opportunityHistoryPrewarm",
+      operationId,
+      metadata: {
+        mutation: false,
+        adapterSnapshotHash: snapshot.adapterSnapshotHash,
+        historyPrewarmShopId: shopId,
+        recoverySource: context.recoverySource
+      },
+      payload: taskParamsWithServerMetadata(params, context)
+    };
+    const runner = createRunnerWindow(context, snapshot, runnerTask);
+    armRunnerLifecycle(context);
+    return { started: true, reason: "started", operationId, runnerWinId: runner.id };
+  } catch (error) {
+    operationContexts.delete(operationId);
+    throw error;
+  }
+}
+
+function scheduleOpportunityHistoryPrewarm(delayMs, reason) {
+  if (!opportunityHistoryPrewarmStarted) return;
+  opportunityHistoryPrewarmReason = String(reason || opportunityHistoryPrewarmReason || "scheduled");
+  if (opportunityHistoryPrewarmTimer) clearTimeout(opportunityHistoryPrewarmTimer);
+  opportunityHistoryPrewarmTimer = setTimeout(() => {
+    opportunityHistoryPrewarmTimer = null;
+    void runOpportunityHistoryPrewarmTick();
+  }, Math.max(250, Math.floor(Number(delayMs || 0))));
+  opportunityHistoryPrewarmTimer.unref?.();
+}
+
+async function runOpportunityHistoryPrewarmTick() {
+  if (!opportunityHistoryPrewarmStarted) return;
+  if (opportunityHistoryPrewarmTickPromise) return opportunityHistoryPrewarmTickPromise;
+  const trigger = opportunityHistoryPrewarmReason;
+  opportunityHistoryPrewarmReason = "scheduled";
+  opportunityHistoryPrewarmTickPromise = (async () => {
+    if (operationContexts.size > 0 || runnerContexts.size > 0) {
+      scheduleOpportunityHistoryPrewarm(OPPORTUNITY_HISTORY_PREWARM_POLL_MS, "wait-for-idle");
+      return;
+    }
+    const snapshot = currentSnapshot();
+    if (!snapshot || !opportunityHistoryPrewarmEnabled(snapshot)) {
+      scheduleOpportunityHistoryPrewarm(OPPORTUNITY_HISTORY_PREWARM_POLL_MS, "feature-disabled");
+      return;
+    }
+    const policy = opportunityHistoryPrewarmPolicy(snapshot);
+    const nowMs = Date.now();
+    const idleEligibleAt = opportunityHistoryPrewarmLastForegroundActivityAt + policy.idleGraceMs;
+    const schedulerEligibleAt = Math.max(idleEligibleAt, opportunityHistoryPrewarmNextAllowedAt);
+    if (schedulerEligibleAt > nowMs) {
+      scheduleOpportunityHistoryPrewarm(
+        Math.min(OPPORTUNITY_HISTORY_PREWARM_POLL_MS, schedulerEligibleAt - nowMs),
+        idleEligibleAt > nowMs ? "idle-grace" : "inter-slice-delay"
+      );
+      return;
+    }
+    try {
+      await requirePaidFeature({ taskType: "opportunityHistoryPrewarm", recoverySource: trigger });
+    } catch {
+      scheduleOpportunityHistoryPrewarm(policy.retryMs, "authorization-wait");
+      return;
+    }
+    const submitWork = await automaticOpportunitySubmitWorkPending();
+    if (submitWork.pending) {
+      const submitWakeDelay = submitWork.nextWakeAt ? Math.max(250, submitWork.nextWakeAt - Date.now()) : OPPORTUNITY_HISTORY_PREWARM_POLL_MS;
+      scheduleOpportunityHistoryPrewarm(Math.min(OPPORTUNITY_HISTORY_PREWARM_POLL_MS, submitWakeDelay), "submit-pending");
+      return;
+    }
+    const [storePage, syncPage] = await Promise.all([
+      service().request("records.list", { storeName: "stores", limit: 50000 }, { priority: "interactive" }),
+      service().request("records.list", { storeName: "opportunity_submit_history_sync_v1", limit: 50000 }, { priority: "maintenance" })
+    ]);
+    const stores = (Array.isArray(storePage?.items) ? storePage.items : [])
+      .filter((store) => store?.status === "online");
+    const syncRecords = Array.isArray(syncPage?.items) ? syncPage.items : [];
+    const dueStores = dueOpportunityHistoryPrewarmStores(stores, syncRecords, {
+      nowMs: Date.now(),
+      ...policy,
+      lastAttemptByShopId: opportunityHistoryPrewarmLastAttemptByShopId
+    });
+    if (dueStores.length) {
+      const store = dueStores[0];
+      const shopId = String(store.shopId || store.id || "");
+      opportunityHistoryPrewarmLastAttemptByShopId.set(shopId, new Date().toISOString());
+      const result = await startOpportunityHistoryPrewarm(store, snapshot, trigger);
+      if (result.started) {
+        opportunityHistoryPrewarmNextAllowedAt = Date.now() + policy.interSliceDelayMs;
+        scheduleOpportunityHistoryPrewarm(OPPORTUNITY_HISTORY_PREWARM_POLL_MS, "prewarm-running");
+        return;
+      }
+      if (result.reason === "authorization-wait") {
+        scheduleOpportunityHistoryPrewarm(policy.retryMs, result.reason);
+        return;
+      }
+    }
+    const nextWakeAt = nextOpportunityHistoryPrewarmWakeAt(stores, syncRecords, {
+      ...policy,
+      lastAttemptByShopId: opportunityHistoryPrewarmLastAttemptByShopId
+    });
+    const delay = nextWakeAt === null
+      ? OPPORTUNITY_HISTORY_PREWARM_POLL_MS
+      : Math.min(OPPORTUNITY_HISTORY_PREWARM_POLL_MS, Math.max(250, nextWakeAt - Date.now()));
+    scheduleOpportunityHistoryPrewarm(delay, "scheduled");
+  })().catch((error) => {
+    console.warn("[opportunity-history-prewarm] scheduler tick failed:", error?.message || error);
+    scheduleOpportunityHistoryPrewarm(OPPORTUNITY_HISTORY_PREWARM_POLL_MS, "retry-after-error");
+  }).finally(() => {
+    opportunityHistoryPrewarmTickPromise = null;
+  });
+  return opportunityHistoryPrewarmTickPromise;
+}
+
+function notifyOpportunityHistoryPrewarm(reason = "external") {
+  scheduleOpportunityHistoryPrewarm(500, reason);
+}
+
+function startOpportunityHistoryPrewarmScheduler() {
+  if (opportunityHistoryPrewarmStarted) return;
+  opportunityHistoryPrewarmStarted = true;
+  opportunityHistoryPrewarmLastForegroundActivityAt = Date.now();
+  scheduleOpportunityHistoryPrewarm(2000, "app-startup");
+}
+
+function stopOpportunityHistoryPrewarmScheduler() {
+  opportunityHistoryPrewarmStarted = false;
+  if (opportunityHistoryPrewarmTimer) clearTimeout(opportunityHistoryPrewarmTimer);
+  opportunityHistoryPrewarmTimer = null;
 }
 
 async function runnerEvent(event, message = {}) {
@@ -424,11 +1045,18 @@ async function runnerEvent(event, message = {}) {
         currentStatus: String(existing?.status || "running")
       });
       const patch = {
-        progress: terminalStatus === "reconciling" ? Number(existing?.progress || 0) : 100,
+        progress: terminalTaskProgress({
+          taskType: context.taskType,
+          terminalStatus,
+          currentProgress: existing?.progress
+        }),
         resultSummary: String(message.resultSummary || "completed").slice(0, 2000),
         ...(persistence.persistResult ? { result: message.result } : { resultOmitted: true, resultBytes: persistence.bytes })
       };
       await writeOperationEvidence(context, terminalStatus, patch).catch(() => undefined);
+      await syncOpportunityPipelineSourceOperation(context).catch((error) => {
+        console.warn("[opportunity-submit-recovery] source operation sync failed:", error?.message || error);
+      });
     }
   } else if (message.type === "task:error") {
     const terminalStatus = context.mutation && context.mutationStarted ? "reconciling" : "failed";
@@ -495,6 +1123,8 @@ async function recoverRunner(event, request = {}) {
     paidGrantedAtStart: true,
     principalNavigationEpoch: 1,
     releaseId: snapshot.releaseId,
+    releaseManifestHash: snapshot.releaseManifestHash,
+    runnerArtifactHash: snapshot.runnerArtifactHash,
     adapterSnapshotHash: evidence.adapterSnapshotHash || snapshot.adapterSnapshotHash,
     allowedPlanKeys: new Set(evidenceRecoveryPlanKeys.filter((planKey) => snapshot.adapter?.requestPlans?.[planKey] && snapshot.adapter.requestPlans[planKey].mutation !== true)),
     recoveryPlanKeys: new Set(evidenceRecoveryPlanKeys),
@@ -791,10 +1421,17 @@ module.exports = {
   getRunnerContextForSender,
   markRunnerWindowProgrammaticClose,
   installTaskHandlers,
+  notifyOpportunityHistoryPrewarm,
+  notifyOpportunitySubmitRecovery,
+  nudgeOpportunitySubmitRecovery,
   registerTaskChildWindow,
   runnerCookieAllowed,
   runnerHttpAllowed,
   runnerOwnsWindow,
   runnerWindowCommand,
+  startOpportunityHistoryPrewarmScheduler,
+  startOpportunitySubmitRecoveryScheduler,
+  stopOpportunityHistoryPrewarmScheduler,
+  stopOpportunitySubmitRecoveryScheduler,
   taskChildTarget
 };

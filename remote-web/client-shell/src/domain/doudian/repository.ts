@@ -44,6 +44,10 @@ export const DOUDIAN_OBJECT_STORES = [
   "opportunity_pipeline_candidates_v2",
   "opportunity_pipeline_submit_tasks_v2",
   "opportunity_pipeline_operation_events_v2",
+  "opportunity_submit_rate_state_v1",
+  "opportunity_submit_global_rate_state_v1",
+  "opportunity_submit_attempt_groups_v1",
+  "opportunity_submit_contract_snapshots_v1",
   "remote_feature_records_v1",
   "operations",
   "runtime_meta"
@@ -79,6 +83,10 @@ const NATIVE_BATCH_WRITE_STORES = new Set<DoudianObjectStoreName>([
   "opportunity_pipeline_candidates_v2",
   "opportunity_pipeline_submit_tasks_v2",
   "opportunity_pipeline_operation_events_v2",
+  "opportunity_submit_rate_state_v1",
+  "opportunity_submit_global_rate_state_v1",
+  "opportunity_submit_attempt_groups_v1",
+  "opportunity_submit_contract_snapshots_v1",
   "remote_feature_records_v1"
 ]);
 const NATIVE_BATCH_RECORD_LIMIT = 500;
@@ -214,6 +222,12 @@ export async function repositoryClaimOpportunitySubmitTask<T extends Record<stri
   const claim = requireNativeData().records.claimOpportunitySubmitTask;
   if (!claim) return null;
   return claim<T>({ ...args, storeName: "opportunity_pipeline_submit_tasks_v2" });
+}
+
+export function opportunitySubmitCoordinator() {
+  const coordinator = requireNativeData().opportunitySubmit;
+  if (!coordinator) throw new Error("Native opportunity submit coordinator is unavailable");
+  return coordinator;
 }
 
 export async function repositoryGet<T>(storeName: DoudianObjectStoreName, id: string): Promise<T | null> {

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  isRecoverableSubmitState,
+  isRetryWaitingSubmitState,
   isUnresolvedSubmitState,
   logicalSubmitAttemptId,
   recoverUnresolvedSubmitCandidate
@@ -17,6 +19,9 @@ test("sending recovery preserves a stable attempt id and becomes unknown", () =>
   });
 
   assert.equal(isUnresolvedSubmitState(candidate), true);
+  assert.equal(isRetryWaitingSubmitState({ submitStatus: "retry_waiting" }), true);
+  assert.equal(isRecoverableSubmitState({ submitStatus: "retry_waiting" }), true);
+  assert.equal(isRecoverableSubmitState({ submitStatus: "unknown" }), false);
   assert.equal(isUnresolvedSubmitState({ status: "accepted" }), false);
   assert.equal(recovered.status, "unknown");
   assert.equal(recovered.submitStatus, "unknown");

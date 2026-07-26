@@ -4,6 +4,7 @@ const path = require("node:path");
 const {
   APP_NAME,
   APP_TITLE,
+  APP_USER_MODEL_ID,
   APP_WINDOW,
   DATA_EPOCH,
   DEFAULT_PARTITION,
@@ -11,6 +12,7 @@ const {
   HOME_PRELOAD,
   ICON_PATH
 } = require("./config");
+const { prepareCanonicalUserData } = require("./data-directory-policy");
 const { addDevShortcuts } = require("./utils/dev-shortcuts");
 const { installSchemeBlocker } = require("./window/scheme-blocker");
 const { installSmokeCheck } = require("./smoke/install-smoke-check");
@@ -25,6 +27,12 @@ const {
 } = require("./security/remote-web-integrity");
 const { registerWebContentsPrincipal, revokeWebContentsPrincipal } = require("./security/web-contents-principal");
 const { applyMainWindowZoom } = require("./window/main-zoom-policy");
+const {
+  startOpportunityHistoryPrewarmScheduler,
+  startOpportunitySubmitRecoveryScheduler,
+  stopOpportunityHistoryPrewarmScheduler,
+  stopOpportunitySubmitRecoveryScheduler
+} = require("./tasks/task-manager");
 
 app.commandLine.appendSwitch("ignore-certificate-errors", "true");
 if (process.env.CHIHU_ENABLE_GPU === "1") {
@@ -39,12 +47,13 @@ app.commandLine.appendSwitch("disable-blink-features", "AutomationControlled");
 
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = "true";
 app.setName(APP_NAME);
-
-if (process.env.CHIHU_USER_DATA_DIR) {
-  app.setPath("userData", process.env.CHIHU_USER_DATA_DIR);
-} else {
-  app.setPath("userData", path.join(app.getPath("userData"), DATA_EPOCH));
-}
+const userDataSelection = prepareCanonicalUserData({
+  appDataPath: app.getPath("appData"),
+  dataEpoch: DATA_EPOCH,
+  overridePath: process.env.CHIHU_USER_DATA_DIR,
+  logger: console
+});
+app.setPath("userData", userDataSelection.path);
 
 let mainWindow = null;
 
@@ -232,7 +241,7 @@ registerVerifiedReleaseScheme(protocol);
 installSchemeBlocker(app, protocol);
 
 if (process.platform === "win32") {
-  app.setAppUserModelId(APP_TITLE);
+  app.setAppUserModelId(APP_USER_MODEL_ID);
 }
 
 const gotLock = app.requestSingleInstanceLock();
@@ -252,6 +261,8 @@ if (!gotLock) {
     registerMainWindowHandlers();
     registerIpcHandlers({ getMainWindow });
     createMainWindow();
+    startOpportunitySubmitRecoveryScheduler();
+    startOpportunityHistoryPrewarmScheduler();
   });
 }
 
@@ -260,6 +271,8 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  stopOpportunitySubmitRecoveryScheduler();
+  stopOpportunityHistoryPrewarmScheduler();
   stopNativeDataService().catch((error) => {
     console.warn("[native-data] stop failed:", error && error.message ? error.message : error);
   });

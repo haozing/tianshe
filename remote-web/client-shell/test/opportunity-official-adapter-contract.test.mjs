@@ -9,7 +9,7 @@ import {
   parseOfficialWordsPayload,
   selectOfficialCandidateForProduct
 } from "../src/domain/doudian/opportunity/officialValidation.ts";
-import { evaluateSubmitHistoryPageCoverage, isSubmitHistoryBusinessSuccess, parseSubmitHistorySnapshot, submitHistoryCapacityFacts, submitHistoryInitialStart, submitHistoryRemoteUpdatedAtWatermark, submitHistoryWindows } from "../src/domain/doudian/opportunity/submitHistory.ts";
+import { advanceSubmitHistoryThrottle, evaluateSubmitHistoryPageCoverage, isSubmitHistoryBusinessSuccess, parseSubmitHistorySnapshot, submitHistoryBusinessFacts, submitHistoryCapacityFacts, submitHistoryInitialStart, submitHistoryPageBatchRange, submitHistoryPageReachesEnd, submitHistoryRemoteUpdatedAtWatermark, submitHistoryWindows } from "../src/domain/doudian/opportunity/submitHistory.ts";
 import { isAlreadySubmittedOpportunityMessage } from "../src/domain/doudian/opportunityExecutionPolicy.ts";
 
 const configUrl = new URL("../public/config/doudian-adapter.json", import.meta.url);
@@ -42,6 +42,9 @@ test("diagnostic opportunity plans remain contracted but are excluded from autom
   assert.equal(historyPlan.body, "{bodyJson}");
   assert.equal(historyPlan.signStrategy, "mstoken-myargs");
   assert.equal(historyPlan.localSigner, true);
+  assert.equal(historyPlan.maxAttempts, 1);
+  assert.equal(historyPlan.retryOnHttpError, false);
+  assert.equal(historyPlan.retryOnBusinessFailure, false);
   assert.deepEqual(historyPlan.successStatusPaths, ["base_resp.status_code", "data.base_resp.status_code"]);
   assert.equal(historyPlan.successPaths.includes("base_resp"), false);
   assert.ok(config.responseMappings.opportunityReport.clueWordPaths.includes("data.data"));
@@ -137,6 +140,34 @@ test("submission history parser extracts product, clue and update watermark", ()
   assert.equal(submitHistoryRemoteUpdatedAtWatermark([{ remoteUpdatedAtMs: 1784894774000 }, snapshot], 1784894773000), 1784894775000);
 });
 
+test("submission history identifies HTTP 200 business busy responses for prewarm backoff", () => {
+  assert.deepEqual(submitHistoryBusinessFacts({ base_resp: { status_code: 500, status_message: "系统繁忙，请重试" } }), {
+    found: true,
+    ok: false,
+    code: "500",
+    message: "系统繁忙，请重试",
+    busy: true
+  });
+  assert.equal(submitHistoryBusinessFacts({ base_resp: { status_code: 200 } }).ok, true);
+  assert.deepEqual(submitHistoryBusinessFacts({ code: "10001010A", msg: "访问过于频繁，请稍后重试" }), {
+    found: true,
+    ok: false,
+    code: "10001010A",
+    message: "访问过于频繁，请稍后重试",
+    busy: true
+  });
+});
+
+test("submission history throttle increases cooldown and resets after success", () => {
+  const policy = { requestSpacingMs: 1500, initialCooldownMs: 60_000, maxCooldownMs: 300_000, multiplier: 1.5 };
+  const first = advanceSubmitHistoryThrottle({ busyStreak: 0, nextEligibleAtMs: 0 }, "busy", 1_000, policy);
+  assert.deepEqual(first, { busyStreak: 1, nextEligibleAtMs: 61_000, delayMs: 60_000 });
+  const second = advanceSubmitHistoryThrottle(first, "busy", 61_000, policy);
+  assert.deepEqual(second, { busyStreak: 2, nextEligibleAtMs: 151_000, delayMs: 90_000 });
+  const recovered = advanceSubmitHistoryThrottle(second, "success", 151_000, policy);
+  assert.deepEqual(recovered, { busyStreak: 0, nextEligibleAtMs: 152_500, delayMs: 1500 });
+});
+
 test("submission history parsing fails closed when stable identity or submit time is missing", () => {
   for (const row of [
     { clue_id: 1, product_info: { product_id: 2 }, submit_time: 3 },
@@ -196,13 +227,32 @@ test("submission history uses disjoint time windows and the verified request bod
     { startEpochSeconds: 172900, endEpochSeconds: 172900 }
   ]);
   assert.deepEqual(submitHistoryWindows(200, 100, 1), []);
+  assert.deepEqual(submitHistoryPageBatchRange(68, 1000, 10), { startPage: 68, endPage: 77, maxPages: 1000 });
+  assert.deepEqual(submitHistoryPageBatchRange(998, 1000, 10), { startPage: 998, endPage: 1000, maxPages: 1000 });
+  assert.equal(submitHistoryPageReachesEnd(309, 100, 100, 30_980), false);
+  assert.equal(submitHistoryPageReachesEnd(310, 100, 80, 30_980), true);
   const source = await readFile(opportunitySourceUrl, "utf8");
   assert.match(source, /function submitHistoryListBody[\s\S]*?status_list:\s*\[0, 1, 2, 3, 4, 5, 6\]/);
   assert.match(source, /function submitHistoryResponseOk[\s\S]*?base_resp\.status_code/);
+  assert.match(source, /const isInitial = !previous \|\| !previous\.initialized/);
   assert.match(source, /initialCursorStartEpochSeconds/);
   assert.match(source, /submitHistoryIncrementalOverlapSeconds/);
   const config = await readJson(configUrl);
   assert.equal(config.policies.opportunityReport.submitHistoryInitialLookbackDays, 30);
+  assert.equal(config.policies.opportunityReport.submitHistoryPrewarmEnabled, false);
+  assert.equal(config.policies.opportunityReport.submitHistoryThrottleRecoveryEnabled, true);
+  assert.equal(config.policies.opportunityReport.submitHistoryRequestSpacingMs, 1500);
+  assert.equal(config.policies.opportunityReport.submitHistoryThrottleInitialCooldownMs, 60_000);
+  assert.equal(config.policies.opportunityReport.submitHistoryThrottleMaxCooldownMs, 300_000);
+  assert.equal(config.policies.opportunityReport.submitHistoryThrottleMultiplier, 1.5);
+  assert.equal(config.policies.opportunityReport.submitHistoryThrottleRecoveryBudgetMs, 1_800_000);
+  assert.equal(config.policies.opportunityReport.submitHistoryCheckpointPageBatchSize, 10);
+  assert.equal(config.policies.opportunityReport.submitHistoryPrewarmIntervalMs, 21_600_000);
+  assert.equal(config.policies.opportunityReport.submitHistoryPrewarmIdleGraceMs, 180_000);
+  assert.equal(config.policies.opportunityReport.submitHistoryPrewarmInterSliceDelayMs, 60_000);
+  assert.equal(config.policies.opportunityReport.submitHistoryPrewarmWindowDays, 1);
+  assert.equal(config.policies.opportunityReport.submitHistoryPrewarmMaxWindowsPerRun, 1);
+  assert.equal(config.policies.opportunityReport.submitHistoryPrewarmCompactionBatchSize, 500);
   assert.equal("submitHistoryInitialStartEpochSeconds" in config.policies.opportunityReport, false);
 });
 
@@ -210,8 +260,25 @@ test("submission history schema mismatch remains blocked and emits diagnostics",
   const source = await readFile(opportunitySourceUrl, "utf8");
   assert.match(source, /key:\s*"opportunitySubmitHistorySchema"/);
   assert.match(source, /event:\s*"submit-history-window"/);
-  assert.match(source, /event:\s*"pipeline-submit-history-incomplete"/);
+  assert.match(source, /"pipeline-submit-history-incomplete"/);
+  assert.match(source, /event:\s*"pipeline-submit-history-throttled"/);
+  assert.match(source, /event:\s*"pipeline-submit-history-recovered"/);
+  assert.match(source, /event:\s*"submit-history-progress"/);
+  assert.match(source, /event:\s*"pipeline-submit-history-progress"/);
+  assert.match(source, /checkpointNextPage/);
+  assert.match(source, /status:\s*"cooling_down"/);
+  assert.match(source, /maxAttempts:\s*1/);
   assert.match(source, /if \(benefitScan\.status !== "complete"\) throw new Error\("submit history sync incomplete"\)/);
+});
+
+test("submission history checkpoints successful page batches before throttle recovery", async () => {
+  const source = await readFile(opportunitySourceUrl, "utf8");
+  assert.match(source, /startPage:\s*windowNextPage/);
+  assert.match(source, /pageBatchSize:\s*checkpointPageBatchSize/);
+  assert.match(source, /remoteTotal:\s*windowRemoteTotal/);
+  assert.match(source, /await persistSubmitHistoryBatch\(identity, result\.records\)/);
+  assert.match(source, /checkpointNextPage:\s*result\.nextPage/);
+  assert.match(source, /await waitForSubmitHistoryCooldown\(args, resumeAtMs, shopLabel, checkpointNextPage\)/);
 });
 
 test("contract fixtures cover duplicate pagination and already-submitted response", async () => {

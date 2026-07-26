@@ -116,6 +116,10 @@ export type NativeDataRecordStoreName =
   | "opportunity_pipeline_candidates_v2"
   | "opportunity_pipeline_submit_tasks_v2"
   | "opportunity_pipeline_operation_events_v2"
+  | "opportunity_submit_rate_state_v1"
+  | "opportunity_submit_global_rate_state_v1"
+  | "opportunity_submit_attempt_groups_v1"
+  | "opportunity_submit_contract_snapshots_v1"
   | "remote_feature_records_v1"
   | "operations"
   | "runtime_meta";
@@ -216,6 +220,8 @@ export interface StoreOpportunityCleanupResult {
   unknownCandidates: number;
   deletedCategoryRecords: number;
   deletedCacheRecords: number;
+  deletedRateStates?: number;
+  updatedGlobalRateStates?: number;
   finalizedPipelineRuns: number;
   finalizedOperations: number;
 }
@@ -532,7 +538,7 @@ export interface NativeDataApi {
     put: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; record: T }) => Promise<NativeDataRecordPutResult<T>>;
     putMany?: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; records: T[]; omitRecords?: boolean }) => Promise<NativeDataRecordPutManyResult<T>>;
     acquireOperation?: <T extends Record<string, unknown>>(args: { operation: T; updatedAfter: string }) => Promise<{ acquired: boolean; operation: T }>;
-    claimOpportunitySubmitTask?: <T extends Record<string, unknown>>(args: { storeName: "opportunity_pipeline_submit_tasks_v2"; taskId: string; ownerRunId: string; leaseExpiresAt: string; now: string }) => Promise<{ claimed: boolean; reason: string; task: T | null }>;
+    claimOpportunitySubmitTask?: <T extends Record<string, unknown>>(args: { storeName: "opportunity_pipeline_submit_tasks_v2"; taskId: string; ownerRunId: string; leaseExpiresAt: string; now: string }) => Promise<{ claimed: boolean; reason: string; task: T | null; fencingToken?: number }>;
     get: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; id: string }) => Promise<T | null>;
     getMany?: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; ids: string[] }) => Promise<T[]>;
     list: <T extends Record<string, unknown>>(args: { storeName: NativeDataRecordStoreName; cursor?: string; limit?: number }) => Promise<CursorPage<T>>;
@@ -542,6 +548,16 @@ export interface NativeDataApi {
     cleanupOperations?: (args: { retentionDays?: number; maxTerminalRecords?: number }) => Promise<NativeDataOperationCleanupResult>;
     delete: (args: { storeName: NativeDataRecordStoreName; id: string; reason?: string }) => Promise<NativeDataRecordDeleteResult>;
     deleteMany?: (args: { storeName: NativeDataRecordStoreName; ids: string[]; reason?: string }) => Promise<NativeDataRecordDeleteManyResult>;
+  };
+  opportunitySubmit?: {
+    claimSchedulerLease: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    releaseSchedulerLease: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    admit: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    consumeHttpGrant: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    resolve: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    releaseReservation: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    getQuotaUsage: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    summarizeRun?: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
   };
   opportunityAttempts?: {
     putMany: (args: { attempts: Array<Record<string, unknown>> }) => Promise<{ ok: boolean; count: number }>;
@@ -568,13 +584,14 @@ export interface NativeDataApi {
       ok: boolean;
       runId: string;
       acknowledged: number;
+      pending: number;
       failed: number;
       skipped: number;
       safetySkipped: number;
       unknown: number;
       confirmed: number;
       total: number;
-      byShop: Record<string, { acknowledged: number; failed: number; skipped: number; safetySkipped: number; unknown: number; confirmed: number; total: number }>;
+      byShop: Record<string, { acknowledged: number; pending: number; failed: number; skipped: number; safetySkipped: number; unknown: number; confirmed: number; total: number }>;
     }>;
     confirmMutations: (args: CatalogConfirmMutationsArgs) => Promise<CatalogConfirmMutationsResult>;
     invalidateCoverage: (args: { coverageKey: string; reason?: string }) => Promise<{ ok: boolean; changed: number; invalidatedAt: string }>;

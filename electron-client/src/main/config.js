@@ -19,9 +19,9 @@ const DEFAULT_RELEASE_CHANNEL =
   "stable";
 const APP_NAME =
   process.env.CHIHU_APP_NAME ||
-  packageMetadata.productName ||
-  (DEFAULT_RELEASE_CHANNEL === "beta" ? "赤狐管家内测" : "赤狐管家");
+  "赤狐管家";
 const APP_TITLE = `${APP_NAME} V${app.getVersion()}`;
+const APP_USER_MODEL_ID = "com.chihu.guanjia";
 const DATA_EPOCH = "freemium-v2";
 const DEFAULT_PARTITION = "persist:chihu-default";
 const APP_WINDOW = {
@@ -33,7 +33,7 @@ const APP_WINDOW = {
 };
 
 const DEFAULT_REMOTE_WEB_URL = "http://chihu.facaishe.cn/remote-web/current/new-remote-web/index.html";
-const BETA_REMOTE_WEB_URL = "http://chihu.facaishe.cn/remote-web/beta/releases/2026.07.20.freemium-v2/new-remote-web/index.html";
+const BETA_REMOTE_WEB_URL = "http://chihu.facaishe.cn/remote-web/beta/current/new-remote-web/index.html";
 const DEFAULT_UPDATE_CHANNEL = process.env.CHIHU_UPDATE_CHANNEL || (DEFAULT_RELEASE_CHANNEL === "beta" ? "beta" : "latest");
 
 const HOME_INDEX_URL =
@@ -49,6 +49,7 @@ module.exports = {
   SRC_ROOT,
   APP_NAME,
   APP_TITLE,
+  APP_USER_MODEL_ID,
   DATA_EPOCH,
   APP_WINDOW,
   DEFAULT_PARTITION,

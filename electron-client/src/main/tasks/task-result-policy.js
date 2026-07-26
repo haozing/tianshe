@@ -18,12 +18,19 @@ function resultBusinessStatus(result) {
 
 function terminalTaskStatus({ result, resultSummary = "", mutation = false, currentStatus = "running" }) {
   const businessStatus = resultBusinessStatus(result);
-  if (["unknown", "reconciling"].includes(businessStatus)) return "reconciling";
+  if (["unknown", "reconciling", "manual_reconcile", "cancelling"].includes(businessStatus)) return "reconciling";
   if (mutation && currentStatus === "cancelling" && businessStatus === "cancelled" && resultSummary !== "cancelled before mutation") return "reconciling";
   if (resultSummary === "cancelled" || businessStatus === "cancelled") return "cancelled";
-  if (businessStatus === "partial") return "partial";
+  if (["preparing", "ready", "queued", "running", "partial", "cooling_down", "deferred", "deferred_contract_mismatch"].includes(businessStatus)) return "partial";
   if (result && typeof result === "object" && (result.ok === false || ["failed", "error", "missing", "missing-request-plans"].includes(businessStatus))) return "failed";
   return "succeeded";
+}
+
+function terminalTaskProgress({ taskType = "", terminalStatus = "succeeded", currentProgress = 0 }) {
+  const progress = Math.max(0, Math.min(100, Number(currentProgress || 0)));
+  if (terminalStatus === "reconciling") return progress;
+  if (taskType === "opportunityPipelineSubmit" && terminalStatus === "partial") return progress;
+  return 100;
 }
 
 function interruptedTaskStatus({ mutation = false, mutationStarted, inFlightMutations = 0, currentStatus = "running", cancellationRequested = false }) {
@@ -44,7 +51,12 @@ function taskResultPersistence(result) {
 }
 
 function opportunitySubmitProgressStalled(context, now = Date.now()) {
-  if (context.taskType !== "opportunityPipelineSubmit") return false;
+  if (!["opportunityPipelineSubmit", "opportunitySubmitContinuation"].includes(context.taskType)) return false;
+  const persistedStatus = String(context.persistedSubmitTaskStatus || "");
+  const resumeAtMs = Date.parse(String(context.persistedSubmitResumeAt || ""));
+  if (persistedStatus === "cancelling") return false;
+  if (persistedStatus === "cooling_down" && Number.isFinite(resumeAtMs) && resumeAtMs > now) return false;
+  if (["deferred", "deferred_contract_mismatch", "manual_reconcile"].includes(persistedStatus)) return false;
   const progress = Number(context.lastProgress || 0);
   if (progress < 82 || progress >= 95) return false;
   return now - Number(context.lastProgressAt || context.createdAtMs || now) > OPPORTUNITY_SUBMIT_PROGRESS_STALL_MS;
@@ -56,5 +68,6 @@ module.exports = {
   opportunitySubmitProgressStalled,
   taskResultPersistence,
   interruptedTaskStatus,
+  terminalTaskProgress,
   terminalTaskStatus
 };

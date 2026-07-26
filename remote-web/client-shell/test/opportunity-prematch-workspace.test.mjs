@@ -33,6 +33,10 @@ test("prematch keeps the submit action and live event stream in the open workspa
   assert.match(source, /pipelineLogs\.map/);
   assert.match(source, /opportunity-submit-button/);
   assert.match(source, /ref=\{pipelineLogViewportRef\}/);
+  assert.match(source, /detail\.status === "partial"[\s\S]*?setPipelineInFlight\(true\)[\s\S]*?restorePipelineRun/);
+  assert.match(source, /pipelineSummaryAwaitsAutomaticRecovery\(summary\)/);
+  assert.match(source, /window\.setInterval\([\s\S]*?restorePipelineRun\(runId/);
+  assert.doesNotMatch(source, /heartbeatMessages|pipelineHeartbeatSeqRef/);
 });
 
 test("a new workspace session starts with fresh run counters", () => {

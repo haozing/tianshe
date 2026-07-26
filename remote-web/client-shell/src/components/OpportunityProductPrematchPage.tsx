@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { cancelDoudianStoreOperation, fetchDoudianOpportunityPipelineRun, fetchDoudianOpportunityPipelineSummary, fetchDoudianOpportunityReportLatest, listDoudianOpportunityCandidatesPage, listDoudianOpportunityStoreCategories, listDoudianStores, restoreDoudianOpportunityPipelineTask, runDoudianOpportunityPipelineTask } from "../bridge/client";
 import { addDoudianProgressListener } from "../domain/doudian/progress";
+import { pipelineSummaryAwaitsAutomaticRecovery } from "../domain/doudian/opportunity/pipelineResult.ts";
 import { activeStoreRefs, activeStoreSelection, reconcileSelectedShopIds, restoredActiveShopIds, storeIdentityKey } from "../domain/doudian/opportunityStoreState";
 import { groupStoresByName, toggleStoreIds } from "../domain/doudian/storeSelection";
 import { cn } from "../lib/utils";
@@ -537,6 +538,9 @@ function pipelineSnapshotLog(details: DoudianRunDetail[], summary: Record<string
   const safetySkippedCount = Number(summary.safetySkippedCount || 0);
   const productCount = Number(summary.productCount || 0);
   const clueCount = Number(summary.clueCount || 0);
+  if (pipelineSummaryAwaitsAutomaticRecovery(summary)) {
+    return `自动恢复中：已接受 ${formatNumber(submittedCount)} · 待处理 ${formatNumber(Number(summary.retryableRemainingCount || 0))} · 频控 ${formatNumber(Number(summary.throttleCount || 0))}`;
+  }
   if (submittedCount || failedCount || safetySkippedCount) return `提报完成：提报数 ${formatNumber(submittedCount)} · 失败 ${formatNumber(failedCount)} · 安全跳过 ${formatNumber(safetySkippedCount)}`;
   if (productCount || clueCount) return `已同步：商品 ${formatNumber(productCount)} · 商机 ${formatNumber(clueCount)}`;
   return "等待一键提报";
@@ -578,7 +582,6 @@ export function OpportunityProductPrematchPage() {
   const categoryRequestSeqRef = useRef(0);
   const pipelineLogSeqRef = useRef(1);
   const pipelineLogViewportRef = useRef<HTMLDivElement | null>(null);
-  const pipelineHeartbeatSeqRef = useRef(0);
   const storeRowRefs = useRef(new Map<string, HTMLLabelElement>());
   const storeRowTopsRef = useRef(new Map<string, number>());
 
@@ -809,23 +812,6 @@ export function OpportunityProductPrematchPage() {
     if (viewport) viewport.scrollTop = viewport.scrollHeight;
   }, [pipelineLogs]);
 
-  useEffect(() => {
-    if (!pipelineBusy) return undefined;
-    const heartbeatMessages = [
-      "提报模式：自动匹配，正在等待下一批回执",
-      "获取商品名称：正在读取当前店铺商品",
-      "获取商机：正在同步平台商机词",
-      "提报商机：已进入请求队列，等待平台响应",
-      "提报接口：继续校对提交结果"
-    ];
-    const timer = window.setInterval(() => {
-      const message = heartbeatMessages[pipelineHeartbeatSeqRef.current % heartbeatMessages.length];
-      pipelineHeartbeatSeqRef.current += 1;
-      recordPipelineLog(message);
-    }, 720);
-    return () => window.clearInterval(timer);
-  }, [pipelineBusy]);
-
   useLayoutEffect(() => {
     const nextTops = new Map<string, number>();
     storeRowRefs.current.forEach((element, shopId) => {
@@ -853,6 +839,14 @@ export function OpportunityProductPrematchPage() {
         lastPipelineSnapshotRefreshRef.current = now;
         void restorePipelineRun(activePipelineOperationIdRef.current, { silent: true, includeCandidates: false, updatePipelineLog: true, summaryOnly: true });
       }
+      return;
+    }
+    if (detail.status === "partial") {
+      actionLockRef.current = true;
+      setPipelineInFlight(true);
+      lastPipelineSnapshotRefreshRef.current = 0;
+      recordPipelineLog("提报已转入后台自动恢复，正在读取真实进度");
+      void restorePipelineRun(activePipelineOperationIdRef.current, { silent: true, includeCandidates: false, updatePipelineLog: true, summaryOnly: true });
       return;
     }
     actionLockRef.current = false;
@@ -1047,8 +1041,10 @@ export function OpportunityProductPrematchPage() {
     const runId = hasCompatibleRun ? (result.matchRunId || result.runId || "") : "";
     setMatchRunId(runId);
     const pipelineStatus = String(result.pipelineStatus || result.status || "");
-    if (runId && activePipelineOperationIdRef.current === runId) {
-      if (pipelineStatus === "running") {
+    const automaticRecoveryPending = pipelineStatus === "partial" && pipelineSummaryAwaitsAutomaticRecovery(result.summary || {});
+    if (runId && (activePipelineOperationIdRef.current === runId || automaticRecoveryPending)) {
+      if (pipelineStatus === "running" || automaticRecoveryPending) {
+        activePipelineOperationIdRef.current = runId;
         actionLockRef.current = true;
         setPipelineInFlight(true);
       } else if (["ok", "partial", "failed", "cancelled"].includes(pipelineStatus)) {

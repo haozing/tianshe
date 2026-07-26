@@ -3,6 +3,14 @@ export function isUnresolvedSubmitState(candidate: { submitStatus?: unknown; sta
   return state === "sending" || state === "submitting";
 }
 
+export function isRetryWaitingSubmitState(candidate: { submitStatus?: unknown; status?: unknown }) {
+  return String(candidate.submitStatus || candidate.status || "").trim().toLocaleLowerCase() === "retry_waiting";
+}
+
+export function isRecoverableSubmitState(candidate: { submitStatus?: unknown; status?: unknown }) {
+  return isUnresolvedSubmitState(candidate) || isRetryWaitingSubmitState(candidate);
+}
+
 export function logicalSubmitAttemptId(runId: string, candidate: { id: string; productId: string }) {
   return `${runId}-${candidate.id}-${candidate.productId}-submission`;
 }

@@ -25,6 +25,7 @@ function parseArgs(argv) {
   const args = {
     remote: false,
     desktop: false,
+    beta: false,
     skipBuild: false,
     dryRun: false
   };
@@ -38,6 +39,8 @@ function parseArgs(argv) {
       args.remote = true;
     } else if (value === "--desktop") {
       args.desktop = true;
+    } else if (value === "--beta") {
+      args.beta = true;
     } else if (value === "--skip-build") {
       args.skipBuild = true;
     } else if (value === "--dry-run") {
@@ -280,6 +283,12 @@ function getConfig(args) {
   loadEnvFiles();
   const region = envValue(["TENCENT_COS_REGION", "COS_REGION"], "ap-shanghai");
   const bucket = envValue(["TENCENT_COS_BUCKET", "COS_BUCKET"], "chihu-1434132228");
+  const remotePrefix = args.beta
+    ? envValue(["TENCENT_COS_BETA_REMOTE_PREFIX", "COS_BETA_REMOTE_PREFIX"], "remote-web/beta/current")
+    : envValue(["TENCENT_COS_REMOTE_PREFIX", "COS_REMOTE_PREFIX", "ALI_OSS_REMOTE_PREFIX"], "remote-web/current");
+  const remoteReleasesPrefix = args.beta
+    ? envValue(["TENCENT_COS_BETA_REMOTE_RELEASES_PREFIX", "COS_BETA_REMOTE_RELEASES_PREFIX"], "remote-web/beta/releases")
+    : envValue(["TENCENT_COS_REMOTE_RELEASES_PREFIX", "COS_REMOTE_RELEASES_PREFIX", "ALI_OSS_REMOTE_RELEASES_PREFIX"], "remote-web/releases");
   const accessBaseUrl = trimTrailingSlash(envValue(
     ["TENCENT_COS_ACCESS_BASE_URL", "COS_ACCESS_BASE_URL"],
     `https://${bucket}.cos.${region}.myqcloud.com`
@@ -297,13 +306,13 @@ function getConfig(args) {
     desktopBaseUrl: trimTrailingSlash(envValue(["TENCENT_COS_DESKTOP_BASE_URL", "COS_DESKTOP_BASE_URL"], accessBaseUrl)),
     secretId: requiredEnv(["TENCENT_COS_SECRET_ID", "COS_SECRET_ID"], args.dryRun),
     secretKey: requiredEnv(["TENCENT_COS_SECRET_KEY", "COS_SECRET_KEY"], args.dryRun),
-    remotePrefix: trimSlashes(envValue(["TENCENT_COS_REMOTE_PREFIX", "COS_REMOTE_PREFIX", "ALI_OSS_REMOTE_PREFIX"], "remote-web/current")),
-    remoteReleasesPrefix: trimSlashes(envValue(["TENCENT_COS_REMOTE_RELEASES_PREFIX", "COS_REMOTE_RELEASES_PREFIX", "ALI_OSS_REMOTE_RELEASES_PREFIX"], "remote-web/releases")),
+    remotePrefix: trimSlashes(remotePrefix),
+    remoteReleasesPrefix: trimSlashes(remoteReleasesPrefix),
     desktopPrefix: trimSlashes(envValue(["TENCENT_COS_DESKTOP_PREFIX", "COS_DESKTOP_PREFIX", "ALI_OSS_DESKTOP_PREFIX"], "desktop/win"))
   };
 }
 
-function buildRemote(config, skipBuild) {
+function buildRemote(config, skipBuild, beta) {
   if (skipBuild) return;
   const remoteOrigin = `${config.remoteBaseUrl}/${config.remotePrefix}/new-remote-web/`;
   const buildEnv = {
@@ -312,8 +321,48 @@ function buildRemote(config, skipBuild) {
     CHIHU_REMOTE_WEB_ORIGIN: remoteOrigin
   };
   run(npmCommand, ["run", "build:release"], { cwd: remoteShellRoot, env: buildEnv });
+  run(process.execPath, [
+    join(remoteRoot, "scripts", "apply-release-channel-policy.mjs"),
+    "--channel", beta ? "beta" : "stable",
+    "--build-root", remoteBuildRoot
+  ], { cwd: repoRoot, env: buildEnv });
+  run(process.execPath, [
+    "--experimental-strip-types",
+    join(remoteRoot, "scripts", "export-doudian-window-commands.mjs"),
+    "--adapter", join(remoteBuildRoot, "config", "doudian-adapter.marketing-pilot.json"),
+    "--output", join(remoteBuildRoot, "config", "doudian-window-commands.json")
+  ], { cwd: repoRoot, env: buildEnv });
+  run(process.execPath, [join(remoteRoot, "scripts", "update-release-manifest.mjs")], { cwd: repoRoot, env: buildEnv });
   run(process.execPath, [join(remoteRoot, "scripts", "check-release.mjs")], { cwd: repoRoot });
   run(process.execPath, [join(remoteRoot, "scripts", "package-release.mjs")], { cwd: repoRoot });
+}
+
+function assertRemoteChannelBuild(config, beta) {
+  const adapterPath = join(remoteBuildRoot, "config", "doudian-adapter.marketing-pilot.json");
+  const commandsPath = join(remoteBuildRoot, "config", "doudian-window-commands.json");
+  if (!existsSync(remoteManifestPath) || !existsSync(adapterPath) || !existsSync(commandsPath)) {
+    throw new Error("Remote channel build is incomplete");
+  }
+  const manifest = readJson(remoteManifestPath);
+  const adapter = readJson(adapterPath);
+  const commands = readJson(commandsPath);
+  const expectedOrigin = `${config.remoteBaseUrl}/${config.remotePrefix}/new-remote-web/`;
+  const actualOrigin = String(manifest.entry?.remoteWebOrigin || "");
+  const recoveryEnabled = adapter.policies?.opportunityReport?.submitThrottleRecoveryEnabled === true;
+  const historyPrewarmEnabled = adapter.policies?.opportunityReport?.submitHistoryPrewarmEnabled === true;
+  const streamingEnabled = adapter.policies?.opportunityReport?.submitPipelineStreamingEnabled === true;
+  if (actualOrigin !== expectedOrigin) {
+    throw new Error(`Remote channel origin mismatch: expected ${expectedOrigin}, received ${actualOrigin || "empty"}`);
+  }
+  if (recoveryEnabled !== beta) {
+    throw new Error(`Remote channel recovery policy mismatch: channel=${beta ? "beta" : "stable"}, enabled=${recoveryEnabled}`);
+  }
+  if (historyPrewarmEnabled || streamingEnabled !== beta) {
+    throw new Error(`Remote channel throughput policy mismatch: channel=${beta ? "beta" : "stable"}, prewarm=${historyPrewarmEnabled}, streaming=${streamingEnabled}`);
+  }
+  if (commands.adapterSha256 !== sha256(adapterPath)) {
+    throw new Error("Remote channel adapter and window command hashes do not match");
+  }
 }
 
 function collectRemoteItems(config) {
@@ -352,23 +401,24 @@ function collectRemoteItems(config) {
   };
 }
 
-function buildDesktop(skipBuild) {
+function buildDesktop(skipBuild, beta) {
   if (skipBuild) return;
   assertInside(electronReleaseRoot, electronRoot, "electron release directory");
   rmSync(electronReleaseRoot, { recursive: true, force: true });
   mkdirSync(dirname(electronReleaseRoot), { recursive: true });
-  run(npmCommand, ["run", "dist:win"], { cwd: electronRoot });
+  run(npmCommand, ["run", beta ? "dist:win:beta" : "dist:win"], { cwd: electronRoot });
 }
 
-function ensureDesktopLatestYml() {
-  const latestPath = join(electronReleaseRoot, "latest.yml");
+function ensureDesktopChannelYml(beta) {
+  const channel = beta ? "beta" : "latest";
+  const channelPath = join(electronReleaseRoot, `${channel}.yml`);
 
   const setupFiles = readdirSync(electronReleaseRoot, { withFileTypes: true })
     .filter((entry) => entry.isFile() && /-setup\.exe$/i.test(entry.name))
     .map((entry) => join(electronReleaseRoot, entry.name))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
 
-  if (!setupFiles.length) throw new Error("No setup exe was generated; cannot create latest.yml.");
+  if (!setupFiles.length) throw new Error(`No setup exe was generated; cannot create ${channel}.yml.`);
 
   const setupPath = setupFiles[0];
   const packageJson = readJson(join(electronRoot, "package.json"));
@@ -376,7 +426,7 @@ function ensureDesktopLatestYml() {
   const setupSize = statSync(setupPath).size;
   const setupSha512 = sha512Base64(setupPath);
   const releaseDate = new Date().toISOString();
-  const latestYml = [
+  const channelYml = [
     `version: ${packageJson.version}`,
     "files:",
     `  - url: ${JSON.stringify(setupName)}`,
@@ -388,24 +438,25 @@ function ensureDesktopLatestYml() {
     ""
   ].join("\n");
 
-  writeFileSync(latestPath, latestYml, "utf8");
-  console.log(`[latest] generated ${relative(repoRoot, latestPath).replace(/\\/g, "/")}`);
-  return latestPath;
+  writeFileSync(channelPath, channelYml, "utf8");
+  console.log(`[${channel}] generated ${relative(repoRoot, channelPath).replace(/\\/g, "/")}`);
+  return channelPath;
 }
 
-function collectDesktopItems(config) {
+function collectDesktopItems(config, beta) {
   if (!existsSync(electronReleaseRoot)) {
     throw new Error(`Electron release directory not found: ${electronReleaseRoot}`);
   }
-  ensureDesktopLatestYml();
+  const channel = beta ? "beta" : "latest";
+  const channelPath = ensureDesktopChannelYml(beta);
   const files = readdirSync(electronReleaseRoot, { withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => join(electronReleaseRoot, entry.name))
     .filter((filePath) => /\.(exe|blockmap|ya?ml)$/i.test(filePath))
+    .filter((filePath) => !beta || !/\.ya?ml$/i.test(filePath) || basename(filePath).toLowerCase() === "beta.yml")
     .sort((a, b) => basename(a).localeCompare(basename(b)));
 
-  const latestPath = files.find((filePath) => /^latest\.ya?ml$/i.test(basename(filePath)));
-  if (!latestPath) throw new Error("latest.yml was not generated.");
+  if (!files.includes(channelPath)) throw new Error(`${channel}.yml was not generated.`);
 
   const items = files.map((filePath) => buildUploadItem({
     localPath: filePath,
@@ -413,21 +464,24 @@ function collectDesktopItems(config) {
     cacheControl: desktopCacheControl(filePath)
   }));
 
-  const itemKeys = new Set(items.map((item) => item.objectKey));
-  for (const channel of desktopCompatibilityChannels()) {
-    const objectKey = `${config.desktopPrefix}/${channel}.yml`;
-    if (itemKeys.has(objectKey)) continue;
-    items.push(buildUploadItem({
-      localPath: latestPath,
-      objectKey,
-      cacheControl: desktopCacheControl(latestPath)
-    }));
-    itemKeys.add(objectKey);
+  if (!beta) {
+    const itemKeys = new Set(items.map((item) => item.objectKey));
+    for (const compatibilityChannel of desktopCompatibilityChannels()) {
+      const objectKey = `${config.desktopPrefix}/${compatibilityChannel}.yml`;
+      if (itemKeys.has(objectKey)) continue;
+      items.push(buildUploadItem({
+        localPath: channelPath,
+        objectKey,
+        cacheControl: desktopCacheControl(channelPath)
+      }));
+      itemKeys.add(objectKey);
+    }
   }
 
   return {
     items,
-    latestUrl: publicUrl(config.desktopBaseUrl, `${config.desktopPrefix}/latest.yml`)
+    channel,
+    channelUrl: publicUrl(config.desktopBaseUrl, `${config.desktopPrefix}/${channel}.yml`)
   };
 }
 
@@ -439,6 +493,7 @@ async function main() {
 
   console.log(JSON.stringify({
     provider: config.provider,
+    channel: args.beta ? "beta" : "stable",
     dryRun: args.dryRun,
     skipBuild: args.skipBuild,
     bucket: config.bucket,
@@ -451,7 +506,8 @@ async function main() {
   }, null, 2));
 
   if (args.remote) {
-    buildRemote(config, args.skipBuild);
+    buildRemote(config, args.skipBuild, args.beta);
+    assertRemoteChannelBuild(config, args.beta);
     const remote = collectRemoteItems(config);
     await uploadItems(client, config, remote.items, args.dryRun);
     results.remote = {
@@ -463,12 +519,13 @@ async function main() {
   }
 
   if (args.desktop) {
-    buildDesktop(args.skipBuild);
-    const desktop = collectDesktopItems(config);
+    buildDesktop(args.skipBuild, args.beta);
+    const desktop = collectDesktopItems(config, args.beta);
     await uploadItems(client, config, desktop.items, args.dryRun);
     results.desktop = {
       objectCount: desktop.items.length,
-      latestUrl: desktop.latestUrl
+      channel: desktop.channel,
+      channelUrl: desktop.channelUrl
     };
   }
 

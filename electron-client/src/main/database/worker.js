@@ -127,6 +127,56 @@ function tableHasColumn(database, tableName, columnName) {
   return database.prepare(`PRAGMA table_info(${tableName})`).all().some((row) => row.name === columnName);
 }
 
+function migrateOpportunityAttemptStatuses(database) {
+  const row = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'opportunity_submit_attempts_v2'").get();
+  if (!row || String(row.sql || "").includes("'throttled'")) return;
+  database.exec(`
+    DROP INDEX IF EXISTS idx_opportunity_attempts_status;
+    DROP INDEX IF EXISTS idx_opportunity_attempts_date_shop;
+    DROP INDEX IF EXISTS idx_opportunity_attempts_relation_status;
+    DROP INDEX IF EXISTS idx_opportunity_attempts_clue_status;
+    DROP INDEX IF EXISTS idx_opportunity_attempts_category_status;
+    ALTER TABLE opportunity_submit_attempts_v2 RENAME TO opportunity_submit_attempts_v2_legacy_status;
+    CREATE TABLE opportunity_submit_attempts_v2 (
+      attempt_id TEXT PRIMARY KEY,
+      attempt_key TEXT NOT NULL UNIQUE,
+      execute_run_id TEXT,
+      business_date TEXT NOT NULL DEFAULT '',
+      tenant_id TEXT NOT NULL DEFAULT 'local-user',
+      shop_id TEXT NOT NULL DEFAULT '',
+      clue_id TEXT NOT NULL DEFAULT '',
+      product_id TEXT NOT NULL DEFAULT '',
+      clue_category_id TEXT NOT NULL DEFAULT '',
+      relation_key TEXT NOT NULL DEFAULT '',
+      clue_key TEXT NOT NULL DEFAULT '',
+      clue_category_key TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL CHECK (status IN ('prepared', 'sending', 'accepted', 'rejected', 'throttled', 'unknown', 'confirmed', 'failed', 'cancelled')),
+      counts_against_daily_limit INTEGER NOT NULL DEFAULT 0 CHECK (counts_against_daily_limit IN (0, 1)),
+      request_hash TEXT NOT NULL DEFAULT '',
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      sent_at TEXT,
+      resolved_at TEXT,
+      FOREIGN KEY (execute_run_id) REFERENCES opportunity_execute_runs_v2 (run_id)
+        ON UPDATE CASCADE ON DELETE SET NULL
+    );
+    INSERT INTO opportunity_submit_attempts_v2 (
+      attempt_id, attempt_key, execute_run_id, business_date, tenant_id, shop_id,
+      clue_id, product_id, clue_category_id, relation_key, clue_key, clue_category_key,
+      status, counts_against_daily_limit, request_hash, payload_json, created_at,
+      updated_at, sent_at, resolved_at
+    )
+    SELECT
+      attempt_id, attempt_key, execute_run_id, business_date, tenant_id, shop_id,
+      clue_id, product_id, clue_category_id, relation_key, clue_key, clue_category_key,
+      status, counts_against_daily_limit, request_hash, payload_json, created_at,
+      updated_at, sent_at, resolved_at
+    FROM opportunity_submit_attempts_v2_legacy_status;
+    DROP TABLE opportunity_submit_attempts_v2_legacy_status;
+  `);
+}
+
 function applyForwardCompatibleFixups(database) {
   if (!tableHasColumn(database, "catalog_pages", "transaction_id")) {
     database.exec("ALTER TABLE catalog_pages ADD COLUMN transaction_id TEXT NOT NULL DEFAULT ''");
@@ -147,7 +197,10 @@ function applyForwardCompatibleFixups(database) {
       database.exec(`ALTER TABLE opportunity_submit_attempts_v2 ADD COLUMN ${column} ${definition}`);
     }
   }
+  migrateOpportunityAttemptStatuses(database);
   database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_opportunity_attempts_status
+      ON opportunity_submit_attempts_v2 (status, created_at);
     CREATE INDEX IF NOT EXISTS idx_opportunity_attempts_date_shop
       ON opportunity_submit_attempts_v2 (business_date, shop_id, counts_against_daily_limit);
     CREATE INDEX IF NOT EXISTS idx_opportunity_attempts_relation_status
@@ -171,6 +224,10 @@ function applyForwardCompatibleFixups(database) {
         updated_at
       )
       WHERE store_name = 'operations';
+    CREATE INDEX IF NOT EXISTS idx_opportunity_request_attempts_quota
+      ON opportunity_submit_request_attempts_v1 (business_date, tenant_id, shop_id, status);
+    CREATE INDEX IF NOT EXISTS idx_opportunity_request_attempts_task
+      ON opportunity_submit_request_attempts_v1 (task_id, status, updated_at);
   `);
 }
 
@@ -559,6 +616,10 @@ const NATIVE_RECORD_STORES = new Set([
   "opportunity_pipeline_candidates_v2",
   "opportunity_pipeline_submit_tasks_v2",
   "opportunity_pipeline_operation_events_v2",
+  "opportunity_submit_rate_state_v1",
+  "opportunity_submit_global_rate_state_v1",
+  "opportunity_submit_attempt_groups_v1",
+  "opportunity_submit_contract_snapshots_v1",
   "remote_feature_records_v1",
   "operations",
   "runtime_meta"
@@ -813,6 +874,42 @@ function acquireNativeOperation(args = {}) {
   }
 }
 
+const OPPORTUNITY_SUBMIT_NON_TERMINAL_TASK_STATUSES = new Set([
+  "preparing",
+  "ready",
+  "queued",
+  "running",
+  "cancelling",
+  "cooling_down",
+  "deferred",
+  "deferred_contract_mismatch",
+  "manual_reconcile"
+]);
+
+const OPPORTUNITY_SUBMIT_CLAIM_PRIORITY = new Map([
+  ["cancelling", 0],
+  ["manual_reconcile", 1],
+  ["deferred_contract_mismatch", 2],
+  ["running", 3],
+  ["cooling_down", 4],
+  ["deferred", 5],
+  ["ready", 6],
+  ["queued", 7],
+  ["preparing", 8]
+]);
+
+function opportunitySubmitTaskClaimable(task, now) {
+  const status = normalizeString(task.status) || "";
+  if (status === "ready" || status === "queued") return !task.resumeAt || timestampMs(task.resumeAt) <= timestampMs(now);
+  if (status === "running") return !task.leaseExpiresAt || String(task.leaseExpiresAt) < now;
+  if (status === "cooling_down") return Boolean(task.resumeAt && String(task.resumeAt) <= now);
+  if (status === "deferred") {
+    if (task.requiresExplicitResume === true || task.deferredReason === "retry_exhausted") return false;
+    return Boolean(task.resumeAt && String(task.resumeAt) <= now);
+  }
+  return false;
+}
+
 function claimOpportunitySubmitTask(args = {}) {
   const database = ensureDb();
   const taskId = normalizeString(args.taskId || args.id);
@@ -852,32 +949,45 @@ function claimOpportunitySubmitTask(args = {}) {
       database.exec("COMMIT");
       return { claimed: false, reason: storeIdentity ? "store-tombstoned" : "store-missing", task: cancelledTask };
     }
-    const claimable = task.status === "ready" || task.status === "queued" || (task.status === "running" && (!task.leaseExpiresAt || String(task.leaseExpiresAt) < now));
+    const claimable = opportunitySubmitTaskClaimable(task, now);
     if (!claimable) {
       database.exec("COMMIT");
       return { claimed: false, reason: "not-claimable", task };
     }
-    const activeRow = database.prepare(`
+    const competingRows = database.prepare(`
       SELECT * FROM native_records
       WHERE store_name = 'opportunity_pipeline_submit_tasks_v2'
-        AND record_id <> ?
         AND json_valid(payload_json)
         AND json_extract(payload_json, '$.concurrencyKey') = ?
-        AND json_extract(payload_json, '$.status') = 'running'
-        AND COALESCE(json_extract(payload_json, '$.leaseExpiresAt'), '') >= ?
-      ORDER BY updated_at DESC
-      LIMIT 1
-    `).get(taskId, normalizeString(task.concurrencyKey) || "", now);
-    if (activeRow) {
+        AND json_extract(payload_json, '$.status') IN ('preparing', 'ready', 'queued', 'running', 'cancelling', 'cooling_down', 'deferred', 'deferred_contract_mismatch', 'manual_reconcile')
+    `).all(normalizeString(task.concurrencyKey) || "");
+    const competingTasks = competingRows.map((candidateRow) => ({
+      row: candidateRow,
+      task: formatNativeRecord(candidateRow)
+    })).sort((left, right) => {
+      const priority = (OPPORTUNITY_SUBMIT_CLAIM_PRIORITY.get(left.task.status) ?? 99) - (OPPORTUNITY_SUBMIT_CLAIM_PRIORITY.get(right.task.status) ?? 99);
+      if (priority) return priority;
+      const created = String(left.task.createdAt || left.row.created_at).localeCompare(String(right.task.createdAt || right.row.created_at));
+      return created || String(left.row.record_id).localeCompare(String(right.row.record_id));
+    });
+    const canonicalTask = competingTasks[0];
+    if (canonicalTask && canonicalTask.row.record_id !== taskId) {
       database.exec("COMMIT");
-      return { claimed: false, reason: "concurrency-active", task: formatNativeRecord(activeRow) };
+      return {
+        claimed: false,
+        reason: canonicalTask.task.status === "running" ? "concurrency-active" : "concurrency-nonterminal",
+        task: canonicalTask.task
+      };
     }
+    const fencingToken = Math.max(0, normalizeInteger(task.fencingToken) || 0) + 1;
     const claimedTask = {
       ...task,
       status: "running",
       ownerRunId,
+      fencingToken,
       startedAt: task.startedAt || now,
       leaseExpiresAt,
+      resumeAt: undefined,
       updatedAt: now
     };
     database.prepare(`
@@ -885,14 +995,1275 @@ function claimOpportunitySubmitTask(args = {}) {
       WHERE store_name = 'opportunity_pipeline_submit_tasks_v2' AND record_id = ?
     `).run(encodeJson(claimedTask), now, taskId);
     database.exec("COMMIT");
-    return { claimed: true, reason: "claimed", task: claimedTask };
+    return { claimed: true, reason: "claimed", task: claimedTask, fencingToken };
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
   }
 }
 
-const OPPORTUNITY_ATTEMPT_STATUSES = new Set(["prepared", "sending", "accepted", "rejected", "unknown", "confirmed", "failed", "cancelled"]);
+const OPPORTUNITY_SUBMIT_RATE_STORE = "opportunity_submit_rate_state_v1";
+const OPPORTUNITY_SUBMIT_GLOBAL_RATE_STORE = "opportunity_submit_global_rate_state_v1";
+const OPPORTUNITY_SUBMIT_GROUP_STORE = "opportunity_submit_attempt_groups_v1";
+const OPPORTUNITY_SUBMIT_CONTRACT_STORE = "opportunity_submit_contract_snapshots_v1";
+const OPPORTUNITY_SUBMIT_TASK_STORE = "opportunity_pipeline_submit_tasks_v2";
+const OPPORTUNITY_SUBMIT_CANDIDATE_STORE = "opportunity_pipeline_candidates_v2";
+const OPPORTUNITY_SUBMIT_TERMINAL_CANDIDATE_STATUSES = new Set([
+  "accepted", "submitted", "failed", "skipped", "cancelled", "quota_exhausted"
+]);
+
+function boundedInteger(value, fallback, minimum, maximum) {
+  const number = normalizeInteger(value);
+  return Math.max(minimum, Math.min(maximum, number === null ? fallback : number));
+}
+
+function boundedNumber(value, fallback, minimum, maximum) {
+  const number = Number(value);
+  return Math.max(minimum, Math.min(maximum, Number.isFinite(number) ? number : fallback));
+}
+
+function timestampMs(value, fallback = 0) {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function isoAfter(base, delayMs) {
+  return new Date(timestampMs(base, Date.now()) + Math.max(0, Number(delayMs || 0))).toISOString();
+}
+
+function hashParts(domain, ...parts) {
+  const hash = createHash("sha256");
+  hash.update(`${Buffer.byteLength(String(domain), "utf8")}:${domain}`, "utf8");
+  for (const part of parts) {
+    const value = typeof part === "string" ? part : canonicalJson(part);
+    hash.update(`|${Buffer.byteLength(value, "utf8")}:${value}`, "utf8");
+  }
+  return hash.digest("hex");
+}
+
+function deterministicJitterMs(maximum, ...parts) {
+  const max = Math.max(0, normalizeInteger(maximum) || 0);
+  if (!max) return 0;
+  const value = Number.parseInt(hashParts("submit-jitter:v1", ...parts).slice(0, 12), 16);
+  return value % (max + 1);
+}
+
+function nativeRecordRowById(database, storeName, recordId) {
+  return database.prepare("SELECT * FROM native_records WHERE store_name = ? AND record_id = ?").get(storeName, recordId);
+}
+
+function nativeRecordById(database, storeName, recordId) {
+  const row = nativeRecordRowById(database, storeName, recordId);
+  return row ? formatNativeRecord(row) : null;
+}
+
+function putNativeRecordInTransaction(database, storeName, record, ts) {
+  const normalized = normalizeRecordPayload(record);
+  const recordId = normalizeString(normalized.id);
+  if (!recordId) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Native transaction record requires id", { storeName });
+  const existing = nativeRecordRowById(database, storeName, recordId);
+  const next = { ...normalized, id: recordId, updatedAt: normalizeString(normalized.updatedAt) || ts };
+  if (existing) {
+    database.prepare(`
+      UPDATE native_records SET payload_json = ?, updated_at = ?
+      WHERE store_name = ? AND record_id = ?
+    `).run(encodeJson(next), ts, storeName, recordId);
+  } else {
+    database.prepare(`
+      INSERT INTO native_records (store_name, record_id, payload_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(storeName, recordId, encodeJson(next), normalizeString(next.createdAt) || ts, ts);
+  }
+  return next;
+}
+
+function normalizeSubmitPacingPolicy(input = {}) {
+  const initialIntervalMs = boundedInteger(input.initialIntervalMs ?? input.submitPacingInitialIntervalMs, 15000, 1000, 10 * 60 * 1000);
+  const minIntervalMs = boundedInteger(input.minIntervalMs ?? input.submitPacingMinIntervalMs, 10000, 500, initialIntervalMs);
+  const maxIntervalMs = boundedInteger(input.maxIntervalMs ?? input.submitPacingMaxIntervalMs, 60000, initialIntervalMs, 10 * 60 * 1000);
+  return {
+    policyVersion: normalizeString(input.policyVersion) || "opportunity-submit-adaptive-v1",
+    initialIntervalMs,
+    minIntervalMs,
+    maxIntervalMs,
+    jitterMs: boundedInteger(input.jitterMs ?? input.submitPacingJitterMs, 1500, 0, 60000),
+    successesToDecrease: boundedInteger(input.successesToDecrease ?? input.submitPacingSuccessesToDecrease, 8, 1, 100),
+    decreaseMs: boundedInteger(input.decreaseMs ?? input.submitPacingDecreaseMs, 1000, 1, 60000),
+    multiplier429: boundedNumber(input.multiplier429 ?? input.submitPacing429Multiplier, 1.5, 1, 10),
+    maxCooldownMs: boundedInteger(input.maxCooldownMs ?? input.submitPacingMaxCooldownMs, 120000, 1000, 24 * 60 * 60 * 1000),
+    globalBurstSpacingMs: boundedInteger(input.globalBurstSpacingMs ?? input.submitGlobalBurstSpacingMs, 500, 0, 60000),
+    globalInitialMs: boundedInteger(input.globalInitialMs ?? input.submitGlobalPacingInitialMs, 15000, 1000, 10 * 60 * 1000),
+    globalMaxMs: boundedInteger(input.globalMaxMs ?? input.submitGlobalPacingMaxMs, 60000, 1000, 10 * 60 * 1000),
+    globalMultiplier429: boundedNumber(input.globalMultiplier429 ?? input.submitGlobalPacing429Multiplier, 1.5, 1, 10),
+    globalDecreaseMs: boundedInteger(input.globalDecreaseMs ?? input.submitGlobalPacingDecreaseMs, 5000, 1, 60000),
+    global429WindowMs: boundedInteger(input.global429WindowMs ?? input.submitGlobal429WindowMs, 120000, 10000, 60 * 60 * 1000),
+    globalDistinctStores: boundedInteger(input.globalDistinctStores ?? input.submitGlobal429DistinctStores, 2, 2, 1000),
+    globalStableWindowsToExit: boundedInteger(input.globalStableWindowsToExit ?? input.submitGlobalStableWindowsToExit, 2, 1, 100),
+    storeThrottleBudgetMs: boundedInteger(input.storeThrottleBudgetMs ?? input.submitStoreThrottleBudgetMs, 1800000, 1000, 24 * 60 * 60 * 1000),
+    retryLimit: boundedInteger(input.retryLimit ?? input.submitRetryLimit, 3, 1, 100)
+  };
+}
+
+function opportunitySubmitRateId(task) {
+  return `${normalizeString(task.tenantId) || DEFAULT_TENANT_ID}-${normalizeString(task.shopId) || ""}-${normalizeInteger(task.storeGeneration || task.generation) || 1}`;
+}
+
+function opportunitySubmitGlobalRateId(tenantId, endpointContract) {
+  return `${tenantId}-${hashParts("submit-global-rate:v1", endpointContract).slice(0, 24)}`;
+}
+
+function schedulerLeaseMetaKey(tenantId, endpointContract) {
+  return `opportunity-submit-scheduler-lease:${hashParts("submit-scheduler:v1", tenantId, endpointContract)}`;
+}
+
+function claimOpportunitySubmitSchedulerLease(args = {}) {
+  const database = ensureDb();
+  const tenantId = normalizeString(args.tenantId) || DEFAULT_TENANT_ID;
+  const endpointContract = normalizeString(args.endpointContract) || "opportunitySubmitClue";
+  const ownerId = normalizeString(args.ownerId || args.ownerRunId);
+  const now = normalizeString(args.now) || nowIso();
+  const leaseExpiresAt = normalizeString(args.leaseExpiresAt);
+  if (!ownerId || !leaseExpiresAt || timestampMs(leaseExpiresAt) <= timestampMs(now)) {
+    throw createError("NATIVE_DATA_BAD_ARGUMENT", "Scheduler lease requires ownerId and a future leaseExpiresAt");
+  }
+  const key = schedulerLeaseMetaKey(tenantId, endpointContract);
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const current = readRuntimeMeta(database, key, null);
+    if (current && current.ownerId !== ownerId && timestampMs(current.leaseExpiresAt) >= timestampMs(now)) {
+      database.exec("COMMIT");
+      return { claimed: false, reason: "lease-active", lease: current };
+    }
+    const fencingToken = Math.max(0, normalizeInteger(current && current.fencingToken) || 0) + 1;
+    const lease = {
+      id: key,
+      tenantId,
+      endpointContract,
+      ownerId,
+      fencingToken,
+      claimedAt: now,
+      leaseExpiresAt,
+      updatedAt: now
+    };
+    writeRuntimeMeta(database, key, lease, now);
+    database.exec("COMMIT");
+    return { claimed: true, reason: "claimed", lease };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function releaseOpportunitySubmitSchedulerLease(args = {}) {
+  const database = ensureDb();
+  const tenantId = normalizeString(args.tenantId) || DEFAULT_TENANT_ID;
+  const endpointContract = normalizeString(args.endpointContract) || "opportunitySubmitClue";
+  const ownerId = normalizeString(args.ownerId || args.schedulerOwnerId || args.ownerRunId);
+  const fencingToken = normalizeInteger(args.fencingToken ?? args.schedulerFencingToken);
+  const now = normalizeString(args.now) || nowIso();
+  if (!ownerId || fencingToken == null) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Scheduler lease release requires ownerId and fencingToken");
+  const key = schedulerLeaseMetaKey(tenantId, endpointContract);
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const current = readRuntimeMeta(database, key, null);
+    if (!current || current.ownerId !== ownerId || Number(current.fencingToken) !== fencingToken) {
+      database.exec("COMMIT");
+      return { released: false, reason: "stale-fence", lease: current };
+    }
+    const lease = {
+      ...current,
+      ownerId: "",
+      leaseExpiresAt: now,
+      releasedAt: now,
+      updatedAt: now
+    };
+    writeRuntimeMeta(database, key, lease, now);
+    database.exec("COMMIT");
+    return { released: true, reason: "released", lease };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function assertOpportunitySchedulerLease(database, args, tenantId, endpointContract, now) {
+  const key = schedulerLeaseMetaKey(tenantId, endpointContract);
+  const lease = readRuntimeMeta(database, key, null);
+  const ownerId = normalizeString(args.schedulerOwnerId || args.ownerRunId);
+  const fencingToken = normalizeInteger(args.schedulerFencingToken);
+  if (!lease || lease.ownerId !== ownerId || Number(lease.fencingToken) !== fencingToken || timestampMs(lease.leaseExpiresAt) < timestampMs(now)) {
+    throw createError("NATIVE_DATA_STALE_FENCE", "Opportunity submit scheduler lease is stale", { tenantId, endpointContract });
+  }
+  return lease;
+}
+
+function assertOpportunityTaskFence(task, args, now, options = {}) {
+  const ownerRunId = normalizeString(args.ownerRunId);
+  const fencingToken = normalizeInteger(args.fencingToken);
+  if (!task || task.ownerRunId !== ownerRunId || Number(task.fencingToken || 0) !== fencingToken) {
+    throw createError("NATIVE_DATA_STALE_FENCE", "Opportunity submit task fence is stale", { taskId: args.taskId });
+  }
+  if (options.allowExpired !== true && task.leaseExpiresAt && timestampMs(task.leaseExpiresAt) < timestampMs(now)) {
+    throw createError("NATIVE_DATA_STALE_FENCE", "Opportunity submit task lease expired", { taskId: args.taskId });
+  }
+}
+
+function normalizeContractSnapshot(input = {}, task, ts) {
+  const required = [
+    "releaseId", "releaseManifestHash", "runnerArtifactHash", "adapterVersion", "scriptsVersion",
+    "requestPlanHash", "submitContractVersion", "pacingPolicyHash", "adapterSnapshotHash"
+  ];
+  const snapshot = Object.fromEntries(required.map((key) => [key, normalizeString(input[key] ?? task[key]) || ""]));
+  const missing = required.filter((key) => !snapshot[key]);
+  if (missing.length) throw createError("NATIVE_DATA_CONTRACT_MISMATCH", "Opportunity submit contract snapshot is incomplete", { missing });
+  for (const key of required) {
+    if (task[key] && normalizeString(task[key]) !== snapshot[key]) {
+      throw createError("NATIVE_DATA_CONTRACT_MISMATCH", `Opportunity submit contract field changed: ${key}`, { key });
+    }
+  }
+  return {
+    id: hashParts("submit-contract-snapshot:v1", ...required.map((key) => snapshot[key])),
+    ...snapshot,
+    createdAt: normalizeString(input.createdAt) || ts,
+    updatedAt: ts
+  };
+}
+
+function initialStoreRateState(task, policy, ts) {
+  return {
+    id: opportunitySubmitRateId(task),
+    tenantId: normalizeString(task.tenantId) || DEFAULT_TENANT_ID,
+    shopId: normalizeString(task.shopId) || "",
+    storeGeneration: normalizeInteger(task.storeGeneration || task.generation) || 1,
+    mode: "normal",
+    policyVersion: policy.policyVersion,
+    intervalMs: policy.initialIntervalMs,
+    consecutiveSuccesses: 0,
+    consecutive429: 0,
+    cooldownCount: 0,
+    updatedAt: ts
+  };
+}
+
+function initialGlobalRateState(tenantId, endpointContract, policy, ts) {
+  return {
+    id: opportunitySubmitGlobalRateId(tenantId, endpointContract),
+    tenantId,
+    endpointContract,
+    mode: "inactive",
+    policyVersion: policy.policyVersion,
+    intervalMs: policy.globalInitialMs,
+    burstSpacingMs: policy.globalBurstSpacingMs,
+    rolling429Buckets: [],
+    consecutiveAffectedWindows: 0,
+    consecutiveStableWindows: 0,
+    updatedAt: ts
+  };
+}
+
+function settleGlobalStableWindows(globalRate, policy, now) {
+  const nowMs = timestampMs(now, Date.now());
+  const currentWindowStartedMs = nowMs - (nowMs % policy.global429WindowMs);
+  const previousEvaluatedMs = timestampMs(globalRate.lastEvaluatedWindowStartedAt, currentWindowStartedMs);
+  if (globalRate.mode !== "protective" || previousEvaluatedMs >= currentWindowStartedMs) {
+    return { ...globalRate, lastEvaluatedWindowStartedAt: new Date(currentWindowStartedMs).toISOString() };
+  }
+  let intervalMs = Number(globalRate.intervalMs || policy.globalInitialMs);
+  let consecutiveStableWindows = Number(globalRate.consecutiveStableWindows || 0);
+  let consecutiveAffectedWindows = Number(globalRate.consecutiveAffectedWindows || 0);
+  let mode = globalRate.mode;
+  const buckets = Array.isArray(globalRate.rolling429Buckets) ? globalRate.rolling429Buckets : [];
+  const elapsed = Math.min(20, Math.max(0, Math.floor((currentWindowStartedMs - previousEvaluatedMs) / policy.global429WindowMs)));
+  for (let offset = 1; offset <= elapsed; offset += 1) {
+    const windowStartedMs = previousEvaluatedMs + offset * policy.global429WindowMs;
+    if (windowStartedMs >= currentWindowStartedMs) break;
+    const key = new Date(windowStartedMs).toISOString();
+    const affected = buckets.some((bucket) => bucket.windowStartedAt === key && Array.isArray(bucket.shopIds) && bucket.shopIds.length > 0);
+    if (affected) {
+      consecutiveStableWindows = 0;
+      consecutiveAffectedWindows += 1;
+    } else {
+      consecutiveStableWindows += 1;
+      intervalMs = Math.max(policy.globalInitialMs, intervalMs - policy.globalDecreaseMs);
+      if (intervalMs <= policy.globalInitialMs && consecutiveStableWindows >= policy.globalStableWindowsToExit) {
+        mode = "inactive";
+        consecutiveAffectedWindows = 0;
+      }
+    }
+  }
+  return {
+    ...globalRate,
+    mode,
+    intervalMs,
+    consecutiveStableWindows,
+    consecutiveAffectedWindows,
+    rolling429Buckets: buckets.filter((bucket) => timestampMs(bucket.windowStartedAt) >= currentWindowStartedMs - policy.global429WindowMs * 2),
+    lastEvaluatedWindowStartedAt: new Date(currentWindowStartedMs).toISOString()
+  };
+}
+
+function opportunityQuotaUsage(database, args) {
+  const candidateDispatched = Number(database.prepare(`
+    SELECT COUNT(*) AS count FROM opportunity_submit_attempts_v2
+    WHERE business_date = ? AND tenant_id = ? AND shop_id = ? AND counts_against_daily_limit = 1
+  `).get(args.businessDate, args.tenantId, args.shopId)?.count || 0);
+  const candidateReserved = Number(database.prepare(`
+    SELECT COALESCE(SUM(reserved_candidate_mutation_units), 0) AS count
+    FROM opportunity_submit_request_attempts_v1
+    WHERE business_date = ? AND tenant_id = ? AND shop_id = ? AND status = 'reserved'
+  `).get(args.businessDate, args.tenantId, args.shopId)?.count || 0);
+  const httpDispatched = Number(database.prepare(`
+    SELECT COUNT(*) AS count FROM opportunity_submit_request_attempts_v1
+    WHERE business_date = ? AND tenant_id = ? AND endpoint_contract = ?
+      AND status IN ('dispatched', 'accepted', 'partial', 'throttled', 'failed', 'unknown')
+  `).get(args.businessDate, args.tenantId, args.endpointContract)?.count || 0);
+  const httpReserved = Number(database.prepare(`
+    SELECT COUNT(*) AS count FROM opportunity_submit_request_attempts_v1
+    WHERE business_date = ? AND tenant_id = ? AND endpoint_contract = ? AND status = 'reserved'
+  `).get(args.businessDate, args.tenantId, args.endpointContract)?.count || 0);
+  return { candidateDispatched, candidateReserved, httpDispatched, httpReserved };
+}
+
+function getOpportunitySubmitQuotaUsage(args = {}) {
+  const tenantId = normalizeString(args.tenantId) || DEFAULT_TENANT_ID;
+  const shopId = normalizeString(args.shopId) || "";
+  const endpointContract = normalizeString(args.endpointContract) || "opportunitySubmitClue";
+  const businessDateValue = normalizeString(args.businessDate) || businessDate();
+  if (!shopId) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Opportunity submit quota usage requires shopId");
+  return {
+    businessDate: businessDateValue,
+    tenantId,
+    shopId,
+    endpointContract,
+    ...opportunityQuotaUsage(ensureDb(), { businessDate: businessDateValue, tenantId, shopId, endpointContract })
+  };
+}
+
+function summarizeOpportunitySubmitRun(args = {}) {
+  const database = ensureDb();
+  const runId = normalizeString(args.runId || args.operationId);
+  if (!runId) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Opportunity submit run summary requires runId");
+  const endpointContract = normalizeString(args.endpointContract) || "opportunitySubmitClue";
+  const businessDateValue = normalizeString(args.businessDate) || businessDate();
+  const policy = normalizeSubmitPacingPolicy(args.policy);
+  const candidateMutationLimit = boundedInteger(args.dailyCandidateMutationLimit, 1000, 1, 1000000);
+  const httpRequestLimit = boundedInteger(args.dailyHttpRequestLimit, 1000, 1, 1000000);
+  const tasks = nativeRecordRows(database, OPPORTUNITY_SUBMIT_TASK_STORE)
+    .map(formatNativeRecord)
+    .filter((task) => normalizeString(task.runId) === runId);
+  const attempts = database.prepare(`
+    SELECT attempt.*
+    FROM opportunity_submit_request_attempts_v1 attempt
+    INNER JOIN native_records task
+      ON task.store_name = ? AND task.record_id = attempt.task_id
+    WHERE json_extract(task.payload_json, '$.runId') = ?
+    ORDER BY attempt.logical_group_id, attempt.retry_cycle, attempt.attempt_ordinal
+  `).all(OPPORTUNITY_SUBMIT_TASK_STORE, runId);
+  const dispatchedStatuses = new Set(["dispatched", "accepted", "partial", "throttled", "failed", "unknown"]);
+  const dispatchedAttempts = attempts.filter((attempt) => dispatchedStatuses.has(normalizeString(attempt.status)));
+  const throttleAttempts = dispatchedAttempts.filter((attempt) => normalizeString(attempt.status) === "throttled");
+  const attemptsByGroup = new Map();
+  for (const attempt of dispatchedAttempts) {
+    const groupId = normalizeString(attempt.logical_group_id) || "";
+    const groupAttempts = attemptsByGroup.get(groupId) || [];
+    groupAttempts.push(attempt);
+    attemptsByGroup.set(groupId, groupAttempts);
+  }
+  let recoveredAfterThrottleCount = 0;
+  for (const groupAttempts of attemptsByGroup.values()) {
+    let throttled = false;
+    for (const attempt of groupAttempts) {
+      const status = normalizeString(attempt.status);
+      if (status === "throttled") throttled = true;
+      else if (throttled && (status === "accepted" || status === "partial")) {
+        recoveredAfterThrottleCount += 1;
+        break;
+      }
+    }
+  }
+  const throttleBuckets = new Map();
+  for (const attempt of throttleAttempts) {
+    const occurredAt = timestampMs(attempt.resolved_at || attempt.updated_at || attempt.dispatched_at);
+    const windowStartedMs = occurredAt - (occurredAt % policy.global429WindowMs);
+    const bucket = throttleBuckets.get(windowStartedMs) || { shopIds: new Set(), count: 0 };
+    bucket.shopIds.add(normalizeString(attempt.shop_id) || "");
+    bucket.count += 1;
+    throttleBuckets.set(windowStartedMs, bucket);
+  }
+  const globalThrottleCount = Array.from(throttleBuckets.values()).reduce((sum, bucket) => (
+    bucket.shopIds.size >= policy.globalDistinctStores ? sum + bucket.count : sum
+  ), 0);
+  const storeIdentities = Array.from(new Map(tasks.map((task) => {
+    const tenantId = normalizeString(task.tenantId) || DEFAULT_TENANT_ID;
+    const shopId = normalizeString(task.shopId) || "";
+    return [`${tenantId}:${shopId}`, { tenantId, shopId }];
+  })).values()).filter((identity) => identity.shopId);
+  const storeIntervals = Array.from(new Map(tasks.map((task) => [
+    opportunitySubmitRateId(task),
+    Number(nativeRecordById(database, OPPORTUNITY_SUBMIT_RATE_STORE, opportunitySubmitRateId(task))?.intervalMs || policy.initialIntervalMs)
+  ])).values());
+  const globalKeys = Array.from(new Map(tasks.map((task) => {
+    const tenantId = normalizeString(task.tenantId) || DEFAULT_TENANT_ID;
+    return [`${tenantId}:${endpointContract}`, { tenantId, endpointContract }];
+  })).values());
+  const globalRates = globalKeys.map((identity) => (
+    nativeRecordById(database, OPPORTUNITY_SUBMIT_GLOBAL_RATE_STORE, opportunitySubmitGlobalRateId(identity.tenantId, identity.endpointContract))
+      || initialGlobalRateState(identity.tenantId, identity.endpointContract, policy, nowIso())
+  ));
+  let dailyCandidateMutationUsed = 0;
+  let dailyCandidateMutationReserved = 0;
+  let dailyCandidateMutationRemaining = 0;
+  for (const identity of storeIdentities) {
+    const usage = opportunityQuotaUsage(database, { ...identity, businessDate: businessDateValue, endpointContract });
+    dailyCandidateMutationUsed += usage.candidateDispatched;
+    dailyCandidateMutationReserved += usage.candidateReserved;
+    dailyCandidateMutationRemaining += Math.max(0, candidateMutationLimit - usage.candidateDispatched - usage.candidateReserved);
+  }
+  let dailyHttpRequestUsed = 0;
+  let dailyHttpRequestReserved = 0;
+  let dailyHttpRequestRemaining = 0;
+  for (const identity of globalKeys) {
+    const usage = opportunityQuotaUsage(database, {
+      ...identity,
+      businessDate: businessDateValue,
+      shopId: storeIdentities.find((item) => item.tenantId === identity.tenantId)?.shopId || ""
+    });
+    dailyHttpRequestUsed += usage.httpDispatched;
+    dailyHttpRequestReserved += usage.httpReserved;
+    dailyHttpRequestRemaining += Math.max(0, httpRequestLimit - usage.httpDispatched - usage.httpReserved);
+  }
+  const firstHttpDispatchedAt = dispatchedAttempts
+    .map((attempt) => normalizeString(attempt.dispatched_at || attempt.grant_consumed_at))
+    .filter(Boolean)
+    .sort()[0] || "";
+  const lastHttpResolvedAt = dispatchedAttempts
+    .map((attempt) => normalizeString(attempt.resolved_at || attempt.updated_at || attempt.dispatched_at))
+    .filter(Boolean)
+    .sort()
+    .at(-1) || "";
+  return {
+    ok: true,
+    runId,
+    businessDate: businessDateValue,
+    endpointContract,
+    taskCount: tasks.length,
+    shopCount: storeIdentities.length,
+    throttleCount: throttleAttempts.length,
+    recoveredAfterThrottleCount,
+    globalThrottleCount,
+    candidateMutationAttemptCount: dispatchedAttempts.reduce((sum, attempt) => sum + Number(attempt.reserved_candidate_mutation_units || 0), 0),
+    httpRequestAttemptCount: dispatchedAttempts.length,
+    maxStoreIntervalMs: storeIntervals.length ? Math.max(...storeIntervals) : policy.initialIntervalMs,
+    averageStoreIntervalMs: storeIntervals.length ? Math.round(storeIntervals.reduce((sum, value) => sum + value, 0) / storeIntervals.length) : policy.initialIntervalMs,
+    globalRateMode: globalRates.some((rate) => normalizeString(rate.mode) === "protective") ? "protective" : "inactive",
+    globalIntervalMs: globalRates.length ? Math.max(...globalRates.map((rate) => Number(rate.intervalMs || policy.globalInitialMs))) : policy.globalInitialMs,
+    dailyCandidateMutationUsed,
+    dailyCandidateMutationReserved,
+    dailyCandidateMutationRemaining,
+    dailyHttpRequestUsed,
+    dailyHttpRequestReserved,
+    dailyHttpRequestRemaining,
+    firstHttpDispatchedAt,
+    lastHttpResolvedAt
+  };
+}
+
+function candidateRowsForIds(database, candidateIds) {
+  return candidateIds.map((candidateId) => {
+    const row = nativeRecordRowById(database, OPPORTUNITY_SUBMIT_CANDIDATE_STORE, candidateId);
+    if (!row) throw createError("NATIVE_DATA_NOT_FOUND", "Opportunity submit candidate is missing", { candidateId });
+    return { row, candidate: formatNativeRecord(row) };
+  });
+}
+
+function nextCandidateIndex(task, candidates) {
+  const byId = new Map(candidates.map((candidate) => [normalizeString(candidate.id), candidate]));
+  const index = (Array.isArray(task.candidateIds) ? task.candidateIds : []).findIndex((candidateId) => {
+    const candidate = byId.get(normalizeString(candidateId));
+    const status = normalizeString(candidate && (candidate.submitStatus || candidate.status)) || "";
+    return !OPPORTUNITY_SUBMIT_TERMINAL_CANDIDATE_STATUSES.has(status);
+  });
+  return index < 0 ? (Array.isArray(task.candidateIds) ? task.candidateIds.length : 0) : index;
+}
+
+function admitOpportunitySubmitAttempt(args = {}) {
+  const database = ensureDb();
+  const taskId = normalizeString(args.taskId);
+  const now = normalizeString(args.now) || nowIso();
+  const endpointContract = normalizeString(args.endpointContract) || "opportunitySubmitClue";
+  const businessDateValue = normalizeString(args.businessDate) || businessDate(new Date(now));
+  const candidateIds = Array.from(new Set((Array.isArray(args.candidateIds) ? args.candidateIds : []).map(normalizeString).filter(Boolean)));
+  if (!taskId || !candidateIds.length) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Submit admission requires taskId and candidateIds");
+  const policy = normalizeSubmitPacingPolicy(args.policy);
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const taskRow = nativeRecordRowById(database, OPPORTUNITY_SUBMIT_TASK_STORE, taskId);
+    if (!taskRow) throw createError("NATIVE_DATA_NOT_FOUND", "Opportunity submit task is missing", { taskId });
+    const task = formatNativeRecord(taskRow);
+    assertOpportunityTaskFence(task, args, now);
+    if (task.status !== "running") throw createError("NATIVE_DATA_BAD_ARGUMENT", "Opportunity submit task is not running", { taskId, status: task.status });
+    const identity = normalizeIdentity(task);
+    assertActiveStoreIdentity(identity);
+    assertOpportunitySchedulerLease(database, args, identity.tenantId, endpointContract, now);
+    const contractSnapshot = normalizeContractSnapshot(args.contractSnapshot || {}, task, now);
+    putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_CONTRACT_STORE, contractSnapshot, now);
+
+    const candidateEntries = candidateRowsForIds(database, candidateIds);
+    if (candidateEntries.some(({ candidate }) => normalizeString(candidate.submitTaskId) !== taskId)) {
+      throw createError("NATIVE_DATA_BAD_ARGUMENT", "Opportunity submit candidate belongs to another task", { taskId });
+    }
+    const clueId = normalizeString(args.clueId || candidateEntries[0].candidate.clueId) || "";
+    if (candidateEntries.some(({ candidate }) => normalizeString(candidate.clueId) !== clueId)) {
+      throw createError("NATIVE_DATA_BAD_ARGUMENT", "Logical submit group cannot mix clue ids", { taskId, clueId });
+    }
+    const requestBodyInput = typeof args.requestBodyCanonicalJson === "string"
+      ? decodeJson(args.requestBodyCanonicalJson, null)
+      : args.requestBody;
+    if (!requestBodyInput || typeof requestBodyInput !== "object") {
+      throw createError("NATIVE_DATA_BAD_ARGUMENT", "Submit admission requires a canonical request body");
+    }
+    const requestBodyCanonicalJson = canonicalJson(requestBodyInput);
+    const requestBodyHash = sha256(requestBodyCanonicalJson);
+    if (args.requestBodyHash && normalizeString(args.requestBodyHash) !== requestBodyHash) {
+      throw createError("NATIVE_DATA_CONTRACT_MISMATCH", "Submit request body hash mismatch");
+    }
+    const expectedGroupId = hashParts("submit-group:v1", taskId, clueId, candidateIds, requestBodyHash);
+    const logicalGroupId = normalizeString(args.logicalGroupId) || expectedGroupId;
+    if (logicalGroupId !== expectedGroupId) throw createError("NATIVE_DATA_CONTRACT_MISMATCH", "Logical submit group id mismatch");
+    const existingGroup = nativeRecordById(database, OPPORTUNITY_SUBMIT_GROUP_STORE, logicalGroupId);
+    if (existingGroup) {
+      if (canonicalJson(existingGroup.orderedCandidateIds || []) !== canonicalJson(candidateIds) || existingGroup.requestBodyHash !== requestBodyHash) {
+        throw createError("NATIVE_DATA_CONTRACT_MISMATCH", "Logical submit group snapshot changed", { logicalGroupId });
+      }
+      if (!new Set(["ready", "retry_waiting"]).has(existingGroup.status)) {
+        throw createError("NATIVE_DATA_BAD_ARGUMENT", "Logical submit group is not admissible", { logicalGroupId, status: existingGroup.status });
+      }
+      if (candidateEntries.some(({ candidate }) => normalizeString(candidate.submitStatus || candidate.status) !== "retry_waiting")) {
+        throw createError("NATIVE_DATA_BAD_ARGUMENT", "Retry group candidates must remain retry_waiting", { logicalGroupId });
+      }
+    } else if (candidateEntries.some(({ candidate }) => !new Set(["ready", "queued", "fallback"]).has(normalizeString(candidate.submitStatus || candidate.status)))) {
+      throw createError("NATIVE_DATA_BAD_ARGUMENT", "New logical group contains a non-ready candidate", { logicalGroupId });
+    }
+    const retryCycle = Math.max(0, normalizeInteger(existingGroup && existingGroup.retryCycle) || 0);
+    const attemptOrdinal = Math.max(1, normalizeInteger(existingGroup && existingGroup.nextAttemptOrdinal) || 1);
+    if (attemptOrdinal > policy.retryLimit) {
+      const exhaustedGroup = putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_GROUP_STORE, {
+        ...existingGroup,
+        id: logicalGroupId,
+        status: "retry_exhausted",
+        updatedAt: now
+      }, now);
+      const deferredTask = putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_TASK_STORE, {
+        ...task,
+        status: "deferred",
+        deferredReason: "retry_exhausted",
+        requiresExplicitResume: true,
+        retryableRemainingCount: candidateIds.length,
+        leaseExpiresAt: undefined,
+        updatedAt: now
+      }, now);
+      database.exec("COMMIT");
+      return { admitted: false, reason: "retry-exhausted", task: deferredTask, group: exhaustedGroup };
+    }
+
+    const rateId = opportunitySubmitRateId(task);
+    const globalRateId = opportunitySubmitGlobalRateId(identity.tenantId, endpointContract);
+    const storeRate = nativeRecordById(database, OPPORTUNITY_SUBMIT_RATE_STORE, rateId) || initialStoreRateState(task, policy, now);
+    const globalRate = settleGlobalStableWindows(
+      nativeRecordById(database, OPPORTUNITY_SUBMIT_GLOBAL_RATE_STORE, globalRateId) || initialGlobalRateState(identity.tenantId, endpointContract, policy, now),
+      policy,
+      now
+    );
+    if (storeRate.policyVersion !== policy.policyVersion || globalRate.policyVersion !== policy.policyVersion) {
+      throw createError("NATIVE_DATA_CONTRACT_MISMATCH", "Submit pacing policy requires an explicit migration", { policyVersion: policy.policyVersion });
+    }
+    const jitterMs = deterministicJitterMs(policy.jitterMs, identity.tenantId, identity.shopId, identity.storeGeneration, taskId, logicalGroupId, attemptOrdinal);
+    const storeIntervalEligible = storeRate.lastAdmittedAt ? timestampMs(storeRate.lastAdmittedAt) + Number(storeRate.intervalMs || policy.initialIntervalMs) + jitterMs : 0;
+    const storeCooldownEligible = Math.max(timestampMs(storeRate.cooldownUntil), timestampMs(storeRate.nextEligibleAt));
+    const globalEligible = globalRate.mode === "protective"
+      ? timestampMs(globalRate.nextEligibleAt)
+      : globalRate.lastAdmittedAt
+        ? timestampMs(globalRate.lastAdmittedAt) + Number(globalRate.burstSpacingMs || policy.globalBurstSpacingMs)
+        : 0;
+    const eligibleAtMs = Math.max(storeIntervalEligible, storeCooldownEligible, globalEligible);
+    if (eligibleAtMs > timestampMs(now)) {
+      const resumeAt = new Date(eligibleAtMs).toISOString();
+      const delayedTask = putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_TASK_STORE, {
+        ...task,
+        status: "cooling_down",
+        resumeAt,
+        leaseExpiresAt: undefined,
+        ownerRunId: undefined,
+        updatedAt: now
+      }, now);
+      database.exec("COMMIT");
+      return { admitted: false, reason: "rate-delayed", task: delayedTask, resumeAt, jitterMs, storeRate, globalRate };
+    }
+
+    const candidateMutationLimit = boundedInteger(args.dailyCandidateMutationLimit, 1000, 1, 1000000);
+    const httpRequestLimit = boundedInteger(args.dailyHttpRequestLimit, 1000, 1, 1000000);
+    const usage = opportunityQuotaUsage(database, {
+      businessDate: businessDateValue,
+      tenantId: identity.tenantId,
+      shopId: identity.shopId,
+      endpointContract
+    });
+    if (usage.candidateDispatched + usage.candidateReserved + candidateIds.length > candidateMutationLimit ||
+        usage.httpDispatched + usage.httpReserved + 1 > httpRequestLimit) {
+      for (const { candidate } of candidateEntries) {
+        putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_CANDIDATE_STORE, {
+          ...candidate,
+          eligible: false,
+          estimatedCost: 0,
+          status: "quota_exhausted",
+          submitStatus: "quota_exhausted",
+          skipReason: "daily_submit_quota_exhausted",
+          updatedAt: now
+        }, now);
+      }
+      const quotaTask = putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_TASK_STORE, {
+        ...task,
+        status: "partial",
+        quotaExhaustedCount: Number(task.quotaExhaustedCount || 0) + candidateIds.length,
+        leaseExpiresAt: undefined,
+        ownerRunId: undefined,
+        finishedAt: now,
+        updatedAt: now
+      }, now);
+      database.exec("COMMIT");
+      return { admitted: false, reason: "quota-exhausted", task: quotaTask, usage, candidateMutationLimit, httpRequestLimit };
+    }
+
+    const attemptId = hashParts("submit-attempt:v1", logicalGroupId, retryCycle, attemptOrdinal);
+    const quotaReservationId = hashParts("submit-quota-reservation:v1", attemptId);
+    const httpGrantId = hashParts("submit-http-grant:v1", attemptId);
+    const group = {
+      ...(existingGroup || {}),
+      id: logicalGroupId,
+      taskId,
+      clueId,
+      orderedCandidateIds: candidateIds,
+      requestPlanHash: contractSnapshot.requestPlanHash,
+      requestBodyCanonicalJson,
+      requestBodyHash,
+      retryCycle,
+      nextAttemptOrdinal: attemptOrdinal + 1,
+      status: "sending",
+      attempts: [
+        ...(Array.isArray(existingGroup && existingGroup.attempts) ? existingGroup.attempts : []),
+        {
+          attemptId,
+          attemptOrdinal,
+          quotaReservationId,
+          quotaBusinessDate: businessDateValue,
+          reservedCandidateMutationUnits: candidateIds.length,
+          reservedHttpRequestUnits: 1,
+          httpGrantId,
+          status: "reserved",
+          admittedAt: now,
+          persistedJitterMs: jitterMs,
+          originGroupStatus: existingGroup?.status || "ready"
+        }
+      ],
+      contractSnapshotId: contractSnapshot.id,
+      createdAt: normalizeString(existingGroup && existingGroup.createdAt) || now,
+      updatedAt: now
+    };
+    database.prepare(`
+      INSERT INTO opportunity_submit_request_attempts_v1 (
+        attempt_id, logical_group_id, retry_cycle, attempt_ordinal, task_id, tenant_id, shop_id,
+        store_generation, endpoint_contract, business_date, quota_reservation_id, http_grant_id,
+        reserved_candidate_mutation_units, reserved_http_request_units, status, admitted_at,
+        payload_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'reserved', ?, ?, ?, ?)
+    `).run(
+      attemptId, logicalGroupId, retryCycle, attemptOrdinal, taskId, identity.tenantId, identity.shopId,
+      identity.storeGeneration, endpointContract, businessDateValue, quotaReservationId, httpGrantId,
+      candidateIds.length, now, encodeJson({ candidateIds, requestBodyHash, contractSnapshotId: contractSnapshot.id, jitterMs, originGroupStatus: existingGroup?.status || "ready" }), now, now
+    );
+    putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_GROUP_STORE, group, now);
+    for (const { candidate } of candidateEntries) {
+      putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_CANDIDATE_STORE, {
+        ...candidate,
+        status: "submitting",
+        submitStatus: "sending",
+        logicalGroupId,
+        submitAttemptId: attemptId,
+        attemptOrdinal,
+        updatedAt: now
+      }, now);
+    }
+    const nextStoreRate = putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_RATE_STORE, {
+      ...storeRate,
+      mode: "normal",
+      lastAdmittedAt: now,
+      nextEligibleAt: isoAfter(now, Number(storeRate.intervalMs || policy.initialIntervalMs) + jitterMs),
+      updatedAt: now
+    }, now);
+    const nextGlobalRate = putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_GLOBAL_RATE_STORE, {
+      ...globalRate,
+      lastAdmittedAt: now,
+      nextEligibleAt: isoAfter(now, globalRate.mode === "protective" ? Number(globalRate.intervalMs || policy.globalInitialMs) : Number(globalRate.burstSpacingMs || policy.globalBurstSpacingMs)),
+      updatedAt: now
+    }, now);
+    const checkpointCandidates = candidateRowsForIds(database, Array.isArray(task.candidateIds) ? task.candidateIds : []).map(({ candidate }) => candidate);
+    const nextTask = putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_TASK_STORE, {
+      ...task,
+      inFlightAttemptId: attemptId,
+      inFlightLogicalGroupId: logicalGroupId,
+      inFlightCandidateIds: candidateIds,
+      inFlightAttemptOrdinal: attemptOrdinal,
+      quotaReservationId,
+      httpGrantId,
+      contractSnapshotId: contractSnapshot.id,
+      checkpointVersion: "opportunity-submit-checkpoint-v1",
+      nextCandidateIndex: nextCandidateIndex(task, checkpointCandidates),
+      updatedAt: now
+    }, now);
+    database.exec("COMMIT");
+    return {
+      admitted: true,
+      reason: "admitted",
+      task: nextTask,
+      group,
+      attempt: { attemptId, logicalGroupId, retryCycle, attemptOrdinal, quotaReservationId, httpGrantId, businessDate: businessDateValue },
+      quota: { ...usage, candidateMutationLimit, httpRequestLimit },
+      rate: { store: nextStoreRate, global: nextGlobalRate, jitterMs }
+    };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function updateSubmitGroupAttempt(group, attemptId, patch, ts) {
+  const attempts = Array.isArray(group.attempts) ? group.attempts : [];
+  let found = false;
+  const nextAttempts = attempts.map((attempt) => {
+    if (attempt.attemptId !== attemptId) return attempt;
+    found = true;
+    return { ...attempt, ...patch };
+  });
+  if (!found) throw createError("NATIVE_DATA_CONTRACT_MISMATCH", "Logical submit group is missing the request attempt", { attemptId });
+  return { ...group, attempts: nextAttempts, updatedAt: ts };
+}
+
+function consumeOpportunitySubmitHttpGrant(args = {}) {
+  const database = ensureDb();
+  const taskId = normalizeString(args.taskId);
+  const attemptId = normalizeString(args.attemptId);
+  const httpGrantId = normalizeString(args.httpGrantId);
+  const now = normalizeString(args.now) || nowIso();
+  if (!taskId || !attemptId || !httpGrantId) throw createError("NATIVE_DATA_BAD_ARGUMENT", "HTTP grant dispatch requires taskId, attemptId and httpGrantId");
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const task = nativeRecordById(database, OPPORTUNITY_SUBMIT_TASK_STORE, taskId);
+    assertOpportunityTaskFence(task, args, now);
+    if (task.inFlightAttemptId !== attemptId || task.httpGrantId !== httpGrantId) {
+      throw createError("NATIVE_DATA_STALE_FENCE", "HTTP grant no longer matches the task checkpoint", { taskId, attemptId });
+    }
+    const attempt = database.prepare("SELECT * FROM opportunity_submit_request_attempts_v1 WHERE attempt_id = ?").get(attemptId);
+    if (!attempt || attempt.task_id !== taskId || attempt.http_grant_id !== httpGrantId || attempt.status !== "reserved") {
+      throw createError("NATIVE_DATA_STALE_FENCE", "HTTP grant is missing, stale, or already consumed", { taskId, attemptId });
+    }
+    assertOpportunitySchedulerLease(database, args, attempt.tenant_id, attempt.endpoint_contract, now);
+    const payload = decodeJson(attempt.payload_json, {});
+    const candidateIds = Array.isArray(payload.candidateIds) ? payload.candidateIds.map(normalizeString).filter(Boolean) : [];
+    if (!candidateIds.length) throw createError("NATIVE_DATA_CONTRACT_MISMATCH", "HTTP grant has no candidate snapshot", { attemptId });
+    const candidateEntries = candidateRowsForIds(database, candidateIds);
+    if (candidateEntries.some(({ candidate }) => candidate.submitAttemptId !== attemptId || normalizeString(candidate.submitStatus) !== "sending")) {
+      throw createError("NATIVE_DATA_STALE_FENCE", "Candidate checkpoint changed before HTTP grant dispatch", { attemptId });
+    }
+    const updated = database.prepare(`
+      UPDATE opportunity_submit_request_attempts_v1
+      SET status = 'dispatched', grant_consumed_at = ?, dispatched_at = ?, updated_at = ?
+      WHERE attempt_id = ? AND status = 'reserved' AND http_grant_id = ?
+    `).run(now, now, now, attemptId, httpGrantId);
+    if (updated.changes !== 1) throw createError("NATIVE_DATA_STALE_FENCE", "HTTP grant was consumed concurrently", { attemptId });
+    const insertCandidateAttempt = database.prepare(`
+      INSERT INTO opportunity_submit_attempts_v2 (
+        attempt_id, attempt_key, execute_run_id, business_date, tenant_id, shop_id, clue_id,
+        product_id, clue_category_id, relation_key, clue_key, clue_category_key, status,
+        counts_against_daily_limit, request_hash, payload_json, created_at, updated_at, sent_at, resolved_at
+      ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sending', 1, ?, ?, ?, ?, ?, NULL)
+    `);
+    for (const { candidate } of candidateEntries) {
+      const candidateAttemptId = hashParts("submit-candidate-attempt:v1", attemptId, candidate.id);
+      insertCandidateAttempt.run(
+        candidateAttemptId,
+        candidateAttemptId,
+        attempt.business_date,
+        attempt.tenant_id,
+        attempt.shop_id,
+        normalizeString(candidate.clueId) || "",
+        normalizeString(candidate.productId) || "",
+        normalizeString(candidate.clueLastCategoryId || candidate.clueCategoryId) || "",
+        normalizeString(candidate.relationKey) || "",
+        normalizeString(candidate.clueKey) || "",
+        normalizeString(candidate.clueCategoryKey || candidate.clueLastCategoryKey) || "",
+        normalizeString(payload.requestBodyHash) || "",
+        encodeJson({
+          candidateId: candidate.id,
+          logicalGroupId: attempt.logical_group_id,
+          requestAttemptId: attemptId,
+          retryCycle: attempt.retry_cycle,
+          attemptOrdinal: attempt.attempt_ordinal,
+          quotaReservationId: attempt.quota_reservation_id,
+          httpGrantId
+        }),
+        now,
+        now,
+        now
+      );
+    }
+    const group = nativeRecordById(database, OPPORTUNITY_SUBMIT_GROUP_STORE, attempt.logical_group_id);
+    if (!group || group.status !== "sending") throw createError("NATIVE_DATA_CONTRACT_MISMATCH", "Logical submit group is not sending", { attemptId });
+    const nextGroup = updateSubmitGroupAttempt(group, attemptId, {
+      status: "dispatched",
+      grantConsumedAt: now,
+      dispatchedAt: now
+    }, now);
+    putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_GROUP_STORE, nextGroup, now);
+    const nextTask = putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_TASK_STORE, {
+      ...task,
+      httpGrantConsumedAt: now,
+      dispatchedAt: now,
+      candidateMutationAttemptCount: Number(task.candidateMutationAttemptCount || 0) + candidateIds.length,
+      httpRequestAttemptCount: Number(task.httpRequestAttemptCount || 0) + 1,
+      updatedAt: now
+    }, now);
+    const quota = opportunityQuotaUsage(database, {
+      businessDate: attempt.business_date,
+      tenantId: attempt.tenant_id,
+      shopId: attempt.shop_id,
+      endpointContract: attempt.endpoint_contract
+    });
+    database.exec("COMMIT");
+    return { dispatched: true, task: nextTask, group: nextGroup, attemptId, httpGrantId, candidateMutationUnits: candidateIds.length, httpRequestUnits: 1, quota };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function normalizeResolvedCandidateStatus(value, fallback) {
+  const status = normalizeString(value) || fallback;
+  if (["accepted", "already_submitted", "submitted"].includes(status)) return "accepted";
+  if (["failed", "rejected"].includes(status)) return "failed";
+  if (status === "throttled" || status === "retry_waiting") return "retry_waiting";
+  if (status === "skipped") return "skipped";
+  if (status === "cancelled") return "cancelled";
+  return "unknown";
+}
+
+function applyGlobalThrottle(globalRate, policy, shopId, now) {
+  const nowMs = timestampMs(now, Date.now());
+  const windowStartedAt = new Date(nowMs - (nowMs % policy.global429WindowMs)).toISOString();
+  const buckets = (Array.isArray(globalRate.rolling429Buckets) ? globalRate.rolling429Buckets : [])
+    .filter((bucket) => timestampMs(bucket.windowStartedAt) >= nowMs - policy.global429WindowMs * 2)
+    .map((bucket) => ({ ...bucket, shopIds: Array.from(new Set(Array.isArray(bucket.shopIds) ? bucket.shopIds.map(String) : [])) }));
+  let bucket = buckets.find((item) => item.windowStartedAt === windowStartedAt);
+  if (!bucket) {
+    bucket = { windowStartedAt, shopIds: [] };
+    buckets.push(bucket);
+  }
+  if (!bucket.shopIds.includes(shopId)) bucket.shopIds.push(shopId);
+  const affected = bucket.shopIds.length >= policy.globalDistinctStores;
+  const firstAffectedSignal = affected && globalRate.lastAffectedWindowStartedAt !== windowStartedAt;
+  const mode = affected ? "protective" : globalRate.mode;
+  const intervalMs = firstAffectedSignal
+    ? Math.min(policy.globalMaxMs, Math.max(policy.globalInitialMs, Math.ceil(Number(globalRate.intervalMs || policy.globalInitialMs) * policy.globalMultiplier429)))
+    : Number(globalRate.intervalMs || policy.globalInitialMs);
+  return {
+    ...globalRate,
+    mode,
+    intervalMs,
+    nextEligibleAt: mode === "protective" ? isoAfter(now, intervalMs) : globalRate.nextEligibleAt,
+    rolling429Buckets: buckets,
+    consecutiveAffectedWindows: firstAffectedSignal ? Number(globalRate.consecutiveAffectedWindows || 0) + 1 : Number(globalRate.consecutiveAffectedWindows || 0),
+    consecutiveStableWindows: affected ? 0 : Number(globalRate.consecutiveStableWindows || 0),
+    lastAffectedWindowStartedAt: affected ? windowStartedAt : globalRate.lastAffectedWindowStartedAt,
+    lastEvaluatedWindowStartedAt: windowStartedAt,
+    updatedAt: now
+  };
+}
+
+function resolveOpportunitySubmitAttempt(args = {}) {
+  const database = ensureDb();
+  const taskId = normalizeString(args.taskId);
+  const attemptId = normalizeString(args.attemptId);
+  const now = normalizeString(args.now) || nowIso();
+  const outcome = normalizeString(args.outcome);
+  if (!taskId || !attemptId || !new Set(["accepted", "partial", "throttled", "failed", "unknown"]).has(outcome)) {
+    throw createError("NATIVE_DATA_BAD_ARGUMENT", "Submit result requires taskId, attemptId and a supported outcome");
+  }
+  const policy = normalizeSubmitPacingPolicy(args.policy);
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const task = nativeRecordById(database, OPPORTUNITY_SUBMIT_TASK_STORE, taskId);
+    assertOpportunityTaskFence(task, args, now, { allowExpired: true });
+    if (task.inFlightAttemptId !== attemptId) throw createError("NATIVE_DATA_STALE_FENCE", "Submit result no longer matches task checkpoint", { taskId, attemptId });
+    const attempt = database.prepare("SELECT * FROM opportunity_submit_request_attempts_v1 WHERE attempt_id = ?").get(attemptId);
+    if (!attempt || attempt.task_id !== taskId || attempt.status !== "dispatched") {
+      throw createError("NATIVE_DATA_STALE_FENCE", "Submit request attempt is not dispatched", { taskId, attemptId });
+    }
+    assertOpportunitySchedulerLease(database, args, attempt.tenant_id, attempt.endpoint_contract, now);
+    const group = nativeRecordById(database, OPPORTUNITY_SUBMIT_GROUP_STORE, attempt.logical_group_id);
+    if (!group || group.status !== "sending") throw createError("NATIVE_DATA_CONTRACT_MISMATCH", "Logical submit group is not sending", { attemptId });
+    const candidateEntries = candidateRowsForIds(database, group.orderedCandidateIds || []);
+    const resultByCandidateId = new Map((Array.isArray(args.candidateResults) ? args.candidateResults : [])
+      .map((result) => [normalizeString(result.candidateId), result])
+      .filter(([candidateId]) => Boolean(candidateId)));
+    const fallbackStatus = outcome === "accepted" ? "accepted" : outcome === "throttled" ? "retry_waiting" : outcome === "failed" ? "failed" : "unknown";
+    if (outcome === "partial" && resultByCandidateId.size !== candidateEntries.length) {
+      throw createError("NATIVE_DATA_BAD_ARGUMENT", "Partial submit result must classify every candidate", { attemptId });
+    }
+    const resolvedCandidates = [];
+    for (const { candidate } of candidateEntries) {
+      const result = resultByCandidateId.get(normalizeString(candidate.id));
+      const status = normalizeResolvedCandidateStatus(result && result.status, fallbackStatus);
+      const next = {
+        ...candidate,
+        eligible: status === "retry_waiting",
+        estimatedCost: status === "retry_waiting" ? 1 : 0,
+        status: status === "accepted" ? "submitted" : status === "retry_waiting" ? "retry_waiting" : status,
+        submitStatus: status,
+        skipReason: status === "accepted"
+          ? undefined
+          : normalizeString(result && result.message) || (status === "failed" ? normalizeString(args.message) || candidate.skipReason : candidate.skipReason),
+        submittedAt: status === "accepted" ? now : candidate.submittedAt,
+        updatedAt: now
+      };
+      resolvedCandidates.push(putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_CANDIDATE_STORE, next, now));
+      const candidateAttemptId = hashParts("submit-candidate-attempt:v1", attemptId, candidate.id);
+      const candidateAttemptStatus = status === "retry_waiting" ? "throttled" : status === "accepted" ? "accepted" : status === "failed" ? "failed" : status === "cancelled" ? "cancelled" : "unknown";
+      const row = database.prepare("SELECT payload_json FROM opportunity_submit_attempts_v2 WHERE attempt_id = ?").get(candidateAttemptId);
+      if (!row) throw createError("NATIVE_DATA_CONTRACT_MISMATCH", "Candidate mutation attempt is missing", { candidateAttemptId });
+      database.prepare(`
+        UPDATE opportunity_submit_attempts_v2
+        SET status = ?, payload_json = ?, updated_at = ?, resolved_at = ?
+        WHERE attempt_id = ? AND status = 'sending'
+      `).run(
+        candidateAttemptStatus,
+        encodeJson({ ...decodeJson(row.payload_json, {}), responseClass: normalizeString(args.responseClass) || outcome, httpStatus: normalizeInteger(args.httpStatus), message: normalizeString(args.message) || "" }),
+        now,
+        now,
+        candidateAttemptId
+      );
+    }
+    database.prepare(`
+      UPDATE opportunity_submit_request_attempts_v1
+      SET status = ?, response_class = ?, payload_json = ?, resolved_at = ?, updated_at = ?
+      WHERE attempt_id = ? AND status = 'dispatched'
+    `).run(
+      outcome,
+      normalizeString(args.responseClass) || outcome,
+      encodeJson({ ...decodeJson(attempt.payload_json, {}), httpStatus: normalizeInteger(args.httpStatus), message: normalizeString(args.message) || "" }),
+      now,
+      now,
+      attemptId
+    );
+
+    const rateId = opportunitySubmitRateId(task);
+    const globalRateId = opportunitySubmitGlobalRateId(attempt.tenant_id, attempt.endpoint_contract);
+    const storeRate = nativeRecordById(database, OPPORTUNITY_SUBMIT_RATE_STORE, rateId) || initialStoreRateState(task, policy, now);
+    const globalRate = nativeRecordById(database, OPPORTUNITY_SUBMIT_GLOBAL_RATE_STORE, globalRateId) || initialGlobalRateState(attempt.tenant_id, attempt.endpoint_contract, policy, now);
+    let nextStoreRate = storeRate;
+    let nextGlobalRate = globalRate;
+    let resumeAt;
+    if (outcome === "throttled") {
+      const consecutive429 = Number(storeRate.consecutive429 || 0) + 1;
+      const intervalMs = Math.min(policy.maxIntervalMs, Math.max(policy.initialIntervalMs, Math.ceil(Number(storeRate.intervalMs || policy.initialIntervalMs) * policy.multiplier429)));
+      const generatedCooldownMs = Math.min(policy.maxCooldownMs, 30000 * (2 ** Math.max(0, consecutive429 - 1)));
+      const cooldownJitterMs = deterministicJitterMs(policy.jitterMs, attempt.tenant_id, attempt.shop_id, attempt.store_generation, taskId, attempt.logical_group_id, attempt.attempt_ordinal, "cooldown");
+      const platformRetryAfterMs = Math.max(0, normalizeInteger(args.retryAfterMs) || 0);
+      const cooldownMs = Math.max(platformRetryAfterMs, Math.min(policy.maxCooldownMs, generatedCooldownMs + cooldownJitterMs));
+      const cooldownUntil = isoAfter(now, cooldownMs);
+      const nextAttemptJitterMs = deterministicJitterMs(
+        policy.jitterMs,
+        attempt.tenant_id,
+        attempt.shop_id,
+        attempt.store_generation,
+        taskId,
+        attempt.logical_group_id,
+        Number(attempt.attempt_ordinal || 0) + 1
+      );
+      const intervalEligibleAtMs = timestampMs(storeRate.lastAdmittedAt) + intervalMs + nextAttemptJitterMs;
+      const storeNextEligibleAt = new Date(Math.max(timestampMs(cooldownUntil), intervalEligibleAtMs)).toISOString();
+      nextStoreRate = {
+        ...storeRate,
+        mode: "cooling_down",
+        intervalMs,
+        consecutiveSuccesses: 0,
+        consecutive429,
+        cooldownCount: Number(storeRate.cooldownCount || 0) + 1,
+        cooldownStartedAt: now,
+        cooldownUntil,
+        nextEligibleAt: storeNextEligibleAt,
+        last429At: now,
+        lastHttpStatus: normalizeInteger(args.httpStatus) || 429,
+        lastMessage: normalizeString(args.message) || "",
+        updatedAt: now
+      };
+      nextGlobalRate = applyGlobalThrottle(globalRate, policy, attempt.shop_id, now);
+      resumeAt = new Date(Math.max(timestampMs(storeNextEligibleAt), timestampMs(nextGlobalRate.nextEligibleAt))).toISOString();
+    } else if (outcome === "accepted") {
+      let consecutiveSuccesses = Number(storeRate.consecutiveSuccesses || 0) + 1;
+      let intervalMs = Number(storeRate.intervalMs || policy.initialIntervalMs);
+      if (consecutiveSuccesses >= policy.successesToDecrease) {
+        intervalMs = Math.max(policy.minIntervalMs, intervalMs - policy.decreaseMs);
+        consecutiveSuccesses = 0;
+      }
+      nextStoreRate = {
+        ...storeRate,
+        mode: "normal",
+        intervalMs,
+        consecutiveSuccesses,
+        consecutive429: 0,
+        cooldownStartedAt: undefined,
+        cooldownUntil: undefined,
+        updatedAt: now
+      };
+    }
+    putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_RATE_STORE, nextStoreRate, now);
+    putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_GLOBAL_RATE_STORE, nextGlobalRate, now);
+
+    const throttlePauseMs = outcome === "throttled" && resumeAt ? Math.max(0, timestampMs(resumeAt) - timestampMs(now)) : 0;
+    const accumulatedThrottlePauseMs = Number(task.throttlePauseMs || 0) + throttlePauseMs;
+    const retryExhausted = outcome === "throttled" && attempt.attempt_ordinal >= policy.retryLimit;
+    const throttleBudgetExceeded = outcome === "throttled" && !retryExhausted && accumulatedThrottlePauseMs >= policy.storeThrottleBudgetMs;
+    const groupStatus = retryExhausted ? "retry_exhausted" : outcome === "throttled" ? "retry_waiting" : outcome;
+    const nextGroup = updateSubmitGroupAttempt({ ...group, status: groupStatus }, attemptId, {
+      status: outcome,
+      resolvedAt: now,
+      responseClass: normalizeString(args.responseClass) || outcome
+    }, now);
+    putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_GROUP_STORE, nextGroup, now);
+
+    const allCandidates = candidateRowsForIds(database, Array.isArray(task.candidateIds) ? task.candidateIds : []).map(({ candidate }) => candidate);
+    const statuses = allCandidates.map((candidate) => normalizeString(candidate.submitStatus || candidate.status) || "");
+    const submittedCount = statuses.filter((status) => status === "accepted" || status === "submitted").length;
+    const failedCount = statuses.filter((status) => status === "failed").length;
+    const skippedCount = statuses.filter((status) => status === "skipped").length;
+    const quotaExhaustedCount = statuses.filter((status) => status === "quota_exhausted").length;
+    const unknownCount = statuses.filter((status) => status === "unknown").length;
+    const retryableRemainingCount = statuses.filter((status) => status === "retry_waiting" || status === "ready" || status === "queued" || status === "fallback").length;
+    const hasReady = statuses.some((status) => status === "ready" || status === "queued" || status === "fallback");
+    if (outcome === "accepted" && hasReady) {
+      const pacingResumeAtMs = Math.max(timestampMs(nextStoreRate.nextEligibleAt), timestampMs(nextGlobalRate.nextEligibleAt));
+      resumeAt = pacingResumeAtMs > timestampMs(now) ? new Date(pacingResumeAtMs).toISOString() : undefined;
+    }
+    let taskStatus;
+    let deferredReason;
+    let requiresExplicitResume = false;
+    if (retryExhausted) {
+      taskStatus = "deferred";
+      deferredReason = "retry_exhausted";
+      requiresExplicitResume = true;
+      resumeAt = undefined;
+    } else if (throttleBudgetExceeded) {
+      taskStatus = "deferred";
+      deferredReason = "throttle_budget";
+    } else if (outcome === "throttled") {
+      taskStatus = "cooling_down";
+    } else if (unknownCount > 0) {
+      taskStatus = "manual_reconcile";
+    } else if (hasReady) {
+      taskStatus = "ready";
+    } else if (failedCount > 0) {
+      taskStatus = submittedCount || skippedCount ? "partial" : "failed";
+    } else {
+      taskStatus = "ok";
+    }
+    const terminalTask = new Set(["ok", "partial", "failed", "cancelled", "expired"]).has(taskStatus);
+    const nextTask = putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_TASK_STORE, {
+      ...task,
+      status: taskStatus,
+      nextCandidateIndex: nextCandidateIndex(task, allCandidates),
+      inFlightAttemptId: undefined,
+      inFlightLogicalGroupId: undefined,
+      inFlightCandidateIds: undefined,
+      inFlightAttemptOrdinal: undefined,
+      quotaReservationId: undefined,
+      httpGrantId: undefined,
+      leaseExpiresAt: undefined,
+      ownerRunId: undefined,
+      resumeAt,
+      throttleCount: Number(task.throttleCount || 0) + (outcome === "throttled" ? 1 : 0),
+      throttlePauseMs: accumulatedThrottlePauseMs,
+      lastThrottleAt: outcome === "throttled" ? now : task.lastThrottleAt,
+      retryableRemainingCount,
+      deferredReason,
+      requiresExplicitResume,
+      submittedCount,
+      failedCount,
+      skippedCount,
+      quotaExhaustedCount,
+      unknownCount,
+      remoteRequestCount: Number(task.remoteRequestCount || 0) + 1,
+      finishedAt: terminalTask ? now : undefined,
+      updatedAt: now
+    }, now);
+    database.exec("COMMIT");
+    return { resolved: true, outcome, task: nextTask, group: nextGroup, rate: { store: nextStoreRate, global: nextGlobalRate }, resumeAt, retryExhausted, throttleBudgetExceeded };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function releaseOpportunitySubmitReservation(args = {}) {
+  const database = ensureDb();
+  const taskId = normalizeString(args.taskId);
+  const attemptId = normalizeString(args.attemptId);
+  const now = normalizeString(args.now) || nowIso();
+  if (!taskId || !attemptId) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Reservation release requires taskId and attemptId");
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const task = nativeRecordById(database, OPPORTUNITY_SUBMIT_TASK_STORE, taskId);
+    assertOpportunityTaskFence(task, args, now, { allowExpired: true });
+    if (task.inFlightAttemptId !== attemptId) throw createError("NATIVE_DATA_STALE_FENCE", "Reservation no longer matches task checkpoint", { taskId, attemptId });
+    const attempt = database.prepare("SELECT * FROM opportunity_submit_request_attempts_v1 WHERE attempt_id = ?").get(attemptId);
+    if (!attempt || attempt.task_id !== taskId || attempt.status !== "reserved" || attempt.grant_consumed_at) {
+      throw createError("NATIVE_DATA_STALE_FENCE", "Reservation cannot be proven unused", { taskId, attemptId });
+    }
+    assertOpportunitySchedulerLease(database, args, attempt.tenant_id, attempt.endpoint_contract, now);
+    database.prepare(`
+      UPDATE opportunity_submit_request_attempts_v1
+      SET status = 'released', resolved_at = ?, updated_at = ?
+      WHERE attempt_id = ? AND status = 'reserved' AND grant_consumed_at IS NULL
+    `).run(now, now, attemptId);
+    const payload = decodeJson(attempt.payload_json, {});
+    const originStatus = payload.originGroupStatus === "retry_waiting" ? "retry_waiting" : "ready";
+    const group = nativeRecordById(database, OPPORTUNITY_SUBMIT_GROUP_STORE, attempt.logical_group_id);
+    if (!group) throw createError("NATIVE_DATA_CONTRACT_MISMATCH", "Released reservation group is missing", { attemptId });
+    const nextGroup = updateSubmitGroupAttempt({ ...group, status: originStatus }, attemptId, { status: "released", resolvedAt: now }, now);
+    putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_GROUP_STORE, nextGroup, now);
+    const candidateEntries = candidateRowsForIds(database, Array.isArray(payload.candidateIds) ? payload.candidateIds : []);
+    for (const { candidate } of candidateEntries) {
+      putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_CANDIDATE_STORE, {
+        ...candidate,
+        status: originStatus,
+        submitStatus: originStatus,
+        eligible: true,
+        estimatedCost: 1,
+        submitAttemptId: undefined,
+        updatedAt: now
+      }, now);
+    }
+    const nextTask = putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_TASK_STORE, {
+      ...task,
+      status: "ready",
+      inFlightAttemptId: undefined,
+      inFlightLogicalGroupId: undefined,
+      inFlightCandidateIds: undefined,
+      inFlightAttemptOrdinal: undefined,
+      quotaReservationId: undefined,
+      httpGrantId: undefined,
+      leaseExpiresAt: undefined,
+      ownerRunId: undefined,
+      updatedAt: now
+    }, now);
+    database.exec("COMMIT");
+    return { released: true, task: nextTask, group: nextGroup, attemptId };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+const OPPORTUNITY_SUBMIT_AUTOMATIC_DEFER_REASONS = new Set([
+  "authorization_wait",
+  "login_wait",
+  "throttle_budget"
+]);
+
+function deferOpportunitySubmitTask(args = {}) {
+  const database = ensureDb();
+  const taskId = normalizeString(args.taskId);
+  const deferredReason = normalizeString(args.deferredReason || args.reason);
+  const now = normalizeString(args.now) || nowIso();
+  if (!taskId || !deferredReason) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Submit task deferral requires taskId and deferredReason");
+  const contractMismatch = deferredReason === "contract_mismatch";
+  if (!contractMismatch && !OPPORTUNITY_SUBMIT_AUTOMATIC_DEFER_REASONS.has(deferredReason)) {
+    throw createError("NATIVE_DATA_BAD_ARGUMENT", "Submit task deferral reason is not supported", { deferredReason });
+  }
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const task = nativeRecordById(database, OPPORTUNITY_SUBMIT_TASK_STORE, taskId);
+    if (!task) {
+      database.exec("COMMIT");
+      return { deferred: false, reason: "missing", task: null };
+    }
+    if (!OPPORTUNITY_SUBMIT_NON_TERMINAL_TASK_STATUSES.has(normalizeString(task.status))) {
+      database.exec("COMMIT");
+      return { deferred: false, reason: "terminal", task };
+    }
+    if (task.inFlightAttemptId) {
+      database.exec("COMMIT");
+      return { deferred: false, reason: "in-flight", task };
+    }
+    if (task.status === "running" && timestampMs(task.leaseExpiresAt) > timestampMs(now)) {
+      database.exec("COMMIT");
+      return { deferred: false, reason: "active-lease", task };
+    }
+    const requiresExplicitResume = contractMismatch || args.requiresExplicitResume === true;
+    const resumeAt = requiresExplicitResume ? undefined : normalizeString(args.resumeAt) || now;
+    const nextTask = putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_TASK_STORE, {
+      ...task,
+      status: contractMismatch ? "deferred_contract_mismatch" : "deferred",
+      ownerRunId: undefined,
+      leaseExpiresAt: undefined,
+      deferredReason,
+      requiresExplicitResume,
+      resumeAt,
+      lastError: normalizeString(args.message) || task.lastError,
+      recoverySource: normalizeString(args.recoverySource) || task.recoverySource,
+      updatedAt: now
+    }, now);
+    database.exec("COMMIT");
+    return { deferred: true, reason: deferredReason, task: nextTask };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function nudgeDeferredOpportunitySubmitTasks(args = {}) {
+  const database = ensureDb();
+  const now = normalizeString(args.now) || nowIso();
+  const requestedReasons = new Set((Array.isArray(args.deferredReasons) ? args.deferredReasons : [args.deferredReason])
+    .map(normalizeString)
+    .filter((reason) => OPPORTUNITY_SUBMIT_AUTOMATIC_DEFER_REASONS.has(reason)));
+  if (!requestedReasons.size) throw createError("NATIVE_DATA_BAD_ARGUMENT", "Deferred submit task nudge requires a supported reason");
+  const taskIds = new Set((Array.isArray(args.taskIds) ? args.taskIds : []).map(normalizeString).filter(Boolean));
+  const shopIds = new Set((Array.isArray(args.shopIds) ? args.shopIds : []).map(normalizeString).filter(Boolean));
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const rows = nativeRecordRows(database, OPPORTUNITY_SUBMIT_TASK_STORE);
+    const tasks = [];
+    for (const row of rows) {
+      const task = formatNativeRecord(row);
+      if (task.status !== "deferred" || task.requiresExplicitResume === true || task.inFlightAttemptId) continue;
+      if (!requestedReasons.has(normalizeString(task.deferredReason))) continue;
+      if (taskIds.size && !taskIds.has(normalizeString(task.id))) continue;
+      if (shopIds.size && !shopIds.has(normalizeString(task.shopId))) continue;
+      tasks.push(putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_TASK_STORE, {
+        ...task,
+        resumeAt: now,
+        recoverySource: normalizeString(args.recoverySource) || task.recoverySource,
+        updatedAt: now
+      }, now));
+    }
+    database.exec("COMMIT");
+    return { nudged: tasks.length, tasks };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+const OPPORTUNITY_ATTEMPT_STATUSES = new Set(["prepared", "sending", "accepted", "rejected", "throttled", "unknown", "confirmed", "failed", "cancelled"]);
 
 function normalizeOpportunityAttemptStatus(value) {
   const status = normalizeString(value) || "unknown";
@@ -1402,6 +2773,8 @@ function cancelStoreOpportunityState(database, identity, ts, reason = "store-led
     unknownCandidates: 0,
     deletedCategoryRecords: 0,
     deletedCacheRecords: 0,
+    deletedRateStates: 0,
+    updatedGlobalRateStates: 0,
     finalizedPipelineRuns: 0,
     finalizedOperations: 0
   };
@@ -1427,15 +2800,18 @@ function cancelStoreOpportunityState(database, identity, ts, reason = "store-led
   for (const row of nativeRecordRows(database, "opportunity_pipeline_submit_tasks_v2")) {
     const record = formatNativeRecord(row);
     if (!nativeRecordMatchesIdentity(record, identity)) continue;
-    if (!new Set(["preparing", "ready", "queued", "running"]).has(normalizeString(record.status))) continue;
+    if (!OPPORTUNITY_SUBMIT_NON_TERMINAL_TASK_STATUSES.has(normalizeString(record.status))) continue;
     if (record.runId) affectedRunIds.add(normalizeString(record.runId));
     affectedTaskIds.add(normalizeString(record.id || row.record_id));
+    const unresolvedDispatch = Boolean(record.inFlightAttemptId) || nativeRecordRows(database, OPPORTUNITY_SUBMIT_CANDIDATE_STORE)
+      .map(formatNativeRecord)
+      .some((candidate) => normalizeString(candidate.submitTaskId) === normalizeString(record.id || row.record_id) && ["sending", "submitting", "unknown"].includes(normalizeString(candidate.submitStatus || candidate.status)));
     updateNativeRecordPayload(database, row, {
       ...record,
-      status: "cancelled",
+      status: unresolvedDispatch ? "cancelling" : "cancelled",
       leaseExpiresAt: undefined,
       lastError: record.lastError || reason,
-      finishedAt: record.finishedAt || ts,
+      finishedAt: unresolvedDispatch ? undefined : record.finishedAt || ts,
       updatedAt: ts
     }, ts);
     summary.cancelledSubmitTasks += 1;
@@ -1522,6 +2898,22 @@ function cancelStoreOpportunityState(database, identity, ts, reason = "store-led
     }
   }
 
+  for (const row of nativeRecordRows(database, OPPORTUNITY_SUBMIT_RATE_STORE)) {
+    const record = formatNativeRecord(row);
+    if (!nativeRecordMatchesIdentity(record, identity)) continue;
+    summary.deletedRateStates += deleteNativeRecordRow(database, row);
+  }
+  for (const row of nativeRecordRows(database, OPPORTUNITY_SUBMIT_GLOBAL_RATE_STORE)) {
+    const record = formatNativeRecord(row);
+    if (normalizeTenantId(record) !== identity.tenantId) continue;
+    const buckets = (Array.isArray(record.rolling429Buckets) ? record.rolling429Buckets : []).map((bucket) => ({
+      ...bucket,
+      shopIds: (Array.isArray(bucket.shopIds) ? bucket.shopIds : []).map(String).filter((shopId) => shopId !== identity.shopId)
+    }));
+    updateNativeRecordPayload(database, row, { ...record, rolling429Buckets: buckets, updatedAt: ts }, ts);
+    summary.updatedGlobalRateStates += 1;
+  }
+
   for (const runId of affectedRunIds) {
     if (!runId) continue;
     const runRow = database.prepare("SELECT * FROM native_records WHERE store_name = 'opportunity_pipeline_runs_v2' AND record_id = ?").get(runId);
@@ -1530,8 +2922,41 @@ function cancelStoreOpportunityState(database, identity, ts, reason = "store-led
     const storeRuns = nativeRecordRows(database, "opportunity_pipeline_store_runs_v2")
       .map(formatNativeRecord)
       .filter((record) => normalizeString(record.runId) === runId);
-    const active = storeRuns.filter((record) => ["queued", "running", "submitting"].includes(normalizeString(record.status)) && record.phase !== "finished");
+    const active = storeRuns.filter((record) => ["queued", "running", "submitting", "cancelling", "cooling_down"].includes(normalizeString(record.status)) && record.phase !== "finished");
+    const unresolvedTasks = nativeRecordRows(database, OPPORTUNITY_SUBMIT_TASK_STORE)
+      .map(formatNativeRecord)
+      .filter((record) => normalizeString(record.runId) === runId && OPPORTUNITY_SUBMIT_NON_TERMINAL_TASK_STATUSES.has(normalizeString(record.status)));
     if (active.length) continue;
+    if (unresolvedTasks.length) {
+      updateNativeRecordPayload(database, runRow, {
+        ...run,
+        status: "partial",
+        summary: {
+          ...(run.summary || {}),
+          manualReconcileCount: unresolvedTasks.filter((task) => task.status === "manual_reconcile" || task.status === "cancelling").length,
+          retryableRemainingCount: unresolvedTasks.reduce((total, task) => total + Math.max(0, Number(task.retryableRemainingCount || 0)), 0)
+        },
+        updatedAt: ts
+      }, ts);
+      const operationId = normalizeString(run.operationId || run.runId);
+      const operationRow = operationId
+        ? database.prepare("SELECT * FROM native_records WHERE store_name = 'operations' AND record_id = ?").get(operationId)
+        : null;
+      if (operationRow) {
+        const operation = formatNativeRecord(operationRow);
+        if (["created", "running", "cancelling"].includes(normalizeString(operation.status))) {
+          updateNativeRecordPayload(database, operationRow, {
+            ...operation,
+            status: "reconciling",
+            resultSummary: "store deleted with dispatched opportunity submit outcome unresolved",
+            updatedAt: ts
+          }, ts);
+          summary.finalizedOperations += 1;
+        }
+      }
+      summary.finalizedPipelineRuns += 1;
+      continue;
+    }
     const submittedCount = storeRuns.reduce((total, record) => total + Math.max(0, Number(record.submittedCount || 0)), 0);
     const failedCount = storeRuns.reduce((total, record) => total + Math.max(0, Number(record.failedCount || 0)), 0);
     const cancelledCount = storeRuns.filter((record) => record.status === "cancelled").length;
@@ -2722,7 +4147,7 @@ function summarizeOpportunityRunMutations(args = {}) {
     FROM catalog_mutations
     WHERE substr(mutation_key, 1, length(?)) = ?
   `).all(prefix, prefix);
-  const empty = () => ({ acknowledged: 0, failed: 0, skipped: 0, safetySkipped: 0, unknown: 0, confirmed: 0, total: 0 });
+  const empty = () => ({ acknowledged: 0, failed: 0, pending: 0, skipped: 0, safetySkipped: 0, unknown: 0, confirmed: 0, total: 0 });
   const totals = empty();
   const byShop = {};
   for (const row of rows) {
@@ -2737,7 +4162,8 @@ function summarizeOpportunityRunMutations(args = {}) {
     );
     for (const target of [totals, summary]) {
       target.total += 1;
-      if (Object.prototype.hasOwnProperty.call(target, status)) target[status] += 1;
+      if (status === "prepared" || status === "sending") target.pending += 1;
+      else if (status === "acknowledged" || status === "confirmed" || status === "failed" || status === "skipped") target[status] += 1;
       else target.unknown += 1;
       if (safetySkipped) target.safetySkipped += 1;
     }
@@ -2985,6 +4411,16 @@ function handle(method, args = {}) {
     case "records.putMany": return putManyNativeRecords(args);
     case "records.acquireOperation": return acquireNativeOperation(args);
     case "records.claimOpportunitySubmitTask": return claimOpportunitySubmitTask(args);
+    case "opportunitySubmit.claimSchedulerLease": return claimOpportunitySubmitSchedulerLease(args);
+    case "opportunitySubmit.releaseSchedulerLease": return releaseOpportunitySubmitSchedulerLease(args);
+    case "opportunitySubmit.admit": return admitOpportunitySubmitAttempt(args);
+    case "opportunitySubmit.consumeHttpGrant": return consumeOpportunitySubmitHttpGrant(args);
+    case "opportunitySubmit.resolve": return resolveOpportunitySubmitAttempt(args);
+    case "opportunitySubmit.releaseReservation": return releaseOpportunitySubmitReservation(args);
+    case "opportunitySubmit.deferTask": return deferOpportunitySubmitTask(args);
+    case "opportunitySubmit.nudgeDeferredTasks": return nudgeDeferredOpportunitySubmitTasks(args);
+    case "opportunitySubmit.getQuotaUsage": return getOpportunitySubmitQuotaUsage(args);
+    case "opportunitySubmit.summarizeRun": return summarizeOpportunitySubmitRun(args);
     case "records.putLarge.start": return startLargeNativeRecordPut(args);
     case "records.putLarge.chunk": return putLargeNativeRecordChunk(args);
     case "records.putLarge.commit": return commitLargeNativeRecordPut(args);

@@ -183,6 +183,16 @@ const nativeData = {
     delete: invoke("native:data:records:delete"),
     deleteMany: invoke("native:data:records:deleteMany")
   },
+  opportunitySubmit: {
+    claimSchedulerLease: invoke("native:data:opportunitySubmit:claimSchedulerLease"),
+    releaseSchedulerLease: invoke("native:data:opportunitySubmit:releaseSchedulerLease"),
+    admit: invoke("native:data:opportunitySubmit:admit"),
+    consumeHttpGrant: invoke("native:data:opportunitySubmit:consumeHttpGrant"),
+    resolve: invoke("native:data:opportunitySubmit:resolve"),
+    releaseReservation: invoke("native:data:opportunitySubmit:releaseReservation"),
+    getQuotaUsage: invoke("native:data:opportunitySubmit:getQuotaUsage"),
+    summarizeRun: invoke("native:data:opportunitySubmit:summarizeRun")
+  },
   opportunityAttempts: {
     putMany: invoke("native:data:opportunityAttempts:putMany"),
     count: invoke("native:data:opportunityAttempts:count"),

@@ -14,7 +14,7 @@ const {
 
 const adapter = require("../../remote-web/client-shell/public/config/doudian-adapter.marketing-pilot.json");
 const { paidDataRequest, runnerDataAllowed } = require("../src/main/license/data-access-policy");
-const { interruptedTaskStatus, opportunitySubmitProgressStalled, taskResultPersistence, terminalTaskStatus } = require("../src/main/tasks/task-result-policy");
+const { interruptedTaskStatus, opportunitySubmitProgressStalled, taskResultPersistence, terminalTaskProgress, terminalTaskStatus } = require("../src/main/tasks/task-result-policy");
 const { httpTransportFingerprint, runnerPartitionAllowed, transportMatchesPlan, transportMatchesPlanTemplate } = require("../src/main/tasks/task-transport-policy");
 const { taskWindowCommandScript } = require("../src/main/tasks/task-window-commands");
 const { urlMatchesPrincipal } = require("../src/main/security/web-contents-principal");
@@ -26,11 +26,69 @@ test("task registry contains the audited free and paid boundary", () => {
   for (const taskType of ["fetchDoudianStores", "businessData", "fundsData", "violationsData", "staleGoodsScan", "staleGoodsExecute", "bulkDeleteScan", "bulkDeleteExecute"]) {
     assert.equal(TASK_DEFINITIONS[taskType]?.accessTier, "free", taskType);
   }
-  for (const taskType of ["opportunityReportScan", "opportunityReportAction", "opportunityFavoriteCategories", "opportunityPipelineSubmit", "opportunityAutoFavorites", "opportunityFavoriteRecords", "opportunityFavoriteCancel", "opportunityFavoritesClearInvalid", "marketingTask"]) {
+  for (const taskType of ["opportunityReportScan", "opportunityReportAction", "opportunityFavoriteCategories", "opportunityPipelineSubmit", "opportunityHistoryPrewarm", "opportunityAutoFavorites", "opportunityFavoriteRecords", "opportunityFavoriteCancel", "opportunityFavoritesClearInvalid", "marketingTask"]) {
     assert.equal(TASK_DEFINITIONS[taskType]?.accessTier, "paid", taskType);
   }
+  assert.equal(TASK_DEFINITIONS.opportunitySubmitContinuation.accessTier, "recovery");
   assert.equal(TASK_DEFINITIONS.marketingReconcile.accessTier, "recovery");
   assert.equal(TASK_DEFINITIONS.mockLongTask.accessTier, "internal");
+});
+
+test("opportunity submit continuation is signed and awakened only by the main process", () => {
+  const taskManager = fs.readFileSync(path.resolve(__dirname, "../src/main/tasks/task-manager.js"), "utf8");
+  const mainIndex = fs.readFileSync(path.resolve(__dirname, "../src/main/index.js"), "utf8");
+  const businessDatabase = fs.readFileSync(path.resolve(__dirname, "../src/main/ipc/business-database.js"), "utf8");
+  const licenseIpc = fs.readFileSync(path.resolve(__dirname, "../src/main/ipc/license.js"), "utf8");
+  assert.match(taskManager, /definition\.accessTier === "recovery"[\s\S]*TASK_TYPE_DENIED/);
+  assert.match(taskManager, /task\?\.submitThrottleRecoveryEnabled === true/);
+  assert.match(taskManager, /startOpportunitySubmitContinuation\(task, trigger\)/);
+  assert.match(taskManager, /opportunitySubmitRecoveryContractMatches\(task, snapshot\)/);
+  assert.match(taskManager, /syncOpportunityPipelineSourceOperation\(context\)/);
+  assert.match(taskManager, /backgroundRecoveryActive: tasks\.some\(automaticOpportunitySubmitRecoveryPendingTask\)/);
+  assert.match(taskManager, /type: "task:result",\s*operationId: sourceOperationId/);
+  assert.match(mainIndex, /startOpportunitySubmitRecoveryScheduler\(\)/);
+  assert.match(mainIndex, /stopOpportunitySubmitRecoveryScheduler\(\)/);
+  assert.match(businessDatabase, /nudgeOpportunitySubmitRecovery\(\["login_wait"\]/);
+  assert.match(licenseIpc, /nudgeOpportunitySubmitRecovery\(\["authorization_wait"\]/);
+});
+
+test("opportunity history prewarm is an idle paid read task with no submit mutation scope", () => {
+  const taskManager = fs.readFileSync(path.resolve(__dirname, "../src/main/tasks/task-manager.js"), "utf8");
+  const mainIndex = fs.readFileSync(path.resolve(__dirname, "../src/main/index.js"), "utf8");
+  const businessDatabase = fs.readFileSync(path.resolve(__dirname, "../src/main/ipc/business-database.js"), "utf8");
+  const licenseIpc = fs.readFileSync(path.resolve(__dirname, "../src/main/ipc/license.js"), "utf8");
+  const runner = fs.readFileSync(path.resolve(__dirname, "../../remote-web/client-shell/src/domain/doudian/taskRunner.ts"), "utf8");
+  const scopes = materializeDataScopes(TASK_DEFINITIONS.opportunityHistoryPrewarm.allowedDataScopes, "prewarm-1");
+  const context = {
+    taskType: "opportunityHistoryPrewarm",
+    allowedStoreRefs: [{ shopId: "shop-1", tenantId: "tenant-1", storeGeneration: 2 }],
+    allowedDataScopes: scopes
+  };
+  assert.equal(TASK_DEFINITIONS.opportunityHistoryPrewarm.mutation, false);
+  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.opportunityHistoryPrewarm, adapter), ["opportunitySubmitHistoryList"]);
+  assert.equal(runnerDataAllowed(context, "native:data:records:put", {
+    storeName: "opportunity_submit_history_sync_v1",
+    record: { id: "tenant-1-shop-1-2-sync", shopId: "shop-1", tenantId: "tenant-1", storeGeneration: 2 }
+  }), true);
+  assert.equal(runnerDataAllowed(context, "native:data:records:put", {
+    storeName: "opportunity_pipeline_submit_tasks_v2",
+    record: { id: "forbidden-submit-task" }
+  }), false);
+  assert.equal(runnerDataAllowed(context, "native:data:opportunitySubmit:admit", { shopId: "shop-1" }), false);
+  assert.match(taskManager, /submitHistoryPrewarmEnabled === true/);
+  assert.match(taskManager, /definition\.accessTier === "recovery" \|\| taskType === "opportunityHistoryPrewarm"/);
+  assert.match(taskManager, /operationContexts\.size > 0 \|\| runnerContexts\.size > 0/);
+  assert.match(taskManager, /requirePaidFeature\(\{ taskType: "opportunityHistoryPrewarm"/);
+  assert.match(taskManager, /yieldOpportunityHistoryPrewarm\("foreground-task-started"\)/);
+  assert.match(taskManager, /automaticOpportunitySubmitWorkPending\(\)/);
+  assert.match(taskManager, /history prewarm yielded to submit work/);
+  assert.match(taskManager, /submitHistoryPrewarmIdleGraceMs/);
+  assert.match(mainIndex, /startOpportunityHistoryPrewarmScheduler\(\)/);
+  assert.match(mainIndex, /stopOpportunityHistoryPrewarmScheduler\(\)/);
+  assert.match(businessDatabase, /notifyOpportunityHistoryPrewarm\("store-login-restored"\)/);
+  assert.match(licenseIpc, /notifyOpportunityHistoryPrewarm\("paid-authorization-restored"\)/);
+  assert.match(runner, /task\.taskType === "opportunityHistoryPrewarm"/);
+  assert.match(runner, /runOpportunityHistoryPrewarmTask/);
 });
 
 test("task params reject renderer-controlled transport and policy fields", () => {
@@ -65,6 +123,9 @@ test("task-specific modes fail closed", () => {
   assert.throws(() => validateTaskParams("bulkDeleteExecute", { mode: "scan" }), /mode must be execute/);
   assert.throws(() => validateTaskParams("opportunityReportScan", { mode: "collect" }), /mode is invalid/);
   assert.deepEqual(validateTaskParams("opportunityReportAction", { mode: "collect", shopIds: ["shop-1"] }), { mode: "collect", shopIds: ["shop-1"] });
+  assert.deepEqual(validateTaskParams("opportunitySubmitContinuation", { mode: "submit-continuation", taskId: "task-1", reason: "resume" }), { mode: "submit-continuation", taskId: "task-1", reason: "resume" });
+  assert.deepEqual(validateTaskParams("opportunityHistoryPrewarm", { mode: "history-prewarm", shopIds: ["shop-1"] }), { mode: "history-prewarm", shopIds: ["shop-1"] });
+  assert.throws(() => validateTaskParams("opportunitySubmitContinuation", { mode: "submit-continuation", taskId: "" }), /taskId is invalid/);
   for (const mode of ["clue-submit", "product-submit", "prematch-submit"]) {
     assert.throws(() => validateTaskParams("opportunityReportAction", { mode }), /mode is invalid/);
   }
@@ -117,6 +178,12 @@ test("each task receives only its audited request plans", () => {
     "opportunitySubmitClue",
     "opportunitySubmitHistoryList"
   ]);
+  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.opportunitySubmitContinuation, adapter).sort(), [
+    "opportunityProductList",
+    "opportunitySubmitClue",
+    "opportunitySubmitHistoryList"
+  ]);
+  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.opportunityHistoryPrewarm, adapter), ["opportunitySubmitHistoryList"]);
 
   const marketingRead = { feature: "general_coupon", action: "list" };
   assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.marketingTask, adapter, marketingRead).sort(), [
@@ -202,6 +269,7 @@ test("mixed local stores keep only the audited schedule prefix free", () => {
   assert.equal(paidDataRequest("native:data:records:put", { storeName: "remote_feature_records_v1", record: { id: "marketing:schedule:limited_time:1" } }), false);
   assert.equal(paidDataRequest("native:data:records:get", { storeName: "operations", taskType: "marketingTask", id: "operation-1" }), true);
   assert.equal(paidDataRequest("native:data:opportunityAttempts:count", { businessDate: "2026-07-20" }), true);
+  assert.equal(paidDataRequest("native:data:opportunitySubmit:getQuotaUsage", { businessDate: "2026-07-20", shopId: "shop-1" }), true);
   assert.equal(paidDataRequest("native:data:features:loadOpportunityCandidates", { runId: "run-1" }), true);
   assert.equal(paidDataRequest("native:data:catalog:summarizeOpportunityRunMutations", { runId: "run-1" }), true);
 });
@@ -250,6 +318,18 @@ test("runner data scopes are task-specific and marketing records are operation-o
   }), true);
   assert.equal(runnerDataAllowed(opportunityContext, "native:data:records:claimOpportunitySubmitTask", {
     taskId: "opportunity-1-tenant-1-shop-1-2-task-1"
+  }), false);
+  assert.equal(runnerDataAllowed(opportunityContext, "native:data:opportunitySubmit:admit", {
+    taskId: "opportunity-1-tenant-1-shop-1-2-task-1",
+    shopId: "shop-1"
+  }), true);
+  assert.equal(runnerDataAllowed(opportunityContext, "native:data:records:get", {
+    storeName: "opportunity_submit_rate_state_v1",
+    id: "tenant-1-shop-1-2"
+  }), true);
+  assert.equal(runnerDataAllowed(opportunityContext, "native:data:records:put", {
+    storeName: "opportunity_submit_rate_state_v1",
+    record: { id: "tenant-1-shop-1-2", intervalMs: 1 }
   }), false);
 
   const recoveryContext = {
@@ -318,6 +398,9 @@ test("runner data scopes are task-specific and marketing records are operation-o
 test("main process derives and bounds runner terminal evidence", () => {
   assert.equal(terminalTaskStatus({ result: { ok: true, status: "ok" } }), "succeeded");
   assert.equal(terminalTaskStatus({ result: { ok: true, status: "partial" } }), "partial");
+  assert.equal(terminalTaskStatus({ result: { ok: true, status: "cooling_down" } }), "partial");
+  assert.equal(terminalTaskStatus({ result: { ok: true, status: "deferred" } }), "partial");
+  assert.equal(terminalTaskStatus({ result: { ok: false, status: "running" } }), "partial");
   assert.equal(terminalTaskStatus({ result: { ok: false, status: "failed" } }), "failed");
   assert.equal(terminalTaskStatus({ result: { ok: false, status: "unknown" }, mutation: true }), "reconciling");
   assert.equal(terminalTaskStatus({ result: { status: "cancelled" }, resultSummary: "cancelled", currentStatus: "cancelling" }), "cancelled");
@@ -332,6 +415,9 @@ test("main process derives and bounds runner terminal evidence", () => {
   assert.equal(interruptedTaskStatus({ mutation: true, mutationStarted: false, cancellationRequested: true }), "cancelled");
   assert.deepEqual(taskResultPersistence(undefined), { bytes: 0, messageAllowed: true, persistResult: true });
   assert.equal(taskResultPersistence({ value: "x".repeat(4 * 1024 * 1024) }).persistResult, false);
+  assert.equal(terminalTaskProgress({ taskType: "opportunityPipelineSubmit", terminalStatus: "partial", currentProgress: 95 }), 95);
+  assert.equal(terminalTaskProgress({ taskType: "opportunitySubmitContinuation", terminalStatus: "partial", currentProgress: 92 }), 100);
+  assert.equal(terminalTaskProgress({ taskType: "opportunityPipelineSubmit", terminalStatus: "succeeded", currentProgress: 95 }), 100);
 });
 
 test("opportunity submit runner fails closed when worker progress stalls", () => {
@@ -340,6 +426,8 @@ test("opportunity submit runner fails closed when worker progress stalls", () =>
   assert.equal(opportunitySubmitProgressStalled({ taskType: "opportunityPipelineSubmit", lastProgress: 81, lastProgressAt: 0 }, now), false);
   assert.equal(opportunitySubmitProgressStalled({ taskType: "opportunityPipelineSubmit", lastProgress: 82, lastProgressAt: now - 60_000 }, now), false);
   assert.equal(opportunitySubmitProgressStalled({ taskType: "opportunityPipelineSubmit", lastProgress: 82, lastProgressAt: now - 301_000 }, now), true);
+  assert.equal(opportunitySubmitProgressStalled({ taskType: "opportunitySubmitContinuation", lastProgress: 82, lastProgressAt: now - 301_000, persistedSubmitTaskStatus: "cooling_down", persistedSubmitResumeAt: new Date(now + 60_000).toISOString() }, now), false);
+  assert.equal(opportunitySubmitProgressStalled({ taskType: "opportunityPipelineSubmit", lastProgress: 82, lastProgressAt: now - 301_000, persistedSubmitTaskStatus: "deferred" }, now), false);
   assert.equal(opportunitySubmitProgressStalled({ taskType: "opportunityPipelineSubmit", lastProgress: 95, lastProgressAt: now - 301_000 }, now), false);
 });
 

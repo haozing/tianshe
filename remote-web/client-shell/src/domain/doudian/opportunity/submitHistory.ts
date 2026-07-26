@@ -25,6 +25,24 @@ export interface SubmitHistoryPageFacts {
   maxPages: number;
 }
 
+export interface SubmitHistoryThrottleState {
+  busyStreak: number;
+  nextEligibleAtMs: number;
+}
+
+export interface SubmitHistoryThrottlePolicy {
+  requestSpacingMs: number;
+  initialCooldownMs: number;
+  maxCooldownMs: number;
+  multiplier: number;
+}
+
+export interface SubmitHistoryPageBatchRange {
+  startPage: number;
+  endPage: number;
+  maxPages: number;
+}
+
 export function submitHistoryCapacityFacts(clueIds: Iterable<string>, recordIds: Iterable<string>, saturatedByRemoteError = false) {
   const associatedClueCount = new Set(clueIds).size;
   const sourceRecordCount = new Set(recordIds).size;
@@ -38,13 +56,56 @@ export function submitHistoryCapacityFacts(clueIds: Iterable<string>, recordIds:
   };
 }
 
-export function isSubmitHistoryBusinessSuccess(payload: unknown) {
+export function submitHistoryBusinessFacts(payload: unknown) {
   const root = objectRecord(payload);
   const baseResp = objectRecord(root.base_resp ?? root.baseResp);
   const nestedData = objectRecord(root.data);
   const nestedBaseResp = objectRecord(nestedData.base_resp ?? nestedData.baseResp);
-  const statusCode = baseResp.status_code ?? baseResp.statusCode ?? nestedBaseResp.status_code ?? nestedBaseResp.statusCode;
-  return statusCode !== undefined && ["200", "0"].includes(String(statusCode));
+  const statusCode = baseResp.status_code
+    ?? baseResp.statusCode
+    ?? nestedBaseResp.status_code
+    ?? nestedBaseResp.statusCode
+    ?? root.code
+    ?? root.status_code
+    ?? root.statusCode;
+  const statusMessage = text(baseResp.status_message ?? baseResp.statusMessage ?? nestedBaseResp.status_message ?? nestedBaseResp.statusMessage ?? root.message ?? root.msg);
+  const code = statusCode === undefined ? "" : String(statusCode);
+  const busy = ["429", "500", "10001010A"].includes(code)
+    || /系统繁忙|访问过于频繁|请求过于频繁|操作过于频繁|请稍后重试|请重试|too many requests|rate.?limit|busy/i.test(statusMessage);
+  return {
+    found: code !== "",
+    ok: code !== "" && ["200", "0"].includes(code),
+    code,
+    message: statusMessage,
+    busy
+  };
+}
+
+export function advanceSubmitHistoryThrottle(
+  state: SubmitHistoryThrottleState,
+  outcome: "busy" | "success" | "failure",
+  nowMs: number,
+  policy: SubmitHistoryThrottlePolicy
+) {
+  const now = Math.max(0, Math.floor(Number(nowMs) || 0));
+  const requestSpacingMs = Math.max(0, Math.floor(Number(policy.requestSpacingMs) || 0));
+  const initialCooldownMs = Math.max(1, Math.floor(Number(policy.initialCooldownMs) || 1));
+  const maxCooldownMs = Math.max(initialCooldownMs, Math.floor(Number(policy.maxCooldownMs) || initialCooldownMs));
+  const multiplier = Math.max(1, Number(policy.multiplier) || 1);
+  if (outcome === "busy") {
+    const busyStreak = Math.max(0, Math.floor(Number(state.busyStreak) || 0)) + 1;
+    const cooldownMs = Math.min(maxCooldownMs, Math.round(initialCooldownMs * Math.pow(multiplier, busyStreak - 1)));
+    return { busyStreak, nextEligibleAtMs: now + cooldownMs, delayMs: cooldownMs };
+  }
+  return {
+    busyStreak: 0,
+    nextEligibleAtMs: now + requestSpacingMs,
+    delayMs: requestSpacingMs
+  };
+}
+
+export function isSubmitHistoryBusinessSuccess(payload: unknown) {
+  return submitHistoryBusinessFacts(payload).ok;
 }
 
 function text(value: unknown) {
@@ -94,6 +155,28 @@ export function evaluateSubmitHistoryPageCoverage(facts: SubmitHistoryPageFacts)
   if (facts.endReached) return "complete";
   if (facts.fetchedPages >= facts.maxPages) return "truncated";
   return "failed";
+}
+
+export function submitHistoryPageBatchRange(startPage: number, maxPages: number, batchSize: number): SubmitHistoryPageBatchRange {
+  const normalizedMaxPages = Math.max(1, Math.floor(Number(maxPages) || 1));
+  const normalizedStartPage = Math.max(1, Math.min(normalizedMaxPages, Math.floor(Number(startPage) || 1)));
+  const normalizedBatchSize = Math.max(1, Math.floor(Number(batchSize) || 1));
+  return {
+    startPage: normalizedStartPage,
+    endPage: Math.min(normalizedMaxPages, normalizedStartPage + normalizedBatchSize - 1),
+    maxPages: normalizedMaxPages
+  };
+}
+
+export function submitHistoryPageReachesEnd(page: number, pageSize: number, rowCount: number, remoteTotal?: number) {
+  const normalizedPage = Math.max(1, Math.floor(Number(page) || 1));
+  const normalizedPageSize = Math.max(1, Math.floor(Number(pageSize) || 1));
+  const normalizedRowCount = Math.max(0, Math.floor(Number(rowCount) || 0));
+  const normalizedRemoteTotal = Number(remoteTotal);
+  if (Number.isFinite(normalizedRemoteTotal) && normalizedRemoteTotal >= 0) {
+    return (normalizedPage - 1) * normalizedPageSize + normalizedRowCount >= normalizedRemoteTotal;
+  }
+  return normalizedRowCount < normalizedPageSize;
 }
 
 export function submitHistoryInitialStart(nowEpochSeconds: number, lookbackDays: number) {

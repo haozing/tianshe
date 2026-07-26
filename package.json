@@ -7,6 +7,7 @@
     "audit:stale-goods": "node remote-web/scripts/audit-stale-goods-cleanup-contract.mjs",
     "release:gate:product-catalog": "node scripts/run-product-catalog-release-gate.mjs",
     "release:cos": "node scripts/publish-oss.mjs",
+    "release:cos:beta": "node scripts/publish-oss.mjs --beta",
     "release:cos:remote": "node scripts/publish-oss.mjs --remote",
     "release:cos:desktop": "node scripts/publish-oss.mjs --desktop",
     "release:oss": "node scripts/publish-oss.mjs",

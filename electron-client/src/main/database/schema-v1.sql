@@ -550,7 +550,7 @@ CREATE TABLE IF NOT EXISTS opportunity_submit_attempts_v2 (
   relation_key TEXT NOT NULL DEFAULT '',
   clue_key TEXT NOT NULL DEFAULT '',
   clue_category_key TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL CHECK (status IN ('prepared', 'sending', 'accepted', 'rejected', 'unknown', 'confirmed', 'failed', 'cancelled')),
+  status TEXT NOT NULL CHECK (status IN ('prepared', 'sending', 'accepted', 'rejected', 'throttled', 'unknown', 'confirmed', 'failed', 'cancelled')),
   counts_against_daily_limit INTEGER NOT NULL DEFAULT 0 CHECK (counts_against_daily_limit IN (0, 1)),
   request_hash TEXT NOT NULL DEFAULT '',
   payload_json TEXT NOT NULL DEFAULT '{}',
@@ -560,6 +560,33 @@ CREATE TABLE IF NOT EXISTS opportunity_submit_attempts_v2 (
   resolved_at TEXT,
   FOREIGN KEY (execute_run_id) REFERENCES opportunity_execute_runs_v2 (run_id)
     ON UPDATE CASCADE ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS opportunity_submit_request_attempts_v1 (
+  attempt_id TEXT PRIMARY KEY,
+  logical_group_id TEXT NOT NULL,
+  retry_cycle INTEGER NOT NULL DEFAULT 0 CHECK (retry_cycle >= 0),
+  attempt_ordinal INTEGER NOT NULL CHECK (attempt_ordinal > 0),
+  task_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'local-user',
+  shop_id TEXT NOT NULL DEFAULT '',
+  store_generation INTEGER NOT NULL DEFAULT 1 CHECK (store_generation > 0),
+  endpoint_contract TEXT NOT NULL DEFAULT 'opportunitySubmitClue',
+  business_date TEXT NOT NULL,
+  quota_reservation_id TEXT NOT NULL UNIQUE,
+  http_grant_id TEXT UNIQUE,
+  reserved_candidate_mutation_units INTEGER NOT NULL CHECK (reserved_candidate_mutation_units > 0),
+  reserved_http_request_units INTEGER NOT NULL DEFAULT 1 CHECK (reserved_http_request_units = 1),
+  status TEXT NOT NULL CHECK (status IN ('reserved', 'dispatched', 'accepted', 'partial', 'throttled', 'failed', 'unknown', 'released')),
+  admitted_at TEXT NOT NULL,
+  grant_consumed_at TEXT,
+  dispatched_at TEXT,
+  resolved_at TEXT,
+  response_class TEXT NOT NULL DEFAULT '',
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (logical_group_id, retry_cycle, attempt_ordinal)
 );
 
 CREATE INDEX IF NOT EXISTS idx_catalog_runs_coverage_finished
@@ -595,6 +622,12 @@ CREATE INDEX IF NOT EXISTS idx_catalog_pages_commit_token
 
 CREATE INDEX IF NOT EXISTS idx_opportunity_attempts_status
   ON opportunity_submit_attempts_v2 (status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_opportunity_request_attempts_quota
+  ON opportunity_submit_request_attempts_v1 (business_date, tenant_id, shop_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_opportunity_request_attempts_task
+  ON opportunity_submit_request_attempts_v1 (task_id, status, updated_at);
 
 CREATE INDEX IF NOT EXISTS idx_native_records_store_updated
   ON native_records (store_name, updated_at DESC, record_id);

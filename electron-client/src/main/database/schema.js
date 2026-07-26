@@ -41,7 +41,8 @@ const EXPECTED_TABLES = [
   "opportunity_prematch_runs_v2",
   "opportunity_prematch_candidates_v2",
   "opportunity_execute_runs_v2",
-  "opportunity_submit_attempts_v2"
+  "opportunity_submit_attempts_v2",
+  "opportunity_submit_request_attempts_v1"
 ];
 
 function loadSchemaSql() {

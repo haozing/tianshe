@@ -7,7 +7,7 @@ import {
 import { runFetchDoudianStoresTask } from "./storeImport";
 import { runProductCatalogSyncTask } from "./productCatalog";
 import { runRefreshDoudianStoreStatusTask } from "./storeStatus";
-import { cancelOpportunityPipelineSubmitTask, runOpportunityPipelineSubmitTask } from "./opportunityReport";
+import { cancelOpportunityPipelineSubmitTask, runOpportunityHistoryPrewarmTask, runOpportunityPipelineSubmitTask, runOpportunitySubmitContinuationTask } from "./opportunityReport";
 import { cancelOpportunityFavoriteRecords, clearInvalidOpportunityFavorites } from "./opportunityFavorites";
 import { runOpportunityAutoFavorites } from "./opportunityAutoFavorites";
 import { fetchOpportunityFavoriteRecords } from "./opportunityFavoriteRecords";
@@ -314,6 +314,15 @@ async function runDomainTask(channel: RunnerChannel, operationId: string, task: 
       result = await runOpportunityPipelineSubmitTask({
         ...payload
       } as unknown as Parameters<typeof runOpportunityPipelineSubmitTask>[0]);
+    } else if (task.taskType === "opportunitySubmitContinuation") {
+      result = await runOpportunitySubmitContinuationTask({
+        ...payload,
+        submitTaskId: String((payload as Record<string, unknown>).taskId || "")
+      } as unknown as Parameters<typeof runOpportunitySubmitContinuationTask>[0]);
+    } else if (task.taskType === "opportunityHistoryPrewarm") {
+      result = await runOpportunityHistoryPrewarmTask({
+        ...payload
+      } as unknown as Parameters<typeof runOpportunityHistoryPrewarmTask>[0]);
     } else if (task.taskType === "opportunityFavoritesClearInvalid") {
       result = await clearInvalidOpportunityFavorites({
         ...payload

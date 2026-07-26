@@ -187,6 +187,34 @@ test("deleting a store cancels active opportunity state without removing accepte
     productId: "history-product",
     associatedClueIds: ["history-clue"]
   });
+  await put("opportunity_submit_rate_state_v1", {
+    id: `${identity.tenantId}-${shopId}-${identity.storeGeneration}`,
+    ...identity,
+    mode: "cooling_down",
+    intervalMs: 30000,
+    updatedAt: new Date().toISOString()
+  });
+  await put("opportunity_submit_global_rate_state_v1", {
+    id: "local-user-opportunity-submit-clue",
+    tenantId: identity.tenantId,
+    endpointContract: "opportunitySubmitClue",
+    mode: "protective",
+    intervalMs: 30000,
+    rolling429Buckets: [{ windowStartedAt: "2026-07-17T00:00:00.000Z", shopIds: [shopId, "other-shop"] }],
+    updatedAt: new Date().toISOString()
+  });
+  await put("opportunity_submit_attempt_groups_v1", {
+    id: "logical-group-unresolved",
+    taskId,
+    orderedCandidateIds: ["candidate-sending"],
+    status: "unknown",
+    updatedAt: new Date().toISOString()
+  });
+  await put("opportunity_submit_contract_snapshots_v1", {
+    id: "contract-snapshot-unresolved",
+    releaseId: "release-1",
+    updatedAt: new Date().toISOString()
+  });
   await service.request("opportunityAttempts.putMany", {
     attempts: [{
       id: "accepted-attempt",
@@ -210,8 +238,10 @@ test("deleting a store cancels active opportunity state without removing accepte
   assert.equal(deleted.opportunityCleanup.cancelledSubmitTasks, 1);
   assert.equal(deleted.opportunityCleanup.cancelledCandidates, 1);
   assert.equal(deleted.opportunityCleanup.unknownCandidates, 1);
+  assert.equal(deleted.opportunityCleanup.deletedRateStates, 1);
+  assert.equal(deleted.opportunityCleanup.updatedGlobalRateStates, 1);
   assert.equal((await get("opportunity_pipeline_store_runs_v2", storeRunId)).status, "cancelled");
-  assert.equal((await get("opportunity_pipeline_submit_tasks_v2", taskId)).status, "cancelled");
+  assert.equal((await get("opportunity_pipeline_submit_tasks_v2", taskId)).status, "cancelling");
   assert.equal((await get("opportunity_pipeline_candidates_v2", "candidate-ready")).status, "cancelled");
   assert.equal((await get("opportunity_pipeline_candidates_v2", "candidate-sending")).status, "unknown");
   assert.equal(await get("opportunity_store_category_ledger_v2", `local-user-${shopId}-1-category`), null);
@@ -222,9 +252,13 @@ test("deleting a store cancels active opportunity state without removing accepte
   assert.equal(await get("opportunity_submit_history_records_v1", `${identity.tenantId}-${shopId}-${identity.storeGeneration}-history-record`), null);
   assert.equal(await get("opportunity_submit_history_sync_v1", `${identity.tenantId}-${shopId}-${identity.storeGeneration}-sync`), null);
   assert.equal(await get("opportunity_submit_history_product_indexes_v1", `${identity.tenantId}-${shopId}-${identity.storeGeneration}-history-product`), null);
-  assert.equal((await get("opportunity_pipeline_runs_v2", runId)).status, "cancelled");
+  assert.equal(await get("opportunity_submit_rate_state_v1", `${identity.tenantId}-${shopId}-${identity.storeGeneration}`), null);
+  assert.deepEqual((await get("opportunity_submit_global_rate_state_v1", "local-user-opportunity-submit-clue")).rolling429Buckets[0].shopIds, ["other-shop"]);
+  assert.equal((await get("opportunity_submit_attempt_groups_v1", "logical-group-unresolved")).status, "unknown");
+  assert.equal((await get("opportunity_submit_contract_snapshots_v1", "contract-snapshot-unresolved")).releaseId, "release-1");
+  assert.equal((await get("opportunity_pipeline_runs_v2", runId)).status, "partial");
   assert.equal((await get("opportunity_pipeline_runs_v2", completedRunId)).status, "ok");
-  assert.equal((await get("operations", operationId)).status, "cancelled");
+  assert.equal((await get("operations", operationId)).status, "reconciling");
   assert.equal((await service.request("opportunityAttempts.count", { businessDate: "2026-07-17", shopId })).count, 1);
 
   const lateTaskId = `${storeRunId}-late-task`;
@@ -257,6 +291,6 @@ test("deleting a store cancels active opportunity state without removing accepte
   service = new NativeDataService({ app: { getPath: () => userDataDir } });
   await service.start();
   assert.equal(await service.request("records.get", { storeName: "stores", id: shopId }), null);
-  assert.equal((await service.request("records.get", { storeName: "opportunity_pipeline_runs_v2", id: runId })).status, "cancelled");
+  assert.equal((await service.request("records.get", { storeName: "opportunity_pipeline_runs_v2", id: runId })).status, "partial");
   assert.equal((await service.request("opportunityAttempts.count", { businessDate: "2026-07-17", shopId })).count, 1);
 });

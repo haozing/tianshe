@@ -278,6 +278,8 @@ function getVerifiedReleaseSnapshot(releaseId = "") {
     releaseId: release.releaseId,
     manifestUrl: release.manifestUrl,
     entryUrl: release.entryUrl,
+    releaseManifestHash: release.manifestSha256,
+    runnerArtifactHash: release.runnerArtifactHash,
     adapterSnapshotHash: release.adapterSnapshotHash,
     adapter: release.adapter,
     windowCommands: release.windowCommands,
@@ -330,11 +332,16 @@ async function verifyRemoteWebEntry(entryUrl, options = {}) {
     throw new Error(`releaseId ${releaseId} is already bound to a different verified manifest`);
   }
   const cacheRoot = await persistVerifiedRelease(options.cacheRoot, releaseId, verifiedArtifacts);
+  const runnerArtifacts = verifiedArtifacts
+    .filter((artifact) => artifact.type === "remote-js")
+    .sort((left, right) => left.path.localeCompare(right.path));
+  if (!runnerArtifacts.length) throw new Error("verified release runner artifacts are missing");
   const verifiedRelease = {
     releaseId,
     manifestSha256,
     manifestUrl,
     entryUrl: verifiedReleaseEntryUrl(releaseId, entryArtifact.path),
+    runnerArtifactHash: sha256(Buffer.from(runnerArtifacts.map((artifact) => `${artifact.path}:${artifact.sha256}`).join("\n"), "utf8")),
     adapterSnapshotHash: sha256(Buffer.concat([adapterArtifact.buffer, windowCommandsArtifact.buffer])),
     adapter: JSON.parse(adapterArtifact.buffer.toString("utf8")),
     windowCommands,

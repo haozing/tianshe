@@ -37,6 +37,7 @@ const CATALOG_IDENTITY_SCOPES = [commandScope(["native:data:stores:upsertIdentit
 const STORE_ASSERT_SCOPE = [commandScope(["native:data:stores:assertActiveIdentity"], ["read"] )];
 const CATALOG_JOB_SCOPES = [commandScope(["native:data:stores:upsertIdentity", "native:data:catalogJobs:*"], ["read", "write"] )];
 const OPPORTUNITY_ATTEMPT_SCOPES = [commandScope(["native:data:opportunityAttempts:*"])];
+const OPPORTUNITY_SUBMIT_COORDINATION_SCOPES = [commandScope(["native:data:opportunitySubmit:*"])];
 const OPPORTUNITY_RUNTIME_SCOPES = [{
   commands: ["native:data:records:*"],
   storeName: "runtime_meta",
@@ -44,6 +45,9 @@ const OPPORTUNITY_RUNTIME_SCOPES = [{
   actions: ["read", "write"]
 }];
 const OPPORTUNITY_DATA_STORES = ["opportunity_clue_scan_runs_v1", "opportunity_clue_candidates_v1", "opportunity_product_scan_runs_v1", "opportunity_product_candidates_v1", "opportunity_prematch_runs_v1", "opportunity_prematch_candidates_v1", "opportunity_execute_runs_v1", "opportunity_submit_attempts_v1", "opportunity_pipeline_runs_v2", "opportunity_pipeline_store_runs_v2", "opportunity_store_category_snapshots_v2", "opportunity_store_category_ledger_v2", "opportunity_clue_cache_v2", "opportunity_clue_cache_shards_v2", "opportunity_clue_word_cache_v2", "opportunity_clue_word_cache_shards_v2", "opportunity_official_clue_words_cache_v1", "opportunity_official_clue_goods_cache_v1", "opportunity_official_clue_goods_cache_shards_v1", "opportunity_benefit_product_indexes_v1", "opportunity_submit_history_records_v1", "opportunity_submit_history_sync_v1", "opportunity_submit_history_product_indexes_v1", "opportunity_pipeline_candidates_v2", "opportunity_pipeline_submit_tasks_v2", "opportunity_pipeline_operation_events_v2"];
+const OPPORTUNITY_COORDINATOR_STORES = ["opportunity_submit_rate_state_v1", "opportunity_submit_global_rate_state_v1", "opportunity_submit_attempt_groups_v1", "opportunity_submit_contract_snapshots_v1"];
+const OPPORTUNITY_CONTINUATION_STORES = ["opportunity_pipeline_runs_v2", "opportunity_pipeline_store_runs_v2", "opportunity_pipeline_candidates_v2", "opportunity_pipeline_submit_tasks_v2", "opportunity_pipeline_operation_events_v2", "opportunity_submit_history_records_v1", "opportunity_submit_history_sync_v1", "opportunity_submit_history_product_indexes_v1"];
+const OPPORTUNITY_PREWARM_STORES = ["opportunity_submit_history_records_v1", "opportunity_submit_history_sync_v1", "opportunity_submit_history_product_indexes_v1", "opportunity_pipeline_operation_events_v2"];
 
 function marketingRecordScopes(actions) {
   return [
@@ -139,6 +143,8 @@ const TASK_PARAM_KEYS = Object.freeze({
   opportunityReportAction: keys("mode", "shopIds", "filters", "matchRules", "submitMode", "goodsMatchType", "matchMode", "titleMatchMode", "titleUpdatePosition", "clueIds", "productIds", "candidateIds", "sourceRunId", "productRunId", "clueRunId", "matchRunId", "dailyAttemptLimit", "skipSubmittedClueCategory", "skipSubmittedClue", "skipSubmittedProductInSameClue", "dryRun", "pageSize", "maxPages", "includeCandidates"),
   opportunityFavoriteCategories: keys("mode", "shopIds", "storeRefs"),
   opportunityPipelineSubmit: keys("mode", "shopIds", "filters", "matchRules", "submitMode", "goodsMatchType", "matchMode", "titleMatchMode", "titleUpdatePosition", "skipSubmittedClueCategory", "skipSubmittedClue", "skipSubmittedProductInSameClue"),
+  opportunitySubmitContinuation: keys("mode", "taskId", "reason"),
+  opportunityHistoryPrewarm: keys("mode", "shopIds", "reason"),
   opportunityAutoFavorites: keys("mode", "shopIds", "storeRefs", "favoriteFilters", "filters", "storeFilters", "dryRun"),
   opportunityFavoriteRecords: keys("shopIds", "storeRefs", "taskStatus", "pageSize", "startPage", "maxPages"),
   opportunityFavoriteCancel: keys("shopIds", "storeRefs", "taskIds"),
@@ -162,7 +168,9 @@ const TASK_DEFINITIONS = Object.freeze({
   opportunityReportScan: definition("paid", false, ["opportunityClueRealtimeList", "opportunitySubmitHistoryList", "opportunityProductList"], [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(OPPORTUNITY_DATA_STORES, ["read", "write", "delete"]), ...OPPORTUNITY_RUNTIME_SCOPES, ...CATALOG_IDENTITY_SCOPES, ...OPPORTUNITY_ATTEMPT_SCOPES]),
   opportunityReportAction: definition("paid", true, ["opportunityCollectClue"], [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(OPPORTUNITY_DATA_STORES, ["read", "write", "delete"]), ...OPPORTUNITY_RUNTIME_SCOPES, ...CATALOG_IDENTITY_SCOPES, ...OPPORTUNITY_ATTEMPT_SCOPES]),
   opportunityFavoriteCategories: definition("paid", false, ["opportunityCategoryList"], STORE_LEDGER_READ_SCOPES),
-  opportunityPipelineSubmit: definition("paid", true, OPPORTUNITY_SUBMIT_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(OPPORTUNITY_DATA_STORES, ["read", "write", "delete"]), ...OPPORTUNITY_RUNTIME_SCOPES, ...CATALOG_IDENTITY_SCOPES, ...OPPORTUNITY_ATTEMPT_SCOPES]),
+  opportunityPipelineSubmit: definition("paid", true, OPPORTUNITY_SUBMIT_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(OPPORTUNITY_DATA_STORES, ["read", "write", "delete"]), ...scopes(OPPORTUNITY_COORDINATOR_STORES, ["read"]), ...OPPORTUNITY_RUNTIME_SCOPES, ...CATALOG_IDENTITY_SCOPES, ...OPPORTUNITY_ATTEMPT_SCOPES, ...OPPORTUNITY_SUBMIT_COORDINATION_SCOPES]),
+  opportunitySubmitContinuation: definition("recovery", true, ["opportunitySubmitHistoryList", "opportunityProductList", "opportunitySubmitClue"], [...STORE_LEDGER_READ_SCOPES, ...STORE_ASSERT_SCOPE, ...scopes(OPPORTUNITY_CONTINUATION_STORES, ["read", "write"]), ...scopes(OPPORTUNITY_COORDINATOR_STORES, ["read"]), ...CATALOG_IDENTITY_SCOPES, ...OPPORTUNITY_ATTEMPT_SCOPES, ...OPPORTUNITY_SUBMIT_COORDINATION_SCOPES]),
+  opportunityHistoryPrewarm: definition("paid", false, ["opportunitySubmitHistoryList"], [...STORE_LEDGER_READ_SCOPES, ...STORE_ASSERT_SCOPE, ...scopes(OPPORTUNITY_PREWARM_STORES, ["read", "write"])]),
   opportunityAutoFavorites: definition("paid", true, ["opportunityClueRealtimeList", "opportunityCategoryList", "opportunityCollectClue"], [...STORE_LEDGER_READ_SCOPES, ...STORE_ASSERT_SCOPE]),
   opportunityFavoriteRecords: definition("paid", false, ["opportunityFavoriteAutoSubmitPage"], STORE_LEDGER_READ_SCOPES),
   opportunityFavoriteCancel: definition("paid", true, ["opportunityFavoriteCancel"], [...STORE_LEDGER_READ_SCOPES, ...STORE_ASSERT_SCOPE]),
@@ -280,6 +288,9 @@ function validateTaskParams(taskType, value) {
   if (taskType === "opportunityReportScan" && !["clue-scan", "product-scan", "product-prematch"].includes(mode)) throw paramsError("opportunityReportScan mode is invalid");
   if (taskType === "opportunityReportAction" && mode !== "collect") throw paramsError("opportunityReportAction mode is invalid");
   if (taskType === "opportunityPipelineSubmit" && mode !== "pipeline-submit") throw paramsError("opportunityPipelineSubmit mode is invalid");
+  if (taskType === "opportunitySubmitContinuation" && mode !== "submit-continuation") throw paramsError("opportunitySubmitContinuation mode is invalid");
+  if (taskType === "opportunitySubmitContinuation" && !/^[A-Za-z0-9._:-]{1,300}$/.test(String(params.taskId || ""))) throw paramsError("opportunitySubmitContinuation taskId is invalid");
+  if (taskType === "opportunityHistoryPrewarm" && mode !== "history-prewarm") throw paramsError("opportunityHistoryPrewarm mode is invalid");
   if (taskType === "marketingTask") {
     marketingPolicy(params);
     if (!Array.isArray(params.stores) || params.stores.length === 0 || params.stores.length > 100) throw paramsError("marketingTask requires a bounded stores array");
