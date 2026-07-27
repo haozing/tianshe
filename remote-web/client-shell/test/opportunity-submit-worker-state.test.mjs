@@ -128,6 +128,8 @@ test("submit worker uses two store slots and isolates rate limits by store", asy
     assert.equal(policy.submitThrottleRecoveryEnabled, false);
     assert.equal(policy.submitPipelineStreamingEnabled, false);
     assert.equal(policy.submitHistoryPrewarmEnabled, false);
+    assert.equal(policy.submitHistoryContinueOnThrottleEnabled, true);
+    assert.equal(policy.submitHistoryPrewarmRetryMs, 21_600_000);
     assert.equal(policy.stopStoreOnSubmitFrequency, true);
     assert.equal(requestPlan.retryOnHttpError, false);
     assert.equal(requestPlan.maxAttempts, 1);

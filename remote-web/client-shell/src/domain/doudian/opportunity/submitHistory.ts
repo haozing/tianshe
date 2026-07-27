@@ -43,6 +43,22 @@ export interface SubmitHistoryPageBatchRange {
   maxPages: number;
 }
 
+export interface SubmitHistoryPipelineContinuationFacts {
+  businessBusyCount?: unknown;
+  requestFailed?: unknown;
+  schemaMismatch?: unknown;
+  schemaMismatchCount?: unknown;
+  duplicatePage?: unknown;
+  totalZeroWithRows?: unknown;
+}
+
+export interface SubmitHistoryThrottleBypassFacts {
+  operationThrottled?: unknown;
+  busyStreak?: unknown;
+  nextEligibleAtMs?: unknown;
+  nowMs?: unknown;
+}
+
 export function submitHistoryCapacityFacts(clueIds: Iterable<string>, recordIds: Iterable<string>, saturatedByRemoteError = false) {
   const associatedClueCount = new Set(clueIds).size;
   const sourceRecordCount = new Set(recordIds).size;
@@ -70,11 +86,12 @@ export function submitHistoryBusinessFacts(payload: unknown) {
     ?? root.statusCode;
   const statusMessage = text(baseResp.status_message ?? baseResp.statusMessage ?? nestedBaseResp.status_message ?? nestedBaseResp.statusMessage ?? root.message ?? root.msg);
   const code = statusCode === undefined ? "" : String(statusCode);
-  const busy = ["429", "500", "10001010A"].includes(code)
-    || /系统繁忙|访问过于频繁|请求过于频繁|操作过于频繁|请稍后重试|请重试|too many requests|rate.?limit|busy/i.test(statusMessage);
+  const ok = code !== "" && ["200", "0"].includes(code);
+  const busyMessage = /系统繁忙|访问过于频繁|请求过于频繁|操作过于频繁|访问频繁|too many requests|rate.?limit|system.?busy/i.test(statusMessage);
+  const busy = !ok && (["429", "10001010A"].includes(code) || busyMessage);
   return {
     found: code !== "",
-    ok: code !== "" && ["200", "0"].includes(code),
+    ok,
     code,
     message: statusMessage,
     busy
@@ -106,6 +123,24 @@ export function advanceSubmitHistoryThrottle(
 
 export function isSubmitHistoryBusinessSuccess(payload: unknown) {
   return submitHistoryBusinessFacts(payload).ok;
+}
+
+export function submitHistoryThrottleAllowsPipeline(facts: SubmitHistoryPipelineContinuationFacts, enabled: unknown) {
+  return enabled === true
+    && Math.max(0, Math.floor(Number(facts.businessBusyCount) || 0)) > 0
+    && facts.requestFailed === true
+    && facts.schemaMismatch !== true
+    && Math.max(0, Math.floor(Number(facts.schemaMismatchCount) || 0)) === 0
+    && facts.duplicatePage !== true
+    && facts.totalZeroWithRows !== true;
+}
+
+export function submitHistoryThrottleBypassesRequest(facts: SubmitHistoryThrottleBypassFacts, enabled: unknown) {
+  const busyStreak = Math.max(0, Math.floor(Number(facts.busyStreak) || 0));
+  const nextEligibleAtMs = Math.max(0, Math.floor(Number(facts.nextEligibleAtMs) || 0));
+  const nowMs = Math.max(0, Math.floor(Number(facts.nowMs) || 0));
+  return enabled === true
+    && (facts.operationThrottled === true || (busyStreak > 0 && nextEligibleAtMs > nowMs));
 }
 
 function text(value: unknown) {

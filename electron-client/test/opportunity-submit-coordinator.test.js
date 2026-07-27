@@ -11,10 +11,12 @@ const POLICY = {
   minIntervalMs: 10000,
   maxIntervalMs: 60000,
   jitterMs: 0,
-  successesToDecrease: 8,
-  decreaseMs: 1000,
+  successesToDecrease: 4,
+  decreaseMs: 5000,
+  isolated429IncreaseMs: 5000,
   multiplier429: 1.5,
   maxCooldownMs: 120000,
+  idleResetMs: 600000,
   globalBurstSpacingMs: 500,
   globalInitialMs: 15000,
   globalMaxMs: 60000,
@@ -273,7 +275,7 @@ test("submit coordinator persists pacing, quota, retry groups, and fencing acros
   });
   assert.equal(throttled.task.status, "cooling_down");
   assert.equal(throttled.group.status, "retry_waiting");
-  assert.equal(throttled.rate.store.intervalMs, 22500);
+  assert.equal(throttled.rate.store.intervalMs, 20000);
   assert.equal(throttled.rate.global.mode, "inactive");
   assert.equal((await service.request("records.get", { storeName: "opportunity_pipeline_candidates_v2", id: taskARef.candidateIds[0] })).submitStatus, "retry_waiting");
   const throttledCandidate = await service.request("records.get", {
@@ -336,7 +338,7 @@ test("submit coordinator persists pacing, quota, retry groups, and fencing acros
   assert.equal(accepted.task.remoteRequestCount, 2);
   assert.equal(accepted.task.candidateMutationAttemptCount, 4);
   assert.equal(accepted.task.httpRequestAttemptCount, 2);
-  assert.equal(accepted.rate.store.intervalMs, 22500);
+  assert.equal(accepted.rate.store.intervalMs, 20000);
   assert.equal(accepted.rate.store.consecutiveSuccesses, 1);
   const acceptedCandidate = await service.request("records.get", {
     storeName: "opportunity_pipeline_candidates_v2",
@@ -356,8 +358,8 @@ test("submit coordinator persists pacing, quota, retry groups, and fencing acros
   assert.equal(runSummary.recoveredAfterThrottleCount, 1);
   assert.equal(runSummary.candidateMutationAttemptCount, 4);
   assert.equal(runSummary.httpRequestAttemptCount, 2);
-  assert.equal(runSummary.maxStoreIntervalMs, 22500);
-  assert.equal(runSummary.averageStoreIntervalMs, 22500);
+  assert.equal(runSummary.maxStoreIntervalMs, 20000);
+  assert.equal(runSummary.averageStoreIntervalMs, 20000);
   assert.equal(runSummary.globalRateMode, "inactive");
   assert.equal(runSummary.dailyCandidateMutationRemaining, 996);
   assert.equal(runSummary.dailyHttpRequestRemaining, 998);
@@ -750,6 +752,139 @@ test("coordinator persists the effective pacing time instead of waking at the sh
   assert.equal(throttled.rate.store.cooldownUntil, at(base, 35));
   assert.equal(throttled.resumeAt, at(base, 62));
   assert.equal(throttled.task.resumeAt, at(base, 62));
+});
+
+test("isolated 429 uses an additive increase while consecutive 429 still escalates", async (t) => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chihu-submit-isolated-throttle-"));
+  const service = new NativeDataService({ app: { getPath: () => userDataDir } });
+  t.after(async () => {
+    await service.stop();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  });
+  await service.start();
+
+  const base = "2026-07-25T00:00:00.000Z";
+  const scheduler = await claimScheduler(service, "scheduler-isolated-throttle", base);
+  const identity = await createStore(service, "shop-isolated-throttle");
+  const taskRef = await createTask(service, identity, "isolated-throttle", base, 1);
+  let task = await claimTask(service, taskRef.taskId, "worker-isolated-throttle-1", at(base, 1));
+  const first = await service.request("opportunitySubmit.admit", {
+    taskId: task.id,
+    ...coordinatorFence(task, scheduler),
+    now: at(base, 2),
+    businessDate: "2026-07-25",
+    endpointContract: "opportunitySubmitClue",
+    clueId: taskRef.clueId,
+    candidateIds: taskRef.candidateIds,
+    requestBody: requestBody(task, taskRef.clueId),
+    contractSnapshot: CONTRACT,
+    dailyCandidateMutationLimit: 1000,
+    dailyHttpRequestLimit: 1000,
+    policy: POLICY
+  });
+  await service.request("opportunitySubmit.consumeHttpGrant", {
+    taskId: task.id,
+    attemptId: first.attempt.attemptId,
+    httpGrantId: first.attempt.httpGrantId,
+    ...coordinatorFence(task, scheduler),
+    now: at(base, 3)
+  });
+  const isolated = await service.request("opportunitySubmit.resolve", {
+    taskId: task.id,
+    attemptId: first.attempt.attemptId,
+    ...coordinatorFence(task, scheduler),
+    now: at(base, 4),
+    outcome: "throttled",
+    httpStatus: 429,
+    responseClass: "http_429",
+    policy: POLICY
+  });
+  assert.equal(isolated.rate.store.intervalMs, 20000);
+
+  task = await claimTask(service, task.id, "worker-isolated-throttle-2", isolated.resumeAt);
+  const second = await service.request("opportunitySubmit.admit", {
+    taskId: task.id,
+    ...coordinatorFence(task, scheduler),
+    now: isolated.resumeAt,
+    businessDate: "2026-07-25",
+    endpointContract: "opportunitySubmitClue",
+    logicalGroupId: first.group.id,
+    clueId: taskRef.clueId,
+    candidateIds: taskRef.candidateIds,
+    requestBody: requestBody(task, taskRef.clueId),
+    requestBodyHash: first.group.requestBodyHash,
+    contractSnapshot: CONTRACT,
+    dailyCandidateMutationLimit: 1000,
+    dailyHttpRequestLimit: 1000,
+    policy: POLICY
+  });
+  await service.request("opportunitySubmit.consumeHttpGrant", {
+    taskId: task.id,
+    attemptId: second.attempt.attemptId,
+    httpGrantId: second.attempt.httpGrantId,
+    ...coordinatorFence(task, scheduler),
+    now: at(isolated.resumeAt, 1)
+  });
+  const consecutive = await service.request("opportunitySubmit.resolve", {
+    taskId: task.id,
+    attemptId: second.attempt.attemptId,
+    ...coordinatorFence(task, scheduler),
+    now: at(isolated.resumeAt, 2),
+    outcome: "throttled",
+    httpStatus: 429,
+    responseClass: "http_429",
+    policy: POLICY
+  });
+  assert.equal(consecutive.rate.store.intervalMs, 30000);
+});
+
+test("idle pacing state resets to the initial interval before a new admission", async (t) => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chihu-submit-idle-rate-reset-"));
+  const service = new NativeDataService({ app: { getPath: () => userDataDir } });
+  t.after(async () => {
+    await service.stop();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  });
+  await service.start();
+
+  const base = "2026-07-25T00:00:00.000Z";
+  const now = at(base, 601);
+  const scheduler = await claimScheduler(service, "scheduler-idle-rate-reset", now);
+  const identity = await createStore(service, "shop-idle-rate-reset");
+  const taskRef = await createTask(service, identity, "idle-rate-reset", now, 1);
+  await service.request("records.put", {
+    storeName: "opportunity_submit_rate_state_v1",
+    record: {
+      id: `local-user-${identity.shopId}-${identity.storeGeneration}`,
+      ...identity,
+      mode: "normal",
+      policyVersion: POLICY.policyVersion,
+      intervalMs: 60000,
+      consecutiveSuccesses: 0,
+      consecutive429: 0,
+      lastAdmittedAt: base,
+      last429At: base,
+      updatedAt: base
+    }
+  });
+  const task = await claimTask(service, taskRef.taskId, "worker-idle-rate-reset", at(now, 1));
+  const admission = await service.request("opportunitySubmit.admit", {
+    taskId: task.id,
+    ...coordinatorFence(task, scheduler),
+    now: at(now, 2),
+    businessDate: "2026-07-25",
+    endpointContract: "opportunitySubmitClue",
+    clueId: taskRef.clueId,
+    candidateIds: taskRef.candidateIds,
+    requestBody: requestBody(task, taskRef.clueId),
+    contractSnapshot: CONTRACT,
+    dailyCandidateMutationLimit: 1000,
+    dailyHttpRequestLimit: 1000,
+    policy: POLICY
+  });
+  assert.equal(admission.admitted, true);
+  assert.equal(admission.rate.store.intervalMs, POLICY.initialIntervalMs);
+  assert.equal(admission.rate.store.idleResetAt, at(now, 2));
 });
 
 test("ready tasks with a future resume time cannot be claimed early", async (t) => {

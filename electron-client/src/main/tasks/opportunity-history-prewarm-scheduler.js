@@ -23,12 +23,22 @@ function matchingHistorySync(store, syncRecords) {
 function opportunityHistoryPrewarmDueAt(store, syncRecord, options = {}) {
   const intervalMs = Math.max(60_000, Number(options.intervalMs || 6 * 60 * 60 * 1000));
   const retryMs = Math.max(30_000, Number(options.retryMs || 5 * 60 * 1000));
+  const interSliceDelayMs = Math.max(30_000, Number(options.interSliceDelayMs || 60_000));
   const lastAttemptAt = timestamp(options.lastAttemptAt);
   if (String(store?.status || "") !== "online") return null;
   if (!syncRecord) return lastAttemptAt ? lastAttemptAt + retryMs : 0;
+  if (String(syncRecord.status || "") === "cooling_down") {
+    const resumeAt = timestamp(syncRecord.resumeAt);
+    const updatedAt = timestamp(syncRecord.updatedAt);
+    return Math.max(resumeAt, updatedAt ? updatedAt + retryMs : 0, lastAttemptAt ? lastAttemptAt + retryMs : 0);
+  }
   if (syncRecord.initialized === true && String(syncRecord.status || "") === "complete") {
     const completedAt = timestamp(syncRecord.lastSuccessfulSyncAt || syncRecord.updatedAt);
     return Math.max(completedAt ? completedAt + intervalMs : 0, lastAttemptAt ? lastAttemptAt + retryMs : 0);
+  }
+  if (String(syncRecord.status || "") === "truncated") {
+    const updatedAt = timestamp(syncRecord.updatedAt);
+    return Math.max(updatedAt ? updatedAt + interSliceDelayMs : 0, lastAttemptAt ? lastAttemptAt + interSliceDelayMs : 0);
   }
   const failedAt = timestamp(syncRecord.updatedAt);
   return Math.max(failedAt ? failedAt + retryMs : 0, lastAttemptAt ? lastAttemptAt + retryMs : 0);

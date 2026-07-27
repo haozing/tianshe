@@ -77,7 +77,7 @@ import {
   type OfficialValidationPolicy,
   type OfficialWordsSemantics
 } from "./opportunity/officialValidation";
-import { SUBMIT_HISTORY_CLUE_CAPACITY, advanceSubmitHistoryThrottle, evaluateSubmitHistoryPageCoverage, isSubmitHistoryBusinessSuccess, parseSubmitHistorySnapshot, submitHistoryBusinessFacts, submitHistoryCapacityFacts, submitHistoryInitialStart, submitHistoryPageBatchRange, submitHistoryPageReachesEnd, submitHistoryRemoteUpdatedAtWatermark, submitHistoryWindows } from "./opportunity/submitHistory";
+import { SUBMIT_HISTORY_CLUE_CAPACITY, advanceSubmitHistoryThrottle, evaluateSubmitHistoryPageCoverage, isSubmitHistoryBusinessSuccess, parseSubmitHistorySnapshot, submitHistoryBusinessFacts, submitHistoryCapacityFacts, submitHistoryInitialStart, submitHistoryPageBatchRange, submitHistoryPageReachesEnd, submitHistoryRemoteUpdatedAtWatermark, submitHistoryThrottleAllowsPipeline, submitHistoryThrottleBypassesRequest, submitHistoryWindows } from "./opportunity/submitHistory";
 import { isUnresolvedSubmitState, logicalSubmitAttemptId, recoverUnresolvedSubmitCandidate } from "./opportunity/submitRecovery.ts";
 import { activeSubmitTasksForRun, canSupersedeContractMismatchTask, hasRemainingLegacySubmitWork, isDeferredSubmitTaskStatus, orphanedSubmitQueueStoreRuns, submitWorkerProgress } from "./opportunity/submitWorkerState.ts";
 import { responseHeaderText, retryAfterMs, submitRetryWaitMs } from "./opportunity/submitRetryPolicy.ts";
@@ -142,6 +142,7 @@ const productCategoryIdFallbackPaths = [
 let pipelineSubmitWorkerTail: Promise<unknown> = Promise.resolve();
 let submitHistoryRequestTail: Promise<void> = Promise.resolve();
 let submitHistoryGlobalThrottle = { busyStreak: 0, nextEligibleAtMs: 0 };
+const submitHistoryThrottledOperations = new WeakSet<OpportunityArgs>();
 const cancelledPipelineRunIds = new Set<string>();
 const clueCacheLoadFlights = new Map<string, Promise<unknown>>();
 
@@ -1612,10 +1613,12 @@ function submitCoordinatorPolicy(adapter: DoudianAdapterConfig) {
     submitPacingMinIntervalMs: policyNumber(adapter, "opportunityReport.submitPacingMinIntervalMs", 10000, 500, 600000),
     submitPacingMaxIntervalMs: policyNumber(adapter, "opportunityReport.submitPacingMaxIntervalMs", 60000, 1000, 600000),
     submitPacingJitterMs: policyNumber(adapter, "opportunityReport.submitPacingJitterMs", 1500, 0, 60000),
-    submitPacingSuccessesToDecrease: policyNumber(adapter, "opportunityReport.submitPacingSuccessesToDecrease", 8, 1, 100),
-    submitPacingDecreaseMs: policyNumber(adapter, "opportunityReport.submitPacingDecreaseMs", 1000, 1, 60000),
+    submitPacingSuccessesToDecrease: policyNumber(adapter, "opportunityReport.submitPacingSuccessesToDecrease", 4, 1, 100),
+    submitPacingDecreaseMs: policyNumber(adapter, "opportunityReport.submitPacingDecreaseMs", 5000, 1, 60000),
+    submitPacingIsolated429IncreaseMs: policyNumber(adapter, "opportunityReport.submitPacingIsolated429IncreaseMs", 5000, 1, 60000),
     submitPacing429Multiplier: Number(policy(adapter, "opportunityReport.submitPacing429Multiplier", 1.5)),
     submitPacingMaxCooldownMs: policyNumber(adapter, "opportunityReport.submitPacingMaxCooldownMs", 120000, 1000, 86400000),
+    submitPacingIdleResetMs: policyNumber(adapter, "opportunityReport.submitPacingIdleResetMs", 600000, 60000, 86400000),
     submitGlobalBurstSpacingMs: policyNumber(adapter, "opportunityReport.submitGlobalBurstSpacingMs", 500, 0, 60000),
     submitGlobalPacingInitialMs: policyNumber(adapter, "opportunityReport.submitGlobalPacingInitialMs", 15000, 1000, 600000),
     submitGlobalPacingMaxMs: policyNumber(adapter, "opportunityReport.submitGlobalPacingMaxMs", 60000, 1000, 600000),
@@ -2098,6 +2101,31 @@ async function runSubmitHistoryRequest(
   planKey: string,
   body: Record<string, unknown>
 ) {
+  const continueOnThrottleEnabled = policyBoolean(payload.adapter, "opportunityReport.submitHistoryContinueOnThrottleEnabled", true);
+  const skippedByThrottle = () => {
+    const nowMs = Date.now();
+    const operationThrottled = submitHistoryThrottledOperations.has(args);
+    if (!submitHistoryThrottleBypassesRequest({
+      operationThrottled,
+      busyStreak: submitHistoryGlobalThrottle.busyStreak,
+      nextEligibleAtMs: submitHistoryGlobalThrottle.nextEligibleAtMs,
+      nowMs
+    }, continueOnThrottleEnabled)) return null;
+    const policy = submitHistoryThrottlePolicy(payload.adapter);
+    return {
+      skippedByGlobalThrottle: true as const,
+      business: {
+        found: true,
+        ok: false,
+        code: "LOCAL_HISTORY_THROTTLE",
+        message: "submit history throttle already active",
+        busy: true
+      },
+      throttleResumeAt: new Date(Math.max(submitHistoryGlobalThrottle.nextEligibleAtMs, nowMs + policy.initialCooldownMs)).toISOString()
+    };
+  };
+  const immediateSkip = skippedByThrottle();
+  if (immediateSkip) return immediateSkip;
   const previous = submitHistoryRequestTail;
   let release: () => void = () => undefined;
   submitHistoryRequestTail = new Promise<void>((resolve) => {
@@ -2105,6 +2133,8 @@ async function runSubmitHistoryRequest(
   });
   await previous.catch(() => undefined);
   try {
+    const queuedSkip = skippedByThrottle();
+    if (queuedSkip) return queuedSkip;
     const shouldCancel = () => pipelineCancelled(args);
     const waitMs = Math.max(0, submitHistoryGlobalThrottle.nextEligibleAtMs - Date.now());
     if (waitMs > 0) await cancellableWait(waitMs, shouldCancel);
@@ -2130,7 +2160,9 @@ async function runSubmitHistoryRequest(
       Date.now(),
       submitHistoryThrottlePolicy(payload.adapter)
     );
+    if (business.busy && continueOnThrottleEnabled) submitHistoryThrottledOperations.add(args);
     return {
+      skippedByGlobalThrottle: false as const,
       response,
       business,
       throttleResumeAt: business.busy ? new Date(submitHistoryGlobalThrottle.nextEligibleAtMs).toISOString() : undefined
@@ -2336,6 +2368,25 @@ async function fetchSubmitHistoryWindow(
     const body = submitHistoryListBody(window, page, pageSize);
     try {
       const request = await runSubmitHistoryRequest(payload, store, args, planKey, body);
+      if (request.skippedByGlobalThrottle) {
+        businessBusyCount += 1;
+        lastBusinessCode = request.business.code;
+        lastBusinessMessage = request.business.message;
+        throttleResumeAt = request.throttleResumeAt;
+        requestFailed = true;
+        failedPage = page;
+        sourceHealth.push({
+          key: page === 1 ? planKey : `${planKey}:page:${page}`,
+          status: 0,
+          ok: false,
+          count: 0,
+          businessCode: request.business.code,
+          businessMessage: request.business.message,
+          businessBusy: true,
+          skippedByGlobalThrottle: true
+        });
+        break;
+      }
       const response = request.response;
       const wrapped = { [planKey]: response.data };
       const rows = firstArray(wrapped, mappingArray(payload.adapter, "submitHistoryListPaths", [
@@ -2468,6 +2519,30 @@ async function fetchSubmitHistoryWindow(
   };
 }
 
+async function cachedSubmitHistoryResult(
+  identity: PipelineStoreIdentity,
+  mode: "initial" | "incremental",
+  fetchedPages: number,
+  businessBusyCount: number,
+  nextPage?: number
+) {
+  const index = await loadBenefitIndexForStore(identity);
+  const records = Array.from(index.values());
+  return {
+    status: "complete" as const,
+    mode,
+    records,
+    overview: summarizeBenefitProducts(records),
+    sourceHealth: [] as Array<Record<string, unknown>>,
+    remoteTotal: records.length,
+    remoteTotalKnown: false,
+    fetchedPages,
+    businessBusyCount,
+    throttleRecoveryCount: 0,
+    nextPage
+  };
+}
+
 async function scanBenefitProductsForStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: OpportunityArgs) {
   const identity = normalizePipelineStoreIdentity(store);
   const shopLabel = identity.shopName || identity.shopId;
@@ -2487,11 +2562,21 @@ async function scanBenefitProductsForStore(payload: DoudianAdapterPayload, store
     ? previous.initialStartEpochSeconds
     : configuredInitialStart;
   const throttleRecoveryEnabled = !prewarmSlice && policyBoolean(payload.adapter, "opportunityReport.submitHistoryThrottleRecoveryEnabled", true);
+  const continueOnThrottleEnabled = policyBoolean(payload.adapter, "opportunityReport.submitHistoryContinueOnThrottleEnabled", true);
   const throttleRecoveryBudgetMs = policyNumber(payload.adapter, "opportunityReport.submitHistoryThrottleRecoveryBudgetMs", 30 * 60_000, 60_000, 2 * 60 * 60_000);
   const throttleRecoveryDeadlineMs = Date.now() + throttleRecoveryBudgetMs;
   let throttleRecoveryCount = 0;
   const storedCheckpointNextPage = Math.max(1, Math.floor(Number(previous?.checkpointNextPage) || 1));
   const previousResumeAtMs = Date.parse(String(previous?.resumeAt || ""));
+  if (continueOnThrottleEnabled && previous?.status === "cooling_down" && Number.isFinite(previousResumeAtMs) && previousResumeAtMs > Date.now()) {
+    return cachedSubmitHistoryResult(
+      identity,
+      previous.lastMode === "incremental" ? "incremental" : "initial",
+      0,
+      0,
+      storedCheckpointNextPage
+    );
+  }
   if (throttleRecoveryEnabled && previous?.status === "cooling_down" && Number.isFinite(previousResumeAtMs) && previousResumeAtMs > Date.now()) {
     const diagnosticRunId = text(args.runId || args.operationId);
     if (diagnosticRunId) await writePipelineEvent({
@@ -2627,15 +2712,26 @@ async function scanBenefitProductsForStore(payload: DoudianAdapterPayload, store
       }
       if (result.status !== "complete") {
         const resumeAtMs = Date.parse(String(result.throttleResumeAt || ""));
-        const canRecoverThrottle = throttleRecoveryEnabled
+        const continueAfterThrottle = submitHistoryThrottleAllowsPipeline({
+          businessBusyCount: result.businessBusyCount,
+          requestFailed: result.diagnostic.requestFailed,
+          schemaMismatch: result.diagnostic.schemaMismatch,
+          schemaMismatchCount: result.diagnostic.schemaMismatchCount,
+          duplicatePage: result.diagnostic.duplicatePage,
+          totalZeroWithRows: result.diagnostic.totalZeroWithRows
+        }, continueOnThrottleEnabled);
+        const canRecoverThrottle = !continueAfterThrottle && throttleRecoveryEnabled
           && result.businessBusyCount > 0
           && Number.isFinite(resumeAtMs)
           && resumeAtMs <= throttleRecoveryDeadlineMs;
-        if (canRecoverThrottle) {
+        if (continueAfterThrottle || canRecoverThrottle) {
           throttleRecoveryCount += 1;
           windowThrottleRecoveryCount += 1;
           const coolingAt = nowIso();
-          const resumeAt = new Date(resumeAtMs).toISOString();
+          const effectiveResumeAtMs = Number.isFinite(resumeAtMs)
+            ? resumeAtMs
+            : Date.now() + submitHistoryThrottlePolicy(payload.adapter).initialCooldownMs;
+          const resumeAt = new Date(effectiveResumeAtMs).toISOString();
           await repositoryPut(submitHistorySyncStore, {
             id: syncId,
             ...identity,
@@ -2661,7 +2757,7 @@ async function scanBenefitProductsForStore(payload: DoudianAdapterPayload, store
             createdAt: previous?.createdAt || coolingAt,
             updatedAt: coolingAt
           } satisfies SubmitHistorySyncRecord);
-          const waitSeconds = Math.max(1, Math.ceil((resumeAtMs - Date.now()) / 1000));
+          const waitSeconds = Math.max(1, Math.ceil((effectiveResumeAtMs - Date.now()) / 1000));
           const diagnosticRunId = text(args.runId || args.operationId);
           const throttleDetail = {
             status: "cooling_down",
@@ -2676,6 +2772,15 @@ async function scanBenefitProductsForStore(payload: DoudianAdapterPayload, store
             throttleRecoveryBudgetMs
           };
           await reportDoudianDiagnostic({ category: "opportunity-pipeline", event: "submit-history-throttled", runId: diagnosticRunId, shopId: identity.shopId, ...throttleDetail }, true).catch(() => undefined);
+          if (continueAfterThrottle) {
+            return cachedSubmitHistoryResult(
+              identity,
+              isInitial ? "initial" : "incremental",
+              fetchedPages,
+              businessBusyCount,
+              checkpointNextPage
+            );
+          }
           if (diagnosticRunId) await writePipelineEvent({
             runId: diagnosticRunId,
             shopId: identity.shopId,
@@ -2684,7 +2789,7 @@ async function scanBenefitProductsForStore(payload: DoudianAdapterPayload, store
             message: `平台访问频率受限，${waitSeconds} 秒后自动恢复`,
             detail: throttleDetail
           }).catch(() => undefined);
-          await waitForSubmitHistoryCooldown(args, resumeAtMs, shopLabel, checkpointNextPage);
+          await waitForSubmitHistoryCooldown(args, effectiveResumeAtMs, shopLabel, checkpointNextPage);
           windowNextPage = checkpointNextPage;
           continue;
         }

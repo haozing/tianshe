@@ -159,10 +159,12 @@ submitPacingInitialIntervalMs    = 15000
 submitPacingMinIntervalMs        = 10000
 submitPacingMaxIntervalMs        = 60000
 submitPacingJitterMs             = 1500
-submitPacingSuccessesToDecrease  = 8
-submitPacingDecreaseMs           = 1000
+submitPacingSuccessesToDecrease  = 4
+submitPacingDecreaseMs           = 5000
+submitPacingIsolated429IncreaseMs = 5000
 submitPacing429Multiplier        = 1.5
 submitPacingMaxCooldownMs        = 120000
+submitPacingIdleResetMs          = 600000
 submitStoreThrottleBudgetMs      = 1800000   # 单店本次运行最多暂停 30 分钟
 submitGlobalBurstSpacingMs       = 500
 submitGlobalPacingInitialMs      = 15000
@@ -178,13 +180,14 @@ submitDailyHttpRequestLimit      = 1000
 调节规则：
 
 1. 首次提交使用 `initialIntervalMs`，店铺之间增加确定性错峰和小随机抖动。
-2. 每个成功的远程请求组只增加一次 `consecutiveSuccesses`，不能按组内商品数累加；连续达到 8 次时只减少 1 秒，不能一次恢复到 10 秒。
+2. 每个成功的远程请求组只增加一次 `consecutiveSuccesses`，不能按组内商品数累加；连续达到 4 次时减少 5 秒，不能一次恢复到 10 秒。
 3. HTTP 429、响应头 `Retry-After`、或明确的业务频控错误都进入限速处理：
    - 下一次尝试时间至少遵守 `Retry-After`；没有该响应头时使用 30 秒、60 秒的指数退避并加小抖动；
    - `submitPacingMaxCooldownMs` 只封顶本地生成的退避，不得截短平台给出的更长 `Retry-After`；
-   - 下一次普通提交间隔至少乘以 1.5，且不低于 15 秒；
-   - 连续 429 时继续提高间隔，封顶 60 秒；
+   - 孤立 429 将下一次普通提交间隔增加 5 秒，且不低于 15 秒；
+   - 与上一次 429 之间已有成功请求时按固定 5 秒增加间隔，连续 429 时才按倍率提高，封顶 60 秒；
    - 成功后不立即恢复高速，必须经过连续成功窗口才缓慢下降。
+   - 连续 10 分钟没有提交请求且冷却已结束时，过期的店铺限速记忆重置为初始间隔。
 4. “明确业务频控”必须由经过契约测试的业务码/消息白名单识别。“环境存在风险”、验证码/身份校验、登录失效、权限不足和契约不匹配不属于短期限频，禁止直接进入自动 cooling 重试。
 5. 非频控的业务失败不改变店铺节奏，但仍按原有可重试/不可重试分类处理。
 6. 429 统计按店铺和全局分别维护。统计窗口按 UTC epoch 固定分桶，默认只有最近 2 分钟窗口内至少 2 家不同店铺出现 429 才把全局状态切换为 `protective`；单店 429 不得让其他店铺全局停顿。protective 下每个受影响窗口把全局间隔乘以 1.5 并封顶 60 秒；每个完整无 429 窗口下降 5 秒。间隔回到初始值且至少连续 2 个完整窗口无 429 后切回 `inactive`，并清除过期桶。
@@ -479,10 +482,12 @@ activeStores：每个 tenantId + shopId + storeGeneration 最多一个活动任�
     "submitPacingMinIntervalMs": 10000,
     "submitPacingMaxIntervalMs": 60000,
     "submitPacingJitterMs": 1500,
-    "submitPacingSuccessesToDecrease": 8,
-    "submitPacingDecreaseMs": 1000,
+    "submitPacingSuccessesToDecrease": 4,
+    "submitPacingDecreaseMs": 5000,
+    "submitPacingIsolated429IncreaseMs": 5000,
     "submitPacing429Multiplier": 1.5,
     "submitPacingMaxCooldownMs": 120000,
+    "submitPacingIdleResetMs": 600000,
     "submitStoreThrottleBudgetMs": 1800000,
     "submitGlobalBurstSpacingMs": 500,
     "submitGlobalPacingInitialMs": 15000,

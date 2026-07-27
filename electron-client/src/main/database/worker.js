@@ -1087,10 +1087,12 @@ function normalizeSubmitPacingPolicy(input = {}) {
     minIntervalMs,
     maxIntervalMs,
     jitterMs: boundedInteger(input.jitterMs ?? input.submitPacingJitterMs, 1500, 0, 60000),
-    successesToDecrease: boundedInteger(input.successesToDecrease ?? input.submitPacingSuccessesToDecrease, 8, 1, 100),
-    decreaseMs: boundedInteger(input.decreaseMs ?? input.submitPacingDecreaseMs, 1000, 1, 60000),
+    successesToDecrease: boundedInteger(input.successesToDecrease ?? input.submitPacingSuccessesToDecrease, 4, 1, 100),
+    decreaseMs: boundedInteger(input.decreaseMs ?? input.submitPacingDecreaseMs, 5000, 1, 60000),
+    isolated429IncreaseMs: boundedInteger(input.isolated429IncreaseMs ?? input.submitPacingIsolated429IncreaseMs, 5000, 1, 60000),
     multiplier429: boundedNumber(input.multiplier429 ?? input.submitPacing429Multiplier, 1.5, 1, 10),
     maxCooldownMs: boundedInteger(input.maxCooldownMs ?? input.submitPacingMaxCooldownMs, 120000, 1000, 24 * 60 * 60 * 1000),
+    idleResetMs: boundedInteger(input.idleResetMs ?? input.submitPacingIdleResetMs, 600000, 60000, 24 * 60 * 60 * 1000),
     globalBurstSpacingMs: boundedInteger(input.globalBurstSpacingMs ?? input.submitGlobalBurstSpacingMs, 500, 0, 60000),
     globalInitialMs: boundedInteger(input.globalInitialMs ?? input.submitGlobalPacingInitialMs, 15000, 1000, 10 * 60 * 1000),
     globalMaxMs: boundedInteger(input.globalMaxMs ?? input.submitGlobalPacingMaxMs, 60000, 1000, 10 * 60 * 1000),
@@ -1242,6 +1244,26 @@ function initialStoreRateState(task, policy, ts) {
     consecutive429: 0,
     cooldownCount: 0,
     updatedAt: ts
+  };
+}
+
+function settleStoreIdleRate(storeRate, policy, now) {
+  const nowMs = timestampMs(now, Date.now());
+  const lastActivityMs = Math.max(timestampMs(storeRate.lastAdmittedAt), timestampMs(storeRate.last429At));
+  const stillCooling = Math.max(timestampMs(storeRate.cooldownUntil), timestampMs(storeRate.nextEligibleAt)) > nowMs;
+  if (!lastActivityMs || stillCooling || nowMs - lastActivityMs < policy.idleResetMs) return storeRate;
+  if (Number(storeRate.intervalMs || policy.initialIntervalMs) <= policy.initialIntervalMs && storeRate.mode === "normal") return storeRate;
+  return {
+    ...storeRate,
+    mode: "normal",
+    intervalMs: policy.initialIntervalMs,
+    consecutiveSuccesses: 0,
+    consecutive429: 0,
+    cooldownStartedAt: undefined,
+    cooldownUntil: undefined,
+    nextEligibleAt: undefined,
+    idleResetAt: now,
+    updatedAt: now
   };
 }
 
@@ -1568,7 +1590,11 @@ function admitOpportunitySubmitAttempt(args = {}) {
 
     const rateId = opportunitySubmitRateId(task);
     const globalRateId = opportunitySubmitGlobalRateId(identity.tenantId, endpointContract);
-    const storeRate = nativeRecordById(database, OPPORTUNITY_SUBMIT_RATE_STORE, rateId) || initialStoreRateState(task, policy, now);
+    const storeRate = settleStoreIdleRate(
+      nativeRecordById(database, OPPORTUNITY_SUBMIT_RATE_STORE, rateId) || initialStoreRateState(task, policy, now),
+      policy,
+      now
+    );
     const globalRate = settleGlobalStableWindows(
       nativeRecordById(database, OPPORTUNITY_SUBMIT_GLOBAL_RATE_STORE, globalRateId) || initialGlobalRateState(identity.tenantId, endpointContract, policy, now),
       policy,
@@ -1973,7 +1999,11 @@ function resolveOpportunitySubmitAttempt(args = {}) {
     let resumeAt;
     if (outcome === "throttled") {
       const consecutive429 = Number(storeRate.consecutive429 || 0) + 1;
-      const intervalMs = Math.min(policy.maxIntervalMs, Math.max(policy.initialIntervalMs, Math.ceil(Number(storeRate.intervalMs || policy.initialIntervalMs) * policy.multiplier429)));
+      const currentIntervalMs = Math.max(policy.initialIntervalMs, Number(storeRate.intervalMs || policy.initialIntervalMs));
+      const increasedIntervalMs = consecutive429 > 1
+        ? Math.ceil(currentIntervalMs * policy.multiplier429)
+        : currentIntervalMs + policy.isolated429IncreaseMs;
+      const intervalMs = Math.min(policy.maxIntervalMs, increasedIntervalMs);
       const generatedCooldownMs = Math.min(policy.maxCooldownMs, 30000 * (2 ** Math.max(0, consecutive429 - 1)));
       const cooldownJitterMs = deterministicJitterMs(policy.jitterMs, attempt.tenant_id, attempt.shop_id, attempt.store_generation, taskId, attempt.logical_group_id, attempt.attempt_ordinal, "cooldown");
       const platformRetryAfterMs = Math.max(0, normalizeInteger(args.retryAfterMs) || 0);

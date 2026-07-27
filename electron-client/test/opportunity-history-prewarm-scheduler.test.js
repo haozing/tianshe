@@ -11,6 +11,7 @@ const {
 const nowMs = Date.parse("2026-07-26T08:00:00.000Z");
 const intervalMs = 6 * 60 * 60 * 1000;
 const retryMs = 5 * 60 * 1000;
+const interSliceDelayMs = 60 * 1000;
 
 function store(shopId, overrides = {}) {
   return { tenantId: "tenant-1", shopId, storeGeneration: 2, status: "online", ...overrides };
@@ -68,4 +69,41 @@ test("failed and in-memory attempts respect retry backoff", () => {
     retryMs,
     lastAttemptByShopId: attempts
   }), nowMs - 30_000 + retryMs);
+});
+
+test("successful initial slices use the inter-slice delay instead of failure backoff", () => {
+  const truncated = sync("shop-1", {
+    initialized: false,
+    status: "truncated",
+    updatedAt: new Date(nowMs - 30_000).toISOString(),
+    checkpointNextPage: 11
+  });
+  const dueAt = nowMs - 30_000 + interSliceDelayMs;
+  assert.equal(opportunityHistoryPrewarmDueAt(store("shop-1"), truncated, {
+    intervalMs,
+    retryMs: 6 * 60 * 60 * 1000,
+    interSliceDelayMs
+  }), dueAt);
+  assert.deepEqual(dueOpportunityHistoryPrewarmStores([store("shop-1")], [truncated], {
+    nowMs: dueAt,
+    intervalMs,
+    retryMs: 6 * 60 * 60 * 1000,
+    interSliceDelayMs
+  }).map((item) => item.shopId), ["shop-1"]);
+});
+
+test("cooling history resumes from its persisted checkpoint after cooldown and retry backoff", () => {
+  const cooling = sync("shop-1", {
+    initialized: false,
+    status: "cooling_down",
+    resumeAt: new Date(nowMs + 60_000).toISOString(),
+    updatedAt: new Date(nowMs - 60_000).toISOString(),
+    checkpointNextPage: 235
+  });
+  assert.equal(opportunityHistoryPrewarmDueAt(store("shop-1"), cooling, { intervalMs, retryMs }), nowMs - 60_000 + retryMs);
+  assert.deepEqual(dueOpportunityHistoryPrewarmStores([store("shop-1")], [cooling], {
+    nowMs,
+    intervalMs,
+    retryMs
+  }), []);
 });

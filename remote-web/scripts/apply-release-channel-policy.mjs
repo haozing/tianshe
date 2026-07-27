@@ -19,7 +19,7 @@ export function applyReleaseChannelPolicy(adapter, channelValue) {
   const policies = record(next.policies, "adapter.policies");
   const opportunityReport = record(policies.opportunityReport, "adapter.policies.opportunityReport");
   opportunityReport.submitThrottleRecoveryEnabled = channel === "beta";
-  opportunityReport.submitHistoryPrewarmEnabled = false;
+  opportunityReport.submitHistoryPrewarmEnabled = channel === "beta";
   opportunityReport.submitPipelineStreamingEnabled = channel === "beta";
   return next;
 }

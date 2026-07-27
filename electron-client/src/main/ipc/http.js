@@ -149,6 +149,13 @@ function normalizeNativeHeaders(headers = {}, body) {
   return nextHeaders;
 }
 
+function nativeHttpErrorMessage(status, statusText, body) {
+  const bodyText = Buffer.isBuffer(body) ? body.toString("utf8") : typeof body === "string" ? body : "";
+  const detail = bodyText.replace(/\s+/g, " ").trim().slice(0, 512);
+  const label = `HTTP ${status}${statusText ? ` ${statusText}` : ""}`;
+  return detail ? `${label}: ${detail}` : label;
+}
+
 async function nativeHttpRequest(args = {}) {
   const url = String(args.url || "").trim();
   if (!url) return { ok: false, status: 0, headers: {}, data: null, error: { message: "missing url" } };
@@ -185,6 +192,16 @@ async function nativeHttpRequest(args = {}) {
       try {
         data = parseLosslessJson(data);
       } catch (error) {
+        if (response.status < 200 || response.status >= 300) {
+          return {
+            ok: false,
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+            data,
+            error: { message: nativeHttpErrorMessage(response.status, response.statusText, data) }
+          };
+        }
         return {
           ok: false,
           status: response.status,

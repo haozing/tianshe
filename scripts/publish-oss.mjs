@@ -357,7 +357,7 @@ function assertRemoteChannelBuild(config, beta) {
   if (recoveryEnabled !== beta) {
     throw new Error(`Remote channel recovery policy mismatch: channel=${beta ? "beta" : "stable"}, enabled=${recoveryEnabled}`);
   }
-  if (historyPrewarmEnabled || streamingEnabled !== beta) {
+  if (historyPrewarmEnabled !== beta || streamingEnabled !== beta) {
     throw new Error(`Remote channel throughput policy mismatch: channel=${beta ? "beta" : "stable"}, prewarm=${historyPrewarmEnabled}, streaming=${streamingEnabled}`);
   }
   if (commands.adapterSha256 !== sha256(adapterPath)) {
