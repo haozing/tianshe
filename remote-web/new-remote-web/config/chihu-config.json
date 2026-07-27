@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.27.product-management-execution-freight-v20",
+  "version": "2026.07.27.product-management-streaming-v21",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "3416541",
-    "buildTime": "2026-07-27T09:19:38.733Z"
+    "gitCommit": "ec2ac28",
+    "buildTime": "2026-07-27T09:58:19.771Z"
   }
 }
