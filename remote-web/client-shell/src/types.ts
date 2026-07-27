@@ -878,7 +878,7 @@ export interface DoudianStaleGoodsCleanupResult extends DoudianStoreResult {
 
 export type DoudianBulkDeleteMode = "scan" | "execute";
 export type DoudianBulkDeleteSourceMode = "range" | "ids";
-export type DoudianBulkDeleteAction = "recycle" | "delete";
+export type DoudianBulkDeleteAction = "online" | "offline" | "recycle" | "delete";
 export type DoudianBulkDeleteProtectMode = "includeSelling" | "skipSelling";
 export type DoudianBulkDeleteProductStatus = "selling" | "offline" | "recycle" | "rejected" | "unknown";
 export type DoudianBulkDeleteProductStatusFilter = "all" | "selling" | "offline";
@@ -902,6 +902,8 @@ export interface DoudianBulkDeleteFilters {
   priceMax?: number;
   salesMin?: number;
   salesMax?: number;
+  createdStart?: string;
+  createdEnd?: string;
   createdDaysMin?: number;
   listedDaysMin?: number;
   perStoreLimit?: number;
@@ -974,9 +976,9 @@ export interface DoudianBulkDeleteExecution {
   ok: boolean;
   message: string;
   planKey?: string;
-  stage?: "recycle" | "delete" | string;
+  stage?: "online" | "offline" | "recycle" | "delete" | string;
   stages?: Array<{
-    stage: "recycle" | "delete" | string;
+    stage: "online" | "offline" | "recycle" | "delete" | string;
     status: string;
     ok: boolean;
     message: string;
@@ -1016,6 +1018,20 @@ export interface DoudianBulkDeleteResult extends DoudianStoreResult {
   sourceHealth?: Array<Record<string, unknown>>;
   filters?: DoudianBulkDeleteFilters;
   requestPlanHash?: string;
+}
+
+export interface DoudianFreightTemplate {
+  id: string;
+  templateName: string;
+  shopId: string;
+  shopName: string;
+  raw?: Record<string, unknown>;
+}
+
+export interface DoudianFreightTemplateResult extends DoudianStoreResult {
+  templates?: DoudianFreightTemplate[];
+  successCount?: number;
+  failureCount?: number;
 }
 
 export type DoudianOpportunityReportMode = "clue-scan" | "product-scan" | "product-prematch" | "pipeline-submit" | "clue-submit" | "product-submit" | "prematch-submit" | "collect" | "latest";

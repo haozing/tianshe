@@ -13,7 +13,7 @@ const safetySource = read("remote-web/client-shell/src/domain/doudian/mutationSa
 const contractSource = read("remote-web/client-shell/src/domain/doudian/bulkDeleteContract.ts");
 const productStatusSource = read("remote-web/client-shell/src/domain/doudian/productStatus.ts");
 const repositorySource = read("remote-web/client-shell/src/domain/doudian/repository.ts");
-const pageSource = read("remote-web/client-shell/src/components/BulkDeletePage.tsx");
+const pageSource = read("remote-web/client-shell/src/components/ProductManagementPage.tsx");
 const bridgeSource = read("remote-web/client-shell/src/bridge/client.ts");
 const taskRunnerSource = read("remote-web/client-shell/src/domain/doudian/taskRunner.ts");
 const workerSource = read("electron-client/src/main/database/worker.js");
@@ -22,7 +22,7 @@ assert.deepEqual(deployedConfig, publicConfig, "deployed adapter must match the 
 
 const plans = publicConfig.requestPlans;
 const policy = publicConfig.policies.bulkDelete;
-for (const key of ["bulkDeleteBatchDelete", "bulkDeleteCompleteDelete"]) {
+for (const key of ["bulkDeleteBatchOnline", "bulkDeleteBatchOffline", "bulkDeleteBatchDelete", "bulkDeleteCompleteDelete"]) {
   const plan = plans[key];
   assert.equal(plan.sign, true, `${key} must be signed`);
   assert.equal(plan.localSignerOnly, true, `${key} must use the local xzb-compatible signer`);
@@ -34,6 +34,8 @@ for (const key of ["bulkDeleteBatchDelete", "bulkDeleteCompleteDelete"]) {
   assert.equal(plan.retryOnHttpError, false);
   assert.equal(plan.maxAttempts, 1);
 }
+assert.match(plans.bulkDeleteBatchOnline.referer, /\/ffa\/g\/list$/);
+assert.match(plans.bulkDeleteBatchOffline.referer, /\/ffa\/g\/list$/);
 assert.match(plans.bulkDeleteBatchDelete.referer, /\/ffa\/g\/list$/);
 assert.match(plans.bulkDeleteCompleteDelete.referer, /\/ffa\/g\/recycle$/);
 assert.equal(plans.bulkDeleteProductList.query.id_name_code, "{idNameCode}");
@@ -53,12 +55,12 @@ assert.match(bulkSource, /Object\.values\(responses\)\.every/);
 assert.match(bulkSource, /repositoryGet<ScanRunRecord>\(bulkDeleteScanStore, sourceRunId\)/);
 assert.match(bulkSource, /repositoryGetMany<DoudianBulkDeleteCandidate>\(bulkDeleteCandidateStore, \[\.\.\.selectedIds\]\)/);
 assert.match(bulkSource, /"bulk delete item results missing"/);
-assert.match(bulkSource, /useItemRows: stage === "recycle"/);
+assert.match(bulkSource, /useItemRows: stage !== "delete"/);
 assert.match(bulkSource, /protectMode,/);
 assert.match(bulkSource, /stages: stageRows\.map/);
 assert.match(bulkSource, /status === "submitted"/);
 assert.match(bulkSource, /status === "unknown"/);
-assert.match(bulkSource, /bulk-delete-contract\.status-fields-partial-v2/);
+assert.match(bulkSource, /product-management-contract\.lifecycle-actions-v3/);
 assert.match(bulkSource, /run\.status === "partial" && args\.allowPartialScan === true/);
 assert.match(bulkSource, /objectRecord\(item\.fieldSources\?\.stock\)\.mapped === true/);
 assert.match(bulkSource, /bulkDeleteResultPageSize = 200/);
@@ -83,6 +85,8 @@ assert.match(bulkSource, /segmentCount: collected\.segmentCount/);
 assert.match(safetySource, /args\.protectMode === "skipSelling"/);
 assert.match(safetySource, /Array\.from\(\{ length: concurrency \}/);
 assert.match(safetySource, /reason: "already-recycled"/);
+assert.match(safetySource, /reason: "already-online"/);
+assert.match(safetySource, /reason: "already-offline"/);
 assert.match(safetySource, /confirmAttempts/);
 assert.match(safetySource, /normalizeDoudianProductStatus/);
 assert.match(productStatusSource, /\["0", "selling", "onsale", "on_sale"\]/);
@@ -102,12 +106,16 @@ assert.match(workerSource, /records\.deleteMany cannot bypass store\/group delet
 assert.match(workerSource, /requested: recordIds\.length/);
 
 assert.match(pageSource, /item\.validationStatus === "ok"/);
-assert.match(pageSource, /onProgress: \(event\) => setProgress\(event\.percent\)/);
+assert.match(pageSource, /onProgress: \(event\) => setRunProgress\(event\.percent\)/);
 assert.match(pageSource, /shouldCancel: \(\) => cancelExecutionRef\.current/);
-assert.match(pageSource, /item\.status === "submitted"/);
+assert.match(pageSource, /row\.status === "submitted"/);
 assert.match(pageSource, /allowPartialScan/);
 assert.match(pageSource, /"取消执行"/);
-assert.match(pageSource, /previewRows\.slice\(previewPageStartIndex, previewPageEndIndex\)/);
+assert.match(pageSource, /shownRows\.slice\(pageStart, pageEnd\)/);
+assert.match(pageSource, /value: "online"/);
+assert.match(pageSource, /value: "offline"/);
+assert.match(pageSource, /value: "recycle"/);
+assert.match(pageSource, /value: "delete"/);
 assert.doesNotMatch(pageSource, /修改筛选/);
 
 console.log("BULK_DELETE_CONTRACT_OK");

@@ -56,7 +56,7 @@ test("stale-goods product pages stream candidates through the task bridge", () =
 });
 
 test("stale-goods settings follow the compact reference layout", () => {
-  assert.match(pageSource, /开始分析前，请勾选/);
+  assert.doesNotMatch(pageSource, /开始分析前，请勾选/);
   assert.match(pageSource, /所有勾选条件/);
   assert.match(pageSource, /任一勾选条件/);
   assert.match(pageSource, /grid-cols-3 gap-x-7 gap-y-2/);
@@ -64,6 +64,8 @@ test("stale-goods settings follow the compact reference layout", () => {
   assert.match(pageSource, /<details className="group relative">/);
   assert.match(pageSource, /function RadioOption/);
   assert.match(pageSource, /商品来源 \/ 分析的流量周期/);
+  assert.doesNotMatch(pageSource, /识别方式：/);
+  assert.doesNotMatch(pageSource, /综合滞销|零动销|有流无转/);
   assert.match(pageSource, /placeholder="不限"/);
   assert.match(pageSource, /place-items-center border-t[\s\S]+?开始滞销商品分析/);
   assert.doesNotMatch(pageSource, /启用条件[\s\S]+?时间条件/);

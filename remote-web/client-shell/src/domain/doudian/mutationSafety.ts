@@ -396,7 +396,18 @@ async function liveLookupProduct(payload: DoudianAdapterPayload, store: DoudianS
 function allowedStatus(action: string, stage: string | undefined, lifecycleStatus: string) {
   if (lifecycleStatus === "not_found") return { ok: true, allowed: false, reason: "live-not-found", message: "Live lookup did not find product" };
   if (lifecycleStatus === "unknown") return { ok: false, allowed: false, reason: "live-status-unknown", message: "Live lookup returned unknown product status" };
+  if (action === "online") {
+    if (lifecycleStatus === "selling") {
+      return { ok: true, allowed: false, reason: "already-online", message: "Product is already online" };
+    }
+    return lifecycleStatus === "offline"
+      ? { ok: true, allowed: true, reason: "", message: "" }
+      : { ok: true, allowed: false, reason: "not-offline", message: `Product is ${lifecycleStatus}, online skipped` };
+  }
   if (action === "offline") {
+    if (lifecycleStatus === "offline") {
+      return { ok: true, allowed: false, reason: "already-offline", message: "Product is already offline" };
+    }
     return lifecycleStatus === "selling"
       ? { ok: true, allowed: true, reason: "", message: "" }
       : { ok: true, allowed: false, reason: "not-selling", message: `Product is ${lifecycleStatus}, offline skipped` };

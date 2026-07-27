@@ -4,6 +4,8 @@ const { addDevShortcuts } = require("../utils/dev-shortcuts");
 const { registerWebContentsPrincipal } = require("../security/web-contents-principal");
 const { markRunnerWindowProgrammaticClose, registerTaskChildWindow, runnerOwnsWindow, runnerWindowCommand, taskChildTarget } = require("../tasks/task-manager");
 const { lockBrowserWindowTitle } = require("../window/window-title");
+const { isBlockedScheme } = require("../window/scheme-blocker");
+const { installPlatformPopupPolicy } = require("../window/platform-popup-policy");
 
 const ENABLE_GPU = process.env.CHIHU_ENABLE_GPU === "1";
 
@@ -77,6 +79,21 @@ function registerWindowHandlers() {
         role: "platform-child",
         expectedUrl: target.toString(),
         allowedPlatformOrigins: [target.origin]
+      });
+      installPlatformPopupPolicy(child, {
+        partition: args.partition,
+        title: args.title || APP_TITLE,
+        isBlockedUrl: isBlockedScheme,
+        prepareChild: (popup, details) => {
+          const popupTarget = new URL(details.url);
+          registerWebContentsPrincipal(popup.webContents, {
+            role: "platform-child",
+            expectedUrl: popupTarget.toString(),
+            allowedPlatformOrigins: [target.origin, popupTarget.origin]
+          });
+          if (args.lockTitle) lockBrowserWindowTitle(popup, args.title);
+          addDevShortcuts(popup);
+        }
       });
     }
 

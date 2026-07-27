@@ -23,7 +23,7 @@ const { parseVerifiedReleaseUrl, verifiedReleaseEntryUrl } = require("../src/mai
 const { MAIN_ZOOM_FACTORS, applyMainWindowZoom } = require("../src/main/window/main-zoom-policy");
 
 test("task registry contains the audited free and paid boundary", () => {
-  for (const taskType of ["fetchDoudianStores", "businessData", "fundsData", "violationsData", "staleGoodsScan", "staleGoodsExecute", "bulkDeleteScan", "bulkDeleteExecute"]) {
+  for (const taskType of ["fetchDoudianStores", "businessData", "fundsData", "violationsData", "staleGoodsScan", "staleGoodsExecute", "bulkDeleteScan", "bulkDeleteExecute", "productFreightTemplates"]) {
     assert.equal(TASK_DEFINITIONS[taskType]?.accessTier, "free", taskType);
   }
   for (const taskType of ["opportunityReportScan", "opportunityReportAction", "opportunityFavoriteCategories", "opportunityPipelineSubmit", "opportunityHistoryPrewarm", "opportunityAutoFavorites", "opportunityFavoriteRecords", "opportunityFavoriteCancel", "opportunityFavoritesClearInvalid", "marketingTask"]) {
@@ -120,6 +120,7 @@ test("task-specific modes fail closed", () => {
   assert.throws(() => validateTaskParams("fetchDoudianStores", { mode: "login_all" }), /mode is invalid/);
   assert.throws(() => validateTaskParams("fetchDoudianStores", { mode: "login_selected", repairShopIds: ["1001"] }), /sourceOperationId is invalid/);
   assert.deepEqual(validateTaskParams("bulkDeleteScan", { mode: "scan", shopIds: ["1"] }), { mode: "scan", shopIds: ["1"] });
+  assert.deepEqual(validateTaskParams("productFreightTemplates", { shopIds: ["1"] }), { shopIds: ["1"] });
   assert.throws(() => validateTaskParams("bulkDeleteExecute", { mode: "scan" }), /mode must be execute/);
   assert.throws(() => validateTaskParams("opportunityReportScan", { mode: "collect" }), /mode is invalid/);
   assert.deepEqual(validateTaskParams("opportunityReportAction", { mode: "collect", shopIds: ["shop-1"] }), { mode: "collect", shopIds: ["shop-1"] });
@@ -159,7 +160,8 @@ test("task params use a per-task top-level schema", () => {
 
 test("each task receives only its audited request plans", () => {
   assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.fetchDoudianStores, adapter).sort(), ["currentShop", "shopList"]);
-  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.bulkDeleteExecute, adapter).sort(), ["bulkDeleteBatchDelete", "bulkDeleteCompleteDelete", "bulkDeleteProductList"]);
+  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.bulkDeleteExecute, adapter).sort(), ["bulkDeleteBatchDelete", "bulkDeleteBatchOffline", "bulkDeleteBatchOnline", "bulkDeleteCompleteDelete", "bulkDeleteProductList"]);
+  assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.productFreightTemplates, adapter).sort(), ["freightTemplateList", "freightTemplateToken"]);
   assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.fundsData, adapter).sort(), ["fundAccountCenter", "fundAccountList", "fundAccountOpenInfo", "fundBillQuery", "fundCompensateStatistics", "fundPledgeCash", "fundPledgePayable", "fundShopAwardOverview", "fundShopDepositPage"]);
   assert.deepEqual(allowedPlanKeys(TASK_DEFINITIONS.violationsData, adapter).sort(), ["violationPenaltyTicketList", "violationRiskTicketList"]);
   const businessPlans = allowedPlanKeys(TASK_DEFINITIONS.businessData, adapter);

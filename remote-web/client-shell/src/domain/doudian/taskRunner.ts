@@ -5,7 +5,7 @@ import {
   type DoudianTaskRequest
 } from "./progress";
 import { runFetchDoudianStoresTask } from "./storeImport";
-import { runProductCatalogSyncTask } from "./productCatalog";
+import { fetchFreightTemplates, runProductCatalogSyncTask } from "./productCatalog";
 import { runRefreshDoudianStoreStatusTask } from "./storeStatus";
 import { cancelOpportunityPipelineSubmitTask, runOpportunityHistoryPrewarmTask, runOpportunityPipelineSubmitTask, runOpportunitySubmitContinuationTask } from "./opportunityReport";
 import { cancelOpportunityFavoriteRecords, clearInvalidOpportunityFavorites } from "./opportunityFavorites";
@@ -261,6 +261,10 @@ async function runDomainTask(channel: RunnerChannel, operationId: string, task: 
       result = await fetchFundsData({
         ...payload
       } as unknown as Parameters<typeof fetchFundsData>[0]);
+    } else if (task.taskType === "productFreightTemplates") {
+      result = await fetchFreightTemplates({
+        ...payload
+      } as unknown as Parameters<typeof fetchFreightTemplates>[0]);
     } else if (task.taskType === "violationsData") {
       result = await fetchViolationsData({
         ...payload
@@ -274,7 +278,7 @@ async function runDomainTask(channel: RunnerChannel, operationId: string, task: 
         ...payload,
         onProgress: (detail: unknown) => {
           const progress = detail && typeof detail === "object" ? Number((detail as { progress?: unknown }).progress || 0) : 0;
-          post(channel, { type: "task:progress", operationId, progress, message: "批量删除任务执行中" });
+          post(channel, { type: "task:progress", operationId, progress, message: "商品管理任务执行中" });
         },
         shouldCancel: () => state.cancelled
       } as unknown as Parameters<typeof fetchBulkDeleteProducts>[0]);

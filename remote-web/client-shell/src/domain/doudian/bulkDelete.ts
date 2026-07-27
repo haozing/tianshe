@@ -116,7 +116,7 @@ const bulkDeleteScanStore = "bulk_delete_scan_runs_v1" as const;
 const bulkDeleteCandidateStore = "bulk_delete_candidates_v1" as const;
 const bulkDeleteExecuteStore = "bulk_delete_execute_runs_v1" as const;
 const bulkDeleteOperationEventStore = "bulk_delete_operation_events_v1" as const;
-const bulkDeleteContractVersion = "bulk-delete-contract.status-fields-partial-v2";
+const bulkDeleteContractVersion = "product-management-contract.lifecycle-actions-v3";
 const bulkDeleteResultPageSize = 200;
 
 function text(value: unknown) {
@@ -308,6 +308,16 @@ function productListPlanKey(adapter: DoudianAdapterConfig) {
   return "bulkDeleteProductList";
 }
 
+function onlinePlanKey(adapter: DoudianAdapterConfig) {
+  if (!adapter.requestPlans?.bulkDeleteBatchOnline) throw new Error("product management request plan missing: bulkDeleteBatchOnline");
+  return "bulkDeleteBatchOnline";
+}
+
+function offlinePlanKey(adapter: DoudianAdapterConfig) {
+  if (!adapter.requestPlans?.bulkDeleteBatchOffline) throw new Error("product management request plan missing: bulkDeleteBatchOffline");
+  return "bulkDeleteBatchOffline";
+}
+
 function recyclePlanKey(adapter: DoudianAdapterConfig) {
   if (!adapter.requestPlans?.bulkDeleteBatchDelete) throw new Error("bulk delete request plan missing: bulkDeleteBatchDelete");
   return "bulkDeleteBatchDelete";
@@ -321,6 +331,8 @@ function completeDeletePlanKey(adapter: DoudianAdapterConfig) {
 function validateBulkDeleteAdapter(adapter: DoudianAdapterConfig) {
   mappings(adapter);
   productListPlanKey(adapter);
+  onlinePlanKey(adapter);
+  offlinePlanKey(adapter);
   recyclePlanKey(adapter);
   completeDeletePlanKey(adapter);
 }
@@ -329,6 +341,8 @@ function requestPlanHash(adapter: DoudianAdapterConfig) {
   return [
     adapter.version || "",
     productListPlanKey(adapter),
+    onlinePlanKey(adapter),
+    offlinePlanKey(adapter),
     recyclePlanKey(adapter),
     completeDeletePlanKey(adapter),
     policyText(adapter, "bulkDelete.ruleVersion", "bulk-delete-rule"),
@@ -341,7 +355,7 @@ function normalizeSourceMode(value: unknown): DoudianBulkDeleteSourceMode {
 }
 
 function normalizeAction(value: unknown): DoudianBulkDeleteAction {
-  return value === "delete" ? "delete" : "recycle";
+  return value === "online" || value === "offline" || value === "delete" ? value : "recycle";
 }
 
 function normalizeProtectMode(value: unknown): DoudianBulkDeleteProtectMode {
@@ -391,6 +405,8 @@ function normalizeFilters(filters: DoudianBulkDeleteFilters | undefined): Doudia
     priceMax: Math.max(0, Number(filters?.priceMax ?? 999999999)),
     salesMin: Math.max(0, Number(filters?.salesMin ?? 0)),
     salesMax: Math.max(0, Number(filters?.salesMax ?? 999999999)),
+    createdStart: bulkDeleteCreatedDate(filters?.createdStart),
+    createdEnd: bulkDeleteCreatedDate(filters?.createdEnd),
     createdDaysMin: Math.max(0, Number(filters?.createdDaysMin ?? 0)),
     listedDaysMin: Math.max(0, Number(filters?.listedDaysMin ?? 0)),
     perStoreLimit: Math.max(0, Number(filters?.perStoreLimit ?? 0))
@@ -528,8 +544,12 @@ function matchesFilters(row: DoudianBulkDeleteCandidate, filters: DoudianBulkDel
   const priceMax = Number(filters.priceMax || 999999999);
   const salesMin = Number(filters.salesMin || 0);
   const salesMax = Number(filters.salesMax || 999999999);
-  if (row.price === undefined ? priceMin > 0 || priceMax < 999999999 : row.price < priceMin || row.price > priceMax) return false;
-  if (row.sales === undefined ? salesMin > 0 || salesMax < 999999999 : row.sales < salesMin || row.sales > salesMax) return false;
+  if (row.price === undefined ? priceMin > 0 : row.price < priceMin || row.price > priceMax) return false;
+  if (row.sales === undefined ? salesMin > 0 : row.sales < salesMin || row.sales > salesMax) return false;
+  const createdDate = bulkDeleteCreatedDate(row.createdAt);
+  if ((filters.createdStart || filters.createdEnd) && !createdDate) return false;
+  if (filters.createdStart && createdDate && createdDate < filters.createdStart) return false;
+  if (filters.createdEnd && createdDate && createdDate > filters.createdEnd) return false;
   if (Number(filters.createdDaysMin || 0) > 0 && Number(row.daysSinceCreated ?? -1) >= 0 && Number(row.daysSinceCreated) < Number(filters.createdDaysMin)) return false;
   if (Number(filters.listedDaysMin || 0) > 0 && Number(row.daysSinceListed ?? -1) >= 0 && Number(row.daysSinceListed) < Number(filters.listedDaysMin)) return false;
   return true;
@@ -602,8 +622,8 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
     pageSize: String(pageSize),
     keyword: filters.keyword || "",
     idNameCode: "",
-    startTime: segment?.startDate || "",
-    endTime: segment?.endDate || "",
+    startTime: segment?.startDate || filters.createdStart || "",
+    endTime: segment?.endDate || filters.createdEnd || "",
     ...statusContext(filters.status),
     ...(orderField ? { orderField } : {}),
     ...(sort ? { sort } : {})
@@ -1028,7 +1048,7 @@ async function loadExecuteCandidates(args: BulkDeleteArgs) {
   const selectedIds = new Set((args.candidateIds || []).map((id) => text(id)).filter(Boolean));
   if (!selectedIds.size) throw new Error("bulk delete selected products missing");
 
-  const action = normalizeAction(run.action);
+  const action = normalizeAction(args.action || run.action);
   const stored = await repositoryGetMany<DoudianBulkDeleteCandidate>(bulkDeleteCandidateStore, [...selectedIds]);
   const candidates = stored
     .filter((item) => text(item.sourceRunId) === run.runId || text(item.sourceRunId) === sourceRunId)
@@ -1051,7 +1071,7 @@ async function loadExecuteCandidates(args: BulkDeleteArgs) {
 function executePlanGuard(adapter: DoudianAdapterConfig, action: string, planKey: string) {
   const plan = objectRecord(adapter.requestPlans?.[planKey]);
   return {
-    ok: !!planKey && !!adapter.requestPlans?.[planKey] && ["recycle", "delete"].includes(action),
+    ok: !!planKey && !!adapter.requestPlans?.[planKey] && ["online", "offline", "recycle", "delete"].includes(action),
     dryRunOnly: plan.dryRunOnly !== false,
     action,
     planKey,
@@ -1277,7 +1297,13 @@ async function executeRequestStage(payload: DoudianAdapterPayload, store: Doudia
       diagnostic: { guard, requestContext: buildRequestContext(candidates) }
     };
   }
-  const auditAction = stage === "delete" ? "delete" : "recycle";
+  const auditAction: DoudianBulkDeleteAction = stage === "online"
+    ? "online"
+    : stage === "offline"
+      ? "offline"
+      : stage === "delete"
+        ? "delete"
+        : "recycle";
   const safety = await prepareMutationSafety({
     payload,
     store,
@@ -1297,15 +1323,16 @@ async function executeRequestStage(payload: DoudianAdapterPayload, store: Doudia
     confirmDelayMs: policyNumber(payload.adapter, "bulkDelete.recycleConfirmDelayMs", 1000, 0, 10000),
     shouldCancel: operationArgs.shouldCancel
   });
-  const rejectedExecutions = bulkExecutionsFromRejected(store, safety.rejected, auditAction as DoudianBulkDeleteAction, planKey, stage);
-  const alreadySatisfiedCandidates = stage === "recycle"
-    ? safety.rejected.filter((entry) => entry.reason === "already-recycled").map((entry) => entry.item)
+  const rejectedExecutions = bulkExecutionsFromRejected(store, safety.rejected, auditAction, planKey, stage);
+  const satisfiedReason = stage === "online" ? "already-online" : stage === "offline" ? "already-offline" : stage === "recycle" ? "already-recycled" : "";
+  const alreadySatisfiedCandidates = satisfiedReason
+    ? safety.rejected.filter((entry) => entry.reason === satisfiedReason).map((entry) => entry.item)
     : [];
   const safeCandidates = safety.allowed;
   if (!safeCandidates.length) {
     await recordExecutionMutationResults({ store, executions: rejectedExecutions.map((item) => ({ ...item, action: auditAction })), defaultAction: auditAction }).catch(() => undefined);
     return {
-      ok: rejectedExecutions.length > 0 && safety.rejected.every((entry) => entry.reason === "already-recycled"),
+      ok: rejectedExecutions.length > 0 && safety.rejected.every((entry) => entry.reason === satisfiedReason),
       dryRun: false,
       executions: rejectedExecutions,
       successfulCandidates: alreadySatisfiedCandidates,
@@ -1335,7 +1362,7 @@ async function executeRequestStage(payload: DoudianAdapterPayload, store: Doudia
       candidates: current,
       action,
       stage,
-      useItemRows: stage === "recycle"
+      useItemRows: stage !== "delete"
     });
     lastItemResultCount = stageResult.itemResultCount;
     const topLevelTransient = false;
@@ -1375,7 +1402,7 @@ async function executeRequestStage(payload: DoudianAdapterPayload, store: Doudia
   await recordExecutionMutationResults({ store, executions: allExecutions.map((item) => ({ ...item, action: auditAction })), defaultAction: auditAction }).catch(() => undefined);
   const ok = executions.length === safeCandidates.length
     && executions.every((item) => item.ok)
-    && safety.rejected.every((entry) => entry.reason === "already-recycled");
+    && safety.rejected.every((entry) => entry.reason === satisfiedReason);
   return {
     ok,
     dryRun: false,
@@ -1388,6 +1415,12 @@ async function executeRequestStage(payload: DoudianAdapterPayload, store: Doudia
 async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, candidates: DoudianBulkDeleteCandidate[], action: DoudianBulkDeleteAction, index: number, total: number, forceDryRun: boolean, runId: string, operationId: string, protectMode: DoudianBulkDeleteProtectMode, operationArgs: BulkDeleteArgs, progressState: { completed: number; total: number }) {
   const recycleKey = recyclePlanKey(payload.adapter);
   const finalKey = completeDeletePlanKey(payload.adapter);
+  const firstPlanKey = action === "online"
+    ? onlinePlanKey(payload.adapter)
+    : action === "offline"
+      ? offlinePlanKey(payload.adapter)
+      : recycleKey;
+  const firstStageName = action === "online" ? "online" : action === "offline" ? "offline" : "recycle";
   const batchSize = policyNumber(payload.adapter, "bulkDelete.executeBatchSize", executeBatchSize, 1, 100);
   const batchDelayMs = policyNumber(payload.adapter, "bulkDelete.executeBatchDelayMs", executeBatchDelayMs, 0, 30000);
   const batches = chunksOf(candidates, batchSize);
@@ -1397,24 +1430,24 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
 
   for (const [batchIndex, batch] of batches.entries()) {
     if (operationCancelled(operationArgs)) {
-      executions.push(...executionFor(batch, store, action, "cancelled", false, "bulk delete operation cancelled before batch submission", recycleKey, "recycle"));
+      executions.push(...executionFor(batch, store, action, "cancelled", false, "product operation cancelled before batch submission", firstPlanKey, firstStageName));
       continue;
     }
-    reportProgress(operationArgs, { phase: "recycle", completed: progressState.completed, total: progressState.total, shopId: store.shopId, batchIndex: batchIndex + 1, totalBatches: batches.length });
+    reportProgress(operationArgs, { phase: firstStageName, completed: progressState.completed, total: progressState.total, shopId: store.shopId, batchIndex: batchIndex + 1, totalBatches: batches.length });
     let firstStage: Awaited<ReturnType<typeof executeRequestStage>>;
     try {
-      firstStage = await executeRequestStage(payload, store, batch, action, recycleKey, "recycle", forceDryRun, runId, protectMode, operationArgs);
+      firstStage = await executeRequestStage(payload, store, batch, action, firstPlanKey, firstStageName, forceDryRun, runId, protectMode, operationArgs);
     } catch (error) {
       if (!operationCancelled(operationArgs)) throw error;
-      executions.push(...executionFor(batch, store, action, "cancelled", false, "bulk delete operation cancelled before batch submission", recycleKey, "recycle"));
+      executions.push(...executionFor(batch, store, action, "cancelled", false, "product operation cancelled before batch submission", firstPlanKey, firstStageName));
       continue;
     }
     dryRun = dryRun || firstStage.dryRun;
-    const diagnostic: Record<string, unknown> = { index: batchIndex + 1, total: batches.length, recycle: firstStage.diagnostic };
+    const diagnostic: Record<string, unknown> = { index: batchIndex + 1, total: batches.length, [firstStageName]: firstStage.diagnostic };
     await recordOperationEvent({
       operationId,
       runId,
-      phase: "recycle",
+      phase: firstStageName,
       shopId: store.shopId,
       shopName: store.shopName,
       batchIndex: batchIndex + 1,
@@ -1464,12 +1497,12 @@ async function executeStore(payload: DoudianAdapterPayload, store: DoudianStoreS
       const recycledButCancelled = cancelledAfterRecycle && firstStage.successfulCandidates.some((item) => item.id === candidate.id);
       const terminal = recycledButCancelled
         ? executionFor([candidate], store, action, "cancelled", false, "bulk delete operation cancelled after recycle and before complete delete", finalKey, "delete")[0]
-        : second || first || executionFor([candidate], store, action, "failed", false, "bulk delete execution result missing", recycleKey, "recycle")[0];
+        : second || first || executionFor([candidate], store, action, "failed", false, "product operation result missing", firstPlanKey, firstStageName)[0];
       const stageRows = [first, second].filter((item): item is DoudianBulkDeleteExecution => Boolean(item));
       executions.push({
         ...terminal,
         action,
-        stages: stageRows.map((item) => ({ stage: item.stage || "recycle", status: item.status, ok: item.ok, message: item.message, planKey: item.planKey }))
+        stages: stageRows.map((item) => ({ stage: item.stage || firstStageName, status: item.status, ok: item.ok, message: item.message, planKey: item.planKey }))
       });
     }
 
@@ -1642,7 +1675,7 @@ async function fetchBulkDeleteScan(payload: DoudianAdapterPayload, args: BulkDel
 }
 
 async function fetchBulkDeleteExecute(payload: DoudianAdapterPayload, args: BulkDeleteArgs): Promise<DoudianBulkDeleteResult> {
-  if (String(args.confirmText || "") !== "确认删除") throw new Error("bulk delete confirm text mismatch");
+  if (String(args.confirmText || "") !== "确认执行") throw new Error("product operation confirm text mismatch");
   const { run, sourceRunId, selected, action } = await loadExecuteCandidates(args);
   if (run.status !== "ok" && !(run.status === "partial" && args.allowPartialScan === true)) {
     throw new Error("bulk delete source scan is incomplete; explicitly allow execution for completed stores only");
@@ -1652,7 +1685,6 @@ async function fetchBulkDeleteExecute(payload: DoudianAdapterPayload, args: Bulk
   const previewAgeMs = Date.now() - new Date(run.createdAt).getTime();
   if (!Number.isFinite(previewAgeMs) || previewAgeMs > maxPreviewAgeMs) throw new Error("bulk delete source preview expired; generate a new preview");
   if (run.adapterVersion !== (payload.adapter.version || "") || run.requestPlanHash !== requestHash) throw new Error("bulk delete adapter changed after preview; generate a new preview");
-  if (args.action && normalizeAction(args.action) !== action) throw new Error("bulk delete action differs from source preview");
   const protectMode = normalizeProtectMode(run.protectMode);
   const ledger = await listStoreLedger();
   const stores = ledger.stores || [];
@@ -1695,7 +1727,9 @@ async function fetchBulkDeleteExecute(payload: DoudianAdapterPayload, args: Bulk
         index: index + 1,
         total: groups.length
       });
-      executions.push(...executionFor(group.candidates, group.store, action, "failed", false, message, recyclePlanKey(payload.adapter), "recycle"));
+      const planKey = action === "online" ? onlinePlanKey(payload.adapter) : action === "offline" ? offlinePlanKey(payload.adapter) : recyclePlanKey(payload.adapter);
+      const stage = action === "online" ? "online" : action === "offline" ? "offline" : "recycle";
+      executions.push(...executionFor(group.candidates, group.store, action, "failed", false, message, planKey, stage));
       await recordOperationEvent({
         operationId,
         runId,
@@ -1717,7 +1751,11 @@ async function fetchBulkDeleteExecute(payload: DoudianAdapterPayload, args: Bulk
       const key = text(candidate.id || `${candidate.shopId}-${candidate.productId}`);
       if (executedIds.has(key)) continue;
       const store = targets.find((item) => item.shopId === candidate.shopId);
-      if (store) executions.push(...executionFor([candidate], store, action, "cancelled", false, "bulk delete operation cancelled before batch submission", recyclePlanKey(payload.adapter), "recycle"));
+      if (store) {
+        const planKey = action === "online" ? onlinePlanKey(payload.adapter) : action === "offline" ? offlinePlanKey(payload.adapter) : recyclePlanKey(payload.adapter);
+        const stage = action === "online" ? "online" : action === "offline" ? "offline" : "recycle";
+        executions.push(...executionFor([candidate], store, action, "cancelled", false, "product operation cancelled before batch submission", planKey, stage));
+      }
     }
   }
   const summary = executeSummary(executions);
@@ -1847,7 +1885,7 @@ export async function runDoudianBulkDeleteSelfCheck(options: { doudianAdapter?: 
       sourceMode: "range",
       action: "delete",
       protectMode: "includeSelling",
-      filters: { keyword: "Self Check", status: "all", productIds: [] },
+      filters: { keyword: "Self Check", status: "all", productIds: [], priceMin: 0, priceMax: 999999, salesMin: 0, salesMax: 999999 },
       mockProducts: [{
        product_id: `bulk-product-${suffix}`,
         title: "Self Check Bulk Product",
@@ -1882,7 +1920,7 @@ export async function runDoudianBulkDeleteSelfCheck(options: { doudianAdapter?: 
       action: "delete",
       candidateIds: candidate ? [candidate.id] : [],
       sourceRunId: scanRunId,
-      confirmText: "确认删除",
+      confirmText: "确认执行",
       dryRun: true
     });
     const restoredScan = await restoreLatestBulkDeleteScan();

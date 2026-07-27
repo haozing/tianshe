@@ -1,11 +1,13 @@
 import type {
   BridgeSelfCheck,
   DoudianAdapterPayload,
+  DoudianBulkDeleteAction,
   DoudianBulkDeleteFilters,
   DoudianBulkDeleteProgress,
   DoudianBulkDeleteResult,
   DoudianBusinessDataResult,
   DoudianFundsDataResult,
+  DoudianFreightTemplateResult,
   DoudianOpportunityFilters,
   DoudianOpportunityGoodsMatchType,
   DoudianOpportunityCandidatePage,
@@ -371,6 +373,23 @@ export async function fetchDoudianFundsData(args: {
   }, 900000) as Promise<DoudianFundsDataResult>;
 }
 
+export async function fetchDoudianFreightTemplates(args: {
+  shopIds?: string[];
+  operationId?: string;
+  forceAdapter?: boolean;
+} = {}): Promise<DoudianFreightTemplateResult> {
+  const nextArgs = await withDoudianAdapter({
+    shopIds: args.shopIds || [],
+    ...(args.operationId ? { operationId: args.operationId } : {})
+  }, { force: args.forceAdapter === true });
+  return runDoudianStoreTask({
+    taskType: "productFreightTemplates",
+    operationId: args.operationId,
+    metadata: { replaceActive: true },
+    payload: nextArgs
+  }, 600000) as Promise<DoudianFreightTemplateResult>;
+}
+
 export async function fetchDoudianFundsDataLatest(args: {
   shopIds?: string[];
   forceAdapter?: boolean;
@@ -503,7 +522,7 @@ export async function fetchDoudianBulkDeleteProducts(args: {
   shopIds?: string[];
   sourceMode?: "range" | "ids";
   filters?: DoudianBulkDeleteFilters;
-  action?: "recycle" | "delete";
+  action?: DoudianBulkDeleteAction;
   protectMode?: "includeSelling" | "skipSelling";
   candidateIds?: string[];
   sourceRunId?: string;

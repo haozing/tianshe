@@ -1,4 +1,4 @@
-import type { DoudianAdapterConfig, DoudianAdapterPayload, DoudianRunDetail, DoudianStoreResult, DoudianStoreSummary } from "../../types";
+import type { DoudianAdapterConfig, DoudianAdapterPayload, DoudianFreightTemplate, DoudianFreightTemplateResult, DoudianRunDetail, DoudianStoreResult, DoudianStoreSummary } from "../../types";
 import { requireNativeData } from "../../nativeData/client";
 import { dispatchDoudianProgress } from "./progress";
 import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestPlan, type RequestPlanResult } from "./requestPlan";
@@ -16,6 +16,14 @@ interface ProductCatalogSyncArgs {
   maxPages?: number;
   forceRefresh?: boolean;
   mockProducts?: Array<Record<string, unknown>>;
+}
+
+interface FreightTemplateArgs {
+  doudianAdapter: DoudianAdapterPayload;
+  shopIds?: string[];
+  operationId?: string;
+  isCancelled?: () => boolean;
+  trackWindow?: (winId: number) => void;
 }
 
 const DEFAULT_TENANT_ID = "local-user";
@@ -386,6 +394,169 @@ export async function runProductCatalogSyncTask(args: ProductCatalogSyncArgs = {
     updated: successCount,
     failed: failureCount,
     coverageKeys
+  };
+}
+
+function freightResponseMessage(value: unknown) {
+  return text(firstPathValue(value, ["msg", "message", "status_msg", "statusMessage"]));
+}
+
+function freightTemplateRows(value: unknown) {
+  const data = getPathValue(value, "data");
+  if (Array.isArray(data)) return data.map(objectRecord);
+  if (data && typeof data === "object") return Object.values(data).map(objectRecord);
+  return [];
+}
+
+function freightTemplateTotal(value: unknown, fallback: number) {
+  const total = Number(firstPathValue(value, ["total", "data.total"]));
+  return Number.isFinite(total) && total >= 0 ? total : fallback;
+}
+
+function normalizeFreightTemplate(store: DoudianStoreSummary, row: Record<string, unknown>): DoudianFreightTemplate | null {
+  const id = text(row.id || row.template_id || row.templateId);
+  const templateName = text(row.template_name || row.templateName || row.name);
+  if (!id && !templateName) return null;
+  return {
+    id: id || `${store.shopId}:${templateName}`,
+    templateName: templateName || `运费模板 ${id}`,
+    shopId: store.shopId,
+    shopName: store.shopName,
+    raw: row
+  };
+}
+
+async function fetchStoreFreightTemplates(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: FreightTemplateArgs, index: number, totalStores: number) {
+  const tokenResponse = await runDoudianRequestPlan(payload, {
+    partition: store.partition,
+    planKey: "freightTemplateToken",
+    context: {
+      timestamp: String(Date.now()),
+      shopId: store.shopId,
+      shopName: store.shopName,
+      partition: store.partition
+    },
+    trackWindow: args.trackWindow,
+    shouldCancel: args.isCancelled
+  });
+  const tokenOk = requestPlanResponseOk(tokenResponse, payload.adapter, "freightTemplateToken");
+  const token = text(firstPathValue(tokenResponse.data, ["data.token", "data.__token", "token", "__token"]));
+  if (!tokenOk || !token) {
+    const message = freightResponseMessage(tokenResponse.data) || tokenResponse.error || "店铺登录令牌获取失败";
+    return {
+      templates: [] as DoudianFreightTemplate[],
+      detail: {
+        shopId: store.shopId,
+        shopName: store.shopName,
+        status: "failed",
+        ok: false,
+        message,
+        reason: "freight-template-token-failed",
+        category: "api",
+        diagnostic: { tokenStatus: tokenResponse.status, tokenAttempts: tokenResponse.attemptCount || 0 },
+        index,
+        total: totalStores
+      } satisfies DoudianRunDetail
+    };
+  }
+
+  const pageSize = 100;
+  const maxPages = 50;
+  const templates: DoudianFreightTemplate[] = [];
+  let remoteTotal = 0;
+  let fetchedPages = 0;
+  let failureMessage = "";
+  for (let page = 0; page < maxPages; page += 1) {
+    if (args.isCancelled?.()) {
+      failureMessage = "运费模板刷新已取消";
+      break;
+    }
+    const response = await runDoudianRequestPlan(payload, {
+      partition: store.partition,
+      planKey: "freightTemplateList",
+      context: {
+        name: "",
+        page: String(page),
+        pageSize: String(pageSize),
+        token,
+        shopId: store.shopId,
+        shopName: store.shopName,
+        partition: store.partition
+      },
+      trackWindow: args.trackWindow,
+      shouldCancel: args.isCancelled
+    });
+    if (!requestPlanResponseOk(response, payload.adapter, "freightTemplateList")) {
+      failureMessage = freightResponseMessage(response.data) || response.error || "运费模板列表获取失败";
+      break;
+    }
+    const rows = freightTemplateRows(response.data);
+    fetchedPages += 1;
+    remoteTotal = Math.max(remoteTotal, freightTemplateTotal(response.data, rows.length));
+    for (const row of rows) {
+      const template = normalizeFreightTemplate(store, row);
+      if (template) templates.push(template);
+    }
+    if (rows.length < pageSize || templates.length >= remoteTotal) break;
+  }
+
+  const deduped = Array.from(new Map(templates.map((template) => [template.id, template])).values());
+  const truncated = !failureMessage && fetchedPages >= maxPages && remoteTotal > deduped.length;
+  const ok = !failureMessage && !truncated;
+  const message = failureMessage || (truncated ? "运费模板数量超过当前分页上限" : `已获取 ${deduped.length} 个运费模板`);
+  return {
+    templates: ok ? deduped : [],
+    detail: {
+      shopId: store.shopId,
+      shopName: store.shopName,
+      status: ok ? "ok" : "failed",
+      ok,
+      message,
+      reason: ok ? "" : truncated ? "freight-template-truncated" : "freight-template-list-failed",
+      category: ok ? "" : truncated ? "adapter-policy" : "api",
+      diagnostic: { fetchedPages, fetchedCount: deduped.length, remoteTotal },
+      index,
+      total: totalStores
+    } satisfies DoudianRunDetail
+  };
+}
+
+export async function fetchFreightTemplates(args: FreightTemplateArgs): Promise<DoudianFreightTemplateResult> {
+  const payload = args.doudianAdapter;
+  if (!payload.adapter.requestPlans?.freightTemplateToken || !payload.adapter.requestPlans?.freightTemplateList) {
+    throw new Error("运费模板请求配置缺失");
+  }
+  const ledger = await listStoreLedger();
+  const requested = new Set((args.shopIds || []).map(text).filter(Boolean));
+  const stores = (ledger.stores || []).filter((store) => !requested.size || requested.has(store.shopId));
+  if (!stores.length) return { ok: false, status: "failed", message: "未选择可用店铺", templates: [], successCount: 0, failureCount: 0 };
+
+  const templates: DoudianFreightTemplate[] = [];
+  const details: DoudianRunDetail[] = [];
+  for (const [index, store] of stores.entries()) {
+    const result = await fetchStoreFreightTemplates(payload, store, args, index + 1, stores.length);
+    templates.push(...result.templates);
+    details.push(result.detail);
+  }
+  const successCount = details.filter((detail) => detail.ok).length;
+  const failureCount = details.length - successCount;
+  const status = failureCount ? (successCount ? "partial" : "failed") : "ok";
+  const message = failureCount
+    ? successCount
+      ? `已获取 ${successCount} 家店铺，${failureCount} 家失败`
+      : details[0]?.message || "运费模板获取失败"
+    : `已获取 ${templates.length} 个运费模板`;
+  return {
+    ok: failureCount === 0,
+    status,
+    message,
+    operationId: args.operationId,
+    templates,
+    details,
+    successCount,
+    failureCount,
+    stores,
+    groups: ledger.groups || []
   };
 }
 

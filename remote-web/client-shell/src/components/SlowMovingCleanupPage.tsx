@@ -228,12 +228,6 @@ const trafficPeriodOptions: Array<{ key: TrafficPeriod; label: string }> = [
   { key: "90d", label: "近90天" }
 ];
 
-const noSalesTypeOptions: Array<{ value: NoSalesType; label: string }> = [
-  { value: "balanced", label: "综合滞销" },
-  { value: "strict", label: "零动销" },
-  { value: "trafficWaste", label: "有流无转" }
-];
-
 const cleanupColumns: Array<{ key: CleanupColumnKey; label: string; width: number }> = [
   { key: "status", label: "商品状态", width: 136 },
   { key: "sales", label: "总销量", width: 96 },
@@ -1776,13 +1770,7 @@ export function SlowMovingCleanupPage() {
           <section className="grid min-h-0 grid-rows-[minmax(0,1fr)_64px] overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
             <div className="min-h-0 overflow-auto bg-[#fffaf8]">
               <div className="w-full max-w-[1040px] px-6 py-5 max-[860px]:px-4">
-                <div className="flex items-start gap-2 text-[13px] leading-6 text-[#344054]">
-                  <Info className="mt-1 size-[15px] shrink-0 text-brand-fox" strokeWidth={2.2} />
-                  <span>开始分析前，请勾选 <a className="font-semibold text-brand-navy underline decoration-dashed underline-offset-4" href="#/stores">【店铺管理】</a> 内需要参与分析的店铺，勾选店铺将作为分析过程中商品数据的来源。</span>
-                </div>
-                <div className="ml-[23px] mt-1 text-[12px] text-[#98a2b3]">注：商品数据来自平台商品列表，流量指标来自罗盘经营数据。</div>
-
-                <div className="mt-5 grid gap-6">
+                <div className="grid gap-6">
                   <section aria-labelledby="stale-match-heading">
                     <h3 className="text-[14px] font-semibold text-[#101828]" id="stale-match-heading">标记符合以下 <span className="text-brand-fox">所有勾选条件</span> 的商品为滞销商品</h3>
                     <div className="mt-3 grid grid-cols-3 gap-x-7 gap-y-2 max-[1180px]:grid-cols-2 max-[760px]:grid-cols-1">
@@ -1808,10 +1796,6 @@ export function SlowMovingCleanupPage() {
 
                   <section className="grid gap-2" aria-labelledby="stale-source-heading">
                     <h3 className="text-[14px] font-semibold text-[#101828]" id="stale-source-heading">商品来源 / 分析的流量周期</h3>
-                    <div className="flex min-h-8 flex-wrap items-center gap-x-5 gap-y-1">
-                      <span className="w-[72px] text-[13px] text-[#667085]">识别方式：</span>
-                      {noSalesTypeOptions.map((option) => <RadioOption checked={rules.noSalesType === option.value} key={option.value} label={option.label} onClick={() => setRule("noSalesType", option.value)} />)}
-                    </div>
                     <div className="flex min-h-8 flex-wrap items-center gap-x-5 gap-y-1">
                       <span className="w-[72px] text-[13px] text-[#667085]">流量周期：</span>
                       {trafficPeriodOptions.map((period) => <RadioOption checked={rules.trafficPeriod === period.key} key={period.key} label={period.label} onClick={() => setTrafficPeriod(period.key)} />)}

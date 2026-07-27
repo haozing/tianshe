@@ -93,7 +93,8 @@ const FUNDS_PLANS = ["fundAccountList", "fundAccountOpenInfo", "fundPledgeCash",
 const VIOLATION_PLANS = ["violationRiskTicketList", "violationPenaltyTicketList"];
 const STALE_SCAN_PLANS = ["staleGoodsProductList", "staleGoodsRecommendAdmit", "staleGoodsCompassDownload"];
 const STALE_EXECUTE_PLANS = [...STALE_SCAN_PLANS, "staleGoodsBatchOffline", "staleGoodsBatchDelete", "staleGoodsCompleteDelete"];
-const BULK_DELETE_PLANS = ["bulkDeleteProductList", "bulkDeleteBatchDelete", "bulkDeleteCompleteDelete"];
+const BULK_DELETE_PLANS = ["bulkDeleteProductList", "bulkDeleteBatchOnline", "bulkDeleteBatchOffline", "bulkDeleteBatchDelete", "bulkDeleteCompleteDelete"];
+const FREIGHT_TEMPLATE_PLANS = ["freightTemplateToken", "freightTemplateList"];
 const OPPORTUNITY_SUBMIT_PLANS = ["opportunityClueRealtimeList", "opportunitySubmitHistoryList", "opportunityProductList", "opportunityEditGoodsTitle", "opportunitySubmitClue"];
 
 const MARKETING_PLAN_POLICY = Object.freeze({
@@ -132,6 +133,7 @@ const TASK_PARAM_KEYS = Object.freeze({
   fetchDoudianStores: keys("mode", "repairShopIds", "repairShopNames", "sourceOperationId", "timeoutMs"),
   refreshDoudianStoreStatus: keys("shopIds"),
   syncProductCatalog: keys("shopIds", "tenantId", "storeGeneration", "forceRefresh"),
+  productFreightTemplates: keys("shopIds"),
   businessData: keys("shopIds", "datePreset", "beginDate", "endDate"),
   fundsData: keys("shopIds", "includeDiagnostics"),
   violationsData: keys("shopIds", "datePreset", "beginDate", "endDate", "processStatus"),
@@ -158,6 +160,7 @@ const TASK_DEFINITIONS = Object.freeze({
   fetchDoudianStores: definition("free", false, ["shopList", "currentShop"], STORE_LEDGER_WRITE_SCOPES),
   refreshDoudianStoreStatus: definition("free", false, ["currentShop"], STORE_LEDGER_WRITE_SCOPES),
   syncProductCatalog: definition("free", false, ["bulkDeleteProductList"], [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...CATALOG_JOB_SCOPES]),
+  productFreightTemplates: definition("free", false, FREIGHT_TEMPLATE_PLANS, STORE_LEDGER_READ_SCOPES),
   businessData: definition("free", false, BUSINESS_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["business_latest"])]),
   fundsData: definition("free", false, FUNDS_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["funds_latest"])]),
   violationsData: definition("free", false, VIOLATION_PLANS, [...STORE_LEDGER_WRITE_SCOPES, ...STORE_DELETE_CACHE_SCOPES, ...scopes(["violations_latest"])]),

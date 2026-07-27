@@ -40,6 +40,17 @@ test("bulk delete adapter exposes the verified exact-id lookup contract", () => 
   assert.equal(plan.query.id_name_code, "{idNameCode}");
   assert.equal(plan.query.start_time, "{startTime}");
   assert.equal(plan.query.end_time, "{endTime}");
+  assert.equal(adapter.endpoints.bulkDeleteBatchOnline, "/product/tproduct/batchLaunchProduct");
+  assert.equal(adapter.endpoints.bulkDeleteBatchOffline, "/product/tproduct/batchOffline");
+  assert.equal(adapter.requestPlans.bulkDeleteBatchOnline.referer, "https://fxg.jinritemai.com/ffa/g/list");
+  assert.equal(adapter.requestPlans.bulkDeleteBatchOffline.referer, "https://fxg.jinritemai.com/ffa/g/list");
+  assert.deepEqual(policy.executePlans, {
+    online: "bulkDeleteBatchOnline",
+    offline: "bulkDeleteBatchOffline",
+    recycle: "bulkDeleteBatchDelete",
+    delete: "bulkDeleteCompleteDelete"
+  });
+  assert.equal(policy.confirmText, "确认执行");
   assert.equal(policy.liveLookupBatchSize, 50);
   assert.equal(policy.liveLookupConcurrency, 1);
   assert.equal(policy.maxTimeSegments, 64);
@@ -70,4 +81,6 @@ test("skipped safety results are not reported as successful submissions", () => 
   assert.equal(bulkDeleteExecutionSucceeded({ ...base, status: "skipped", ok: true, liveLifecycleStatus: "offline" }), false);
   assert.equal(bulkDeleteExecutionSucceeded({ ...base, status: "skipped", ok: true, liveLifecycleStatus: "recycle" }), true);
   assert.equal(bulkDeleteExecutionSucceeded({ ...base, status: "failed", ok: false }), false);
+  assert.equal(bulkDeleteExecutionSucceeded({ ...base, action: "online", stage: "online", status: "skipped", ok: true, liveLifecycleStatus: "selling" }), true);
+  assert.equal(bulkDeleteExecutionSucceeded({ ...base, action: "offline", stage: "offline", status: "skipped", ok: true, liveLifecycleStatus: "offline" }), true);
 });

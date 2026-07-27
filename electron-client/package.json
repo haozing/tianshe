@@ -1,7 +1,7 @@
 {
   "name": "chihu-electron-client",
   "private": true,
-  "version": "2.2.21",
+  "version": "2.2.22",
   "description": "Readable Electron client source for CHIHU remote web migration",
   "author": "赤狐管家",
   "chihuLicense": {
@@ -31,7 +31,7 @@
     "check:desktop-ui-manual-evidence": "node scripts/check-desktop-ui-manual-evidence.js",
     "check:desktop-ui-manual-ready": "node scripts/check-desktop-ui-manual-evidence.js --require-complete",
     "record:desktop-ui-manual-evidence": "node scripts/record-desktop-ui-manual-evidence.js",
-    "check": "node scripts/check-syntax.js && node scripts/check-contract.js && node scripts/check-assets.js && node scripts/check-opportunity-data.js && npm run test:redaction && npm run test:release-channel-data-policy && npm run test:freemium && npm run test:store-deletion-opportunity && npm run test:opportunity-submit-coordinator && npm run test:opportunity-submit-recovery-scheduler && npm run test:opportunity-history-prewarm-scheduler",
+    "check": "node scripts/check-syntax.js && node scripts/check-contract.js && node scripts/check-assets.js && node scripts/check-opportunity-data.js && npm run test:redaction && npm run test:release-channel-data-policy && npm run test:freemium && npm run test:platform-windows && npm run test:store-deletion-opportunity && npm run test:opportunity-submit-coordinator && npm run test:opportunity-submit-recovery-scheduler && npm run test:opportunity-history-prewarm-scheduler",
     "check:syntax": "node scripts/check-syntax.js",
     "check:contract": "node scripts/check-contract.js",
     "check:assets": "node scripts/check-assets.js",
@@ -42,6 +42,7 @@
     "test:http-lossless-json": "node --test test/http-lossless-json.test.js",
     "test:marketing-foundation": "node --test test/marketing-foundation.test.js test/http-lossless-json.test.js",
     "test:release-channel-data-policy": "node --test test/release-channel-data-policy.test.js",
+    "test:platform-windows": "node --test test/store-window-title.test.js test/platform-popup-policy.test.js",
     "test:store-deletion-opportunity": "node --test test/store-deletion-opportunity-cascade.test.js",
     "test:opportunity-submit-coordinator": "node --test test/opportunity-submit-coordinator.test.js",
     "test:opportunity-submit-recovery-scheduler": "node --test test/opportunity-submit-recovery-scheduler.test.js",
