@@ -1,12 +1,12 @@
 import type { DoudianOperationRecord } from "./operation";
-import type { DoudianBusinessDataRow, DoudianOpportunityAutoFavoriteProgress, DoudianOpportunityFavoriteRecordsProgress, DoudianRunDetail, DoudianStaleGoodsCandidate } from "../../types";
+import type { DoudianBulkDeleteProgress, DoudianBusinessDataRow, DoudianOpportunityAutoFavoriteProgress, DoudianOpportunityFavoriteRecordsProgress, DoudianRunDetail, DoudianStaleGoodsCandidate } from "../../types";
 
 export const DOUDIAN_PROGRESS_EVENT = "chihu-doudian-progress";
 
 export type DoudianTaskMessage =
   | { type: "task:start"; operation: DoudianOperationRecord; task: DoudianTaskRequest }
   | { type: "task:cancel"; operationId: string }
-  | { type: "task:progress"; operationId: string; progress: number; message?: string; store?: DoudianStoreProgress; business?: DoudianBusinessProgress; staleGoods?: DoudianStaleGoodsProgress; favoriteRecords?: DoudianOpportunityFavoriteRecordsProgress; autoFavorite?: DoudianOpportunityAutoFavoriteProgress }
+  | { type: "task:progress"; operationId: string; progress: number; message?: string; store?: DoudianStoreProgress; business?: DoudianBusinessProgress; staleGoods?: DoudianStaleGoodsProgress; bulkDelete?: DoudianBulkDeleteProgress; favoriteRecords?: DoudianOpportunityFavoriteRecordsProgress; autoFavorite?: DoudianOpportunityAutoFavoriteProgress }
   | { type: "task:heartbeat"; operationId: string; inFlightMutations: number; mutationStarted?: boolean }
   | { type: "task:result"; operationId: string; resultSummary?: string; result?: unknown }
   | { type: "task:error"; operationId: string; error: string; inFlightMutations?: number; mutationStarted?: boolean };
@@ -33,6 +33,7 @@ export interface DoudianProgressDetail {
   store?: DoudianStoreProgress;
   business?: DoudianBusinessProgress;
   staleGoods?: DoudianStaleGoodsProgress;
+  bulkDelete?: DoudianBulkDeleteProgress;
   favoriteRecords?: DoudianOpportunityFavoriteRecordsProgress;
   autoFavorite?: DoudianOpportunityAutoFavoriteProgress;
 }

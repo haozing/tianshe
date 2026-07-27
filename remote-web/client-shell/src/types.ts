@@ -992,8 +992,13 @@ export interface DoudianBulkDeleteProgress {
   total: number;
   percent: number;
   shopId?: string;
+  shopName?: string;
   batchIndex?: number;
   totalBatches?: number;
+  page?: number;
+  fetchedCount?: number;
+  remoteTotal?: number;
+  candidates?: DoudianBulkDeleteCandidate[];
   message?: string;
 }
 

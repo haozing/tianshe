@@ -3,6 +3,11 @@ import fs from "node:fs";
 import test from "node:test";
 
 const source = fs.readFileSync(new URL("../src/components/ProductManagementPage.tsx", import.meta.url), "utf8");
+const bulkDeleteSource = fs.readFileSync(new URL("../src/domain/doudian/bulkDelete.ts", import.meta.url), "utf8");
+const progressSource = fs.readFileSync(new URL("../src/domain/doudian/progress.ts", import.meta.url), "utf8");
+const taskRunnerSource = fs.readFileSync(new URL("../src/domain/doudian/taskRunner.ts", import.meta.url), "utf8");
+const taskClientSource = fs.readFileSync(new URL("../src/domain/doudian/taskClient.ts", import.meta.url), "utf8");
+const bridgeSource = fs.readFileSync(new URL("../src/bridge/client.ts", import.meta.url), "utf8");
 
 test("product management uses the requested query and preview layout", () => {
   for (const label of ["商品标题 / ID", "商品选择", "商品价格", "销量区间", "运费模板", "创建时间", "商品预览"]) {
@@ -33,4 +38,22 @@ test("selecting products opens a centered four-action dialog without typed confi
 
 test("complete delete explains the recycle-bin transition", () => {
   assert.match(source, /非回收站商品会先移入回收站，再从回收站永久删除/);
+});
+
+test("product pages stream into the preview before the scan finishes", () => {
+  assert.match(bulkDeleteSource, /onBatch\?\.\(\{ items, fetchedCount: products\.length, remoteTotal, page \}\)/);
+  assert.match(bulkDeleteSource, /candidates: lightweightCandidates/);
+  assert.match(progressSource, /bulkDelete\?: DoudianBulkDeleteProgress/);
+  assert.match(taskRunnerSource, /Number\(bulkDelete\?\.percent \|\| 0\)/);
+  assert.match(taskRunnerSource, /bulkDelete \} : \{\}\)/);
+  assert.match(taskClientSource, /bulkDelete: message\.bulkDelete/);
+  assert.match(bridgeSource, /event\.detail\.bulkDelete/);
+  assert.match(source, /streamedCandidates = mergeCandidates\(streamedCandidates, event\.candidates\)/);
+  assert.match(source, /setAnalyzed\(true\)/);
+  assert.match(source, /正在获取首批商品/);
+  assert.match(source, /disabled=\{!row\.ok \|\| !canSelectRows\}/);
+});
+
+test("failed or truncated store scans never enter the executable candidate set", () => {
+  assert.match(bulkDeleteSource, /collected\.truncated \|\| !requestOk \? \[\] : matches/);
 });

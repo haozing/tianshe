@@ -50,6 +50,7 @@ import {
   restoreStaleGoodsScan,
   fetchViolationsDataLatest,
   cancelOpportunityFavoriteRecords,
+  addDoudianProgressListener,
   listStoreLedger,
   openStoreWindow,
   startDoudianTask,
@@ -533,8 +534,10 @@ export async function fetchDoudianBulkDeleteProducts(args: {
   shouldCancel?: () => boolean;
   forceAdapter?: boolean;
 } = {}): Promise<DoudianBulkDeleteResult> {
+  const mode = args.mode || "scan";
+  const operationId = args.operationId || `${mode === "execute" ? "bulkDeleteExecute" : "bulkDeleteScan"}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const nextArgs = await withDoudianAdapter({
-    mode: args.mode || "scan",
+    mode,
     shopIds: args.shopIds || [],
     ...(args.sourceMode ? { sourceMode: args.sourceMode } : {}),
     ...(args.filters ? { filters: args.filters } : {}),
@@ -544,16 +547,23 @@ export async function fetchDoudianBulkDeleteProducts(args: {
     ...(args.sourceRunId ? { sourceRunId: args.sourceRunId } : {}),
     ...(args.allowPartialScan ? { allowPartialScan: true } : {}),
     ...(args.confirmText ? { confirmText: args.confirmText } : {}),
-    ...(args.operationId ? { operationId: args.operationId } : {})
+    operationId
   }, { force: args.forceAdapter === true });
-  const mode = args.mode || "scan";
-  const operationId = args.operationId;
-  const result = await runDoudianStoreTask({
-    taskType: args.mode === "execute" ? "bulkDeleteExecute" : "bulkDeleteScan",
-    operationId,
-    metadata: { mutation: args.mode === "execute", replaceActive: true },
-    payload: nextArgs
-  }, 900000) as DoudianBulkDeleteResult;
+  const removeProgressListener = args.onProgress ? addDoudianProgressListener((event) => {
+    if (event.detail.operationId !== operationId || !event.detail.bulkDelete) return;
+    args.onProgress?.(event.detail.bulkDelete);
+  }) : null;
+  let result: DoudianBulkDeleteResult;
+  try {
+    result = await runDoudianStoreTask({
+      taskType: mode === "execute" ? "bulkDeleteExecute" : "bulkDeleteScan",
+      operationId,
+      metadata: { mutation: mode === "execute", replaceActive: true },
+      payload: nextArgs
+    }, 900000) as DoudianBulkDeleteResult;
+  } finally {
+    removeProgressListener?.();
+  }
   if (mode === "scan" && result.candidatesDeferred) {
     const restored = await restoreBulkDeleteScan(result.runId || operationId || "");
     if (restored) return { ...result, ...restored, ok: result.ok, status: result.status, message: result.message, operationId: result.operationId || operationId } as DoudianBulkDeleteResult;

@@ -223,6 +223,12 @@ function rowFromCandidate(candidate: DoudianBulkDeleteCandidate): ProductRow {
   };
 }
 
+function mergeCandidates(current: DoudianBulkDeleteCandidate[], incoming: DoudianBulkDeleteCandidate[]) {
+  const merged = new Map(current.map((candidate) => [candidate.id || `${candidate.shopId}-${candidate.productId}`, candidate]));
+  for (const candidate of incoming) merged.set(candidate.id || `${candidate.shopId}-${candidate.productId}`, candidate);
+  return [...merged.values()];
+}
+
 function buildSampleRows(stores: StoreOption[]): ProductRow[] {
   return stores.flatMap((store, storeIndex) => sampleProducts.map((product, productIndex) => {
     const productId = `${710000 + storeIndex * 100 + productIndex}${String(productIndex + 13).padStart(2, "0")}`;
@@ -387,6 +393,7 @@ export function ProductManagementPage() {
   const failedRows = executionRows.filter((row) => row.ok === false);
   const submittedRows = executionRows.filter((row) => row.ok && row.status === "submitted");
   const canExecute = previewMode || (Boolean(sourceRunId) && (previewStatus === "ok" || (partialScan && allowPartialScan)));
+  const canSelectRows = !previewBusy && (previewMode || previewStatus === "ok" || partialScan);
 
   useEffect(() => {
     if (page >= pageCount) setPage(pageCount - 1);
@@ -487,9 +494,15 @@ export function ProductManagementPage() {
     setActionDialogOpen(false);
     setPage(0);
     setPreviewProgress(0);
+    setRemoteCandidates([]);
+    setSourceRunId("");
+    setPreviewStatus("running");
+    setPartialScan(false);
+    setAllowPartialScan(false);
     const sourceMode = isProductIdQuery(productQuery) ? "ids" : "range";
     const parsedItems = parseImportItems(productQuery, stores);
     const importItems = parsedItems.filter((item) => item.productId && item.validationStatus === "ok");
+    let streamedCandidates: DoudianBulkDeleteCandidate[] = [];
     if (sourceMode === "ids" && parsedItems.some((item) => item.validationStatus !== "ok")) {
       setAnalyzed(false);
       setPreviewMessage("商品 ID 中存在无法识别的店铺或无效内容，请检查后重试");
@@ -519,7 +532,14 @@ export function ProductManagementPage() {
         filters: buildFilters(sourceMode, importItems),
         action: "recycle",
         protectMode: "includeSelling",
-        onProgress: (event) => setPreviewProgress(event.percent),
+        onProgress: (event) => {
+          setPreviewProgress((current) => Math.max(current, event.percent));
+          if (!event.candidates?.length) return;
+          streamedCandidates = mergeCandidates(streamedCandidates, event.candidates);
+          setRemoteCandidates(streamedCandidates);
+          setPreviewMessage(`已获取 ${streamedCandidates.length} 个商品，继续获取中`);
+          setAnalyzed(true);
+        },
         forceAdapter: true
       });
       const candidates = result.candidates || [];
@@ -533,11 +553,10 @@ export function ProductManagementPage() {
       setAnalyzed(true);
       setPreviewMessage(result.message || `已获取 ${candidates.length} 个商品`);
     } catch (error) {
-      setRemoteCandidates([]);
       setSourceRunId("");
-      setPreviewStatus("");
+      setPreviewStatus("failed");
       setPartialScan(false);
-      setAnalyzed(false);
+      setAnalyzed(streamedCandidates.length > 0);
       setPreviewMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setPreviewBusy(false);
@@ -717,7 +736,7 @@ export function ProductManagementPage() {
             <div className="flex min-w-0 items-center gap-2">
               <PackageSearch className="size-4 text-brand-navy" />
               <strong className="text-[15px]">商品预览</strong>
-              <button className="inline-flex h-8 items-center gap-2 rounded-md border border-[#dbe5f2] px-2 text-[12px] font-semibold" type="button" onClick={toggleVisibleProducts}><CheckboxBox checked={allVisibleProductsSelected} mixed={someVisibleProductsSelected} />本页 {selectedVisibleProductCount}/{visibleExecutableIds.length}</button>
+              <button className="inline-flex h-8 items-center gap-2 rounded-md border border-[#dbe5f2] px-2 text-[12px] font-semibold disabled:opacity-45" type="button" disabled={!canSelectRows} onClick={toggleVisibleProducts}><CheckboxBox checked={allVisibleProductsSelected} mixed={someVisibleProductsSelected} />本页 {selectedVisibleProductCount}/{visibleExecutableIds.length}</button>
               {selectedRows.length ? <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white" type="button" onClick={() => setActionDialogOpen(true)}><PlayCircle className="size-3.5" />执行动作</button> : null}
             </div>
             <div className="flex shrink-0 items-center gap-2 text-[12px]">
@@ -733,10 +752,10 @@ export function ProductManagementPage() {
               <thead className="sticky top-0 z-20 bg-[#fbfcff] text-[#344054] shadow-[inset_0_-1px_0_#e6ebf3]"><tr className="h-11"><th className="sticky left-0 z-30 w-[330px] bg-[#fbfcff] px-4 font-semibold shadow-[inset_-1px_0_0_#edf1f6]">商品 / 店铺</th><th className="px-3 font-semibold">状态</th><th className="px-3 font-semibold">售价</th><th className="px-3 font-semibold">销量</th><th className="px-3 font-semibold">库存估算</th><th className="px-3 font-semibold">创建 / 上架</th><th className="px-3 font-semibold">来源</th><th className="px-3 font-semibold">校验</th></tr></thead>
               <tbody className="divide-y divide-[#edf1f6]">
                 {visibleRows.map((row) => <tr className={cn("group h-[62px] hover:bg-[#f8fbff]", !row.ok && "text-[#98a2b3]")} key={row.id}>
-                  <td className="sticky left-0 z-10 w-[330px] bg-white px-4 shadow-[inset_-1px_0_0_#edf1f6] group-hover:bg-[#f8fbff]"><div className="grid grid-cols-[18px_minmax(0,1fr)] gap-2"><button className="pt-1 disabled:opacity-40" type="button" disabled={!row.ok} aria-label="选择商品" onClick={() => toggleProduct(row.id)}><CheckboxBox checked={row.ok && selectedProductIds.has(row.id)} /></button><div className="min-w-0"><div className="truncate font-semibold text-[#1d2939]" title={row.title}>{row.title}</div><div className="mt-1 flex gap-2 text-[11px] text-[#667085]"><span className="truncate">{row.shopName}</span><span className="font-mono">{row.productId}</span></div></div></div></td>
+                  <td className="sticky left-0 z-10 w-[330px] bg-white px-4 shadow-[inset_-1px_0_0_#edf1f6] group-hover:bg-[#f8fbff]"><div className="grid grid-cols-[18px_minmax(0,1fr)] gap-2"><button className="pt-1 disabled:opacity-40" type="button" disabled={!row.ok || !canSelectRows} aria-label="选择商品" onClick={() => toggleProduct(row.id)}><CheckboxBox checked={row.ok && selectedProductIds.has(row.id)} /></button><div className="min-w-0"><div className="truncate font-semibold text-[#1d2939]" title={row.title}>{row.title}</div><div className="mt-1 flex gap-2 text-[11px] text-[#667085]"><span className="truncate">{row.shopName}</span><span className="font-mono">{row.productId}</span></div></div></div></td>
                   <td className="whitespace-nowrap px-3"><ProductStatusTag status={row.status} /></td><td className="whitespace-nowrap px-3 font-semibold">{formatMoney(row.price)}</td><td className="whitespace-nowrap px-3">{formatNumber(row.sales)}</td><td className="whitespace-nowrap px-3">{formatNumber(row.stock)}</td><td className="whitespace-nowrap px-3 text-[#667085]"><div>{row.createdAt || "未知"}</div><div className="mt-1 text-[11px]">上架 {row.listedAt || "未知"}</div></td><td className="whitespace-nowrap px-3">{row.source}</td><td className="min-w-[150px] px-3">{row.ok ? <span className="inline-flex items-center gap-1 font-semibold text-[#087443]"><Check className="size-3.5" />可执行</span> : <span className="inline-flex items-center gap-1 font-semibold text-[#b54708]"><FileWarning className="size-3.5" />{row.excludedReason || "不可执行"}</span>}</td>
                 </tr>)}
-                {!shownRows.length ? <tr><td className="h-[300px] text-center" colSpan={8}><div className="mx-auto grid w-[360px] place-items-center gap-3 text-[#667085]"><span className="grid size-14 place-items-center rounded-full bg-brand-foxSoft text-brand-fox"><PackageSearch className="size-7" /></span><strong className="text-[14px] text-[#344054]">暂无命中商品</strong><span className="text-[13px] leading-6">调整店铺、商品状态、价格或销量条件后重新生成预览。</span></div></td></tr> : null}
+                {!shownRows.length ? <tr><td className="h-[300px] text-center" colSpan={8}><div className="mx-auto grid w-[360px] place-items-center gap-3 text-[#667085]"><span className="grid size-14 place-items-center rounded-full bg-brand-foxSoft text-brand-fox">{previewBusy ? <Loader2 className="size-7 animate-spin" /> : <PackageSearch className="size-7" />}</span><strong className="text-[14px] text-[#344054]">{previewBusy ? "正在获取首批商品" : "暂无命中商品"}</strong><span className="text-[13px] leading-6">{previewBusy ? "首批数据返回后会直接显示在这里。" : "调整店铺、商品状态、价格或销量条件后重新生成预览。"}</span></div></td></tr> : null}
               </tbody>
             </table>
           </div>

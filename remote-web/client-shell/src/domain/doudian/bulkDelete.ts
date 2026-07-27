@@ -45,6 +45,13 @@ interface BulkDeleteArgs {
   shouldCancel?: () => boolean;
 }
 
+interface ProductBatchDetail {
+  items: Array<Record<string, unknown>>;
+  fetchedCount: number;
+  remoteTotal: number;
+  page: number;
+}
+
 interface ScanRunRecord {
   id: string;
   mode: "scan";
@@ -586,8 +593,9 @@ async function runProductListPage(payload: DoudianAdapterPayload, store: Doudian
     .catch((error) => ({ ok: false, status: 0, data: null, error: error instanceof Error ? error.message : String(error), source: planKey } as RequestPlanResult));
 }
 
-async function collectProducts(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: BulkDeleteArgs, filters: DoudianBulkDeleteFilters, sourceMode: DoudianBulkDeleteSourceMode) {
+async function collectProducts(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: BulkDeleteArgs, filters: DoudianBulkDeleteFilters, sourceMode: DoudianBulkDeleteSourceMode, onBatch?: (detail: ProductBatchDetail) => void) {
   if (args.mockProducts?.length) {
+    onBatch?.({ items: args.mockProducts, fetchedCount: args.mockProducts.length, remoteTotal: args.mockProducts.length, page: 0 });
     return { products: args.mockProducts, remoteTotal: args.mockProducts.length, truncated: false, requestOk: true, pageSize: args.mockProducts.length, maxPages: 1, segmented: false, segmentCount: 0, segmentBounds: null, sourceHealth: [], responses: {} as Record<string, RequestPlanResult> };
   }
   const planKey = productListPlanKey(payload.adapter);
@@ -606,6 +614,11 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
   let segmented = false;
   let segmentCount = 0;
   let segmentBounds: { startDate: string; endDate: string } | null = null;
+  const appendProducts = (items: Array<Record<string, unknown>>, page: number) => {
+    if (!items.length) return;
+    products.push(...items);
+    onBatch?.({ items, fetchedCount: products.length, remoteTotal, page });
+  };
   const responseOk = (response: RequestPlanResult) => requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter));
   const parsePage = (response: RequestPlanResult) => {
     const wrapped = { [planKey]: response.data };
@@ -664,8 +677,8 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
             endTime: "",
             ...statusContext(filters.status)
           });
-          products.push(...result.items.map((item) => ({ ...item, ...(importItem ? { __bulkDeleteImportItem: importItem } : {}) })));
           remoteTotal = Math.max(result.total, remoteTotal);
+          appendProducts(result.items.map((item) => ({ ...item, ...(importItem ? { __bulkDeleteImportItem: importItem } : {}) })), page);
           if (!result.ok || result.items.length < pageSize) break;
         }
       }
@@ -676,11 +689,12 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
     const initial = await requestPage(`${planKey}:range:initial:page:${pageStart}`, baseContext(pageStart));
     remoteTotal = initial.total || initial.items.length;
     if (initial.ok && remoteTotal <= capacity) {
-      products.push(...initial.items);
+      appendProducts(initial.items, pageStart);
       let fetchedCount = initial.items.length;
       for (let page = pageStart + 1; page < pageStart + rangeMaxPages && fetchedCount < remoteTotal; page += 1) {
         const result = await requestPage(`${planKey}:range:page:${page}`, baseContext(page));
-        products.push(...result.items);
+        remoteTotal = Math.max(remoteTotal, result.total);
+        appendProducts(result.items, page);
         fetchedCount += result.items.length;
         if (!result.ok || result.items.length < pageSize) break;
       }
@@ -724,21 +738,20 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
         }
         segmentCount = accepted.length;
         if (!truncated && Object.values(responses).every(responseOk)) {
-          let segmentedRemoteTotal = 0;
+          const segmentedRemoteTotal = accepted.reduce((sum, entry) => sum + entry.total, 0);
+          remoteTotal = Math.max(remoteTotal, segmentedRemoteTotal);
           for (const [segmentIndex, entry] of accepted.entries()) {
-            segmentedRemoteTotal += entry.total;
-            products.push(...entry.items);
+            appendProducts(entry.items, pageStart);
             let fetchedCount = entry.items.length;
             for (let page = pageStart + 1; page < pageStart + rangeMaxPages && fetchedCount < entry.total; page += 1) {
               const key = `${planKey}:segment:${segmentIndex + 1}:${entry.segment.startDate}:${entry.segment.endDate}:page:${page}`;
               const result = await requestPage(key, baseContext(page, entry.segment, "create_time", "desc"));
-              products.push(...result.items);
+              appendProducts(result.items, page);
               fetchedCount += result.items.length;
               if (!result.ok || result.items.length < pageSize) break;
             }
             if (fetchedCount < entry.total) truncated = true;
           }
-          remoteTotal = Math.max(remoteTotal, segmentedRemoteTotal);
         }
       }
     }
@@ -842,15 +855,56 @@ async function reportBulkDeleteRow(args: {
 }
 
 async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: BulkDeleteArgs, runId: string, filters: DoudianBulkDeleteFilters, sourceMode: DoudianBulkDeleteSourceMode, action: DoudianBulkDeleteAction, protectMode: DoudianBulkDeleteProtectMode) {
-  const collected = await collectProducts(payload, store, args, filters, sourceMode);
-  const products = collected.products.map((product, index) => productFromRecord(store, product, payload.adapter, runId, index, sourceMode, action, protectMode));
   const filterProductIds = new Set((filters.productIds || []).map((id) => text(id)).filter(Boolean));
+  const streamedProductIds = new Set<string>();
+  let streamedIndex = 0;
+  let streamedMatchCount = 0;
+  const collected = await collectProducts(payload, store, args, filters, sourceMode, (batch) => {
+    let candidates = batch.items
+      .map((product) => productFromRecord(store, product, payload.adapter, runId, streamedIndex++, sourceMode, action, protectMode))
+      .filter((product) => product.productId && matchesFilters(product, filters, sourceMode, filterProductIds))
+      .filter((product) => {
+        if (streamedProductIds.has(product.productId)) return false;
+        streamedProductIds.add(product.productId);
+        return true;
+      });
+    const perStoreLimit = Math.max(0, Number(filters.perStoreLimit || 0));
+    if (perStoreLimit > 0) candidates = candidates.slice(0, Math.max(0, perStoreLimit - streamedMatchCount));
+    if (!candidates.length) return;
+    streamedMatchCount += candidates.length;
+    const lightweightCandidates = candidates.map((candidate) => {
+      const raw = objectRecord(candidate.raw);
+      return {
+        ...candidate,
+        raw: {
+          freight_template_name: raw.freight_template_name,
+          freightTemplateName: raw.freightTemplateName,
+          freight_template_id: raw.freight_template_id,
+          freightTemplateId: raw.freightTemplateId
+        }
+      };
+    });
+    reportProgress(args, {
+      phase: "scan",
+      completed: 0,
+      total: 0,
+      percent: 0,
+      shopId: store.shopId,
+      shopName: store.shopName,
+      page: batch.page,
+      fetchedCount: batch.fetchedCount,
+      remoteTotal: batch.remoteTotal,
+      candidates: lightweightCandidates,
+      message: `${store.shopName}：已获取 ${streamedMatchCount} 个商品`
+    });
+  });
+  const products = collected.products.map((product, index) => productFromRecord(store, product, payload.adapter, runId, index, sourceMode, action, protectMode));
   let matches = products.filter((product) => product.productId && matchesFilters(product, filters, sourceMode, filterProductIds));
   if (Number(filters.perStoreLimit || 0) > 0) matches = matches.slice(0, Number(filters.perStoreLimit));
-  const candidates = collected.truncated ? [] : matches;
+  const requestOk = collected.requestOk;
+  const candidates = collected.truncated || !requestOk ? [] : matches;
   const row = buildRow(store, products, candidates);
   const listPlanKey = productListPlanKey(payload.adapter);
-  const requestOk = collected.requestOk;
   const ok = !collected.truncated && requestOk;
   const detail: DoudianRunDetail = {
     shopId: store.shopId,

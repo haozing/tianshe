@@ -217,10 +217,25 @@ export async function getStoreLedger(shopId: string) {
 }
 
 export async function listStoreLedger(): Promise<DoudianStoreResult> {
+  const startedAt = Date.now();
+  const ledger = await ledgerSnapshot();
+  const durationMs = Date.now() - startedAt;
+  if (durationMs >= 250) {
+    const report = getChihuNative()?.logs?.report;
+    if (report) {
+      void report({
+        category: "doudian-store-ledger",
+        event: "slow-list",
+        durationMs,
+        storeCount: ledger.stores?.length || 0,
+        groupCount: ledger.groups?.length || 0
+      }).catch(() => undefined);
+    }
+  }
   return {
     ok: true,
     message: "已读取远程店铺台账。",
-    ...(await ledgerSnapshot())
+    ...ledger
   };
 }
 

@@ -204,6 +204,7 @@ async function handleRunnerMessage(message: DoudianTaskMessage) {
       store: message.store,
       business: message.business,
       staleGoods: message.staleGoods,
+      bulkDelete: message.bulkDelete,
       favoriteRecords: message.favoriteRecords,
       autoFavorite: message.autoFavorite
     });

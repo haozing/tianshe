@@ -23,6 +23,7 @@ import { fetchOpportunityFavoriteCategories } from "./opportunityAutoFavorites";
 import { reconcileMarketingOperation } from "./marketing/reconcile";
 import { loadConfig } from "../../bridge/config";
 import { loadDoudianAdapterPayload } from "../../bridge/doudianAdapter";
+import type { DoudianBulkDeleteProgress } from "../../types";
 import { getChihuNative } from "../../native/client";
 import type { DoudianOpportunityAutoFavoriteProgress, DoudianOpportunityFavoriteRecordsProgress } from "../../types";
 import { listStoreLedger } from "./storeGroups";
@@ -277,8 +278,15 @@ async function runDomainTask(channel: RunnerChannel, operationId: string, task: 
       result = await fetchBulkDeleteProducts({
         ...payload,
         onProgress: (detail: unknown) => {
-          const progress = detail && typeof detail === "object" ? Number((detail as { progress?: unknown }).progress || 0) : 0;
-          post(channel, { type: "task:progress", operationId, progress, message: "商品管理任务执行中" });
+          const bulkDelete = detail && typeof detail === "object" ? detail as DoudianBulkDeleteProgress : null;
+          const progress = Number(bulkDelete?.percent || 0);
+          post(channel, {
+            type: "task:progress",
+            operationId,
+            progress,
+            message: bulkDelete?.message || "商品管理任务执行中",
+            ...(bulkDelete ? { bulkDelete } : {})
+          });
         },
         shouldCancel: () => state.cancelled
       } as unknown as Parameters<typeof fetchBulkDeleteProducts>[0]);
