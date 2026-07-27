@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "contractVersion": "doudian-adapter.v1",
   "platform": "doudian",
-  "version": "2026.07.23.opportunity-favorites-per-store-v2-marketing-write-v1",
+  "version": "2026.07.27.product-management-freight-v1-marketing-write-v1",
   "source": "remote-web",
   "capabilities": {
     "actions": [
@@ -75,8 +75,12 @@
       "staleGoodsBatchDelete",
       "staleGoodsCompleteDelete",
       "bulkDeleteProductList",
+      "bulkDeleteBatchOnline",
+      "bulkDeleteBatchOffline",
       "bulkDeleteBatchDelete",
       "bulkDeleteCompleteDelete",
+      "freightTemplateToken",
+      "freightTemplateList",
       "opportunityClueRealtimeList",
       "opportunitySubmitClue",
       "opportunityEditGoodsTitle",
@@ -364,6 +368,8 @@
         {
           "action": "executeBulkDeleteProducts",
           "requestPlans": [
+            "bulkDeleteBatchOnline",
+            "bulkDeleteBatchOffline",
             "bulkDeleteBatchDelete",
             "bulkDeleteCompleteDelete"
           ]
@@ -485,8 +491,12 @@
     "staleGoodsBatchDelete": "/product/tproduct/batchDelete",
     "staleGoodsCompleteDelete": "/product/tproduct/completeDelete",
     "bulkDeleteProductList": "/product/tproduct/list",
+    "bulkDeleteBatchOnline": "/product/tproduct/batchLaunchProduct",
+    "bulkDeleteBatchOffline": "/product/tproduct/batchOffline",
     "bulkDeleteBatchDelete": "/product/tproduct/batchDelete",
     "bulkDeleteCompleteDelete": "/product/tproduct/completeDelete",
+    "freightTemplateToken": "/common/index/index",
+    "freightTemplateList": "/freight/template/getShopFreightTemplate",
     "opportunityClueRealtimeList": "/api/commop/business_chance_center/clue/common/real_time_list",
     "opportunitySubmitClue": "/api/commop/business_chance_center/multiple_item_submit/submit",
     "opportunityClueWords": "/api/commop/business_chance_center/clue/query_participle",
@@ -4267,6 +4277,74 @@
       ],
       "successPaths": []
     },
+    "freightTemplateToken": {
+      "endpointKey": "freightTemplateToken",
+      "method": "GET",
+      "sign": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/morder/logistics/freight-list",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      "query": {
+        "_": "{timestamp}",
+        "appid": "1"
+      },
+      "retryOnHttpError": true,
+      "retryOnBusinessFailure": true,
+      "maxAttempts": 3,
+      "retryDelayMs": 3000,
+      "retryBackoff": "linear",
+      "successCodes": [
+        0,
+        "0"
+      ],
+      "allowMissingCode": false,
+      "successPaths": []
+    },
+    "freightTemplateList": {
+      "endpointKey": "freightTemplateList",
+      "method": "GET",
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerOnly": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/morder/logistics/freight-list",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/morder/logistics/freight-list",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      "query": {
+        "name": "{name}",
+        "page": "{page}",
+        "pageSize": "{pageSize}",
+        "appid": "1",
+        "_bid": "ffa_order",
+        "__token": "{token}"
+      },
+      "retryOnHttpError": true,
+      "retryOnBusinessFailure": true,
+      "maxAttempts": 3,
+      "retryDelayMs": 3000,
+      "retryBackoff": "linear",
+      "successCodes": [
+        0,
+        "0"
+      ],
+      "allowMissingCode": false,
+      "successPaths": []
+    },
     "bulkDeleteProductList": {
       "endpointKey": "bulkDeleteProductList",
       "method": "GET",
@@ -4314,6 +4392,92 @@
         "0"
       ],
       "allowMissingCode": true,
+      "successPaths": []
+    },
+    "bulkDeleteBatchOnline": {
+      "endpointKey": "bulkDeleteBatchOnline",
+      "method": "POST",
+      "dryRunOnly": false,
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerOnly": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/g/list",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/g/list",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "signQuery": "appid=1",
+      "signBody": "{formBody}",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+      },
+      "body": "{formBody}",
+      "retryOnHttpError": false,
+      "maxAttempts": 1,
+      "retryDelayMs": 1200,
+      "retryBackoff": "linear",
+      "allowMissingCode": false,
+      "successCodes": [
+        0,
+        "0"
+      ],
+      "failureMessages": [
+        "未登录",
+        "请登录",
+        "失败",
+        "异常"
+      ],
+      "successPaths": []
+    },
+    "bulkDeleteBatchOffline": {
+      "endpointKey": "bulkDeleteBatchOffline",
+      "method": "POST",
+      "dryRunOnly": false,
+      "sign": true,
+      "signStrategy": "mstoken-myargs",
+      "localSigner": true,
+      "localSignerOnly": true,
+      "localSignerSource": "xzb.GetMstokenSign/GetABougsSign",
+      "signatureParam": false,
+      "includeEmptySignature": false,
+      "origin": "https://fxg.jinritemai.com",
+      "referer": "https://fxg.jinritemai.com/ffa/g/list",
+      "signerUrl": "https://fxg.jinritemai.com/ffa/g/list",
+      "signDomain": ".jinritemai.com",
+      "signWindowTokenFallback": false,
+      "signUseMsToken": true,
+      "signRequireMsToken": false,
+      "signIncludeEmptyMsToken": true,
+      "signQuery": "appid=1",
+      "signBody": "{formBody}",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+      },
+      "body": "{formBody}",
+      "retryOnHttpError": false,
+      "maxAttempts": 1,
+      "retryDelayMs": 1200,
+      "retryBackoff": "linear",
+      "allowMissingCode": false,
+      "successCodes": [
+        0,
+        "0"
+      ],
+      "failureMessages": [
+        "未登录",
+        "请登录",
+        "失败",
+        "异常"
+      ],
       "successPaths": []
     },
     "bulkDeleteBatchDelete": {
@@ -7420,24 +7584,26 @@
         "bulkDeleteProductList"
       ],
       "executePlans": {
+        "online": "bulkDeleteBatchOnline",
+        "offline": "bulkDeleteBatchOffline",
         "recycle": "bulkDeleteBatchDelete",
         "delete": "bulkDeleteCompleteDelete"
       },
-      "confirmText": "确认删除",
+      "confirmText": "确认执行",
       "messages": {
-        "scanning": "正在扫描可删除商品",
+        "scanning": "正在获取商品",
         "scanned": "命中 {count} 个商品",
         "noCandidateStore": "未命中符合条件的商品",
-        "failed": "批量删除商品扫描失败",
+        "failed": "商品获取失败",
         "partial": "已完成 {successCount} 家，{failureCount} 家失败",
         "done": "命中 {count} 个商品",
-        "executing": "正在提交批量删除",
+        "executing": "正在执行商品操作",
         "executedStore": "已提交 {count} 个商品",
-        "executeDryRun": "批量删除当前为 dry-run，没有提交平台写请求",
-        "executeFailed": "批量删除执行失败",
-        "executePartial": "批量删除未全部成功，{failureCount} 个商品未成功",
-        "executeDone": "已提交 {count} 个商品批量删除",
-        "cancelled": "批量删除任务已取消"
+        "executeDryRun": "商品操作当前为 dry-run，没有提交平台写请求",
+        "executeFailed": "商品操作执行失败",
+        "executePartial": "商品操作未全部成功，{failureCount} 个商品未成功",
+        "executeDone": "已提交 {count} 个商品操作",
+        "cancelled": "商品操作任务已取消"
       }
     },
     "opportunityFavorites": {
