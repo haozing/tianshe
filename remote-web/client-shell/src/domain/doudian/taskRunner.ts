@@ -85,7 +85,8 @@ function installProgressForwarder(channel: RunnerChannel) {
       progress: detail.progress,
       message: detail.message,
       store: detail.store,
-      business: detail.business
+      business: detail.business,
+      staleGoods: detail.staleGoods
     });
   };
   window.addEventListener(DOUDIAN_PROGRESS_EVENT, listener);

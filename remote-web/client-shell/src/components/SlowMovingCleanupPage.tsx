@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   Download,
+  Info,
   Loader2,
   PackageSearch,
   PanelLeftClose,
@@ -35,8 +36,8 @@ type RiskLevel = "high" | "medium" | "low";
 type CandidateAction = "offline" | "recycle" | "delete" | "optimize";
 type TrafficPeriod = "7d" | "30d" | "90d";
 type NoSalesType = "balanced" | "strict" | "trafficWaste";
-type ProductSource = "selling" | "offline" | "importedIds";
-type CleanupColumnKey = "status" | "sales" | "traffic" | "stockPrice" | "quality" | "time";
+type QualityRuleKey = "requireLowRating" | "requireLowInfo" | "requireLowImage" | "requireSameStyleRisk" | "requireBadTitle";
+type CleanupColumnKey = "status" | "sales" | "exposure" | "clicks" | "stock" | "price" | "createdDays" | "listedAt";
 
 interface ScanDiagnostics {
   productCount: number;
@@ -233,19 +234,15 @@ const noSalesTypeOptions: Array<{ value: NoSalesType; label: string }> = [
   { value: "trafficWaste", label: "有流无转" }
 ];
 
-const productSourceOptions: Array<{ value: ProductSource; label: string }> = [
-  { value: "selling", label: "售卖中商品" },
-  { value: "offline", label: "已下架商品" },
-  { value: "importedIds", label: "商品ID导入" }
-];
-
-const cleanupColumns: Array<{ key: CleanupColumnKey; label: string }> = [
-  { key: "status", label: "商品状态" },
-  { key: "sales", label: "销量指标" },
-  { key: "traffic", label: "罗盘流量" },
-  { key: "stockPrice", label: "库存价格" },
-  { key: "quality", label: "质量诊断" },
-  { key: "time", label: "创建/上架" }
+const cleanupColumns: Array<{ key: CleanupColumnKey; label: string; width: number }> = [
+  { key: "status", label: "商品状态", width: 136 },
+  { key: "sales", label: "总销量", width: 96 },
+  { key: "exposure", label: "曝光数", width: 104 },
+  { key: "clicks", label: "点击数", width: 96 },
+  { key: "stock", label: "库存", width: 104 },
+  { key: "price", label: "价格", width: 112 },
+  { key: "createdDays", label: "创建天数", width: 112 },
+  { key: "listedAt", label: "上架时间", width: 124 }
 ];
 
 const sampleStores: StoreOption[] = [
@@ -642,7 +639,7 @@ function applyPerStoreLimit(rows: CandidateRow[], limit: number) {
   return rows.filter((row) => selectedIds.has(row.id));
 }
 
-function toRemoteRules(rules: RuleSettings, productSource: ProductSource, importedProductIds: Set<string>): DoudianStaleGoodsRules {
+function toRemoteRules(rules: RuleSettings): DoudianStaleGoodsRules {
   return {
     totalSalesEnabled: rules.totalSalesEnabled,
     totalSalesMax: rules.totalSalesMax,
@@ -668,8 +665,8 @@ function toRemoteRules(rules: RuleSettings, productSource: ProductSource, import
     listedDays: rules.listedDays,
     perStoreLimit: rules.perStoreLimit,
     trafficPeriod: rules.trafficPeriod,
-    productSource,
-    importedProductIds: productSource === "importedIds" ? [...importedProductIds] : [],
+    productSource: "selling",
+    importedProductIds: [],
     noSalesType: rules.noSalesType,
     requireLowRating: rules.requireLowRating,
     requireLowInfo: rules.requireLowInfo,
@@ -834,59 +831,6 @@ function MetricCell({ item }: { item: MetricItem }) {
   );
 }
 
-function NativeSelect<T extends string>({
-  value,
-  options,
-  onChange,
-  width = 118
-}: {
-  value: T;
-  options: Array<T | { value: T; label: string }>;
-  onChange: (value: T) => void;
-  width?: number;
-}) {
-  return (
-    <span className="relative inline-flex h-8 shrink-0 items-center rounded-md border border-[#dbe5f2] bg-white text-[12px] text-[#1d2939]" style={{ width }}>
-      <select
-        className="app-no-drag h-full w-full appearance-none rounded-md bg-transparent px-2.5 pr-7 outline-none"
-        value={value}
-        onChange={(event) => onChange(event.target.value as T)}
-      >
-        {options.map((option) => {
-          const next = typeof option === "string" ? { value: option, label: option } : option;
-          return <option key={next.value} value={next.value}>{next.label}</option>;
-        })}
-      </select>
-      <ChevronDown className="pointer-events-none absolute right-2 size-[14px] text-[#98a2b3]" strokeWidth={2} />
-    </span>
-  );
-}
-
-function NumberInput({
-  label,
-  value,
-  min = 0,
-  onChange
-}: {
-  label: string;
-  value: number;
-  min?: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="grid min-w-0 grid-cols-[minmax(0,1fr)_76px] items-center gap-2 text-[12px] text-[#667085]">
-      <span className="truncate font-medium">{label}</span>
-      <input
-        className="h-8 rounded-md border border-[#dbe5f2] bg-white px-2 text-right text-[12px] font-semibold text-[#1d2939] outline-none focus:border-brand-fox"
-        min={min}
-        type="number"
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value || 0))}
-      />
-    </label>
-  );
-}
-
 function ConditionInput({
   checked,
   label,
@@ -905,23 +849,21 @@ function ConditionInput({
   onValueChange: (value: number) => void;
 }) {
   return (
-    <div className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md border px-3 py-2.5", checked ? "border-[#bdd2ef] bg-[#f8fbff]" : "border-[#e6ebf3] bg-white")}>
+    <div className="grid h-9 min-w-0 grid-cols-[96px_12px_76px_16px] items-center gap-1.5 text-[13px] text-[#667085]">
       <button className="flex min-w-0 items-center gap-2 text-left" type="button" onClick={() => onCheckedChange(!checked)}>
         <CheckboxBox checked={checked} />
-        <span className={cn("truncate text-[13px] font-semibold", checked ? "text-[#1d2939]" : "text-[#98a2b3]")}>{label}</span>
+        <span className={cn("truncate font-medium", checked ? "text-[#344054]" : "text-[#667085]")}>{label}</span>
       </button>
-      <label className="grid grid-cols-[auto_92px_auto] items-center gap-2 text-[13px] text-[#667085]">
-        <span>{operator}</span>
-        <input
-          className="h-9 rounded-md border border-[#dbe5f2] bg-white px-2 text-right text-[13px] font-semibold text-[#1d2939] outline-none focus:border-brand-fox disabled:bg-[#f8fafc] disabled:text-[#98a2b3]"
-          disabled={!checked}
-          min={0}
-          type="number"
-          value={value}
-          onChange={(event) => onValueChange(Number(event.target.value || 0))}
-        />
-        <span className="min-w-4 text-[#98a2b3]">{unit || ""}</span>
-      </label>
+      <span>{operator}</span>
+      <input
+        className="h-8 w-[76px] rounded-md border border-[#dbe5f2] bg-white px-2 text-right text-[13px] font-medium text-[#1d2939] outline-none focus:border-brand-fox focus:ring-2 focus:ring-brand-foxSoft disabled:bg-[#f8fafc] disabled:text-[#98a2b3]"
+        disabled={!checked}
+        min={0}
+        type="number"
+        value={value}
+        onChange={(event) => onValueChange(Number(event.target.value || 0))}
+      />
+      <span className="text-[#98a2b3]">{unit || ""}</span>
     </div>
   );
 }
@@ -946,90 +888,81 @@ function RangeConditionInput({
   onMaxChange: (value: number) => void;
 }) {
   return (
-    <div className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md border px-3 py-2.5", checked ? "border-[#bdd2ef] bg-[#f8fbff]" : "border-[#e6ebf3] bg-white")}>
+    <div className="grid h-9 min-w-0 grid-cols-[96px_72px_10px_72px_16px] items-center gap-1.5 text-[13px] text-[#667085]">
       <button className="flex min-w-0 items-center gap-2 text-left" type="button" onClick={() => onCheckedChange(!checked)}>
         <CheckboxBox checked={checked} />
-        <span className={cn("truncate text-[13px] font-semibold", checked ? "text-[#1d2939]" : "text-[#98a2b3]")}>{label}</span>
+        <span className={cn("truncate font-medium", checked ? "text-[#344054]" : "text-[#667085]")}>{label}</span>
       </button>
-      <div className="grid grid-cols-[86px_auto_86px_auto] items-center gap-2 text-[13px] text-[#667085]">
-        <input
-          className="h-9 rounded-md border border-[#dbe5f2] bg-white px-2 text-right text-[13px] font-semibold text-[#1d2939] outline-none focus:border-brand-fox disabled:bg-[#f8fafc] disabled:text-[#98a2b3]"
-          disabled={!checked}
-          min={0}
-          type="number"
-          value={minValue}
-          onChange={(event) => onMinChange(Number(event.target.value || 0))}
-        />
-        <span>-</span>
-        <input
-          className="h-9 rounded-md border border-[#dbe5f2] bg-white px-2 text-right text-[13px] font-semibold text-[#1d2939] outline-none focus:border-brand-fox disabled:bg-[#f8fafc] disabled:text-[#98a2b3]"
-          disabled={!checked}
-          min={0}
-          type="number"
-          value={maxValue}
-          onChange={(event) => onMaxChange(Number(event.target.value || 0))}
-        />
-        <span className="min-w-4 text-[#98a2b3]">{unit || ""}</span>
-      </div>
+      <input
+        className="h-8 w-[72px] rounded-md border border-[#dbe5f2] bg-white px-2 text-right text-[13px] font-medium text-[#1d2939] outline-none focus:border-brand-fox focus:ring-2 focus:ring-brand-foxSoft disabled:bg-[#f8fafc] disabled:text-[#98a2b3]"
+        disabled={!checked}
+        min={0}
+        type="number"
+        value={minValue}
+        onChange={(event) => onMinChange(Number(event.target.value || 0))}
+      />
+      <span className="text-center text-[#98a2b3]">-</span>
+      <input
+        className="h-8 w-[72px] rounded-md border border-[#dbe5f2] bg-white px-2 text-right text-[13px] font-medium text-[#1d2939] outline-none focus:border-brand-fox focus:ring-2 focus:ring-brand-foxSoft disabled:bg-[#f8fafc] disabled:text-[#98a2b3]"
+        disabled={!checked}
+        min={0}
+        type="number"
+        value={maxValue}
+        onChange={(event) => onMaxChange(Number(event.target.value || 0))}
+      />
+      <span className="text-[#98a2b3]">{unit || ""}</span>
     </div>
   );
 }
 
-function SegmentButtonGroup<T extends string>({
-  value,
-  options,
-  onChange
-}: {
-  value: T;
-  options: Array<{ value: T; label: string }>;
-  onChange: (value: T) => void;
-}) {
+function RadioOption({ checked, label, onClick }: { checked: boolean; label: string; onClick?: () => void }) {
   return (
-    <div className="inline-flex h-8 items-center overflow-hidden rounded-md border border-[#dbe5f2] bg-white">
-      {options.map((option) => (
-        <button
-          className={cn("h-full px-3 text-[12px] font-semibold transition-colors", value === option.value ? "bg-brand-fox text-white" : "text-[#667085] hover:bg-brand-foxSoft hover:text-brand-navy")}
-          key={option.value}
-          type="button"
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
+    <button className="inline-flex h-8 items-center gap-2 text-[13px] text-[#344054]" type="button" onClick={onClick}>
+      <span className={cn("grid size-4 place-items-center rounded-full border", checked ? "border-brand-fox" : "border-[#cbd5e1]")}>{checked ? <span className="size-2 rounded-full bg-brand-fox" /> : null}</span>
+      <span>{label}</span>
+    </button>
   );
 }
 
-function QualityToggles({
+function QualityConditionSelect({
   rules,
   setRule
 }: {
   rules: RuleSettings;
   setRule: <K extends keyof RuleSettings>(key: K, value: RuleSettings[K]) => void;
 }) {
-  const items: Array<{ key: keyof RuleSettings; label: string }> = [
+  const items: Array<{ key: QualityRuleKey; label: string }> = [
     { key: "requireLowRating", label: "综合评价未达标" },
-    { key: "requireLowInfo", label: "信息质量未达标" },
-    { key: "requireLowImage", label: "主图未达标" },
-    { key: "requireSameStyleRisk", label: "同款未达标" },
-    { key: "requireBadTitle", label: "标题未达标" }
+    { key: "requireLowInfo", label: "商品信息质量未达标" },
+    { key: "requireLowImage", label: "商品主图不合格" },
+    { key: "requireSameStyleRisk", label: "店铺有同款商品" },
+    { key: "requireBadTitle", label: "商品标题不合格" }
   ];
+  const selected = items.filter((item) => rules[item.key]);
+  const toggleAll = () => {
+    if (selected.length) items.forEach((item) => setRule(item.key, false));
+    else setRule("requireLowRating", true);
+  };
   return (
-    <div className="grid grid-cols-5 gap-2 max-[1320px]:grid-cols-3 max-[920px]:grid-cols-2">
-      {items.map((item) => {
-        const checked = Boolean(rules[item.key]);
-        return (
-          <button
-            className={cn("flex h-8 min-w-0 items-center gap-2 rounded-md border px-2 text-left text-[12px] font-medium", checked ? "border-brand-fox bg-brand-foxSoft text-brand-navy" : "border-[#dbe5f2] bg-white text-[#667085]")}
-            key={item.key}
-            type="button"
-            onClick={() => setRule(item.key, !checked as RuleSettings[typeof item.key])}
-          >
-            <CheckboxBox checked={checked} />
-            <span className="truncate">{item.label}</span>
-          </button>
-        );
-      })}
+    <div className="grid h-9 min-w-0 grid-cols-[96px_minmax(0,196px)] items-center gap-1.5 text-[13px]">
+      <button className="flex min-w-0 items-center gap-2 text-left text-[#344054]" type="button" onClick={toggleAll}>
+        <CheckboxBox checked={selected.length > 0} />
+        <span className="truncate font-medium">质量条件</span>
+      </button>
+      <details className="group relative">
+        <summary className="flex h-8 cursor-pointer list-none items-center justify-between gap-2 rounded-md border border-[#dbe5f2] bg-white px-3 text-[#344054] outline-none focus:border-brand-fox [&::-webkit-details-marker]:hidden">
+          <span className="truncate">{selected.length === 0 ? "不限" : selected.length === 1 ? selected[0].label : `已选 ${selected.length} 项`}</span>
+          <ChevronDown className="size-[14px] shrink-0 text-[#98a2b3] transition-transform group-open:rotate-180" strokeWidth={2} />
+        </summary>
+        <div className="absolute left-0 top-9 z-40 grid w-[236px] gap-0.5 rounded-md border border-[#dbe5f2] bg-white p-1.5 shadow-[0_12px_30px_rgba(15,23,42,0.16)]">
+          {items.map((item) => (
+            <button className="flex h-8 items-center gap-2 rounded px-2 text-left text-[12px] text-[#344054] hover:bg-brand-foxSoft" key={item.key} type="button" onClick={() => setRule(item.key, !rules[item.key])}>
+              <CheckboxBox checked={rules[item.key]} />
+              <span className="truncate">{item.label}</span>
+            </button>
+          ))}
+        </div>
+      </details>
     </div>
   );
 }
@@ -1206,7 +1139,6 @@ export function SlowMovingCleanupPage() {
   const [compassFileName, setCompassFileName] = useState("");
   const [compassRows, setCompassRows] = useState<Array<Record<string, unknown>>>([]);
   const [compassPeriod, setCompassPeriod] = useState<TrafficPeriod | undefined>();
-  const [productSource, setProductSource] = useState<ProductSource>("selling");
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
   const [planAction, setPlanAction] = useState<CandidateAction>("offline");
   const [planOpen, setPlanOpen] = useState(false);
@@ -1221,7 +1153,9 @@ export function SlowMovingCleanupPage() {
     const restoredDetails = Array.isArray(restored?.details) ? restored.details : [];
     if (!restored || !["ok", "partial"].includes(String(restored.status || "")) || (!restored.candidates?.length && !restoredDetails.length)) return false;
     const byStore = new Map(stores.map((store) => [store.id, store]));
-    const nextCandidates = restored.candidates.map((row) => normalizeRemoteCandidate(row, byStore.get(String(row.shopId))));
+    const nextCandidates = restored.candidates
+      .map((row) => normalizeRemoteCandidate(row, byStore.get(String(row.shopId))))
+      .filter((row) => row.status === "在售");
     const restoredShopIds = new Set(restoredDetails.map((detail) => String(detail.shopId || "")).filter(Boolean));
     if (restoredShopIds.size) setSelectedIds(restoredShopIds);
     setRemoteCandidates(nextCandidates);
@@ -1252,6 +1186,23 @@ export function SlowMovingCleanupPage() {
   useEffect(() => addDoudianProgressListener((event) => {
     if (!activeOperationId || event.detail.operationId !== activeOperationId) return;
     if (event.detail.status === "running") {
+      const batch = event.detail.staleGoods?.candidates || [];
+      if (batch.length) {
+        const byStore = new Map(stores.map((store) => [store.id, store]));
+        const nextRows = batch
+          .map((row) => normalizeRemoteCandidate(row, byStore.get(String(row.shopId))))
+          .filter((row) => row.status === "在售");
+        setRemoteCandidates((current) => {
+          const byId = new Map(current.map((row) => [row.id, row]));
+          nextRows.forEach((row) => byId.set(row.id, row));
+          return [...byId.values()];
+        });
+        setSelectedCandidateIds((current) => {
+          const next = new Set(current);
+          nextRows.filter((row) => row.action !== "optimize").forEach((row) => next.add(row.id));
+          return next;
+        });
+      }
       setCleanupMessage(event.detail.message ? `扫描进度 ${event.detail.progress}%：${event.detail.message}` : `扫描进度 ${event.detail.progress}%`);
       return;
     }
@@ -1307,16 +1258,10 @@ export function SlowMovingCleanupPage() {
 
   const candidateSourceStores = selectedStores.length ? selectedStores : stores;
   const allCandidates = useMemo(() => buildCandidates(candidateSourceStores), [candidateSourceStores]);
-  const importedProductIds = useMemo(() => new Set(compassRows.map((row) => String(row.productId || "").trim()).filter(Boolean)), [compassRows]);
-  const importedIdsMissing = productSource === "importedIds" && importedProductIds.size === 0;
   const rawMatchedCandidates = useMemo(() => {
-    const sourceFiltered = (rows: CandidateRow[]) => rows.filter((row) => {
-      if (productSource === "importedIds") return importedProductIds.has(String(row.productId));
-      return productSource === "offline" ? row.status === "已下架" : row.status === "在售";
-    });
-    if (!previewMode) return remoteCandidates.filter((row) => selectedIds.has(row.shopId));
-    return sourceFiltered(allCandidates.filter((row) => selectedIds.has(row.shopId) && matchesRules(row, rules)));
-  }, [allCandidates, importedProductIds, previewMode, productSource, remoteCandidates, selectedIds, rules]);
+    if (!previewMode) return remoteCandidates.filter((row) => selectedIds.has(row.shopId) && row.status === "在售");
+    return allCandidates.filter((row) => selectedIds.has(row.shopId) && row.status === "在售" && matchesRules(row, rules));
+  }, [allCandidates, previewMode, remoteCandidates, selectedIds, rules]);
   const matchedCandidates = useMemo(() => applyPerStoreLimit(rawMatchedCandidates, rules.perStoreLimit), [rawMatchedCandidates, rules.perStoreLimit]);
   const filteredCandidates = useMemo(() => [...matchedCandidates].sort((a, b) => b.riskScore - a.riskScore), [matchedCandidates]);
   const selectedCandidates = useMemo(() => matchedCandidates.filter((row) => selectedCandidateIds.has(row.id)), [matchedCandidates, selectedCandidateIds]);
@@ -1324,7 +1269,7 @@ export function SlowMovingCleanupPage() {
   const allVisibleCandidatesSelected = filteredCandidates.length > 0 && filteredCandidates.every((row) => selectedCandidateIds.has(row.id));
   const someVisibleCandidatesSelected = filteredCandidates.some((row) => selectedCandidateIds.has(row.id)) && !allVisibleCandidatesSelected;
   const visibleColumns = cleanupColumns;
-  const tableMinWidth = 460 + visibleColumns.length * 152;
+  const tableMinWidth = 320 + visibleColumns.reduce((sum, column) => sum + column.width, 0);
   const summary = aggregateCandidates(matchedCandidates);
   const defaultPlanAction: CandidateAction = summary.offline ? "offline" : matchedCandidates.some((row) => row.action === "recycle") ? "recycle" : "delete";
   const planRows = planOpen ? selectedCandidates : [];
@@ -1398,14 +1343,12 @@ export function SlowMovingCleanupPage() {
   }
 
   async function scanGoods() {
-    if (importedIdsMissing) {
-      setCleanupState("error");
-      setCleanupMessage("商品ID导入模式需要先导入包含商品ID的文件");
-      return;
-    }
     setAnalysisStarted(true);
     setCleanupState("loading");
-    setCleanupMessage(`正在完整读取商品并合并${trafficPeriodOptions.find((item) => item.key === rules.trafficPeriod)?.label || "所选周期"}罗盘指标`);
+    setCleanupMessage(`正在获取在售商品并合并${trafficPeriodOptions.find((item) => item.key === rules.trafficPeriod)?.label || "所选周期"}罗盘指标`);
+    setRemoteCandidates([]);
+    setSelectedCandidateIds(new Set());
+    setScanDiagnostics(null);
     setLastScanAt(new Date());
     if (!previewMode) {
       const operationId = `stale-scan-${Date.now()}`;
@@ -1414,7 +1357,7 @@ export function SlowMovingCleanupPage() {
         const result = await fetchDoudianStaleGoodsCleanup({
           mode: "scan",
           shopIds: [...selectedIds],
-          rules: toRemoteRules(rules, productSource, importedProductIds),
+          rules: toRemoteRules(rules),
           compassFileName,
           compassRows,
           compassPeriod,
@@ -1423,7 +1366,9 @@ export function SlowMovingCleanupPage() {
         });
         if (!result.ok && result.status !== "partial") throw new Error(result.message || "滞销商品扫描失败");
         const byStore = new Map(stores.map((store) => [store.id, store]));
-        const nextCandidates = (result.candidates || []).map((row) => normalizeRemoteCandidate(row, byStore.get(String(row.shopId))));
+        const nextCandidates = (result.candidates || [])
+          .map((row) => normalizeRemoteCandidate(row, byStore.get(String(row.shopId))))
+          .filter((row) => row.status === "在售");
         const nextDiagnostics = normalizeScanDiagnostics(result);
         const sourceFilteredCandidates = nextCandidates.filter((row) => selectedIds.has(row.shopId));
         const nextMatchedCandidates = applyPerStoreLimit(sourceFilteredCandidates, rules.perStoreLimit);
@@ -1624,83 +1569,67 @@ export function SlowMovingCleanupPage() {
   function renderColumn(row: CandidateRow, key: CleanupColumnKey) {
     if (key === "status") {
       return (
-        <td className="whitespace-nowrap px-3">
+        <td className="overflow-hidden whitespace-nowrap px-3">
           <div className="font-semibold text-[#344054]">{row.status}</div>
-          <div className="mt-0.5 text-[11px] text-[#98a2b3]">{row.category}</div>
+          <div className="mt-0.5 truncate text-[11px] text-[#98a2b3]" title={row.category}>{row.category}</div>
         </td>
       );
     }
     if (key === "sales") {
       return (
         <td className="whitespace-nowrap px-3">
-          <div className={cn("font-semibold", row.periodSales === 0 ? "text-[#b42318]" : "text-[#344054]")}>周期 {formatNumber(row.periodSales)}</div>
-          <div className="mt-0.5 text-[11px] text-[#667085]">总销 {formatNumber(row.totalSales)}</div>
+          <div className="font-semibold text-[#344054]">{formatNumber(row.totalSales)}</div>
         </td>
       );
     }
-    if (key === "traffic") {
+    if (key === "exposure") {
       return (
         <td className="whitespace-nowrap px-3">
-          <div className="font-semibold text-[#344054]">曝 {formatNumber(row.exposureCount)} / 点 {formatNumber(row.clickCount)}</div>
-          <div className="mt-0.5 text-[11px] text-[#667085]">CTR {formatPercent(clickRate(row))}</div>
+          <div className="font-semibold text-[#344054]">{formatNumber(row.exposureCount)}</div>
         </td>
       );
     }
-    if (key === "stockPrice") {
+    if (key === "clicks") {
+      return (
+        <td className="whitespace-nowrap px-3">
+          <div className="font-semibold text-[#344054]">{formatNumber(row.clickCount)}</div>
+        </td>
+      );
+    }
+    if (key === "stock") {
       return (
         <td className="whitespace-nowrap px-3">
           <div className={cn("font-semibold", row.stock >= 80 ? "text-[#b54708]" : "text-[#344054]")}>{formatNumber(row.stock)} 件</div>
-          <div className="mt-0.5 text-[11px] text-[#667085]">{formatMoney(row.price)}</div>
         </td>
       );
     }
-    if (key === "quality") {
-      const issues = qualityIssueLabels(row);
-      return (
-        <td className="max-w-[240px] px-3">
-          <div className={cn("font-semibold", issues.length ? "text-[#b54708]" : "text-[#087443]")}>
-            评 {row.ratingScore.toFixed(1)} · 信息 {row.infoQualityScore}
-          </div>
-          <div className="mt-0.5 truncate text-[11px] text-[#667085]" title={issues.join(" / ") || "质量正常"}>{issues.join(" / ") || "质量正常"}</div>
-        </td>
-      );
-    }
-    if (key === "time") {
-      const age = candidateAge(row);
+    if (key === "price") {
       return (
         <td className="whitespace-nowrap px-3">
-          <div className="font-mono text-[12px] text-[#344054]">{row.createdAt || "-"}</div>
-          <div className="mt-0.5 text-[11px] text-[#667085]">
-            {age.days >= 0 ? `${age.type === "listedAt" ? "上架" : "创建"} ${age.days} 天` : "创建/上架时间缺失"}
-          </div>
-          {row.listedAt ? <div className="mt-0.5 text-[11px] text-[#98a2b3]">上架 {row.listedAt}</div> : null}
+          <div className="font-semibold text-[#344054]">{formatMoney(row.price)}</div>
+        </td>
+      );
+    }
+    if (key === "createdDays") {
+      const storedDays = Number(row.daysSinceCreated);
+      const createdDays = Number.isFinite(storedDays) && storedDays >= 0 ? storedDays : daysSince(row.createdAt);
+      return (
+        <td className="whitespace-nowrap px-3">
+          <div className="font-semibold text-[#344054]">{createdDays >= 0 ? `${formatNumber(createdDays)} 天` : "-"}</div>
+        </td>
+      );
+    }
+    if (key === "listedAt") {
+      return (
+        <td className="whitespace-nowrap px-3">
+          <div className="font-mono text-[12px] text-[#344054]">{row.listedAt || "-"}</div>
         </td>
       );
     }
     return null;
   }
 
-  const trafficPeriodLabel = trafficPeriodOptions.find((period) => period.key === rules.trafficPeriod)?.label || rules.trafficPeriod;
-  const noSalesTypeLabel = noSalesTypeOptions.find((option) => option.value === rules.noSalesType)?.label || rules.noSalesType;
-  const productSourceLabel = productSourceOptions.find((option) => option.value === productSource)?.label || "售卖中商品";
-  const perStoreLimitLabel = rules.perStoreLimit ? `每店最多 ${rules.perStoreLimit} 个` : "每店不限";
   const canReturnToResults = Boolean(remoteCandidates.length || scanDiagnostics || selectedCandidateIds.size);
-  const enabledRuleCount = [
-    rules.totalSalesEnabled,
-    rules.periodSalesEnabled,
-    rules.exposureEnabled,
-    rules.clickEnabled,
-    rules.exposureUsersEnabled,
-    rules.clickUsersEnabled,
-    rules.stockRangeEnabled,
-    rules.priceRangeEnabled,
-    rules.requireLowRating,
-    rules.requireLowInfo,
-    rules.requireLowImage,
-    rules.requireSameStyleRisk,
-    rules.requireBadTitle
-  ].filter(Boolean).length;
-  const timeRuleCount = [rules.skipCreatedDaysEnabled, rules.skipListedDaysEnabled].filter(Boolean).length;
   const mainRowsClass = analysisStarted ? "grid-rows-[42px_auto_minmax(0,1fr)]" : "grid-rows-[42px_minmax(0,1fr)]";
 
   return (
@@ -1774,9 +1703,9 @@ export function SlowMovingCleanupPage() {
             <span className="rounded-md border border-[#dbe5f2] bg-white px-2 py-1 text-[12px] font-medium text-[#667085]">已选 {selectedIds.size} 家</span>
             {previewMode ? <span className="rounded-md border border-[#ffdca8] bg-[#fff7e8] px-2 py-1 text-[12px] font-semibold text-[#b54708]">设计预览</span> : null}
             {cleanupState === "loading" ? (
-              <span className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#667085]">
+              <span className="inline-flex h-7 max-w-[440px] items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#667085]" title={cleanupMessage}>
                 <Loader2 className="size-[13px] animate-spin" strokeWidth={2} />
-                计算中
+                <span className="truncate">{cleanupMessage || "正在获取在售商品"}</span>
               </span>
             ) : cleanupMessage ? (
               <span className={cn("inline-flex h-7 max-w-[360px] items-center gap-1 rounded-md border px-2 text-[12px] font-semibold", cleanupState === "error" ? "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" : "border-[#dbe5f2] bg-white text-[#667085]")} title={cleanupMessage}>
@@ -1844,97 +1773,77 @@ export function SlowMovingCleanupPage() {
         </div>
 
         {!analysisStarted ? (
-          <section className="grid min-h-0 grid-rows-[44px_minmax(0,1fr)_56px] overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-            <div className="flex items-center justify-between border-b border-[#edf1f6] px-4">
-              <div className="flex items-center gap-2">
-                <SlidersHorizontal className="size-[16px] text-brand-navy" strokeWidth={2.2} />
-                <strong className="text-[14px] font-semibold text-[#101828]">清理设置</strong>
-                <span className="text-[12px] text-[#667085]">先设置规则，再扫描滞销候选；扫描不会下架或删除商品</span>
-              </div>
-            </div>
-
-            <div className="min-h-0 overflow-auto px-5 py-4">
-              <div className="mb-4 grid grid-cols-[minmax(0,1fr)_220px] gap-3 max-[1100px]:grid-cols-1">
-                <div className="flex items-start gap-2 rounded-md border border-[#dbe5f2] bg-[#fbfcff] px-3 py-2.5 text-[13px] leading-6 text-[#344054]">
-                  <AlertTriangle className="mt-1 size-[15px] shrink-0 text-[#b54708]" strokeWidth={2} />
-                  <span>扫描只读取已勾选店铺的商品和经营指标，用于生成候选清单，不会修改平台商品。</span>
+          <section className="grid min-h-0 grid-rows-[minmax(0,1fr)_64px] overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+            <div className="min-h-0 overflow-auto bg-[#fffaf8]">
+              <div className="w-full max-w-[1040px] px-6 py-5 max-[860px]:px-4">
+                <div className="flex items-start gap-2 text-[13px] leading-6 text-[#344054]">
+                  <Info className="mt-1 size-[15px] shrink-0 text-brand-fox" strokeWidth={2.2} />
+                  <span>开始分析前，请勾选 <a className="font-semibold text-brand-navy underline decoration-dashed underline-offset-4" href="#/stores">【店铺管理】</a> 内需要参与分析的店铺，勾选店铺将作为分析过程中商品数据的来源。</span>
                 </div>
-                <div className="grid grid-cols-2 gap-2 rounded-md border border-[#e6ebf3] bg-white px-3 py-2.5 text-[12px] text-[#667085]">
-                  <div>
-                    <div className="text-[18px] font-bold leading-6 text-brand-navy">{enabledRuleCount}</div>
-                    <div>启用条件</div>
-                  </div>
-                  <div>
-                    <div className="text-[18px] font-bold leading-6 text-[#b54708]">{timeRuleCount}</div>
-                    <div>时间条件</div>
-                  </div>
-                  <div className="col-span-2 truncate border-t border-[#edf1f6] pt-2">{selectedIds.size} 家店铺 · 识别方式：{productSourceLabel} · 罗盘周期：{trafficPeriodLabel} · 每店上限：{perStoreLimitLabel}</div>
-                </div>
-              </div>
+                <div className="ml-[23px] mt-1 text-[12px] text-[#98a2b3]">注：商品数据来自平台商品列表，流量指标来自罗盘经营数据。</div>
 
-              <div className="grid gap-5">
-                <div className="grid gap-3 border-b border-[#edf1f6] pb-5">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <strong className="text-[14px] font-semibold text-[#101828]">标记符合以下条件的商品为滞销商品</strong>
-                    <span className="text-[12px] text-[#667085]">已勾选条件需要全部满足</span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-3 max-[1320px]:grid-cols-2 max-[860px]:grid-cols-1">
-                    <ConditionInput checked={rules.totalSalesEnabled} label="总销量" value={rules.totalSalesMax} onCheckedChange={(value) => setRule("totalSalesEnabled", value)} onValueChange={(value) => setRule("totalSalesMax", value)} />
-                    <ConditionInput checked={rules.exposureEnabled} label="曝光次数" value={rules.exposureMax} onCheckedChange={(value) => setRule("exposureEnabled", value)} onValueChange={(value) => setRule("exposureMax", value)} />
-                    <ConditionInput checked={rules.clickEnabled} label="点击次数" value={rules.clickMax} onCheckedChange={(value) => setRule("clickEnabled", value)} onValueChange={(value) => setRule("clickMax", value)} />
-                    <ConditionInput checked={rules.periodSalesEnabled} label="周期成交" value={rules.periodSalesMax} onCheckedChange={(value) => setRule("periodSalesEnabled", value)} onValueChange={(value) => setRule("periodSalesMax", value)} />
-                    <ConditionInput checked={rules.exposureUsersEnabled} label="曝光人数" value={rules.exposureUsersMax} onCheckedChange={(value) => setRule("exposureUsersEnabled", value)} onValueChange={(value) => setRule("exposureUsersMax", value)} />
-                    <ConditionInput checked={rules.clickUsersEnabled} label="点击人数" value={rules.clickUsersMax} onCheckedChange={(value) => setRule("clickUsersEnabled", value)} onValueChange={(value) => setRule("clickUsersMax", value)} />
-                    <RangeConditionInput checked={rules.stockRangeEnabled} label="库存区间" minValue={rules.stockMin} maxValue={rules.stockMax} unit="件" onCheckedChange={(value) => setRule("stockRangeEnabled", value)} onMinChange={(value) => setRule("stockMin", value)} onMaxChange={(value) => setRule("stockMax", value)} />
-                    <RangeConditionInput checked={rules.priceRangeEnabled} label="价格区间" minValue={rules.minPrice} maxValue={rules.maxPrice} unit="元" onCheckedChange={(value) => setRule("priceRangeEnabled", value)} onMinChange={(value) => setRule("minPrice", value)} onMaxChange={(value) => setRule("maxPrice", value)} />
-                  </div>
-                  <QualityToggles rules={rules} setRule={setRule} />
-                </div>
+                <div className="mt-5 grid gap-6">
+                  <section aria-labelledby="stale-match-heading">
+                    <h3 className="text-[14px] font-semibold text-[#101828]" id="stale-match-heading">标记符合以下 <span className="text-brand-fox">所有勾选条件</span> 的商品为滞销商品</h3>
+                    <div className="mt-3 grid grid-cols-3 gap-x-7 gap-y-2 max-[1180px]:grid-cols-2 max-[760px]:grid-cols-1">
+                      <ConditionInput checked={rules.totalSalesEnabled} label="总销量" value={rules.totalSalesMax} onCheckedChange={(value) => setRule("totalSalesEnabled", value)} onValueChange={(value) => setRule("totalSalesMax", value)} />
+                      <ConditionInput checked={rules.exposureEnabled} label="曝光次数" value={rules.exposureMax} onCheckedChange={(value) => setRule("exposureEnabled", value)} onValueChange={(value) => setRule("exposureMax", value)} />
+                      <ConditionInput checked={rules.clickEnabled} label="点击次数" value={rules.clickMax} onCheckedChange={(value) => setRule("clickEnabled", value)} onValueChange={(value) => setRule("clickMax", value)} />
+                      <ConditionInput checked={rules.periodSalesEnabled} label="周期成交" value={rules.periodSalesMax} onCheckedChange={(value) => setRule("periodSalesEnabled", value)} onValueChange={(value) => setRule("periodSalesMax", value)} />
+                      <ConditionInput checked={rules.exposureUsersEnabled} label="曝光人数" value={rules.exposureUsersMax} onCheckedChange={(value) => setRule("exposureUsersEnabled", value)} onValueChange={(value) => setRule("exposureUsersMax", value)} />
+                      <ConditionInput checked={rules.clickUsersEnabled} label="点击人数" value={rules.clickUsersMax} onCheckedChange={(value) => setRule("clickUsersEnabled", value)} onValueChange={(value) => setRule("clickUsersMax", value)} />
+                      <RangeConditionInput checked={rules.stockRangeEnabled} label="库存区间" minValue={rules.stockMin} maxValue={rules.stockMax} unit="件" onCheckedChange={(value) => setRule("stockRangeEnabled", value)} onMinChange={(value) => setRule("stockMin", value)} onMaxChange={(value) => setRule("stockMax", value)} />
+                      <RangeConditionInput checked={rules.priceRangeEnabled} label="价格区间" minValue={rules.minPrice} maxValue={rules.maxPrice} unit="元" onCheckedChange={(value) => setRule("priceRangeEnabled", value)} onMinChange={(value) => setRule("minPrice", value)} onMaxChange={(value) => setRule("maxPrice", value)} />
+                      <QualityConditionSelect rules={rules} setRule={setRule} />
+                    </div>
+                  </section>
 
-                <div className="grid gap-3 border-b border-[#edf1f6] pb-5">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <strong className="text-[14px] font-semibold text-[#101828]">商品时间条件</strong>
-                    <span className="text-[12px] text-[#667085]">达到设定天数后才会进行后续操作</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 max-[920px]:grid-cols-1">
-                    <ConditionInput checked={rules.skipCreatedDaysEnabled} label="创建时间" operator="≥" value={rules.noSalesDays} unit="天" onCheckedChange={(value) => setRule("skipCreatedDaysEnabled", value)} onValueChange={(value) => setRule("noSalesDays", value)} />
-                    <ConditionInput checked={rules.skipListedDaysEnabled} label="上架时间" operator="≥" value={rules.listedDays} unit="天" onCheckedChange={(value) => setRule("skipListedDaysEnabled", value)} onValueChange={(value) => setRule("listedDays", value)} />
-                  </div>
-                </div>
+                  <section aria-labelledby="stale-exclude-heading">
+                    <h3 className="text-[14px] font-semibold text-[#101828]" id="stale-exclude-heading">不标记符合以下 <span className="text-brand-fox">任一勾选条件</span> 的商品为滞销商品</h3>
+                    <div className="mt-3 grid max-w-[650px] grid-cols-2 gap-x-7 gap-y-2 max-[760px]:grid-cols-1">
+                      <ConditionInput checked={rules.skipCreatedDaysEnabled} label="创建时间" operator="≤" value={rules.noSalesDays} unit="天" onCheckedChange={(value) => setRule("skipCreatedDaysEnabled", value)} onValueChange={(value) => setRule("noSalesDays", value)} />
+                      <ConditionInput checked={rules.skipListedDaysEnabled} label="上架时间" operator="≤" value={rules.listedDays} unit="天" onCheckedChange={(value) => setRule("skipListedDaysEnabled", value)} onValueChange={(value) => setRule("listedDays", value)} />
+                    </div>
+                  </section>
 
-                <div className="grid gap-3 border-b border-[#edf1f6] pb-5">
-                  <strong className="text-[14px] font-semibold text-[#101828]">商品来源 / 分析流量周期</strong>
-                  <div className="flex flex-wrap items-center gap-4">
-                    <span className="text-[13px] text-[#667085]">识别方式：</span>
-                    <SegmentButtonGroup value={rules.noSalesType} options={noSalesTypeOptions} onChange={(value) => setRule("noSalesType", value)} />
-                    <span className="text-[13px] text-[#667085]">流量周期：</span>
-                    <SegmentButtonGroup value={rules.trafficPeriod} options={trafficPeriodOptions.map((period) => ({ value: period.key, label: period.label }))} onChange={setTrafficPeriod} />
-                    <span className="ml-2 text-[13px] text-[#667085]">商品来源：</span>
-                    <SegmentButtonGroup value={productSource} options={productSourceOptions} onChange={setProductSource} />
-                    <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" title={compassFileName || "导入经营版_商品_商品列表"} onClick={() => void importCompassFile()}>
-                      <Upload className="size-[14px]" strokeWidth={2} />
-                      {compassFileName ? "已导入罗盘" : "导入罗盘"}
-                    </button>
-                  </div>
-                </div>
+                  <section className="grid gap-2" aria-labelledby="stale-source-heading">
+                    <h3 className="text-[14px] font-semibold text-[#101828]" id="stale-source-heading">商品来源 / 分析的流量周期</h3>
+                    <div className="flex min-h-8 flex-wrap items-center gap-x-5 gap-y-1">
+                      <span className="w-[72px] text-[13px] text-[#667085]">识别方式：</span>
+                      {noSalesTypeOptions.map((option) => <RadioOption checked={rules.noSalesType === option.value} key={option.value} label={option.label} onClick={() => setRule("noSalesType", option.value)} />)}
+                    </div>
+                    <div className="flex min-h-8 flex-wrap items-center gap-x-5 gap-y-1">
+                      <span className="w-[72px] text-[13px] text-[#667085]">流量周期：</span>
+                      {trafficPeriodOptions.map((period) => <RadioOption checked={rules.trafficPeriod === period.key} key={period.key} label={period.label} onClick={() => setTrafficPeriod(period.key)} />)}
+                    </div>
+                    <div className="flex min-h-8 flex-wrap items-center gap-x-5 gap-y-1">
+                      <span className="w-[72px] text-[13px] text-[#667085]">商品来源：</span>
+                      <RadioOption checked label="售卖中商品" />
+                      <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054] hover:border-brand-fox hover:text-brand-navy" type="button" title={compassFileName || "导入经营版_商品_商品列表"} onClick={() => void importCompassFile()}>
+                        <Upload className="size-[14px]" strokeWidth={2} />
+                        {compassFileName ? "已导入罗盘" : "导入罗盘"}
+                      </button>
+                    </div>
+                  </section>
 
-                <div className="grid gap-3">
-                  <strong className="text-[14px] font-semibold text-[#101828]">商品个数配置</strong>
-                  <div className="grid grid-cols-[minmax(0,260px)_minmax(0,1fr)] items-center gap-4 max-[920px]:grid-cols-1">
-                    <NumberInput label="每店最多" value={rules.perStoreLimit} onChange={(value) => setRule("perStoreLimit", value)} />
-                    <span className="text-[12px] leading-5 text-[#667085]">0 表示不限；设置后系统会按每家店铺优先抽取风险更高的滞销商品。</span>
-                  </div>
+                  <section aria-labelledby="stale-count-heading">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-[14px] font-semibold text-[#101828]" id="stale-count-heading">商品个数配置</h3>
+                      <span className="inline-flex items-center gap-1 text-[12px] font-medium text-brand-fox"><Info className="size-[13px]" strokeWidth={2.2} />配置清理商品个数后，系统将从每家店铺抽取该数量的滞销商品进行处理</span>
+                    </div>
+                    <label className="mt-3 grid w-[210px] grid-cols-[88px_88px] items-center gap-3 text-[13px] text-[#667085]">
+                      <span>清理商品个数</span>
+                      <input className="h-8 rounded-md border border-[#dbe5f2] bg-white px-2 text-[13px] font-medium text-[#1d2939] outline-none placeholder:text-[#98a2b3] focus:border-brand-fox focus:ring-2 focus:ring-brand-foxSoft" min={0} placeholder="不限" type="number" value={rules.perStoreLimit || ""} onChange={(event) => setRule("perStoreLimit", Number(event.target.value || 0))} />
+                    </label>
+                  </section>
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center justify-between border-t border-[#edf1f6] px-5">
-              <span className="truncate text-[12px] text-[#667085]">
-                当前配置：{selectedIds.size} 家店铺 · {noSalesTypeLabel} · 罗盘周期：{trafficPeriodLabel} · 每店上限：{perStoreLimitLabel}
-              </span>
-              <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-4 text-[13px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" title={!selectedIds.size ? "请先勾选店铺" : importedIdsMissing ? "商品 ID 导入模式需要先导入文件" : cleanupState === "loading" ? "正在扫描" : "只扫描候选，不会下架或删除商品"} disabled={!selectedIds.size || importedIdsMissing || cleanupState === "loading"} onClick={() => void scanGoods()}>
+            <div className="grid place-items-center border-t border-[#edf1f6] bg-white px-5">
+              <button className="inline-flex h-10 items-center gap-1.5 rounded-md bg-brand-fox px-5 text-[13px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:cursor-not-allowed disabled:bg-[#e4e7ec] disabled:text-[#98a2b3] disabled:shadow-none" type="button" title={!selectedIds.size ? "请先勾选店铺" : cleanupState === "loading" ? "正在扫描" : "只扫描候选，不会下架或删除商品"} disabled={!selectedIds.size || cleanupState === "loading"} onClick={() => void scanGoods()}>
                 {cleanupState === "loading" ? <Loader2 className="size-[15px] animate-spin" strokeWidth={2} /> : <PackageSearch className="size-[15px]" strokeWidth={2} />}
-                扫描滞销候选
+                开始滞销商品分析
               </button>
             </div>
           </section>
@@ -1965,12 +1874,12 @@ export function SlowMovingCleanupPage() {
           </div>
 
           <div className="min-h-0 overflow-auto">
-            <table className="w-full border-separate border-spacing-0 text-left text-[12px]" style={{ minWidth: tableMinWidth }}>
+            <table className="w-full table-fixed border-separate border-spacing-0 text-left text-[12px]" style={{ minWidth: tableMinWidth }}>
               <thead className="sticky top-0 z-20 bg-[#fbfcff] text-[#344054] shadow-[inset_0_-1px_0_#e6ebf3]">
                 <tr className="h-10">
                   <th className="sticky left-0 z-30 bg-[#fbfcff] px-3 font-semibold shadow-[inset_-1px_0_0_#edf1f6]" style={{ width: 320, minWidth: 320, maxWidth: 320 }}>商品 / 店铺</th>
                   {visibleColumns.map((column) => (
-                    <th className="whitespace-nowrap bg-[#fbfcff] px-3 font-semibold" key={column.key}>{column.label}</th>
+                    <th className="whitespace-nowrap bg-[#fbfcff] px-3 font-semibold" key={column.key} style={{ width: column.width, minWidth: column.width }}>{column.label}</th>
                   ))}
                 </tr>
               </thead>

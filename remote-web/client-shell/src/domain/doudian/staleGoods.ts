@@ -15,7 +15,7 @@ import { firstPathValue, getPathValue, requestPlanResponseOk, runDoudianRequestP
 import { deleteStoreLedger, listStoreLedger, upsertStoreLedger } from "./storeGroups";
 import { requireChihuNative } from "../../native/client";
 import { prepareMutationSafety, recordExecutionMutationResults } from "./mutationSafety";
-import { dispatchDoudianProgress } from "./progress";
+import { dispatchDoudianProgress, type DoudianStaleGoodsProgress } from "./progress";
 import { reportDoudianDiagnostic } from "./diagnosticLog";
 import { validateStaleGoodsMutationResponse } from "./staleGoodsMutationResponse";
 import * as XLSX from "xlsx";
@@ -37,6 +37,14 @@ interface StaleGoodsArgs {
   sourceRunId?: string;
   confirmText?: string;
   isCancelled?: () => boolean;
+  onProgress?: (detail: DoudianStaleGoodsProgress) => Promise<void> | void;
+}
+
+interface ProductPageBatch {
+  products: Array<Record<string, unknown>>;
+  fetchedCount: number;
+  totalCount: number;
+  fetchedPages: number;
 }
 
 interface ScanRunRecord {
@@ -243,7 +251,12 @@ function defaultRules(adapter: DoudianAdapterConfig): DoudianStaleGoodsRules {
 }
 
 function normalizeRules(args: StaleGoodsArgs, adapter: DoudianAdapterConfig) {
-  return { ...defaultRules(adapter), ...(args.rules || {}) };
+  return {
+    ...defaultRules(adapter),
+    ...(args.rules || {}),
+    productSource: "selling" as const,
+    importedProductIds: []
+  };
 }
 
 function qualityIssues(row: DoudianStaleGoodsCandidate) {
@@ -1010,8 +1023,20 @@ async function runPlan(payload: DoudianAdapterPayload, store: DoudianStoreSummar
     .catch((error) => ({ ok: false, status: 0, data: null, error: error instanceof Error ? error.message : String(error), source: planKey } as RequestPlanResult));
 }
 
-async function collectProducts(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: StaleGoodsArgs, rules: DoudianStaleGoodsRules) {
+async function collectProducts(
+  payload: DoudianAdapterPayload,
+  store: DoudianStoreSummary,
+  args: StaleGoodsArgs,
+  rules: DoudianStaleGoodsRules,
+  onPage?: (detail: ProductPageBatch) => Promise<void> | void
+) {
   if (Array.isArray(args.mockProducts)) {
+    await onPage?.({
+      products: args.mockProducts,
+      fetchedCount: args.mockProducts.length,
+      totalCount: args.mockProducts.length,
+      fetchedPages: 0
+    });
     return {
       products: args.mockProducts,
       remoteTotal: args.mockProducts.length,
@@ -1067,9 +1092,9 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
       const responseKey = `${planKey}:batch:${batchIndex}:page:${page}`;
       const payloadForPage = { [planKey]: response.data };
       const parsed = findArray(payloadForPage, listPaths(payload.adapter));
-      return { response, responseKey, payloadForPage, parsed, responseOk: requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter)) };
+      return { page, response, responseKey, payloadForPage, parsed, responseOk: requestPlanResponseOk(response, payload.adapter, planKey, mappings(payload.adapter)) };
     };
-    const consumePage = (result: Awaited<ReturnType<typeof fetchPage>>) => {
+    const consumePage = async (result: Awaited<ReturnType<typeof fetchPage>>) => {
       responses[result.responseKey] = result.response;
       fetchedPages += 1;
       batchFetchedPages += 1;
@@ -1085,15 +1110,25 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
       batchFetchedItems += result.parsed.items.length;
       batchTotal = optionalTotal(result.payloadForPage, payload.adapter) ?? batchTotal;
       if (source !== "importedIds") remoteTotal = batchTotal ?? remoteTotal;
+      const pageProducts: Array<Record<string, unknown>> = [];
       for (const item of result.parsed.items) {
         const record = objectRecord(item);
         const productId = productRecordId(record, payload.adapter);
         if (!productId || (source === "importedIds" && !batchSet.has(productId))) continue;
-        if (!products.has(productId)) products.set(productId, record);
+        if (!products.has(productId)) {
+          products.set(productId, record);
+          pageProducts.push(record);
+        }
       }
+      await onPage?.({
+        products: pageProducts,
+        fetchedCount: products.size,
+        totalCount: source === "importedIds" ? importedIds.length : Math.max(remoteTotal ?? 0, products.size),
+        fetchedPages,
+      });
     };
     const firstPage = await fetchPage(pageStart);
-    consumePage(firstPage);
+    await consumePage(firstPage);
     if (!requestFailed && !malformed) {
       const foundBatchIds = source === "importedIds" ? idBatch.filter((id) => products.has(id)).length : 0;
       if (source === "importedIds" && foundBatchIds >= idBatch.length) batchComplete = true;
@@ -1109,14 +1144,14 @@ async function collectProducts(payload: DoudianAdapterPayload, store: DoudianSto
         for (let offset = 0; offset < remainingPages.length; offset += pageConcurrency) {
           throwIfCancelled(args);
           const pageResults = await Promise.all(remainingPages.slice(offset, offset + pageConcurrency).map((page) => fetchPage(page)));
-          pageResults.forEach(consumePage);
+          for (const pageResult of pageResults) await consumePage(pageResult);
           if (requestFailed || malformed || (remoteTotal !== undefined && products.size >= remoteTotal)) break;
         }
         batchComplete = !requestFailed && !malformed && batchTotal !== undefined && batchFetchedItems >= batchTotal;
       } else {
         for (let offset = 1; offset < batchMaxPages && !batchComplete; offset += 1) {
           const pageResult = await fetchPage(pageStart + offset);
-          consumePage(pageResult);
+          await consumePage(pageResult);
           if (requestFailed || malformed) break;
           const foundIds = source === "importedIds" ? idBatch.filter((id) => products.has(id)).length : 0;
           batchComplete = source === "importedIds" && foundIds >= idBatch.length
@@ -1371,18 +1406,42 @@ async function reportStaleGoodsRow(args: {
   }
 }
 
-async function scanStore(payload: DoudianAdapterPayload, store: DoudianStoreSummary, args: StaleGoodsArgs, runId: string, rules: DoudianStaleGoodsRules) {
+async function scanStore(
+  payload: DoudianAdapterPayload,
+  store: DoudianStoreSummary,
+  args: StaleGoodsArgs,
+  runId: string,
+  rules: DoudianStaleGoodsRules,
+  onPage?: (detail: Omit<DoudianStaleGoodsProgress, "completedStores" | "totalStores">) => Promise<void> | void
+) {
   throwIfCancelled(args);
-  const [collected, compassResult, recommendResult] = await Promise.all([
-    collectProducts(payload, store, args, rules),
-    collectCompassRows(payload, store, args, rules),
-    Array.isArray(args.mockProducts)
-      ? Promise.resolve({ byId: new Map<string, Set<number>>(), complete: true, fetchedPages: 0, sourceHealth: [] as Array<Record<string, unknown>>, responses: {} as Record<string, RequestPlanResult> })
-      : collectRecommendAdmit(payload, store, rules, args)
-  ]);
+  const compassPromise = collectCompassRows(payload, store, args, rules);
+  const recommendPromise = Array.isArray(args.mockProducts)
+    ? Promise.resolve({ byId: new Map<string, Set<number>>(), complete: true, fetchedPages: 0, sourceHealth: [] as Array<Record<string, unknown>>, responses: {} as Record<string, RequestPlanResult> })
+    : collectRecommendAdmit(payload, store, rules, args);
+  const streamedCandidateIds = new Set<string>();
+  const collected = await collectProducts(payload, store, args, rules, async (page) => {
+    const [compassResult, recommendResult] = await Promise.all([compassPromise, recommendPromise]);
+    const compass = compassByProductId(compassResult.rows);
+    const candidates = page.products
+      .map((product) => candidateFromProduct(store, product, payload.adapter, runId, compass, compassResult.zeroFillSafe, recommendResult.byId, "selling"))
+      .filter((product): product is DoudianStaleGoodsCandidate => Boolean(product))
+      .filter((product) => evaluateRules(product, rules).match);
+    candidates.forEach((candidate) => streamedCandidateIds.add(candidate.id));
+    await onPage?.({
+      shopId: store.shopId,
+      shopName: store.shopName,
+      candidates,
+      fetchedCount: page.fetchedCount,
+      totalCount: page.totalCount,
+      fetchedPages: page.fetchedPages,
+      candidateCount: streamedCandidateIds.size
+    });
+  });
+  const [compassResult, recommendResult] = await Promise.all([compassPromise, recommendPromise]);
   const compass = compassByProductId(compassResult.rows);
   const products = collected.products
-    .map((product) => candidateFromProduct(store, product, payload.adapter, runId, compass, compassResult.zeroFillSafe, recommendResult.byId, rules.productSource))
+    .map((product) => candidateFromProduct(store, product, payload.adapter, runId, compass, compassResult.zeroFillSafe, recommendResult.byId, "selling"))
     .filter((product): product is DoudianStaleGoodsCandidate => Boolean(product));
   const evaluations = products.map((product) => ({ product, evaluation: evaluateRules(product, rules) }));
   const matched = evaluations.filter((item) => item.evaluation.match).map((item) => item.product);
@@ -1683,6 +1742,7 @@ export async function fetchStaleGoodsCleanup(args: StaleGoodsArgs = {}): Promise
   const results = new Array<Awaited<ReturnType<typeof scanStore>>>(targets.length);
   let nextStoreIndex = 0;
   let completedStoreCount = 0;
+  const storeProgress = new Map<string, number>();
   const initialRun: ScanRunRecord = {
     id: runId,
     mode: "scan",
@@ -1730,15 +1790,34 @@ export async function fetchStaleGoodsCleanup(args: StaleGoodsArgs = {}): Promise
         const index = nextStoreIndex;
         nextStoreIndex += 1;
         if (index >= targets.length) return;
-        results[index] = await scanStore(payload, targets[index], args, runId, rules);
+        results[index] = await scanStore(payload, targets[index], args, runId, rules, async (detail) => {
+          const fraction = detail.totalCount > 0
+            ? Math.min(0.99, detail.fetchedCount / detail.totalCount)
+            : Math.min(0.95, detail.fetchedPages / Math.max(1, Number(args.maxProductListPages || policyNumber(payload.adapter, "staleGoodsCleanup.maxProductListPages", 100, 1, 200))));
+          storeProgress.set(detail.shopId, fraction);
+          const progress = targets.length
+            ? Math.min(99, Math.max(1, Math.round((Array.from(storeProgress.values()).reduce((sum, value) => sum + value, 0) / targets.length) * 100)))
+            : 100;
+          const staleGoods = { ...detail, completedStores: completedStoreCount, totalStores: targets.length };
+          dispatchDoudianProgress({
+            operationId: runId,
+            taskType: "staleGoodsScan",
+            status: "running",
+            progress,
+            message: `已获取 ${detail.fetchedCount}${detail.totalCount ? `/${detail.totalCount}` : ""} 个在售商品，当前命中 ${detail.candidateCount} 个候选`,
+            staleGoods
+          });
+          await args.onProgress?.(staleGoods);
+        });
         enqueueCheckpoint(results[index]);
         completedStoreCount += 1;
+        storeProgress.set(targets[index].shopId, 1);
         dispatchDoudianProgress({
           operationId: runId,
           taskType: "staleGoodsScan",
           status: "running",
-          progress: targets.length ? Math.round((completedStoreCount / targets.length) * 100) : 100,
-          message: `${completedStoreCount}/${targets.length} stores completed`
+          progress: targets.length ? Math.round((Array.from(storeProgress.values()).reduce((sum, value) => sum + value, 0) / targets.length) * 100) : 100,
+          message: `已完成 ${completedStoreCount}/${targets.length} 家店铺`
         });
       }
     }));
