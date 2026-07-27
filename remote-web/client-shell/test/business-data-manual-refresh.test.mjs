@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const source = await readFile(fileURLToPath(new URL("../src/components/BusinessDataPage.tsx", import.meta.url)), "utf8");
+const domainSource = await readFile(fileURLToPath(new URL("../src/domain/doudian/businessData.ts", import.meta.url)), "utf8");
 
 test("business data refresh starts only from the manual button or the user-enabled timer", () => {
   const refreshCalls = source.match(/refreshBusinessData\(/g) || [];
@@ -43,4 +44,15 @@ test("changing the requested range invalidates and cancels an in-flight refresh"
   assert.match(source, /const supersededOperationId = activeOperationIdRef\.current/);
   assert.match(source, /if \(supersededOperationId\) void cancelDoudianStoreOperation\(supersededOperationId\)\.catch\(\(\) => undefined\)/);
   assert.match(source, /businessRequestSeq\.current = requestSeq;[\s\S]*?updateActiveOperationId\(""\);[\s\S]*?setBusinessSyncing\(false\);[\s\S]*?setBusinessProgress\(""\);/);
+});
+
+test("business progress hides store identity and the header shows the recorded data update time", () => {
+  assert.match(domainSource, /message: `已获取 \$\{completed\}\/\$\{total\} · 成交金额/);
+  assert.doesNotMatch(domainSource, /message: `已获取 \$\{completed\}\/\$\{total\}：\$\{row\.shopName \|\| row\.shopId\}/);
+  assert.doesNotMatch(source, /businessItemProgress\.row\.shopName/);
+  assert.doesNotMatch(source, /businessItemProgress\.row\.shopId/);
+  assert.doesNotMatch(source, /家未命中经营指标/);
+  assert.match(source, /dataUpdatedAt \|\| detail\.attemptedAt/);
+  assert.match(source, /店铺明细[\s\S]*?数据更新时间 \{businessDataUpdatedAt/);
+  assert.doesNotMatch(source, /最近同步/);
 });

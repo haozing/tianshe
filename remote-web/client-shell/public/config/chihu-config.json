@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.07.26.opportunity-submit-rate-recovery-beta-v13",
+  "version": "2026.07.27.product-navigation-cleanup-ui-beta-v17",
   "configTtlSeconds": 300,
   "entry": {
     "newRemoteOrigin": "./"
@@ -49,7 +49,7 @@
     "sampleRate": 1
   },
   "release": {
-    "gitCommit": "b2bf432-dirty",
-    "buildTime": "2026-07-26T14:52:36.441Z"
+    "gitCommit": "0003bd4-dirty",
+    "buildTime": "2026-07-27T06:04:38.543Z"
   }
 }

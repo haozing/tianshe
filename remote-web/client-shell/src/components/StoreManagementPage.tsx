@@ -33,12 +33,12 @@ import {
   updateDoudianStoreGroup
 } from "../bridge/client";
 import { addDoudianProgressListener } from "../domain/doudian";
+import { setStoreLoginNavigationLocked } from "../domain/doudian/storeLoginNavigationLock";
 import { cn } from "../lib/utils";
 import { showStoreOperationToast, storeImportFeedback } from "../lib/storeImportFeedback";
 import type { DoudianStoreGroup, DoudianStoreResult, DoudianStoreSummary } from "../types";
 
 type StoreStatusFilter = "全部状态" | "在线" | "离线" | "待复核" | "未知";
-type FailureFilter = "全部结果" | "只看失败";
 type StoreSortKey = "店铺名称" | "最近获取" | "最近校验" | "登录状态";
 type OperationKey = "fetchStores" | "refreshStatus" | "deleteStores" | "updateGroup";
 type NoticeTone = "success" | "warning" | "info" | "error";
@@ -522,6 +522,100 @@ function OperationDialog({
   );
 }
 
+function StoreLoginSelectionDialog({
+  selection,
+  selectedIds,
+  taskRunning,
+  operationCancelling,
+  onToggle,
+  onSelectAll,
+  onCancel,
+  onLogin
+}: {
+  selection: StoreLoginSelection | null;
+  selectedIds: Set<string>;
+  taskRunning: boolean;
+  operationCancelling: boolean;
+  onToggle: (shopId: string) => void;
+  onSelectAll: () => void;
+  onCancel: () => void;
+  onLogin: () => void;
+}) {
+  if (!selection) return null;
+  const selectedCount = selection.candidates.filter((store) => selectedIds.has(store.shopId)).length;
+  const allSelected = selection.candidates.length > 0 && selectedCount === selection.candidates.length;
+  const loggingIn = selection.phase === "logging_in";
+  const cancelLabel = operationCancelling ? "正在取消" : taskRunning ? (loggingIn ? "取消登录" : "取消获取") : "取消";
+
+  return (
+    <Dialog.Root open onOpenChange={(open) => { if (!open && !taskRunning) onCancel(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/35" />
+        <Dialog.Content
+          className="fixed left-1/2 top-1/2 z-50 flex max-h-[min(680px,calc(100vh-40px))] w-[min(680px,calc(100vw-36px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-[#dbe5f2] bg-white shadow-[0_24px_70px_rgba(15,23,42,0.24)]"
+          onEscapeKeyDown={(event) => { if (taskRunning) event.preventDefault(); }}
+          onPointerDownOutside={(event) => event.preventDefault()}
+        >
+          <div className="flex min-h-[62px] items-center justify-between gap-3 border-b border-[#edf1f6] px-5">
+            <div className="min-w-0">
+              <Dialog.Title className="m-0 text-[17px] font-semibold text-[#101828]">{loggingIn ? "正在登录店铺" : "选择登录店铺"}</Dialog.Title>
+              <Dialog.Description className="mt-1 text-[12px] font-medium text-[#667085]">
+                已发现 {selection.candidates.length} 家，已选择 {selectedCount} 家
+              </Dialog.Description>
+            </div>
+            <button className="grid size-8 shrink-0 place-items-center rounded-md border border-[#dbe5f2] text-[#667085] disabled:opacity-45" type="button" aria-label={cancelLabel} title={cancelLabel} disabled={operationCancelling} onClick={onCancel}>
+              {operationCancelling ? <Loader2 className="size-4 animate-spin" strokeWidth={2} /> : <X className="size-4" strokeWidth={2} />}
+            </button>
+          </div>
+
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex min-h-[44px] items-center justify-between border-b border-[#edf1f6] bg-[#fbfcff] px-4">
+              <button className="inline-flex h-8 items-center gap-2 rounded-md px-2 text-[12px] font-semibold text-[#344054] disabled:opacity-45" type="button" disabled={taskRunning || !selection.candidates.length} onClick={onSelectAll}>
+                <span className={cn("grid size-4 place-items-center rounded border", allSelected ? "border-brand-fox bg-brand-fox text-white" : "border-[#cfd8e6] bg-white text-transparent")}>
+                  <Check className="size-3" strokeWidth={3} />
+                </span>
+                {allSelected ? "取消全选" : "全选店铺"}
+              </button>
+              {loggingIn ? <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-brand-fox"><Loader2 className="size-3.5 animate-spin" strokeWidth={2.2} />登录进行中</span> : null}
+            </div>
+            <div className="min-h-[220px] flex-1 overflow-auto p-3">
+              <div className="grid gap-2">
+                {selection.candidates.map((store) => {
+                  const selected = selectedIds.has(store.shopId);
+                  return (
+                    <button className={cn("flex min-h-[54px] min-w-0 items-center gap-3 rounded-md border px-3 text-left transition-colors disabled:cursor-default", selected ? "border-[#ffc8ad] bg-[#fff7f2]" : "border-[#dbe5f2] bg-white hover:border-brand-fox")} type="button" key={store.shopId || store.shopName} disabled={taskRunning} onClick={() => onToggle(store.shopId)}>
+                      <span className={cn("grid size-5 shrink-0 place-items-center rounded border", selected ? "border-brand-fox bg-brand-fox text-white" : "border-[#cfd8e6] bg-white text-transparent")}>
+                        <Check className="size-3.5" strokeWidth={3} />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <strong className="block truncate text-[13px] text-[#1d2939]" title={store.shopName || store.shopId}>{store.shopName || store.shopId}</strong>
+                        <span className="mt-0.5 block truncate font-mono text-[11px] text-[#98a2b3]">{store.shopId}</span>
+                      </span>
+                      <span className="shrink-0 rounded-md bg-brand-foxSoft px-2 py-0.5 text-[11px] font-semibold text-brand-fox">待登录</span>
+                    </button>
+                  );
+                })}
+                {!selection.candidates.length ? <div className="grid min-h-[220px] place-items-center text-[13px] text-[#667085]">正在获取店铺列表...</div> : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex min-h-[62px] items-center justify-between gap-3 border-t border-[#edf1f6] px-5">
+            <span className="text-[12px] font-medium text-[#667085]">未选择的店铺不会登录</span>
+            <div className="flex items-center gap-2">
+              <button className="h-9 rounded-md border border-[#dbe5f2] bg-white px-4 text-[13px] font-semibold text-[#344054] disabled:opacity-45" type="button" disabled={operationCancelling} onClick={onCancel}>{cancelLabel}</button>
+              <button className="inline-flex h-9 items-center gap-2 rounded-md bg-brand-fox px-4 text-[13px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45" type="button" disabled={taskRunning || selectedCount === 0} onClick={onLogin}>
+                {loggingIn ? <Loader2 className="size-4 animate-spin" strokeWidth={2.2} /> : <KeyRound className="size-4" strokeWidth={2.1} />}
+                {loggingIn ? "正在登录" : `登录已选店铺 (${selectedCount})`}
+              </button>
+            </div>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function GroupManagementDialog({
   open,
   groups,
@@ -602,7 +696,6 @@ export function StoreManagementPage() {
   const [selectedIds, setSelectedIds] = useState(() => new Set<string>());
   const [groupFilter, setGroupFilter] = useState("全部分组");
   const [statusFilter, setStatusFilter] = useState<StoreStatusFilter>("全部状态");
-  const [failureFilter, setFailureFilter] = useState<FailureFilter>("全部结果");
   const [sortKey, setSortKey] = useState<StoreSortKey>("店铺名称");
   const [query, setQuery] = useState("");
   const [pendingOperation, setPendingOperation] = useState<OperationKey | null>(null);
@@ -660,8 +753,16 @@ export function StoreManagementPage() {
   }, [rows]);
 
   useEffect(() => {
+    const locked = operationBusy && activeTask === "fetchStores";
+    setStoreLoginNavigationLocked(locked);
+    return () => {
+      if (locked) setStoreLoginNavigationLocked(false);
+    };
+  }, [activeTask, operationBusy]);
+
+  useEffect(() => {
     setPage(1);
-  }, [failureFilter, groupFilter, query, sortKey, statusFilter]);
+  }, [groupFilter, query, sortKey, statusFilter]);
 
   useEffect(() => {
     let disposed = false;
@@ -781,9 +882,8 @@ export function StoreManagementPage() {
         || (statusFilter === "离线" && row.status === "offline")
         || (statusFilter === "待复核" && row.status === "check_failed")
         || (statusFilter === "未知" && row.status === "unknown");
-      const failureOk = failureFilter === "全部结果" || rowNeedsAttention(row);
       const queryOk = !keyword || row.name.toLowerCase().includes(keyword) || row.id.toLowerCase().includes(keyword);
-      return groupOk && statusOk && failureOk && queryOk;
+      return groupOk && statusOk && queryOk;
     });
     return filtered.sort((left, right) => {
       if (sortKey === "最近获取") return timestamp(right.lastFetchAt || right.updatedAt) - timestamp(left.lastFetchAt || left.updatedAt);
@@ -791,7 +891,7 @@ export function StoreManagementPage() {
       if (sortKey === "登录状态") return left.status.localeCompare(right.status);
       return left.name.localeCompare(right.name, "zh-CN");
     });
-  }, [failureFilter, groupFilter, query, rows, sortKey, statusFilter]);
+  }, [groupFilter, query, rows, sortKey, statusFilter]);
   const pageCount = Math.max(1, Math.ceil(visibleRows.length / STORE_PAGE_SIZE));
   const pageRows = useMemo(() => {
     const safePage = Math.min(page, pageCount);
@@ -1025,6 +1125,26 @@ export function StoreManagementPage() {
     }
   }
 
+  function toggleStoreLoginCandidate(shopId: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(shopId)) next.delete(shopId);
+      else next.add(shopId);
+      return next;
+    });
+  }
+
+  function toggleAllStoreLoginCandidates() {
+    if (!storeLoginSelection) return;
+    const candidateIds = storeLoginSelection.candidates.map((store) => store.shopId).filter(Boolean);
+    const allSelected = candidateIds.length > 0 && candidateIds.every((id) => selectedIds.has(id));
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      candidateIds.forEach((id) => allSelected ? next.delete(id) : next.add(id));
+      return next;
+    });
+  }
+
   async function completeOperation() {
     if (!pendingOperation) return;
     const operationId = createStoreOperationId();
@@ -1172,6 +1292,16 @@ export function StoreManagementPage() {
   return (
     <section className="grid h-full min-h-0 grid-rows-[42px_auto_minmax(0,1fr)_60px] gap-3 overflow-hidden text-[#1d2939]">
       {notice ? <OperationNotice tone={notice.tone} message={notice.message} onClose={() => setNotice(null)} /> : null}
+      <StoreLoginSelectionDialog
+        selection={storeLoginSelection}
+        selectedIds={selectedIds}
+        taskRunning={operationBusy && activeTask === "fetchStores" && Boolean(activeOperationId)}
+        operationCancelling={operationCancelling}
+        onToggle={toggleStoreLoginCandidate}
+        onSelectAll={toggleAllStoreLoginCandidates}
+        onCancel={() => operationBusy && activeTask === "fetchStores" && activeOperationId ? void cancelActiveOperation() : void discardStoreLoginSelection()}
+        onLogin={() => void loginSelectedStores()}
+      />
       <OperationDialog
         operation={pendingOperation}
         selectedCount={selectedCount}
@@ -1224,7 +1354,6 @@ export function StoreManagementPage() {
         <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-3">
           <NativeSelect label="店铺分组" value={groupFilter} options={allGroupOptions} onChange={setGroupFilter} />
           <NativeSelect label="登录状态" value={statusFilter} options={["全部状态", "在线", "离线", "待复核", "未知"]} width="w-[126px]" onChange={setStatusFilter} />
-          <NativeSelect label="结果" value={failureFilter} options={["全部结果", "只看失败"]} width="w-[118px]" onChange={setFailureFilter} />
           <NativeSelect label="排序" value={sortKey} options={["店铺名称", "最近获取", "最近校验", "登录状态"]} width="w-[126px]" onChange={setSortKey} />
           <label className="inline-flex items-center gap-2 text-[13px] font-medium text-[#1d2939]">
             <span>搜索店铺</span>
@@ -1326,18 +1455,7 @@ export function StoreManagementPage() {
       </div>
 
       <div className="grid h-[60px] min-h-0 place-items-center">
-        {storeLoginSelection ? (
-          <div className="mx-auto flex h-[56px] w-[min(760px,calc(100vw-48px))] flex-nowrap items-center justify-center gap-3 overflow-x-auto rounded-lg border border-[#ffdca8] bg-white/96 px-5 shadow-[0_14px_34px_rgba(15,23,42,0.14)] backdrop-blur">
-            <span className="whitespace-nowrap text-[14px] font-medium text-[#344054]">
-              已发现 <strong className="px-1 text-[#101828]">{storeLoginSelection.candidates.length}</strong> 家，已选 <strong className="px-1 text-brand-fox">{selectedCount}</strong> 家
-            </span>
-            <button className="h-9 whitespace-nowrap rounded-md border border-[#dbe5f2] bg-white px-4 text-[13px] font-semibold text-[#344054] disabled:opacity-45" type="button" disabled={operationBusy} onClick={() => void discardStoreLoginSelection()}>取消</button>
-            <button className="inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-md bg-brand-fox px-4 text-[13px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45" type="button" disabled={operationBusy || selectedCount === 0} onClick={() => void loginSelectedStores()}>
-              {storeLoginSelection.phase === "logging_in" ? <Loader2 className="size-[15px] animate-spin" strokeWidth={2.2} /> : <KeyRound className="size-[15px]" strokeWidth={2.1} />}
-              {storeLoginSelection.phase === "logging_in" ? "正在登录" : "登录已选店铺"}
-            </button>
-          </div>
-        ) : selectedCount > 0 ? (
+        {!storeLoginSelection && selectedCount > 0 ? (
           <div className="mx-auto flex h-[56px] w-[min(980px,calc(100vw-48px))] flex-nowrap items-center justify-center gap-3 overflow-x-auto rounded-lg border border-[#e1e8f3] bg-white/96 px-5 shadow-[0_14px_34px_rgba(15,23,42,0.14)] backdrop-blur">
             <span className="whitespace-nowrap text-[14px] font-medium text-[#344054]">已选择 <strong className="px-1 text-brand-fox">{selectedCount}</strong> 家店铺</span>
             <button className="whitespace-nowrap text-[13px] font-semibold text-brand-navy" type="button" onClick={() => setSelectedIds(new Set())}>清空选择</button>
@@ -1361,7 +1479,6 @@ export function StoreManagementPage() {
         ) : (
           <div className="flex h-11 w-full items-center justify-between rounded-lg border border-[#e1e8f3] bg-white px-4 text-[13px] text-[#667085] shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
             <span>共 {visibleRows.length} 家店铺</span>
-            <span>店铺管理是经营数据和资金数据的基础台账</span>
           </div>
         )}
       </div>

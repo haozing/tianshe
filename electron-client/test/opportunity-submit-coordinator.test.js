@@ -84,6 +84,7 @@ async function createTask(service, identity, suffix, createdAt, candidateCount =
       submittedCount: 0,
       skippedCount: 0,
       failedCount: 0,
+      submitThrottleRecoveryEnabled: true,
       createdAt,
       updatedAt: createdAt
     }
@@ -885,6 +886,95 @@ test("idle pacing state resets to the initial interval before a new admission", 
   assert.equal(admission.admitted, true);
   assert.equal(admission.rate.store.intervalMs, POLICY.initialIntervalMs);
   assert.equal(admission.rate.store.idleResetAt, at(now, 2));
+});
+
+test("idle pacing state does not reset for an active legacy task without run markers", async (t) => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chihu-submit-active-rate-preserved-"));
+  const service = new NativeDataService({ app: { getPath: () => userDataDir } });
+  t.after(async () => {
+    await service.stop();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  });
+  await service.start();
+
+  const base = "2026-07-25T00:00:00.000Z";
+  const now = at(base, 611);
+  const scheduler = await claimScheduler(service, "scheduler-active-rate-preserved", now);
+  const identity = await createStore(service, "shop-active-rate-preserved");
+  const taskRef = await createTask(service, identity, "active-rate-preserved", base, 1);
+  await service.request("records.put", {
+    storeName: "opportunity_submit_rate_state_v1",
+    record: {
+      id: `local-user-${identity.shopId}-${identity.storeGeneration}`,
+      ...identity,
+      mode: "normal",
+      policyVersion: POLICY.policyVersion,
+      intervalMs: 60000,
+      consecutiveSuccesses: 0,
+      consecutive429: 0,
+      lastAdmittedAt: at(base, 10),
+      updatedAt: at(base, 10)
+    }
+  });
+  const task = await claimTask(service, taskRef.taskId, "worker-active-rate-preserved", at(now, 1));
+  const admission = await service.request("opportunitySubmit.admit", {
+    taskId: task.id,
+    ...coordinatorFence(task, scheduler),
+    now: at(now, 2),
+    businessDate: "2026-07-25",
+    endpointContract: "opportunitySubmitClue",
+    clueId: taskRef.clueId,
+    candidateIds: taskRef.candidateIds,
+    requestBody: requestBody(task, taskRef.clueId),
+    contractSnapshot: CONTRACT,
+    dailyCandidateMutationLimit: 1000,
+    dailyHttpRequestLimit: 1000,
+    policy: POLICY
+  });
+  assert.equal(admission.admitted, true);
+  assert.equal(admission.rate.store.intervalMs, 60000);
+  assert.equal(admission.rate.store.idleResetAt, undefined);
+  assert.equal(admission.rate.store.lastAdmittedRunId, taskRef.runId);
+});
+
+test("a global pacing grant postpones peer tasks before another worker is launched", async (t) => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chihu-submit-peer-pacing-"));
+  const service = new NativeDataService({ app: { getPath: () => userDataDir } });
+  t.after(async () => {
+    await service.stop();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  });
+  await service.start();
+
+  const base = "2026-07-25T00:00:00.000Z";
+  const scheduler = await claimScheduler(service, "scheduler-peer-pacing", base);
+  const identityA = await createStore(service, "shop-peer-pacing-a");
+  const identityB = await createStore(service, "shop-peer-pacing-b");
+  const taskRefA = await createTask(service, identityA, "peer-pacing-a", base, 1);
+  const taskRefB = await createTask(service, identityB, "peer-pacing-b", base, 1);
+  const taskA = await claimTask(service, taskRefA.taskId, "worker-peer-pacing-a", at(base, 1));
+  const admission = await service.request("opportunitySubmit.admit", {
+    taskId: taskA.id,
+    ...coordinatorFence(taskA, scheduler),
+    now: at(base, 2),
+    businessDate: "2026-07-25",
+    endpointContract: "opportunitySubmitClue",
+    clueId: taskRefA.clueId,
+    candidateIds: taskRefA.candidateIds,
+    requestBody: requestBody(taskA, taskRefA.clueId),
+    contractSnapshot: CONTRACT,
+    dailyCandidateMutationLimit: 1000,
+    dailyHttpRequestLimit: 1000,
+    policy: POLICY
+  });
+  assert.equal(admission.admitted, true);
+  assert.equal(admission.task.lastAdmittedAt, at(base, 2));
+  const peerTask = await service.request("records.get", {
+    storeName: "opportunity_pipeline_submit_tasks_v2",
+    id: taskRefB.taskId
+  });
+  assert.equal(peerTask.status, "queued");
+  assert.equal(peerTask.resumeAt, at(base, 2.5));
 });
 
 test("ready tasks with a future resume time cannot be claimed early", async (t) => {

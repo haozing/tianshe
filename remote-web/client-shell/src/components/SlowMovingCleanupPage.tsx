@@ -24,7 +24,6 @@ import { cancelDoudianStoreOperation, fetchDoudianStaleGoodsCleanup, listDoudian
 import { loadDoudianAdapterPayload } from "../bridge/doudianAdapter";
 import { addDoudianProgressListener } from "../domain/doudian";
 import { toggleStoreIds } from "../domain/doudian/storeSelection";
-import { STORAGE_KEY_STALE_GOODS_COLUMNS, storageGet, storageSet } from "../bridge/storage";
 import { cn } from "../lib/utils";
 import type { DoudianStaleGoodsCandidate, DoudianStaleGoodsRules, DoudianStoreStatus, DoudianStoreSummary } from "../types";
 import { GroupedStoreSelectionList } from "./GroupedStoreSelectionList";
@@ -34,13 +33,10 @@ type CleanupState = "idle" | "loading" | "ready" | "error";
 type MetricTone = "default" | "blue" | "green" | "warning" | "danger";
 type RiskLevel = "high" | "medium" | "low";
 type CandidateAction = "offline" | "recycle" | "delete" | "optimize";
-type ActionFilter = "all" | CandidateAction;
-type RiskFilter = "all" | RiskLevel;
-type SortKey = "风险评分" | "近30天成交" | "曝光次数" | "库存数量" | "创建时间";
 type TrafficPeriod = "7d" | "30d" | "90d";
 type NoSalesType = "balanced" | "strict" | "trafficWaste";
 type ProductSource = "selling" | "offline" | "importedIds";
-type CleanupColumnKey = "status" | "sales" | "traffic" | "stockPrice" | "quality" | "time" | "source" | "action";
+type CleanupColumnKey = "status" | "sales" | "traffic" | "stockPrice" | "quality" | "time";
 
 interface ScanDiagnostics {
   productCount: number;
@@ -218,13 +214,6 @@ const riskCopy: Record<RiskLevel, { label: string; className: string }> = {
   low: { label: "低风险", className: "border-[#bff0cf] bg-[#eafaf0] text-[#087443]" }
 };
 
-const actionCopy: Record<CandidateAction, { label: string; icon: typeof Archive; className: string }> = {
-  offline: { label: "下架（保留商品）", icon: Archive, className: "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" },
-  recycle: { label: "移入回收站（可恢复）", icon: XCircle, className: "border-[#dbe5f2] bg-white text-[#667085]" },
-  delete: { label: "彻底删除（不可恢复）", icon: Trash2, className: "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]" },
-  optimize: { label: "先优化", icon: SlidersHorizontal, className: "border-[#bdd2ef] bg-[#f0f6ff] text-brand-navy" }
-};
-
 const actionLabels: Record<CandidateAction, string> = {
   offline: "\u4e0b\u67b6\uff08\u4fdd\u7559\u5546\u54c1\uff09",
   recycle: "\u79fb\u5165\u56de\u6536\u7ad9\uff08\u53ef\u6062\u590d\uff09",
@@ -250,32 +239,13 @@ const productSourceOptions: Array<{ value: ProductSource; label: string }> = [
   { value: "importedIds", label: "商品ID导入" }
 ];
 
-const clearActionFilterOptions: Array<{ value: ActionFilter; label: string }> = [
-  { value: "all", label: "\u5168\u90e8\u6e05\u7406\u52a8\u4f5c" },
-  { value: "offline", label: actionLabels.offline },
-  { value: "recycle", label: actionLabels.recycle },
-  { value: "delete", label: actionLabels.delete },
-  { value: "optimize", label: actionLabels.optimize }
-];
-
-const riskFilterOptions: Array<{ value: RiskFilter; label: string }> = [
-  { value: "all", label: "全部风险" },
-  { value: "high", label: "高风险" },
-  { value: "medium", label: "中风险" },
-  { value: "low", label: "低风险" }
-];
-
-const sortOptions: SortKey[] = ["风险评分", "近30天成交", "曝光次数", "库存数量", "创建时间"];
-
-const cleanupColumns: Array<{ key: CleanupColumnKey; label: string; defaultVisible?: boolean }> = [
+const cleanupColumns: Array<{ key: CleanupColumnKey; label: string }> = [
   { key: "status", label: "商品状态" },
   { key: "sales", label: "销量指标" },
   { key: "traffic", label: "罗盘流量" },
   { key: "stockPrice", label: "库存价格" },
   { key: "quality", label: "质量诊断" },
-  { key: "time", label: "创建/上架" },
-  { key: "source", label: "来源", defaultVisible: false },
-  { key: "action", label: "建议动作" }
+  { key: "time", label: "创建/上架" }
 ];
 
 const sampleStores: StoreOption[] = [
@@ -413,13 +383,6 @@ function mapStoreToOption(store: DoudianStoreSummary): StoreOption {
     group: store.groupName || "未分组",
     status: normalizeStoreStatus(store.status)
   };
-}
-
-function defaultColumnSet() {
-  const saved = storageGet<string[]>(STORAGE_KEY_STALE_GOODS_COLUMNS, []);
-  const valid = saved.filter((key) => cleanupColumns.some((column) => column.key === key));
-  const initial = valid.length ? valid : cleanupColumns.filter((column) => column.defaultVisible !== false).map((column) => column.key);
-  return new Set(initial as CleanupColumnKey[]);
 }
 
 function formatNumber(value: number) {
@@ -836,20 +799,6 @@ function sourceHealthLabel(item: Record<string, unknown>) {
   return `${key || "来源"} ${status || "未知"}`;
 }
 
-function storeDiagnosticReason(reason: string, status: string, ok: boolean) {
-  if (!reason) return ok ? (status === "partial" ? "部分可判定" : "已完成") : "失败";
-  const labels: Record<string, string> = {
-    "stale-goods-metrics-partial": "部分指标缺失，其余可判定",
-    "stale-goods-metrics-incomplete": "指标来源不可用",
-    "stale-goods-no-candidate": "确实无候选",
-    "stale-goods-product-list-truncated": "商品分页被截断",
-    "stale-goods-product-list-incomplete": "商品列表未完整读取",
-    "stale-goods-product-response-malformed": "商品列表格式异常",
-    "stale-goods-recommend-incomplete": "规则来源未完整读取"
-  };
-  return labels[reason] || reason;
-}
-
 function toneClass(tone?: MetricTone) {
   if (tone === "green") return "text-[#087443]";
   if (tone === "warning") return "text-[#b54708]";
@@ -1085,17 +1034,6 @@ function QualityToggles({
   );
 }
 
-function ActionTag({ action }: { action: CandidateAction }) {
-  const copy = actionCopy[action];
-  const Icon = copy.icon;
-  return (
-    <span className={cn("inline-flex h-6 items-center gap-1 rounded-md border px-2 text-[12px] font-semibold", copy.className)}>
-      <Icon className="size-[12px]" strokeWidth={2.2} />
-      {actionLabels[action]}
-    </span>
-  );
-}
-
 function exportCandidates(rows: CandidateRow[], selectedIds: Set<string>, adapterVersion: string, simulationMode: boolean, diagnostics: ScanDiagnostics | null = null) {
   const exportRows = rows.filter((row) => selectedIds.size ? selectedIds.has(row.id) : true);
   const header = [
@@ -1269,13 +1207,7 @@ export function SlowMovingCleanupPage() {
   const [compassRows, setCompassRows] = useState<Array<Record<string, unknown>>>([]);
   const [compassPeriod, setCompassPeriod] = useState<TrafficPeriod | undefined>();
   const [productSource, setProductSource] = useState<ProductSource>("selling");
-  const [columnPanelOpen, setColumnPanelOpen] = useState(false);
-  const [visibleColumnKeys, setVisibleColumnKeys] = useState<Set<CleanupColumnKey>>(() => defaultColumnSet());
-  const [actionFilter, setActionFilter] = useState<ActionFilter>("all");
-  const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
-  const [sortKey, setSortKey] = useState<SortKey>("风险评分");
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
-  const [confirmInput, setConfirmInput] = useState("");
   const [planAction, setPlanAction] = useState<CandidateAction>("offline");
   const [planOpen, setPlanOpen] = useState(false);
   const [remoteCandidates, setRemoteCandidates] = useState<CandidateRow[]>([]);
@@ -1386,25 +1318,12 @@ export function SlowMovingCleanupPage() {
     return sourceFiltered(allCandidates.filter((row) => selectedIds.has(row.shopId) && matchesRules(row, rules)));
   }, [allCandidates, importedProductIds, previewMode, productSource, remoteCandidates, selectedIds, rules]);
   const matchedCandidates = useMemo(() => applyPerStoreLimit(rawMatchedCandidates, rules.perStoreLimit), [rawMatchedCandidates, rules.perStoreLimit]);
-  const filteredCandidates = useMemo(() => {
-    const rows = matchedCandidates.filter((row) => {
-      if (actionFilter !== "all" && row.action !== actionFilter) return false;
-      if (riskFilter !== "all" && row.risk !== riskFilter) return false;
-      return true;
-    });
-    return [...rows].sort((a, b) => {
-      if (sortKey === "近30天成交") return a.periodSales - b.periodSales || b.riskScore - a.riskScore;
-      if (sortKey === "曝光次数") return b.exposureCount - a.exposureCount;
-      if (sortKey === "库存数量") return b.stock - a.stock;
-      if (sortKey === "创建时间") return toDate(a.createdAt) - toDate(b.createdAt);
-      return b.riskScore - a.riskScore;
-    });
-  }, [actionFilter, matchedCandidates, riskFilter, sortKey]);
+  const filteredCandidates = useMemo(() => [...matchedCandidates].sort((a, b) => b.riskScore - a.riskScore), [matchedCandidates]);
   const selectedCandidates = useMemo(() => matchedCandidates.filter((row) => selectedCandidateIds.has(row.id)), [matchedCandidates, selectedCandidateIds]);
   const selectedExecutable = selectedCandidates;
   const allVisibleCandidatesSelected = filteredCandidates.length > 0 && filteredCandidates.every((row) => selectedCandidateIds.has(row.id));
   const someVisibleCandidatesSelected = filteredCandidates.some((row) => selectedCandidateIds.has(row.id)) && !allVisibleCandidatesSelected;
-  const visibleColumns = cleanupColumns.filter((column) => visibleColumnKeys.has(column.key));
+  const visibleColumns = cleanupColumns;
   const tableMinWidth = 460 + visibleColumns.length * 152;
   const summary = aggregateCandidates(matchedCandidates);
   const defaultPlanAction: CandidateAction = summary.offline ? "offline" : matchedCandidates.some((row) => row.action === "recycle") ? "recycle" : "delete";
@@ -1547,9 +1466,6 @@ export function SlowMovingCleanupPage() {
 
   function resetRules() {
     setRules(defaultRules);
-    setActionFilter("all");
-    setRiskFilter("all");
-    setSortKey("风险评分");
     setAnalysisStarted(false);
     setCleanupState("idle");
     setCleanupMessage("");
@@ -1606,23 +1522,6 @@ export function SlowMovingCleanupPage() {
     fileInputRef.current?.click();
   }
 
-  function toggleColumn(key: CleanupColumnKey) {
-    setVisibleColumnKeys((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      if (!next.size) cleanupColumns.slice(0, 1).forEach((column) => next.add(column.key));
-      storageSet(STORAGE_KEY_STALE_GOODS_COLUMNS, [...next]);
-      return next;
-    });
-  }
-
-  function resetColumns() {
-    const next = new Set(cleanupColumns.filter((column) => column.defaultVisible !== false).map((column) => column.key));
-    storageSet(STORAGE_KEY_STALE_GOODS_COLUMNS, [...next]);
-    setVisibleColumnKeys(next);
-  }
-
   function toggleStores(ids: string[]) {
     setSelectedIds((current) => toggleStoreIds(current, ids));
   }
@@ -1668,7 +1567,6 @@ export function SlowMovingCleanupPage() {
     }
     setPlanAction(action);
     setPlanOpen(true);
-    setConfirmInput("");
     setCleanupState("ready");
     setCleanupMessage(`${actionLabels[action]}计划已生成，需二次确认后才能执行`);
     const next = new Set(currentSelection.map((row) => row.id));
@@ -1676,7 +1574,6 @@ export function SlowMovingCleanupPage() {
   }
 
   async function confirmExecution() {
-    const normalizedConfirmText = confirmInput.trim();
     const scanAgeMs = Date.now() - lastScanAt.getTime();
     if (!previewMode && Number.isFinite(scanAgeMs) && scanAgeMs > scanMaxAgeMs) {
       setPlanOpen(false);
@@ -1684,46 +1581,44 @@ export function SlowMovingCleanupPage() {
       setCleanupMessage("扫描结果已过期，请重新扫描后再执行清理");
       return;
     }
-    if (!previewMode && normalizedConfirmText === "确认清理") {
-      const executable = selectedExecutable;
-      if (!executable.length) {
-        setCleanupState("error");
-        setCleanupMessage("未选择可执行的滞销商品");
-        return;
-      }
-      setExecutingPlan(true);
-      setCleanupState("loading");
-      setCleanupMessage("正在提交清理计划");
-      const operationId = `stale-exec-${Date.now()}`;
-      setActiveOperationId(operationId);
-      try {
-        const result = await fetchDoudianStaleGoodsCleanup({
-          mode: "execute",
-          action: planAction,
-          candidateIds: executable.map((row) => row.id),
-          confirmText: normalizedConfirmText,
-          sourceRunId: executable.find((row) => row.sourceRunId)?.sourceRunId,
-          operationId,
-          forceAdapter: true
-        });
-        if (!result.ok && result.status !== "partial") throw new Error(result.message || "滞销商品清理执行失败");
-        setCleanupState(result.ok ? "ready" : "error");
-        setCleanupMessage(result.message || "清理任务已提交");
-        setPlanOpen(false);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setCleanupState("error");
-        setCleanupMessage(message);
-      } finally {
-        setExecutingPlan(false);
-        setActiveOperationId("");
-      }
+    if (previewMode) {
+      setCleanupState("error");
+      setCleanupMessage("真实下架/删除桥接待接入，已保留执行计划供验收");
       return;
     }
-    if (normalizedConfirmText !== "确认清理") return;
-    setCleanupState(previewMode ? "error" : "ready");
-    setCleanupMessage(previewMode ? "真实下架/删除桥接待接入，已保留执行计划供验收" : "执行任务已提交");
-    if (!previewMode) setPlanOpen(false);
+    const executable = selectedExecutable;
+    if (!executable.length) {
+      setCleanupState("error");
+      setCleanupMessage("未选择可执行的滞销商品");
+      return;
+    }
+    setExecutingPlan(true);
+    setCleanupState("loading");
+    setCleanupMessage("正在提交清理计划");
+    const operationId = `stale-exec-${Date.now()}`;
+    setActiveOperationId(operationId);
+    try {
+      const result = await fetchDoudianStaleGoodsCleanup({
+        mode: "execute",
+        action: planAction,
+        candidateIds: executable.map((row) => row.id),
+        confirmText: "确认清理",
+        sourceRunId: executable.find((row) => row.sourceRunId)?.sourceRunId,
+        operationId,
+        forceAdapter: true
+      });
+      if (!result.ok && result.status !== "partial") throw new Error(result.message || "滞销商品清理执行失败");
+      setCleanupState(result.ok ? "ready" : "error");
+      setCleanupMessage(result.message || "清理任务已提交");
+      setPlanOpen(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCleanupState("error");
+      setCleanupMessage(message);
+    } finally {
+      setExecutingPlan(false);
+      setActiveOperationId("");
+    }
   }
 
   function renderColumn(row: CandidateRow, key: CleanupColumnKey) {
@@ -1782,22 +1677,7 @@ export function SlowMovingCleanupPage() {
         </td>
       );
     }
-    if (key === "source") {
-      return (
-        <td className="max-w-[220px] px-3">
-          <div className="truncate font-semibold text-[#344054]" title={row.source}>{row.source}</div>
-          <div className="mt-0.5 text-[11px] text-[#98a2b3]">{row.compassMatched ? "罗盘商品ID已匹配" : "未匹配罗盘明细"}</div>
-        </td>
-      );
-    }
-    return (
-      <td className="whitespace-nowrap px-3">
-        <div className="flex items-center gap-2">
-          <ActionTag action={row.action} />
-          <CompactTag label={riskCopy[row.risk].label} className={riskCopy[row.risk].className} />
-        </div>
-      </td>
-    );
+    return null;
   }
 
   const trafficPeriodLabel = trafficPeriodOptions.find((period) => period.key === rules.trafficPeriod)?.label || rules.trafficPeriod;
@@ -1933,17 +1813,17 @@ export function SlowMovingCleanupPage() {
                     重新扫描
                   </button>
                 ) : null}
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" onClick={openSettings}>
+                <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)]" type="button" onClick={openSettings}>
                   <SlidersHorizontal className="size-[14px]" strokeWidth={2} />
-                  修改规则
-                </button>
-                <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" disabled={!matchedCandidates.length && !scanDiagnostics} onClick={() => exportCandidates(matchedCandidates, selectedCandidateIds, adapterVersion, previewMode, scanDiagnostics)}>
-                  <Download className="size-[14px]" strokeWidth={2} />
-                  导出清单
+                  修改过滤条件
                 </button>
                 <button className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,80,32,0.18)] disabled:opacity-50" type="button" title={scanExpired ? "扫描结果已过期，请重新扫描后再执行清理" : "选择清理动作；下一步确认后才会提交平台请求"} disabled={!matchedCandidates.length || scanExpired} onClick={() => buildPlan(defaultPlanAction)}>
                   <Workflow className="size-[14px]" strokeWidth={2} />
                   执行清理
+                </button>
+                <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" disabled={!matchedCandidates.length && !scanDiagnostics} onClick={() => exportCandidates(matchedCandidates, selectedCandidateIds, adapterVersion, previewMode, scanDiagnostics)}>
+                  <Download className="size-[14px]" strokeWidth={2} />
+                  导出清单
                 </button>
               </>
             ) : (
@@ -2066,48 +1946,8 @@ export function SlowMovingCleanupPage() {
           </div>
         </section>
 
-        {scanDiagnostics?.stores.length ? (
-          <section className="overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-            <div className="flex items-center justify-between border-b border-[#edf1f6] px-3.5 py-3">
-              <div className="flex items-center gap-2">
-                <Store className="size-[15px] text-brand-navy" strokeWidth={2.2} />
-                <strong className="text-[14px] font-semibold text-[#101828]">店铺扫描诊断</strong>
-              </div>
-              <span className="text-[12px] text-[#667085]">可信候选与不可判定商品分开处理</span>
-            </div>
-            <div className="max-h-[220px] overflow-auto">
-              <table className="w-full min-w-[900px] border-separate border-spacing-0 text-left text-[12px]">
-                <thead className="sticky top-0 z-10 bg-[#fbfcff] text-[#344054] shadow-[inset_0_-1px_0_#edf1f6]">
-                  <tr className="h-9">
-                    <th className="px-3 font-semibold">店铺</th>
-                    <th className="px-3 font-semibold">商品数</th>
-                    <th className="px-3 font-semibold">罗盘匹配</th>
-                    <th className="px-3 font-semibold">缺指标</th>
-                    <th className="px-3 font-semibold">可判定</th>
-                    <th className="px-3 font-semibold">候选</th>
-                    <th className="px-3 font-semibold">结果</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#edf1f6]">
-                  {scanDiagnostics.stores.map((store) => (
-                    <tr className="h-10" key={store.shopId}>
-                      <td className="max-w-[280px] truncate px-3 font-medium text-[#344054]" title={store.shopName}>{store.shopName || store.shopId}</td>
-                      <td className="px-3 text-[#667085]">{formatNumber(store.productCount)}</td>
-                      <td className="px-3 text-[#667085]">{formatNumber(store.compassMatchedCount)}</td>
-                      <td className={cn("px-3", store.indeterminateProductCount ? "font-semibold text-[#b54708]" : "text-[#667085]")}>{formatNumber(store.indeterminateProductCount || store.missingMetricCount)}</td>
-                      <td className="px-3 text-[#667085]">{formatNumber(store.analyzableProductCount)}</td>
-                      <td className="px-3 font-semibold text-[#344054]">{formatNumber(store.candidateCount)}</td>
-                      <td className={cn("px-3", store.ok ? store.status === "partial" ? "text-[#b54708]" : "text-[#067647]" : "text-[#b42318]")}>{storeDiagnosticReason(store.reason, store.status, store.ok)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        ) : null}
-
         <section className="grid min-h-0 grid-rows-[44px_minmax(0,1fr)_46px] overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-          <div className="flex items-center justify-between gap-3 border-b border-[#edf1f6] px-3.5">
+          <div className="flex items-center gap-3 border-b border-[#edf1f6] px-3.5">
             <div className="flex min-w-0 items-center gap-2">
               <PackageSearch className="size-[16px] text-brand-navy" strokeWidth={2.2} />
               <strong className="text-[15px] font-semibold text-[#101828]">滞销候选商品</strong>
@@ -2122,39 +1962,9 @@ export function SlowMovingCleanupPage() {
                 </span>
               ) : null}
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <NativeSelect value={actionFilter} options={clearActionFilterOptions} onChange={setActionFilter} width={148} />
-              <NativeSelect value={riskFilter} options={riskFilterOptions} onChange={setRiskFilter} width={112} />
-              <NativeSelect value={sortKey} options={sortOptions} onChange={setSortKey} width={116} />
-              <button className={cn("inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]", columnPanelOpen ? "bg-brand-foxSoft text-brand-navy" : "")} type="button" onClick={() => setColumnPanelOpen((open) => !open)}>
-                <SlidersHorizontal className="size-[14px]" strokeWidth={2} />
-                字段
-              </button>
-            </div>
           </div>
 
           <div className="min-h-0 overflow-auto">
-            {columnPanelOpen ? (
-              <div className="sticky left-0 z-30 border-b border-[#edf1f6] bg-white px-3.5 py-3 shadow-[0_8px_18px_rgba(15,23,42,0.05)]">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="text-[12px] font-semibold text-[#344054]">商品列表字段</div>
-                  <button className="h-7 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]" type="button" onClick={resetColumns}>恢复默认</button>
-                </div>
-                <div className="grid grid-cols-8 gap-2 max-[1400px]:grid-cols-4 max-[780px]:grid-cols-2">
-                  {cleanupColumns.map((column) => (
-                    <button
-                      className={cn("flex h-8 min-w-0 items-center gap-2 rounded-md border px-2 text-left text-[12px] font-medium", visibleColumnKeys.has(column.key) ? "border-brand-fox bg-brand-foxSoft text-brand-navy" : "border-[#dbe5f2] bg-white text-[#667085]")}
-                      key={column.key}
-                      type="button"
-                      onClick={() => toggleColumn(column.key)}
-                    >
-                      <CheckboxBox checked={visibleColumnKeys.has(column.key)} />
-                      <span className="truncate">{column.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
             <table className="w-full border-separate border-spacing-0 text-left text-[12px]" style={{ minWidth: tableMinWidth }}>
               <thead className="sticky top-0 z-20 bg-[#fbfcff] text-[#344054] shadow-[inset_0_-1px_0_#e6ebf3]">
                 <tr className="h-10">
@@ -2192,7 +2002,7 @@ export function SlowMovingCleanupPage() {
                           {cleanupState === "loading" ? <Loader2 className="size-7 animate-spin" strokeWidth={2.2} /> : <PackageSearch className="size-7" strokeWidth={2.2} />}
                         </span>
                          <strong className="text-[14px] text-[#344054]">{cleanupState === "loading" ? "正在计算候选" : scanDiagnostics?.indeterminateProductCount ? "部分商品不可判定" : "暂无滞销候选"}</strong>
-                         <span className="text-[13px] leading-6">{scanDiagnostics?.indeterminateProductCount ? `有 ${formatNumber(scanDiagnostics.indeterminateProductCount)} 个商品缺少规则指标，未参与候选判断。` : "可返回修改店铺、清理设置、动作或风险筛选后重新分析。"}</span>
+                         <span className="text-[13px] leading-6">{scanDiagnostics?.indeterminateProductCount ? `有 ${formatNumber(scanDiagnostics.indeterminateProductCount)} 个商品缺少规则指标，未参与候选判断。` : "可返回修改店铺或清理设置后重新分析。"}</span>
                       </div>
                     </td>
                   </tr>
@@ -2220,16 +2030,17 @@ export function SlowMovingCleanupPage() {
       </div>
 
       {planOpen ? (
-        <div className="fixed bottom-4 right-4 z-40 grid w-[min(520px,calc(100vw-32px))] gap-3 rounded-lg border border-[#ffdca8] bg-white p-4 shadow-[0_18px_42px_rgba(15,23,42,0.18)]">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/25 p-4" role="dialog" aria-modal="true" aria-labelledby="stale-cleanup-dialog-title">
+          <div className="grid w-[min(520px,calc(100vw-32px))] gap-4 rounded-lg border border-[#ffdca8] bg-white p-5 shadow-[0_24px_60px_rgba(15,23,42,0.24)]">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <ShieldAlert className="size-[17px] text-[#b54708]" strokeWidth={2.2} />
-                <strong className="text-[14px] text-[#101828]">选择清理动作</strong>
+                <strong className="text-[14px] text-[#101828]" id="stale-cleanup-dialog-title">选择清理动作</strong>
                 {previewMode ? <CompactTag label="真实执行待接入" className="border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" /> : null}
               </div>
               <p className="m-0 mt-1 text-[12px] leading-5 text-[#667085]">
-                {`扫描已完成，当前选择 ${planRows.length} 个商品。选择动作后，输入“确认清理”才会真实提交；彻底删除不可恢复。`}
+                {`扫描已完成，当前选择 ${planRows.length} 个商品。选择动作后确认执行；彻底删除不可恢复。`}
               </p>
             </div>
             <button className="grid size-7 shrink-0 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054]" type="button" aria-label="关闭执行计划" onClick={() => setPlanOpen(false)}>
@@ -2252,19 +2063,12 @@ export function SlowMovingCleanupPage() {
               </button>
             ))}
           </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-            <span className="col-span-full text-[12px] text-[#667085]">执行前请输入“确认清理”；此输入是提交真实下架或删除请求的最后确认。</span>
-            <input
-              className="h-9 rounded-md border border-[#dbe5f2] bg-white px-3 text-[13px] text-[#1d2939] outline-none placeholder:text-[#98a2b3] focus:border-brand-fox"
-              aria-label="执行前确认"
-              placeholder="输入确认清理后才能提交"
-              value={confirmInput}
-              onChange={(event) => setConfirmInput(event.target.value)}
-            />
-            <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-3 text-[12px] font-semibold text-white disabled:opacity-50" type="button" disabled={executingPlan || scanExpired || !planRows.length || confirmInput.trim() !== "确认清理"} onClick={() => void confirmExecution()}>
+          <div className="flex justify-end">
+            <button className="inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-fox px-4 text-[12px] font-semibold text-white disabled:opacity-50" type="button" disabled={executingPlan || scanExpired || !planRows.length} onClick={() => void confirmExecution()}>
               <Check className="size-[14px]" strokeWidth={2.2} />
-              确认并执行
+              确认执行
             </button>
+          </div>
           </div>
         </div>
       ) : null}

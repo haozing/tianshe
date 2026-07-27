@@ -79,7 +79,9 @@ test("funds page does not display risk or unavailable status badges", async () =
 
   assert.match(source, /key: "accountName", label: "开户名", format: "text"/);
   assert.match(source, /key: "accountBank", label: "开户银行", format: "text"/);
-  assert.match(source, /key: "phone", label: "手机号", format: "text"/);
+  assert.match(source, /key: "phone", label: "提现手机号", format: "text"/);
+  assert.match(source, /column\.key === "phone" \? "提现手机号" : String\(column\.label\)/);
+  assert.doesNotMatch(source, /label: "手机号"/);
   assert.match(source, />\s*开户筛选/);
   assert.match(source, /暂无匹配开户信息的店铺/);
   assert.match(source, /format === "text"/);

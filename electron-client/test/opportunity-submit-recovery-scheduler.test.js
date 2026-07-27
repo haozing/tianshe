@@ -3,6 +3,7 @@ const test = require("node:test");
 const {
   automaticOpportunitySubmitRecoveryPendingTask,
   automaticOpportunitySubmitRecoveryTask,
+  compareOpportunitySubmitRecoveryFairness,
   dueOpportunitySubmitRecoveryTasks,
   nextOpportunitySubmitRecoveryWakeAt
 } = require("../src/main/tasks/opportunity-submit-recovery-scheduler");
@@ -39,6 +40,16 @@ test("recovery queue excludes active runs and orders oldest due work first", () 
     { id: "task-active", runId: "run-active", status: "ready", createdAt: "2026-07-25T07:40:00.000Z" }
   ];
   assert.deepEqual(dueOpportunitySubmitRecoveryTasks(tasks, { nowMs: NOW, activeRunIds: new Set(["run-active"]) }).map((task) => task.id), ["task-a", "task-b"]);
+});
+
+test("recovery queue rotates stores by their last successful admission", () => {
+  const tasks = [
+    { id: "recent", status: "ready", resumeAt: "2026-07-25T07:59:00.000Z", createdAt: "2026-07-25T07:00:00.000Z", lastAdmittedAt: "2026-07-25T07:58:00.000Z" },
+    { id: "old", status: "ready", resumeAt: "2026-07-25T07:59:00.000Z", createdAt: "2026-07-25T07:01:00.000Z", lastAdmittedAt: "2026-07-25T07:40:00.000Z" },
+    { id: "never", status: "ready", resumeAt: "2026-07-25T07:59:00.000Z", createdAt: "2026-07-25T07:02:00.000Z" }
+  ];
+  assert.deepEqual([...tasks].sort(compareOpportunitySubmitRecoveryFairness).map((task) => task.id), ["never", "old", "recent"]);
+  assert.deepEqual(dueOpportunitySubmitRecoveryTasks(tasks, { nowMs: NOW }).map((task) => task.id), ["never", "old", "recent"]);
 });
 
 test("recovery scheduler wakes at the earliest future lease or resume checkpoint", () => {

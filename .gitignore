@@ -25,6 +25,7 @@ kmsource
 remote-web/client-shell/src/domain/doudian
 !remote-web/client-shell/src/domain/doudian/
 remote-web/client-shell/src/domain/doudian/*
+!remote-web/client-shell/src/domain/doudian/storeLoginNavigationLock.ts
 !remote-web/client-shell/src/domain/doudian/opportunity/
 !remote-web/client-shell/src/domain/doudian/opportunity/**
 !remote-web/client-shell/src/domain/doudian/marketing/

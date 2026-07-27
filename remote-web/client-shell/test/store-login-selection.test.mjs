@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 import { candidateKey, partitionToken } from "../src/domain/doudian/storeIdentity.ts";
 
 const pageSource = await readFile(fileURLToPath(new URL("../src/components/StoreManagementPage.tsx", import.meta.url)), "utf8");
+const appSource = await readFile(fileURLToPath(new URL("../src/App.tsx", import.meta.url)), "utf8");
+const headerSource = await readFile(fileURLToPath(new URL("../src/components/ShellHeader.tsx", import.meta.url)), "utf8");
+const navigationLockSource = await readFile(fileURLToPath(new URL("../src/domain/doudian/storeLoginNavigationLock.ts", import.meta.url)), "utf8");
 const importSource = await readFile(fileURLToPath(new URL("../src/domain/doudian/storeImport.ts", import.meta.url)), "utf8");
 const bridgeSource = await readFile(fileURLToPath(new URL("../src/bridge/client.ts", import.meta.url)), "utf8");
 
@@ -25,9 +28,26 @@ test("discovered stores appear as selected pending rows before details are updat
   assert.match(pageSource, /waitingRows = current\.filter\(\(row\) => row\.pendingLogin/);
 });
 
+test("discovered stores are selected in a modal and every login task locks page navigation until cancellation", () => {
+  assert.match(pageSource, /function StoreLoginSelectionDialog\(/);
+  assert.match(pageSource, /<Dialog\.Root open/);
+  assert.match(pageSource, /selection\.candidates\.map\(\(store\) =>/);
+  assert.match(pageSource, /const locked = operationBusy && activeTask === "fetchStores"/);
+  assert.match(pageSource, /onCancel=\{\(\) => operationBusy && activeTask === "fetchStores" && activeOperationId \? void cancelActiveOperation\(\)/);
+  assert.match(appSource, /if \(isStoreLoginNavigationLocked\(\) && nextRoute !== "\/stores"\)/);
+  assert.match(headerSource, /aria-disabled=\{navigationBlocked && !active\}/);
+  assert.match(navigationLockSource, /export function setStoreLoginNavigationLocked\(next: boolean\)/);
+});
+
 test("store login progress bar is absent", () => {
   assert.doesNotMatch(pageSource, /storeImportProgress/);
   assert.doesNotMatch(pageSource, /transition-\[width\][\s\S]*storeImportProgress\.progress/);
+});
+
+test("store management does not expose the result filter", () => {
+  assert.doesNotMatch(pageSource, /type FailureFilter/);
+  assert.doesNotMatch(pageSource, /label="结果"/);
+  assert.doesNotMatch(pageSource, /全部结果|只看失败/);
 });
 
 test("store discovery preserves the master session and filters the selected stores", () => {

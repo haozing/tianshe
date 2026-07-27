@@ -49,14 +49,51 @@ function redactValue(value, seen = new WeakSet()) {
 }
 
 function safeJson(value, maxLength = 6000) {
+  let normalized;
+  try {
+    normalized = redactValue(value);
+  } catch {
+    normalized = redactText(String(value));
+  }
   let text;
   try {
-    text = typeof value === "string" ? value : JSON.stringify(value);
+    text = JSON.stringify(normalized);
   } catch {
-    text = String(value);
+    text = JSON.stringify(redactText(String(value)));
   }
-  text = redactText(text);
-  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+  if (text === undefined) text = "null";
+  if (text.length <= maxLength) return text;
+
+  const summary = {};
+  if (normalized && typeof normalized === "object" && !Array.isArray(normalized)) {
+    const summaryBudget = Math.max(0, Math.floor(maxLength * 0.4));
+    for (const [key, next] of Object.entries(normalized)) {
+      if (next !== null && !["string", "number", "boolean"].includes(typeof next)) continue;
+      const compact = typeof next === "string" && next.length > 256 ? `${next.slice(0, 256)}...` : next;
+      const candidate = { ...summary, [key]: compact };
+      if (JSON.stringify(candidate).length > summaryBudget) break;
+      summary[key] = compact;
+    }
+  }
+
+  const output = {
+    ...summary,
+    _logTruncation: {
+      originalLength: text.length,
+      preview: ""
+    }
+  };
+  let serialized = JSON.stringify(output);
+  if (serialized.length > maxLength) return JSON.stringify({ _logTruncation: { originalLength: text.length } });
+  let previewLength = Math.max(0, maxLength - serialized.length - 2);
+  output._logTruncation.preview = text.slice(0, previewLength);
+  serialized = JSON.stringify(output);
+  while (serialized.length > maxLength && previewLength > 0) {
+    previewLength = Math.max(0, previewLength - (serialized.length - maxLength));
+    output._logTruncation.preview = text.slice(0, previewLength);
+    serialized = JSON.stringify(output);
+  }
+  return serialized;
 }
 
 module.exports = {

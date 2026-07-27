@@ -13,6 +13,26 @@ export function activeSubmitTasksForRun<T extends { runId?: unknown; status?: un
   return tasks.filter((task) => String(task.runId || "") === runId && isActiveSubmitTaskStatus(task.status));
 }
 
+function timestampMs(value: unknown) {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function compareSubmitTaskFairness(
+  left: { id?: unknown; createdAt?: unknown; resumeAt?: unknown; leaseExpiresAt?: unknown; lastAdmittedAt?: unknown },
+  right: { id?: unknown; createdAt?: unknown; resumeAt?: unknown; leaseExpiresAt?: unknown; lastAdmittedAt?: unknown }
+) {
+  const leftAdmittedAt = timestampMs(left.lastAdmittedAt);
+  const rightAdmittedAt = timestampMs(right.lastAdmittedAt);
+  if (Boolean(leftAdmittedAt) !== Boolean(rightAdmittedAt)) return leftAdmittedAt ? 1 : -1;
+  if (leftAdmittedAt !== rightAdmittedAt) return leftAdmittedAt - rightAdmittedAt;
+  const leftDueAt = timestampMs(left.resumeAt) || timestampMs(left.leaseExpiresAt) || timestampMs(left.createdAt) || Number.MAX_SAFE_INTEGER;
+  const rightDueAt = timestampMs(right.resumeAt) || timestampMs(right.leaseExpiresAt) || timestampMs(right.createdAt) || Number.MAX_SAFE_INTEGER;
+  if (leftDueAt !== rightDueAt) return leftDueAt - rightDueAt;
+  const created = String(left.createdAt || "").localeCompare(String(right.createdAt || ""));
+  return created || String(left.id || "").localeCompare(String(right.id || ""));
+}
+
 export function submitWorkerProgress(completed: number, total: number) {
   const safeTotal = Math.max(1, Math.floor(Number(total) || 0));
   const safeCompleted = Math.max(0, Math.min(safeTotal, Math.floor(Number(completed) || 0)));

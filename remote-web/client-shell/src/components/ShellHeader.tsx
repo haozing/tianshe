@@ -1032,12 +1032,16 @@ export function ShellHeader({
   routes,
   workspace,
   licenseStatus,
+  navigationBlocked = false,
+  onBlockedNavigation,
   onOpenLicenseDialog
 }: {
   route: string;
   routes: ResolvedFeatureRoute[];
   workspace: WorkspaceState;
   licenseStatus?: LicenseStatus;
+  navigationBlocked?: boolean;
+  onBlockedNavigation?: () => void;
   onOpenLicenseDialog?: () => void;
 }) {
   const topRoutes = useMemo(() => buildTopRoutes(routes), [routes]);
@@ -1064,10 +1068,17 @@ export function ShellHeader({
               <a
                 className={cn(
                   "app-no-drag relative inline-flex min-h-[46px] shrink-0 items-center gap-1 px-4 pt-3 text-[15px] font-semibold no-underline transition-colors hover:text-brand-navy",
-                  active ? "text-brand-navy" : "text-[#111827]"
+                  active ? "text-brand-navy" : "text-[#111827]",
+                  navigationBlocked && !active ? "cursor-not-allowed opacity-45" : ""
                 )}
                 href={"#" + item.href}
                 key={item.label}
+                aria-disabled={navigationBlocked && !active}
+                onClick={(event) => {
+                  if (!navigationBlocked || active) return;
+                  event.preventDefault();
+                  onBlockedNavigation?.();
+                }}
               >
                 <span>{item.label}</span>
                 {locked ? <Lock className="size-[13px] shrink-0 text-[#98a2b3]" strokeWidth={2} aria-label="需开通完整版" /> : null}
@@ -1108,10 +1119,17 @@ export function ShellHeader({
               <a
                 className={cn(
                   "app-no-drag inline-flex h-6 shrink-0 items-center gap-1.5 px-2 text-[13px] font-medium no-underline transition-colors hover:text-brand-navy",
-                  active ? "text-brand-navy" : "text-[#475467]"
+                  active ? "text-brand-navy" : "text-[#475467]",
+                  navigationBlocked && !active ? "cursor-not-allowed opacity-45" : ""
                 )}
                 href={"#" + item.route}
                 key={item.navigation.label}
+                aria-disabled={navigationBlocked && !active}
+                onClick={(event) => {
+                  if (!navigationBlocked || active) return;
+                  event.preventDefault();
+                  onBlockedNavigation?.();
+                }}
               >
                 <Icon className="size-[16px]" strokeWidth={2} />
                 <span>{item.navigation.label}</span>

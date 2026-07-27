@@ -1126,7 +1126,7 @@ function publishBusinessProgress(
     taskType: "businessData",
     status: "running",
     progress: Math.round((completed / Math.max(1, total)) * 95),
-    message: `已获取 ${completed}/${total}：${row.shopName || row.shopId} · 成交金额 ¥${amount} · ${status}`,
+    message: `已获取 ${completed}/${total} · 成交金额 ¥${amount} · ${status}`,
     business: { row, detail, completed, total }
   });
 }
@@ -1202,6 +1202,7 @@ async function collectStoreBusinessData(payload: DoudianAdapterPayload, store: D
     message,
     reason: ok ? (blockingSourceFailures.length ? "business-data-partial-source-failure" : summary.allUnavailable ? "business-data-no-readable-metrics" : unavailableCriticalFields.length ? "business-data-critical-fields-unavailable" : "") : "business-data-request-failed",
     category: ok ? (partial ? "api-partial" : "") : "api",
+    attemptedAt: nowIso(),
     diagnostic: {
       responses: responseSummary,
       okCount,
@@ -1310,6 +1311,7 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
         status: "ok",
         ok: true,
         message: "Mock business data synced",
+        attemptedAt: nowIso(),
         diagnostic: { rowSummary: rowSummary(row, metricSources), metricSources },
         index: index + 1,
         total: rows.length
@@ -1391,6 +1393,7 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
           message,
           reason: "business-data-request-failed",
           category: "api",
+          attemptedAt: nowIso(),
           diagnostic: { error: message },
           index: index + 1,
           total: targets.length
@@ -1432,6 +1435,7 @@ export async function fetchBusinessData(args: BusinessDataArgs = {}): Promise<Do
       message,
       reason: "business-data-request-failed",
       category: "api",
+      attemptedAt: nowIso(),
       diagnostic: { error: message },
       index: index + 1,
       total: targets.length
@@ -1542,6 +1546,8 @@ export async function fetchBusinessDataLatest(args: BusinessDataArgs = {}): Prom
     message: record.message || (record.ok ? "Cached business data ready" : "Cached business data failed"),
     reason: record.quality === "partial" ? "business-data-cached-partial" : record.ok ? "" : "business-data-cached-failure",
     category: record.quality === "partial" ? "api-partial" : record.ok ? "" : "api",
+    dataUpdatedAt: record.updatedAt,
+    attemptedAt: record.updatedAt,
     diagnostic: record.diagnostic,
     index: index + 1,
     total: rows.length

@@ -46,6 +46,7 @@ import {
   startMockLongDoudianTask,
   type DoudianProgressDetail
 } from "./domain/doudian";
+import { isStoreLoginNavigationLocked, subscribeStoreLoginNavigationLock } from "./domain/doudian/storeLoginNavigationLock";
 import { DiagnosticsPage } from "./components/DiagnosticsPage";
 import { HomePage } from "./components/HomePage";
 import { LicenseRenewDialog, PaidFeatureGate } from "./components/LicenseGate";
@@ -103,15 +104,25 @@ export function App() {
   const [licenseDialogOpen, setLicenseDialogOpen] = useState(false);
   const [adapterPayload, setAdapterPayload] = useState<DoudianAdapterPayload | null>(null);
   const [routeGuardMessage, setRouteGuardMessage] = useState("");
+  const [storeLoginNavigationLocked, setStoreLoginNavigationLockedState] = useState(isStoreLoginNavigationLocked);
   const previousPaidAccess = useRef(false);
 
   useEffect(() => {
     const onHashChange = () => {
-      setState((current) => ({ ...current, route: currentRoute() }));
+      const nextRoute = currentRoute();
+      if (isStoreLoginNavigationLocked() && nextRoute !== "/stores") {
+        window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}#/stores`);
+        setRouteGuardMessage("店铺正在登录，请先取消登录任务后再切换页面。");
+        setState((current) => ({ ...current, route: "/stores" }));
+        return;
+      }
+      setState((current) => ({ ...current, route: nextRoute }));
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
+
+  useEffect(() => subscribeStoreLoginNavigationLock(setStoreLoginNavigationLockedState), []);
 
   useEffect(() => {
     const enabled = !!adapterPayload && state.config.features.marketingMenu?.enabled === true && state.config.features.marketingLimitedTime?.enabled === true && marketingWriteEnabled(state.config, adapterPayload.adapter, "limited_time", "tool_renew");
@@ -609,6 +620,8 @@ export function App() {
           routes={resolvedRoutes}
           workspace={state.workspace}
           licenseStatus={licenseStatus}
+          navigationBlocked={storeLoginNavigationLocked}
+          onBlockedNavigation={() => setRouteGuardMessage("店铺正在登录，请先取消登录任务后再切换页面。")}
           onOpenLicenseDialog={() => setLicenseDialogOpen(true)}
         />
         <section className="flex min-h-0 flex-col gap-4 overflow-hidden p-4 max-[760px]:overflow-visible max-[760px]:p-3">

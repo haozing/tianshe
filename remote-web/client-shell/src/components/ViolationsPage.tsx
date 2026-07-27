@@ -1,3 +1,4 @@
+import * as Tabs from "@radix-ui/react-tabs";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -11,6 +12,7 @@ import {
   ExternalLink,
   FileWarning,
   Filter,
+  ImageIcon,
   Loader2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -37,6 +39,7 @@ type ColumnFormat = "number" | "money" | "text" | "date";
 type SeverityFilter = "all" | "high" | "medium" | "low";
 type ProcessFilter = "all" | "pending" | "appealing" | "rectifying" | "done" | "failed" | "unknown";
 type TicketTypeFilter = "all" | "risk" | "penalty";
+type DetailTab = "stores" | "records";
 type SortKey = string;
 
 const violationMetricKeys = [
@@ -71,6 +74,7 @@ interface ViolationRecord {
   objectType: string;
   objectId: string;
   objectName: string;
+  objectImage?: string;
   ticketType?: "risk" | "penalty" | string;
   ticketTypeLabel?: string;
   productId: string;
@@ -371,8 +375,7 @@ function hasNativeViolationsBridge() {
 }
 
 function isDevPreviewRuntime() {
-  const meta = import.meta as ImportMeta & { env?: { DEV?: boolean } };
-  return meta.env?.DEV === true;
+  return import.meta.env.DEV;
 }
 
 function normalizeStoreStatus(status: unknown): DoudianStoreStatus {
@@ -577,6 +580,13 @@ function normalizeProductStatus(value: unknown): ViolationRecord["productStatus"
   return value === "在售" || value === "已下架" || value === "回收站" || value === "未关联" || value === "未查询" || value === "无需关联" ? value : "未查询";
 }
 
+function normalizeImageUrl(value: unknown) {
+  const url = String(value || "").trim();
+  if (!url) return "";
+  if (url.startsWith("//")) return `https:${url}`;
+  return /^(https?:|data:image\/|blob:|\/)/i.test(url) ? url : "";
+}
+
 function numberValue(value: unknown) {
   const next = Number(value || 0);
   return Number.isFinite(next) ? next : 0;
@@ -618,6 +628,7 @@ function recordFromRemote(record: DoudianViolationRecord, store?: StoreOption): 
     objectType: normalizeObjectType(record.objectType),
     objectId: String(record.objectId || record.productId || ""),
     objectName: String(record.objectName || "-"),
+    objectImage: normalizeImageUrl(record.objectImage || record.productImage || record.picUrl || record.pic_url || record.image || record.img || record.cover || record.mainImage || record.main_image),
     ticketType: String(record.ticketType || "penalty"),
     ticketTypeLabel: String(record.ticketTypeLabel || (record.ticketType === "risk" ? "预警" : "处罚")),
     productId: String(record.productId || ""),
@@ -682,8 +693,33 @@ function StatusTag({ status }: { status: DoudianStoreStatus }) {
   return <span className={cn("inline-flex h-6 items-center rounded-md border px-2 text-[12px] font-semibold", copy.className)}>{copy.label}</span>;
 }
 
-function CompactTag({ label, className }: { label: string; className: string }) {
-  return <span className={cn("inline-flex h-6 items-center rounded-md border px-2 text-[12px] font-semibold", className)}>{label}</span>;
+function processDotClass(status: ViolationRecord["processStatus"]) {
+  if (status === "done") return "bg-[#12b76a]";
+  if (status === "failed") return "bg-[#f04438]";
+  if (status === "appealing") return "bg-[#2e6bca]";
+  if (status === "rectifying") return "bg-[#f79009]";
+  if (status === "pending") return "bg-[#f04438]";
+  return "bg-[#98a2b3]";
+}
+
+function ViolationObjectThumbnail({ record }: { record: ViolationRecord }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [record.objectImage]);
+  const showImage = Boolean(record.objectImage) && !failed;
+  return (
+    <span className="grid size-12 shrink-0 place-items-center overflow-hidden rounded-md border border-[#e1e8f3] bg-[#f4f7fb] text-[#98a2b3]">
+      {showImage ? (
+        <img
+          className="size-full object-cover"
+          src={record.objectImage}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
+        />
+      ) : <ImageIcon className="size-5" strokeWidth={1.8} />}
+    </span>
+  );
 }
 
 function CheckboxBox({ checked, mixed = false }: { checked: boolean; mixed?: boolean }) {
@@ -765,12 +801,13 @@ function exportRows(
     meta.productLinkageVersion,
     ...exportColumns.map((column) => meta.unavailableMetrics.has(column.key) ? "暂不可用" : formatColumnValue(row[column.key], column.format))
   ]);
-  const detailHeader = ["违规ID", "店铺名称", "违规类型", "处罚对象", "处罚对象ID", "商品ID", "违规原因", "详细违规点", "违规时间", "创建时间", "风险等级", "风险代码", "处罚状态", "状态代码", ...(meta.productAssociation ? ["商品状态", "关联状态"] : []), "处罚方式", "处罚金额", "失败原因", "adapterVersion", "fieldSchemaVersion", "requestPlanHash", "productLinkageVersion"];
+  const detailHeader = ["违规ID", "店铺名称", "违规类型", "处罚对象", "对象图片", "处罚对象ID", "商品ID", "违规原因", "详细违规点", "违规时间", "创建时间", "风险等级", "风险代码", "处罚状态", "状态代码", ...(meta.productAssociation ? ["商品状态", "关联状态"] : []), "处罚方式", "处罚金额", "失败原因", "adapterVersion", "fieldSchemaVersion", "requestPlanHash", "productLinkageVersion"];
   const detailBody = records.map((record) => [
     record.id,
     record.shopName,
     record.ticketTypeLabel || (record.ticketType === "risk" ? "预警" : "处罚"),
     `${record.objectType} / ${record.objectName}`,
+    record.objectImage || "",
     record.objectId || "-",
     record.productId || "-",
     record.reason,
@@ -820,6 +857,7 @@ export function ViolationsPage() {
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
   const [processFilter, setProcessFilter] = useState<ProcessFilter>("all");
   const [ticketTypeFilter, setTicketTypeFilter] = useState<TicketTypeFilter>("all");
+  const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>("stores");
   const [sortKey, setSortKey] = useState<SortKey>("待处理优先");
   const [loadState, setLoadState] = useState<LoadState>(() => previewMode ? "ready" : "loading");
   const [loadMessage, setLoadMessage] = useState("");
@@ -1148,8 +1186,7 @@ export function ViolationsPage() {
   const selectedDateRangeEmpty = rows.length > 0 && dateFilteredRecordTotal === 0;
   const riskRecordCount = filteredRecords.filter((record) => record.ticketType === "risk").length;
   const penaltyRecordCount = filteredRecords.length - riskRecordCount;
-  const showOperationColumn = capabilities.platformNavigation;
-  const detailColSpan = 9 + Number(capabilities.productAssociation) + Number(showOperationColumn);
+  const detailColSpan = 7;
   const summarySchema = useMemo(() => normalizeRemoteSummary(fieldSchema).filter((item) => capabilities.productAssociation || !productMetricKeys.has(item.key as ViolationMetricKey)), [capabilities.productAssociation, fieldSchema]);
   const metrics: MetricItem[] = summarySchema.map((item) => {
     const key = item.key as ViolationMetricKey;
@@ -1339,11 +1376,21 @@ export function ViolationsPage() {
           </div>
         </section>
 
-        <section className="grid min-h-0 grid-rows-[44px_minmax(0,1fr)_38px] overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+        <Tabs.Root className="grid min-h-0 grid-rows-[44px_minmax(0,1fr)_38px] overflow-hidden rounded-lg border border-[#e1e8f3] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]" value={activeDetailTab} onValueChange={(value) => setActiveDetailTab(value as DetailTab)}>
           <div className="flex items-center justify-between gap-3 border-b border-[#edf1f6] px-3.5">
-            <div className="flex min-w-0 items-center gap-2">
-              <Workflow className="size-[16px] text-brand-navy" strokeWidth={2.2} />
-              <strong className="text-[15px] font-semibold text-[#101828]">店铺违规明细</strong>
+            <div className="flex min-w-0 self-stretch items-center gap-3">
+              <Tabs.List className="flex h-full shrink-0 items-stretch" aria-label="违规管理明细视图">
+                <Tabs.Trigger className="inline-flex h-full items-center gap-1.5 px-3 text-[13px] font-semibold text-[#667085] outline-none transition-colors hover:text-brand-navy data-[state=active]:text-[#101828] data-[state=active]:shadow-[inset_0_-2px_0_#ff5020]" value="stores">
+                  <Workflow className="size-[15px]" strokeWidth={2.1} />
+                  店铺明细
+                  <span className="font-mono text-[11px] text-[#98a2b3]">{rows.length}</span>
+                </Tabs.Trigger>
+                <Tabs.Trigger className="inline-flex h-full items-center gap-1.5 px-3 text-[13px] font-semibold text-[#667085] outline-none transition-colors hover:text-brand-navy data-[state=active]:text-[#101828] data-[state=active]:shadow-[inset_0_-2px_0_#ff5020]" value="records">
+                  <FileWarning className="size-[15px]" strokeWidth={2.1} />
+                  违规记录
+                  <span className="font-mono text-[11px] text-[#98a2b3]">{sortedRecords.length}</span>
+                </Tabs.Trigger>
+              </Tabs.List>
               {violationState === "loading" ? (
                 <span className="inline-flex h-6 max-w-[360px] items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#667085]" title={violationProgress || "正在同步违规数据"}>
                   <Loader2 className="size-[13px] animate-spin" strokeWidth={2} />
@@ -1362,14 +1409,16 @@ export function ViolationsPage() {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <NativeSelect value={sortKey} options={sortOptions.map((option) => ({ value: option.label, label: option.label }))} onChange={setSortKey} width={116} />
-              <button className={cn("inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]", columnPanelOpen ? "bg-brand-foxSoft text-brand-navy" : "")} type="button" onClick={() => setColumnPanelOpen((open) => !open)}>
-                <SlidersHorizontal className="size-[14px]" strokeWidth={2} />
-                指标
-              </button>
+              {activeDetailTab === "stores" ? (
+                <button className={cn("inline-flex h-8 items-center gap-1.5 rounded-md border border-[#dbe5f2] bg-white px-2.5 text-[12px] font-semibold text-[#344054]", columnPanelOpen ? "bg-brand-foxSoft text-brand-navy" : "")} type="button" onClick={() => setColumnPanelOpen((open) => !open)}>
+                  <SlidersHorizontal className="size-[14px]" strokeWidth={2} />
+                  指标
+                </button>
+              ) : null}
             </div>
           </div>
 
-          <div className="min-h-0 overflow-auto">
+          <Tabs.Content className="min-h-0 overflow-auto outline-none" value="stores">
             {columnPanelOpen ? (
               <div className="sticky left-0 z-30 border-b border-[#edf1f6] bg-white px-3.5 py-3 shadow-[0_8px_18px_rgba(15,23,42,0.05)]">
                 <div className="mb-2 flex items-center justify-between">
@@ -1442,64 +1491,84 @@ export function ViolationsPage() {
                 </tbody>
               </table>
             </div>
+          </Tabs.Content>
 
-            <div className="min-w-[1120px]">
-              <div className="flex h-10 items-center gap-2 bg-[#fbfcff] px-3.5 text-[12px] font-semibold text-[#344054] shadow-[inset_0_-1px_0_#e6ebf3]">
-                <FileWarning className="size-[15px] text-brand-navy" strokeWidth={2.2} />
-                违规处罚记录
-                <span className="rounded-md border border-[#dbe5f2] bg-white px-2 py-1 text-[11px] text-[#667085]">{sortedRecords.length} 条</span>
-                {sortedRecords.length ? <span className="text-[11px] font-normal text-[#98a2b3]">当前 {Math.min(sortedRecords.length, (detailPage - 1) * DETAIL_PAGE_SIZE + 1)}-{Math.min(sortedRecords.length, detailPage * DETAIL_PAGE_SIZE)}</span> : null}
-              </div>
-              <table className="w-full border-separate border-spacing-0 text-left text-[12px]">
-                <thead className="bg-[#fbfcff] text-[#344054] shadow-[inset_0_-1px_0_#e6ebf3]">
-                   <tr className="h-10">
-                     <th className="px-3 font-semibold">店铺 / 违规ID</th>
-                     <th className="px-3 font-semibold">类型</th>
-                     <th className="px-3 font-semibold">处罚对象</th>
-                     <th className="px-3 font-semibold">违规原因</th>
-                     <th className="px-3 font-semibold">风险</th>
-                     <th className="px-3 font-semibold">处罚状态</th>
-                     {capabilities.productAssociation ? <th className="px-3 font-semibold">商品状态</th> : null}
-                     <th className="px-3 font-semibold">违规时间</th>
-                     <th className="px-3 font-semibold">处罚方式</th>
-                     <th className="px-3 font-semibold">失败原因</th>
-                    {showOperationColumn ? <th className="px-3 font-semibold">操作</th> : null}
+          <Tabs.Content className="min-h-0 overflow-auto outline-none" value="records">
+            <div className="min-w-[1260px]">
+              <table className="w-full table-fixed border-separate border-spacing-0 text-left text-[12px]">
+                <colgroup>
+                  <col className="w-[280px]" />
+                  <col className="w-[185px]" />
+                  <col className="w-[135px]" />
+                  <col className="w-[205px]" />
+                  <col className="w-[225px]" />
+                  <col className="w-[150px]" />
+                  <col className="w-[80px]" />
+                </colgroup>
+                <thead className="sticky top-0 z-20 bg-[#fbfcff] text-[#344054] shadow-[inset_0_-1px_0_#e6ebf3]">
+                  <tr className="h-10">
+                    <th className="px-3 font-semibold">违规对象</th>
+                    <th className="px-3 font-semibold">违规单编号</th>
+                    <th className="px-3 font-semibold">处置状态</th>
+                    <th className="px-3 font-semibold">违规原因</th>
+                    <th className="px-3 font-semibold">处置方式</th>
+                    <th className="px-3 font-semibold">违规时间</th>
+                    <th className="px-3 font-semibold">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#edf1f6]">
                   {pagedRecords.map((record) => (
-                    <tr className="group h-[54px] hover:bg-[#f8fbff]" key={record.id}>
-                       <td className="px-3">
-                         <div className="font-semibold text-[#1d2939]">{record.shopName}</div>
-                         <div className="font-mono text-[11px] text-[#667085]">{record.id}</div>
-                       </td>
-                       <td className="px-3">
-                         <CompactTag
-                           label={record.ticketTypeLabel || (record.ticketType === "risk" ? "预警" : "处罚")}
-                           className={record.ticketType === "risk" ? "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" : "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]"}
-                         />
-                       </td>
-                      <td className="px-3">
-                        <div className="max-w-[180px] truncate font-semibold text-[#1d2939]" title={record.objectName}>{record.objectType}：{record.objectName}</div>
-                        <div className="font-mono text-[11px] text-[#667085]">{record.objectId || record.productId || "-"}</div>
-                      </td>
-                       <td className="max-w-[220px] px-3 font-medium text-[#344054]" title={[record.reason, record.violationDetail].filter(Boolean).join("\n")}>
-                         <div className="truncate">{record.reason}</div>
-                         {record.violationDetail ? <div className="truncate text-[11px] font-normal text-[#98a2b3]">{record.violationDetail}</div> : null}
-                       </td>
-                       <td className="px-3"><CompactTag label={record.severityLabel || severityCopy[record.severity].label} className={severityCopy[record.severity].className} /></td>
-                       <td className="px-3"><CompactTag label={record.processStatusLabel || processCopy[record.processStatus].label} className={processCopy[record.processStatus].className} /></td>
-                       {capabilities.productAssociation ? <td className={cn("whitespace-nowrap px-3 font-semibold", productStatusClass[record.productStatus])}>{record.productStatus}</td> : null}
-                       <td className="whitespace-nowrap px-3 font-mono text-[11px] text-[#344054]">{record.violationAt || "-"}</td>
-                      <td className="max-w-[220px] truncate px-3 text-[#344054]" title={record.action}>{record.action}</td>
-                      <td className={cn("max-w-[180px] truncate px-3", record.failureReason ? "font-semibold text-[#b42318]" : "text-[#98a2b3]")} title={record.failureReason}>{record.failureReason || "-"}</td>
-                      {showOperationColumn ? <td className="px-3">
-                        <div className="flex items-center gap-1.5">
-                          {capabilities.platformNavigation ? <button className="grid size-7 place-items-center rounded-md border border-[#dbe5f2] bg-white text-[#344054] transition-colors hover:bg-brand-foxSoft hover:text-brand-navy" type="button" aria-label="打开平台处理页" title="打开平台处理页" onClick={() => void openDoudianStore(record.shopId, capabilities.platformUrl)}>
-                            <ExternalLink className="size-[14px]" strokeWidth={2} />
-                          </button> : null}
+                    <tr className="group h-[72px] hover:bg-[#f8fbff]" key={record.id}>
+                      <td className="px-3 py-2">
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <ViolationObjectThumbnail record={record} />
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold text-[#1d2939]" title={record.objectName}>{record.objectName}</div>
+                            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-[#667085]">
+                              <span className="shrink-0">{record.objectType}</span>
+                              <span className="truncate font-mono" title={record.productId || record.objectId}>{record.productId || record.objectId || "-"}</span>
+                              {capabilities.productAssociation ? <span className={cn("shrink-0 font-semibold", productStatusClass[record.productStatus])}>{record.productStatus}</span> : null}
+                            </div>
+                          </div>
                         </div>
-                      </td> : null}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="truncate font-mono text-[12px] font-semibold text-[#344054]" title={record.id}>{record.id}</div>
+                        <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                          <span className="truncate text-[11px] text-[#667085]" title={record.shopName}>{record.shopName}</span>
+                          <span className={cn("shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold", record.ticketType === "risk" ? "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" : "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]")}>{record.ticketTypeLabel || (record.ticketType === "risk" ? "预警" : "处罚")}</span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="inline-flex items-center gap-2 font-semibold text-[#344054]">
+                          <span className={cn("size-2 rounded-full", processDotClass(record.processStatus))} />
+                          {record.processStatusLabel || processCopy[record.processStatus].label}
+                        </div>
+                        <div className="mt-1 truncate font-mono text-[11px] text-[#98a2b3]" title={record.dueAt}>{record.dueAt ? `截止 ${record.dueAt}` : "无处置期限"}</div>
+                      </td>
+                      <td className="px-3 py-2" title={[record.reason, record.violationDetail].filter(Boolean).join("\n")}>
+                        <div className="truncate font-medium text-[#344054]">{record.reason}</div>
+                        <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                          <span className={cn("shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold", severityCopy[record.severity].className)}>{record.severityLabel || severityCopy[record.severity].label}</span>
+                          {record.violationDetail ? <span className="truncate text-[11px] text-[#98a2b3]">{record.violationDetail}</span> : null}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2" title={[record.action, record.failureReason].filter(Boolean).join("\n")}>
+                        <div className="line-clamp-2 leading-5 text-[#344054]">{record.action}</div>
+                        {record.failureReason ? <div className="mt-0.5 truncate text-[11px] font-semibold text-[#b42318]">{record.failureReason}</div> : record.penaltyAmount > 0 ? <div className="mt-0.5 text-[11px] text-[#b54708]">处罚 {formatMoney(record.penaltyAmount)}</div> : null}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono text-[11px] text-[#344054]">
+                        <div>{record.violationAt || "-"}</div>
+                        {record.createdAt && record.createdAt !== record.violationAt ? <div className="mt-1 text-[#98a2b3]">创建 {record.createdAt}</div> : null}
+                      </td>
+                      <td className="px-3 py-2">
+                        {capabilities.platformNavigation ? (
+                          <button className="inline-flex h-7 items-center gap-1 text-[12px] font-semibold text-brand-navy transition-colors hover:text-brand-fox" type="button" onClick={() => void openDoudianStore(record.shopId, capabilities.platformUrl)}>
+                            违规详情
+                            <ExternalLink className="size-[13px]" strokeWidth={2} />
+                          </button>
+                        ) : <span className="text-[#98a2b3]">-</span>}
+                      </td>
                     </tr>
                   ))}
                   {!sortedRecords.length ? (
@@ -1529,11 +1598,11 @@ export function ViolationsPage() {
                 </div>
               ) : null}
             </div>
-          </div>
+          </Tabs.Content>
 
           <div className="flex items-center justify-between gap-3 border-t border-[#edf1f6] px-4 text-[12px] text-[#667085]">
             <span className="min-w-0 truncate" title={warningDetail || violationMessage}>
-              共 {rows.length} 家店铺，最近同步 {lastSyncAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}
+              {activeDetailTab === "stores" ? `共 ${rows.length} 家店铺` : `共 ${sortedRecords.length} 条违规记录`}，最近同步 {lastSyncAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}
               {warningTitle ? `，${warningTitle}` : ""}
             </span>
             <span className="inline-flex items-center gap-2">
@@ -1546,7 +1615,7 @@ export function ViolationsPage() {
               <span className="ml-2 rounded-md border border-[#dbe5f2] bg-white px-2 py-1 text-[11px] font-semibold text-[#667085]">{riskStoreCount} 家风险店铺</span>
             </span>
           </div>
-        </section>
+        </Tabs.Root>
       </div>
     </section>
   );

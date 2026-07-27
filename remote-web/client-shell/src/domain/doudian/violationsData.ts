@@ -580,6 +580,7 @@ function extractRecords(store: DoudianStoreSummary, responses: Record<string, Re
       objectId,
       objectTypeCode: text(rawObjectType),
       objectName: text(readViolationField(item, adapter, "objectName")) || reason || id,
+      objectImage: text(readViolationField(item, adapter, "objectImage")),
       ticketType,
       ticketTypeLabel: ticketType === "risk" ? "预警" : "处罚",
       productId,

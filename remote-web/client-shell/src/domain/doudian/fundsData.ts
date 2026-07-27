@@ -1105,7 +1105,7 @@ export async function fetchFundsData(args: FundsDataArgs = {}): Promise<DoudianF
         taskType: "fundsData",
         status: "running",
         progress: Math.round((completedCount / Math.max(1, targets.length)) * 95),
-        message: `${store.shopName || store.shopId} ${completedCount}/${targets.length}`
+        message: `已获取 ${completedCount}/${targets.length}`
       });
     }
   });

@@ -79,7 +79,7 @@ import {
 } from "./opportunity/officialValidation";
 import { SUBMIT_HISTORY_CLUE_CAPACITY, advanceSubmitHistoryThrottle, evaluateSubmitHistoryPageCoverage, isSubmitHistoryBusinessSuccess, parseSubmitHistorySnapshot, submitHistoryBusinessFacts, submitHistoryCapacityFacts, submitHistoryInitialStart, submitHistoryPageBatchRange, submitHistoryPageReachesEnd, submitHistoryRemoteUpdatedAtWatermark, submitHistoryThrottleAllowsPipeline, submitHistoryThrottleBypassesRequest, submitHistoryWindows } from "./opportunity/submitHistory";
 import { isUnresolvedSubmitState, logicalSubmitAttemptId, recoverUnresolvedSubmitCandidate } from "./opportunity/submitRecovery.ts";
-import { activeSubmitTasksForRun, canSupersedeContractMismatchTask, hasRemainingLegacySubmitWork, isDeferredSubmitTaskStatus, orphanedSubmitQueueStoreRuns, submitWorkerProgress } from "./opportunity/submitWorkerState.ts";
+import { activeSubmitTasksForRun, canSupersedeContractMismatchTask, compareSubmitTaskFairness, hasRemainingLegacySubmitWork, isDeferredSubmitTaskStatus, orphanedSubmitQueueStoreRuns, submitWorkerProgress } from "./opportunity/submitWorkerState.ts";
 import { responseHeaderText, retryAfterMs, submitRetryWaitMs } from "./opportunity/submitRetryPolicy.ts";
 import { classifyCoordinatedSubmitAttempt, type CoordinatedSubmitClassification } from "./opportunity/submitAttemptClassifier.ts";
 import { pipelineDiagnosticsBlockCompletion, pipelineInputCoverageAllowsWrite, pipelineMutationTerminalFailureCount, pipelineNoCandidateSkipReason, pipelineStoreResultMessage, pipelineSubmitResponseStatus, pipelineSubmitResultMessage, pipelineTaskAwaitsAutomaticRecovery, pipelineTaskCoverageGate, pipelineTaskRetryableRemainingCount } from "./opportunity/pipelineResult.ts";
@@ -498,6 +498,7 @@ interface PipelineSubmitTaskRecord extends PipelineStoreIdentity {
   httpGrantConsumedAt?: string;
   fencingToken?: number;
   resumeAt?: string;
+  lastAdmittedAt?: string;
   throttleCount?: number;
   throttlePauseMs?: number;
   lastThrottleAt?: string;
@@ -9083,7 +9084,7 @@ async function executeSubmitWorker(payload: DoudianAdapterPayload, args: Opportu
           (task.status === "running" && (!task.leaseExpiresAt || Date.parse(task.leaseExpiresAt) < nowMs)) ||
           (coordinated && task.status === "cooling_down" && Boolean(task.resumeAt) && Date.parse(task.resumeAt || "") <= nowMs) ||
           (coordinated && task.status === "deferred" && task.requiresExplicitResume !== true && Boolean(task.resumeAt) && Date.parse(task.resumeAt || "") <= nowMs))
-        .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+        .sort(compareSubmitTaskFairness);
       if (!tasks.length) break;
       const activeKeys = new Set<string>();
       let processedThisPass = 0;

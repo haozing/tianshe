@@ -23,6 +23,21 @@ test("free route whitelist and paid route families remain exact", () => {
   assert.match(routeSource, /SYSTEM_FREE_ROUTES = \["\/system\/diagnostics"\]/);
 });
 
+test("bulk delete is the primary product route before slow-moving cleanup", () => {
+  const bulkDeleteIndex = routeSource.indexOf('route: "/products/bulk-delete"');
+  const slowMovingIndex = routeSource.indexOf('route: "/products/slow-moving"');
+  assert.ok(bulkDeleteIndex >= 0 && slowMovingIndex >= 0 && bulkDeleteIndex < slowMovingIndex);
+  assert.match(routeSource, /route: "\/products\/bulk-delete", aliases: \["\/products"\][^\n]+order: 10/);
+  assert.match(routeSource, /route: "\/products\/slow-moving"[^\n]+order: 20/);
+});
+
+test("product navigation uses the requested customer-facing labels", () => {
+  assert.match(routeSource, /route: "\/products\/bulk-delete"[^\n]+label: "商品管理"/);
+  assert.match(routeSource, /route: "\/products\/slow-moving"[^\n]+label: "清理无流量"/);
+  assert.doesNotMatch(routeSource, /label: "批量删除"/);
+  assert.doesNotMatch(routeSource, /label: "清理滞销"/);
+});
+
 test("allowPaidFeatures is diagnostic and cannot replace paidAccessGranted", () => {
   const status = {
     configured: true,

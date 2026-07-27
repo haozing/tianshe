@@ -314,10 +314,6 @@ function metricAvailable(row: BusinessRow, key: BusinessMetricKey) {
   return row.metricAvailability[key] === true;
 }
 
-function businessRowHasAvailableMetric(row: BusinessRow) {
-  return businessMetricKeys.some((key) => metricAvailable(row, key));
-}
-
 function businessRowFromRemote(row: DoudianBusinessDataRow, store?: StoreOption, detail?: DoudianRunDetail): BusinessRow {
   const base = zeroBusinessRow({
     id: String(row.shopId || store?.id || ""),
@@ -611,7 +607,6 @@ export function BusinessDataPage() {
   const [storeSyncing, setStoreSyncing] = useState(false);
   const [businessSyncing, setBusinessSyncing] = useState(false);
   const [businessAutoRefresh, setBusinessAutoRefresh] = useState<BusinessAutoRefreshPreference>(savedBusinessAutoRefresh);
-  const [lastSyncAt, setLastSyncAt] = useState(() => new Date());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [businessRows, setBusinessRows] = useState<BusinessRow[]>([]);
   const [businessState, setBusinessState] = useState<BusinessLoadState>("idle");
@@ -701,7 +696,6 @@ export function BusinessDataPage() {
           return next;
         });
         setLoadState("ready");
-        setLastSyncAt(new Date());
       } else {
         setLoadState("error");
         setLoadMessage(result.message || "店铺列表读取失败");
@@ -771,7 +765,6 @@ export function BusinessDataPage() {
       } else {
         setBusinessState(result.ok || result.status === "partial" ? "ready" : "error");
       }
-      setLastSyncAt(new Date());
     } catch (error) {
       if (requestSeq !== businessRequestSeq.current) return;
       setBusinessState("error");
@@ -930,7 +923,6 @@ export function BusinessDataPage() {
           total: item.total,
           progress: Math.round(detail.progress || 0)
         });
-        setLastSyncAt(new Date());
       } else if (detail.status !== "running") {
         setBusinessItemProgress(null);
       }
@@ -994,16 +986,19 @@ export function BusinessDataPage() {
   const partialSourceCount = businessDetails.filter((detail) => blockingSourceCount(detail) > 0).length;
   const coreIncompleteCount = businessDetails.filter((detail) => businessDetailDiagnostic(detail).coreMetricsComplete === false).length;
   const missingSelectedCount = Math.max(0, selectedIds.size - selectedRows.length);
-  const noMetricMatchCount = businessDetails.filter((detail) => businessDetailDiagnostic(detail).rowSummary?.allUnavailable === true).length;
   const incompleteMetricCount = businessDetails.filter((detail) => (businessDetailDiagnostic(detail).unavailableCriticalFields || []).length > 0).length;
-  const selectedRowsAllUnavailable = businessState === "ready" && selectedRows.length > 0 && selectedRows.every((row) => !businessRowHasAvailableMetric(row));
-  const metricMissCount = noMetricMatchCount || (selectedRowsAllUnavailable ? selectedRows.length : 0);
+  const selectedDetailIds = new Set(selectedRows.map((row) => row.shopId));
+  const businessDataTimestamps = businessDetails
+    .filter((detail) => detail.ok !== false && selectedDetailIds.has(String(detail.shopId || "")))
+    .map((detail) => Date.parse(detail.dataUpdatedAt || detail.attemptedAt || ""))
+    .filter(Number.isFinite)
+    .sort((left, right) => right - left);
+  const businessDataUpdatedAt = businessDataTimestamps.length ? new Date(businessDataTimestamps[0]) : null;
   const businessWarningParts = [
     missingSelectedCount ? `${missingSelectedCount} 家正在加载` : "",
     coreIncompleteCount ? `${coreIncompleteCount} 家核心交易指标不完整` : "",
     incompleteMetricCount ? `${incompleteMetricCount} 家核心字段不可用` : "",
-    partialSourceCount ? `${partialSourceCount} 家关键来源异常` : "",
-    metricMissCount ? `${metricMissCount} 家未命中经营指标` : ""
+    partialSourceCount ? `${partialSourceCount} 家关键来源异常` : ""
   ].filter(Boolean);
   const businessWarningTitle = failedDetailCount ? `${failedDetailCount} 家同步失败` : businessWarningParts.join("，");
   const businessWarningDetail = failedDetailCount
@@ -1013,8 +1008,7 @@ export function BusinessDataPage() {
         missingSelectedCount ? "新增选择的店铺尚未返回数据，不会用全零值代替。" : "",
         coreIncompleteCount ? "核心交易接口未完整返回，当前仍保留评分、营销和商品等可用数据。" : "",
         incompleteMetricCount ? "核心接口成功但部分关键字段不可读，未知值以 -- 展示且不计入汇总。" : "",
-        partialSourceCount ? "关键来源未返回有效数据，辅助营销和商品来源不会再污染总状态。" : "",
-        metricMissCount ? "远程接口有返回，但当前映射没有读到可展示的经营指标。" : ""
+        partialSourceCount ? "关键来源未返回有效数据，辅助营销和商品来源不会再污染总状态。" : ""
       ].filter(Boolean).join(" ")
       : "";
 
@@ -1313,6 +1307,10 @@ export function BusinessDataPage() {
             <div className="flex min-w-0 items-center gap-2">
               <Gauge className="size-[16px] text-brand-navy" strokeWidth={2.2} />
               <strong className="text-[15px] font-semibold text-[#101828]">店铺明细</strong>
+              <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-medium text-[#667085]">
+                <Clock3 className="size-[13px]" strokeWidth={2} />
+                数据更新时间 {businessDataUpdatedAt ? businessDataUpdatedAt.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "暂无"}
+              </span>
               {totals.overdueShipment || totals.violationPending || totals.rectificationRisk ? (
                 <span className="inline-flex h-6 items-center gap-1 rounded-md border border-[#ffdca8] bg-[#fff7e8] px-2 text-[12px] font-semibold text-[#b54708]">
                   <AlertTriangle className="size-[13px]" strokeWidth={2} />
@@ -1349,8 +1347,6 @@ export function BusinessDataPage() {
             <div className="flex min-w-0 items-center gap-3 border-b border-[#bfdbfe] bg-[#f5f9ff] px-3.5 text-[12px]">
               <Loader2 className="size-[15px] shrink-0 animate-spin text-[#2563eb]" strokeWidth={2.2} />
               <span className="shrink-0 font-semibold text-[#101828]">正在获取 {businessItemProgress.completed} / {businessItemProgress.total}</span>
-              <span className="max-w-[220px] truncate font-semibold text-[#1d4ed8]" title={businessItemProgress.row.shopName}>{businessItemProgress.row.shopName}</span>
-              <span className="shrink-0 font-mono text-[#667085]">{businessItemProgress.row.shopId}</span>
               <span className="shrink-0 font-semibold text-brand-navy">成交金额 {formatMoney(businessItemProgress.row.dealAmount)}</span>
               <span className="shrink-0 text-[#344054]">订单 {formatNumber(businessItemProgress.row.orderCount)}</span>
               <span className={cn("shrink-0 rounded-md border px-2 py-0.5 font-semibold", businessItemProgress.detail.status === "ok" ? "border-[#bff0cf] bg-[#eafaf0] text-[#087443]" : businessItemProgress.detail.status === "partial" ? "border-[#ffdca8] bg-[#fff7e8] text-[#b54708]" : "border-[#ffd1d1] bg-[#fff1f0] text-[#b42318]")}>
@@ -1497,7 +1493,7 @@ export function BusinessDataPage() {
 
           <div className="flex items-center justify-between gap-3 border-t border-[#edf1f6] px-4 text-[12px] text-[#667085]">
             <span className="min-w-0 truncate" title={businessWarningDetail || businessMessage}>
-              共 {selectedRows.length} 家店铺，最近同步 {lastSyncAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}
+              共 {selectedRows.length} 家店铺
               {businessWarningTitle ? `，${businessWarningTitle}` : ""}
             </span>
             <span className="inline-flex items-center gap-2">

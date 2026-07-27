@@ -1247,11 +1247,20 @@ function initialStoreRateState(task, policy, ts) {
   };
 }
 
-function settleStoreIdleRate(storeRate, policy, now) {
+function storeRateCanResetForTask(storeRate, task, lastActivityMs) {
+  const currentRunId = normalizeString(task && task.runId);
+  const lastAdmittedRunId = normalizeString(storeRate.lastAdmittedRunId);
+  if (currentRunId && lastAdmittedRunId) return currentRunId !== lastAdmittedRunId;
+  const taskCreatedMs = timestampMs(task && task.createdAt);
+  return Boolean(taskCreatedMs && taskCreatedMs > lastActivityMs);
+}
+
+function settleStoreIdleRate(storeRate, policy, now, task) {
   const nowMs = timestampMs(now, Date.now());
   const lastActivityMs = Math.max(timestampMs(storeRate.lastAdmittedAt), timestampMs(storeRate.last429At));
   const stillCooling = Math.max(timestampMs(storeRate.cooldownUntil), timestampMs(storeRate.nextEligibleAt)) > nowMs;
   if (!lastActivityMs || stillCooling || nowMs - lastActivityMs < policy.idleResetMs) return storeRate;
+  if (!storeRateCanResetForTask(storeRate, task, lastActivityMs)) return storeRate;
   if (Number(storeRate.intervalMs || policy.initialIntervalMs) <= policy.initialIntervalMs && storeRate.mode === "normal") return storeRate;
   return {
     ...storeRate,
@@ -1265,6 +1274,35 @@ function settleStoreIdleRate(storeRate, policy, now) {
     idleResetAt: now,
     updatedAt: now
   };
+}
+
+function delayOpportunitySubmitPeerTasksForGlobalRate(database, task, nextEligibleAt, now) {
+  const nextEligibleAtMs = timestampMs(nextEligibleAt);
+  if (!nextEligibleAtMs || nextEligibleAtMs <= timestampMs(now)) return 0;
+  const tenantId = normalizeString(task.tenantId) || DEFAULT_TENANT_ID;
+  const rows = database.prepare(`
+    SELECT * FROM native_records
+    WHERE store_name = ? AND record_id <> ?
+      AND json_valid(payload_json)
+      AND COALESCE(json_extract(payload_json, '$.tenantId'), ?) = ?
+      AND json_extract(payload_json, '$.status') IN ('ready', 'queued', 'cooling_down')
+      AND json_extract(payload_json, '$.submitThrottleRecoveryEnabled') = 1
+  `).all(OPPORTUNITY_SUBMIT_TASK_STORE, normalizeString(task.id), DEFAULT_TENANT_ID, tenantId);
+  let delayedCount = 0;
+  for (const row of rows) {
+    const peer = formatNativeRecord(row);
+    if ((normalizeString(peer.tenantId) || DEFAULT_TENANT_ID) !== tenantId) continue;
+    if (peer.submitThrottleRecoveryEnabled !== true || peer.requiresExplicitResume === true || peer.inFlightAttemptId) continue;
+    if (!["ready", "queued", "cooling_down"].includes(normalizeString(peer.status))) continue;
+    if (timestampMs(peer.resumeAt) >= nextEligibleAtMs) continue;
+    putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_TASK_STORE, {
+      ...peer,
+      resumeAt: new Date(nextEligibleAtMs).toISOString(),
+      updatedAt: now
+    }, now);
+    delayedCount += 1;
+  }
+  return delayedCount;
 }
 
 function initialGlobalRateState(tenantId, endpointContract, policy, ts) {
@@ -1593,7 +1631,8 @@ function admitOpportunitySubmitAttempt(args = {}) {
     const storeRate = settleStoreIdleRate(
       nativeRecordById(database, OPPORTUNITY_SUBMIT_RATE_STORE, rateId) || initialStoreRateState(task, policy, now),
       policy,
-      now
+      now,
+      task
     );
     const globalRate = settleGlobalStableWindows(
       nativeRecordById(database, OPPORTUNITY_SUBMIT_GLOBAL_RATE_STORE, globalRateId) || initialGlobalRateState(identity.tenantId, endpointContract, policy, now),
@@ -1723,6 +1762,8 @@ function admitOpportunitySubmitAttempt(args = {}) {
       ...storeRate,
       mode: "normal",
       lastAdmittedAt: now,
+      lastAdmittedRunId: normalizeString(task.runId) || undefined,
+      lastAdmittedTaskId: taskId,
       nextEligibleAt: isoAfter(now, Number(storeRate.intervalMs || policy.initialIntervalMs) + jitterMs),
       updatedAt: now
     }, now);
@@ -1732,9 +1773,11 @@ function admitOpportunitySubmitAttempt(args = {}) {
       nextEligibleAt: isoAfter(now, globalRate.mode === "protective" ? Number(globalRate.intervalMs || policy.globalInitialMs) : Number(globalRate.burstSpacingMs || policy.globalBurstSpacingMs)),
       updatedAt: now
     }, now);
+    delayOpportunitySubmitPeerTasksForGlobalRate(database, task, nextGlobalRate.nextEligibleAt, now);
     const checkpointCandidates = candidateRowsForIds(database, Array.isArray(task.candidateIds) ? task.candidateIds : []).map(({ candidate }) => candidate);
     const nextTask = putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_TASK_STORE, {
       ...task,
+      lastAdmittedAt: now,
       inFlightAttemptId: attemptId,
       inFlightLogicalGroupId: logicalGroupId,
       inFlightCandidateIds: candidateIds,
@@ -2057,6 +2100,7 @@ function resolveOpportunitySubmitAttempt(args = {}) {
     }
     putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_RATE_STORE, nextStoreRate, now);
     putNativeRecordInTransaction(database, OPPORTUNITY_SUBMIT_GLOBAL_RATE_STORE, nextGlobalRate, now);
+    delayOpportunitySubmitPeerTasksForGlobalRate(database, task, nextGlobalRate.nextEligibleAt, now);
 
     const throttlePauseMs = outcome === "throttled" && resumeAt ? Math.max(0, timestampMs(resumeAt) - timestampMs(now)) : 0;
     const accumulatedThrottlePauseMs = Number(task.throttlePauseMs || 0) + throttlePauseMs;

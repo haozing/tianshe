@@ -43,6 +43,17 @@ function opportunitySubmitRecoverySortValue(task) {
   return timestampMs(task.resumeAt) || timestampMs(task.leaseExpiresAt) || timestampMs(task.createdAt) || Number.MAX_SAFE_INTEGER;
 }
 
+function compareOpportunitySubmitRecoveryFairness(left, right) {
+  const leftAdmittedAt = timestampMs(left.lastAdmittedAt);
+  const rightAdmittedAt = timestampMs(right.lastAdmittedAt);
+  if (Boolean(leftAdmittedAt) !== Boolean(rightAdmittedAt)) return leftAdmittedAt ? 1 : -1;
+  if (leftAdmittedAt !== rightAdmittedAt) return leftAdmittedAt - rightAdmittedAt;
+  const due = opportunitySubmitRecoverySortValue(left) - opportunitySubmitRecoverySortValue(right);
+  if (due) return due;
+  const created = String(left.createdAt || "").localeCompare(String(right.createdAt || ""));
+  return created || String(left.id || "").localeCompare(String(right.id || ""));
+}
+
 function dueOpportunitySubmitRecoveryTasks(tasks, options = {}) {
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const activeRunIds = options.activeRunIds instanceof Set ? options.activeRunIds : new Set(options.activeRunIds || []);
@@ -50,12 +61,7 @@ function dueOpportunitySubmitRecoveryTasks(tasks, options = {}) {
   return (Array.isArray(tasks) ? tasks : [])
     .filter((task) => automaticOpportunitySubmitRecoveryTask(task, nowMs))
     .filter((task) => !activeRunIds.has(String(task.runId || "")) && !activeTaskIds.has(String(task.id || "")))
-    .sort((left, right) => {
-      const due = opportunitySubmitRecoverySortValue(left) - opportunitySubmitRecoverySortValue(right);
-      if (due) return due;
-      const created = String(left.createdAt || "").localeCompare(String(right.createdAt || ""));
-      return created || String(left.id || "").localeCompare(String(right.id || ""));
-    });
+    .sort(compareOpportunitySubmitRecoveryFairness);
 }
 
 function nextOpportunitySubmitRecoveryWakeAt(tasks, nowMs = Date.now()) {
@@ -75,6 +81,7 @@ module.exports = {
   AUTOMATIC_DEFERRED_REASONS,
   automaticOpportunitySubmitRecoveryPendingTask,
   automaticOpportunitySubmitRecoveryTask,
+  compareOpportunitySubmitRecoveryFairness,
   dueOpportunitySubmitRecoveryTasks,
   nextOpportunitySubmitRecoveryWakeAt
 };

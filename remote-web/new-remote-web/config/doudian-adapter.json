@@ -1837,6 +1837,29 @@
             "name"
           ]
         },
+        "objectImage": {
+          "paths": [
+            "info.object.object_image",
+            "info.object.objectImage",
+            "product_info.pic_url",
+            "productInfo.picUrl",
+            "product_info.image_url",
+            "productInfo.imageUrl",
+            "product_info.main_image",
+            "productInfo.mainImage",
+            "object_image",
+            "objectImage",
+            "pic_url",
+            "picUrl",
+            "image_url",
+            "imageUrl",
+            "image",
+            "img",
+            "cover",
+            "main_image",
+            "mainImage"
+          ]
+        },
         "objectId": {
           "paths": [
             "info.object.object_id",

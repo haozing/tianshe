@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   activeSubmitTasksForRun,
   canSupersedeContractMismatchTask,
+  compareSubmitTaskFairness,
   hasRemainingLegacySubmitWork,
   isDeferredSubmitTaskStatus,
   isActiveSubmitTaskStatus,
@@ -64,6 +65,15 @@ test("submit worker detects every non-terminal queue state for the requested run
   assert.equal(isDeferredSubmitTaskStatus("deferred"), true);
   assert.equal(isDeferredSubmitTaskStatus("cooling_down"), false);
   assert.deepEqual(activeSubmitTasksForRun(tasks, "run-1").map((task) => task.id), ["a", "b", "c", "d", "e", "g"]);
+});
+
+test("submit worker prioritizes stores that have never or least recently been admitted", () => {
+  const tasks = [
+    { id: "recent", createdAt: "2026-07-25T07:00:00.000Z", resumeAt: "2026-07-25T08:00:00.000Z", lastAdmittedAt: "2026-07-25T07:59:00.000Z" },
+    { id: "old", createdAt: "2026-07-25T07:01:00.000Z", resumeAt: "2026-07-25T08:00:00.000Z", lastAdmittedAt: "2026-07-25T07:40:00.000Z" },
+    { id: "never", createdAt: "2026-07-25T07:02:00.000Z", resumeAt: "2026-07-25T08:00:00.000Z" }
+  ];
+  assert.deepEqual(tasks.sort(compareSubmitTaskFairness).map((task) => task.id), ["never", "old", "recent"]);
 });
 
 test("legacy submit pacing skips the tail delay after the final sendable batch", () => {

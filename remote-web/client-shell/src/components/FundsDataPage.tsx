@@ -9,6 +9,7 @@ import {
   ChevronDown,
   CircleDollarSign,
   CircleStop,
+  Clock3,
   Download,
   Funnel,
   GripVertical,
@@ -151,7 +152,7 @@ const statusCopy: Record<DoudianStoreStatus, { label: string; className: string 
 const tableColumns: DataColumn[] = [
   { key: "accountName", label: "开户名", format: "text", group: "开户数据信息" },
   { key: "accountBank", label: "开户银行", format: "text", group: "开户数据信息" },
-  { key: "phone", label: "手机号", format: "text", group: "开户数据信息" },
+  { key: "phone", label: "提现手机号", format: "text", group: "开户数据信息" },
   { key: "withdrawBalance", label: "可提现金额", format: "money", group: "账户", tone: "blue" },
   { key: "balance", label: "货款总金额", format: "money", group: "账户" },
   { key: "frozenBalance", label: "应冻结金额", format: "money", group: "账户", tone: (row) => row.frozenBalance > 0 ? "danger" : undefined },
@@ -206,7 +207,7 @@ const emptyAccountFilters: AccountFilters = { accountName: "", accountBank: "", 
 const accountFilterFields = [
   { key: "accountName", label: "开户名" },
   { key: "accountBank", label: "开户银行" },
-  { key: "phone", label: "手机号" }
+  { key: "phone", label: "提现手机号" }
 ] as const satisfies ReadonlyArray<{ key: AccountFilterKey; label: string }>;
 const defaultSortOptions = [
   { key: "withdrawBalance", label: "可提现金额", direction: "desc" },
@@ -411,7 +412,7 @@ function normalizeRemoteColumns(schema?: RemoteFundsFieldSchema): DataColumn[] {
       const fallback = tableColumns.find((item) => item.key === column.key);
       return {
         key: column.key as FundsFieldKey,
-        label: String(column.label),
+        label: column.key === "phone" ? "提现手机号" : String(column.label),
         format: column.format as ColumnFormat,
         group: column.group ? String(column.group) : undefined,
         defaultVisible: column.defaultVisible !== false,
@@ -1155,15 +1156,11 @@ export function FundsDataPage() {
   const riskStoreCount = selectedRows.filter((row) => row.riskCount > 0).length;
   const fundsWarningTitle = failedDetailCount
     ? `${failedDetailCount} 家获取失败`
-    : staleStoreCount
-      ? `${staleStoreCount} 家正在显示历史有效值`
     : selectedRowsAllUnavailable && !previewMode
       ? `${selectedRows.length} 家未命中资金指标`
       : "";
   const fundsWarningDetail = failedDetailCount
     ? "本次获取失败，已保留最近成功数据；请确认登录态后重试。"
-    : staleStoreCount
-      ? "部分来源本次未取得数据，金额保留为最近成功值，数据时间见单元格提示。"
     : selectedRowsAllUnavailable && !previewMode
       ? "资金桥接或字段映射尚未返回可展示的金额。"
       : "";
@@ -1431,6 +1428,10 @@ export function FundsDataPage() {
             <div className="flex min-w-0 items-center gap-2">
               <WalletCards className="size-[16px] text-brand-navy" strokeWidth={2.2} />
               <strong className="text-[15px] font-semibold text-[#101828]">店铺资金明细</strong>
+              <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-medium text-[#667085]">
+                <Clock3 className="size-[13px]" strokeWidth={2} />
+                数据更新时间 {displayedDataAt ? displayedDataAt.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "暂无"}
+              </span>
               {fundsState === "loading" ? (
                 <span className="inline-flex h-6 max-w-[360px] items-center gap-1 rounded-md border border-[#dbe5f2] bg-white px-2 text-[12px] font-semibold text-[#667085]" title={fundsProgress || "正在获取资金数据"}>
                   <Loader2 className="size-[13px] animate-spin" strokeWidth={2} />
@@ -1648,7 +1649,6 @@ export function FundsDataPage() {
           <div className="flex items-center justify-between gap-3 border-t border-[#edf1f6] px-4 text-[12px] text-[#667085]">
             <span className="min-w-0 truncate" title={[fundsWarningDetail, fundsMessage].filter(Boolean).join(" ")}>
               共 {selectedRows.length} 家店铺，最近获取 {lastSyncAt ? lastSyncAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }) : "暂无"}
-              {displayedDataAt ? `，数据截至 ${displayedDataAt.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}` : ""}
               {fundsWarningTitle ? `，${fundsWarningTitle}` : ""}
             </span>
             <span className="inline-flex items-center gap-2">

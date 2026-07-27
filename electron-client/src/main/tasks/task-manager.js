@@ -589,6 +589,13 @@ async function storeRecordForSubmitTask(task) {
 async function startOpportunitySubmitContinuation(task, reason = "scheduled") {
   const taskId = String(task?.id || "");
   if (!taskId) return { started: false, reason: "task-missing" };
+  const latestTask = await service().request("records.get", {
+    storeName: "opportunity_pipeline_submit_tasks_v2",
+    id: taskId
+  }, { priority: "interactive" }).catch(() => null);
+  if (!latestTask) return { started: false, reason: "task-missing" };
+  if (!automaticOpportunitySubmitRecoveryTask(latestTask)) return { started: false, reason: "not-due" };
+  task = latestTask;
   if (task.submitThrottleRecoveryEnabled !== true) return { started: false, reason: "feature-disabled" };
   if (operationContexts.has(String(task.runId || "")) || activeOpportunitySubmitContinuationTaskIds().has(taskId)) {
     return { started: false, reason: "already-active" };

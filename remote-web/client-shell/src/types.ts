@@ -655,6 +655,7 @@ export interface DoudianViolationRecord {
   objectType: "商品" | "店铺" | "订单" | "内容" | "渠道商品" | "售后单" | "电商门店" | "未知" | string;
   objectId: string;
   objectName: string;
+  objectImage?: string;
   ticketType?: "risk" | "penalty" | string;
   ticketTypeLabel?: "预警" | "处罚" | string;
   productId: string;
